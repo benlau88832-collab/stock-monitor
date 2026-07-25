@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { fmtMoney, fmtPct, pctColor } from "@/lib/format";
+import { stockRealUrl } from "@/lib/realLinks";
 
 export default function StockMonitor() {
   const [code, setCode] = useState("");
@@ -71,7 +72,7 @@ export default function StockMonitor() {
               data.vetoTriggered ? "border-rose-500/50 bg-rose-500/10" : "border-emerald-500/30 bg-emerald-500/5"
             }`}
           >
-            <div className="flex items-center justify-between">
+            <a href={stockRealUrl(data.quote.code)} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between hover:opacity-80 transition">
               <div className="text-xl font-black text-slate-50">
                 {data.quote.name} <span className="text-sm text-slate-500">{data.quote.code}</span>
               </div>
@@ -79,7 +80,8 @@ export default function StockMonitor() {
                 <div className="text-2xl font-bold text-slate-50">{data.quote.price}</div>
                 <div className={`font-semibold ${pctColor(data.quote.pct)}`}>{fmtPct(data.quote.pct)}</div>
               </div>
-            </div>
+            </a>
+            <div className="text-[10px] text-amber-300">点击查看东方财富真实个股页面 →</div>
             <div className={`mt-3 rounded-lg px-3 py-2 text-sm font-semibold ${data.vetoTriggered ? "bg-rose-500/20 text-rose-200" : "bg-black/20 text-slate-300"}`}>
               {data.vetoTriggered ? "🚨 " : ""}
               {data.vetoReason}

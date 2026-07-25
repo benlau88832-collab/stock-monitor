@@ -2,7 +2,7 @@
 
 import { fmtTime } from "@/lib/format";
 
-export type TabKey = "market" | "fund" | "risk" | "mainline" | "stock" | "news" | "settings";
+export type TabKey = "market" | "fund" | "risk" | "mainline" | "stock" | "news" | "settings" | "llm" | "pitfalls";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "market", label: "市场监控" },
@@ -12,6 +12,8 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "stock", label: "个股监控" },
   { key: "news", label: "快讯" },
   { key: "settings", label: "设置" },
+  { key: "llm", label: "LLM分析" },
+  { key: "pitfalls", label: "避坑指南" },
 ];
 
 export default function TopNav(props: {

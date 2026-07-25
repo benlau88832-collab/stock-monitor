@@ -1,6 +1,7 @@
 "use client";
 
 import { fmtMoney, pctColor } from "@/lib/format";
+import { indexRealUrl } from "@/lib/realLinks";
 
 interface Props {
   data: any;

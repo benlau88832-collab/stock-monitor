@@ -1,6 +1,7 @@
 "use client";
 
 import { fmtPct, pctColor } from "@/lib/format";
+import { indexRealUrl } from "@/lib/realLinks";
 
 interface Props {
   data: any;
@@ -56,11 +57,12 @@ export default function MarketOverview({ data, loading }: Props) {
           </div>
         )}
         {(indices ?? []).map((idx: any) => (
-          <div key={idx.code} className="rounded-xl border border-white/10 bg-white/5 p-3">
+          <a key={idx.code} href={indexRealUrl(idx.code, idx.name)} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-white/10 bg-white/5 p-3 hover:border-amber-400/30 hover:bg-white/10 transition block">
             <div className="text-xs text-slate-400">{idx.name}</div>
             <div className="mt-1 text-lg font-bold text-slate-50">{idx.price?.toFixed(2)}</div>
             <div className={`text-sm font-semibold ${pctColor(idx.pct)}`}>{fmtPct(idx.pct)}</div>
-          </div>
+            <div className="mt-1 text-[10px] text-amber-300/80">点击查看东方财富真实数据 →</div>
+          </a>
         ))}
 
         <div className="col-span-2 rounded-xl border border-white/10 bg-white/5 p-3 sm:col-span-3 lg:col-span-5">

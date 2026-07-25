@@ -9,6 +9,11 @@ import Mainline from "./Mainline";
 import StockMonitor from "./StockMonitor";
 import NewsPanel from "./NewsPanel";
 import Settings from "./Settings";
+import LLMFunnel from "./LLMFunnel";
+import Pitfalls from "./Pitfalls";
+import DarkPool from "./DarkPool";
+import GlobalSignals from "./GlobalSignals";
+import KeyIndicators from "./KeyIndicators";
 
 async function safeJson(url: string) {
   try {
@@ -30,6 +35,8 @@ export default function Dashboard() {
   const [riskRadar, setRiskRadar] = useState<any>(null);
   const [mainline, setMainline] = useState<any>(null);
   const [news, setNews] = useState<any>(null);
+  const [llmKey, setLLMKey] = useState("");
+  const [darkPool, setDarkPool] = useState<any>(null);
 
   const inFlight = useRef(false);
 
@@ -38,18 +45,20 @@ export default function Dashboard() {
     inFlight.current = true;
     setLoading(true);
     try {
-      const [ov, fs, rr, ml, nw] = await Promise.all([
+      const [ov, fs, rr, ml, nw, dp] = await Promise.all([
         safeJson("/api/market/overview"),
         safeJson("/api/market/fund-structure"),
         safeJson("/api/market/risk-radar"),
         safeJson("/api/market/mainline"),
         safeJson("/api/news"),
+        safeJson("/api/market/dark-pool"),
       ]);
       setOverview(ov);
       setFundStructure(fs);
       setRiskRadar(rr);
       setMainline(ml);
       setNews(nw);
+      setDarkPool(dp);
       setLastUpdated(new Date().toISOString());
     } finally {
       setLoading(false);
@@ -95,6 +104,9 @@ export default function Dashboard() {
               <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构速览</h3>
               <FundStructure data={fundStructure} loading={loading} />
             </div>
+            <DarkPool data={darkPool} loading={loading} />
+            <GlobalSignals data={{ globalSignals: [] }} />
+            <KeyIndicators data={{ indicators: [] }} />
           </>
         )}
         {active === "fund" && <FundStructure data={fundStructure} loading={loading} />}
@@ -103,6 +115,8 @@ export default function Dashboard() {
         {active === "stock" && <StockMonitor />}
         {active === "news" && <NewsPanel data={news} loading={loading} />}
         {active === "settings" && <Settings />}
+        {active === "llm" && <LLMFunnel data={{ overview, fundStructure, mainline, riskRadar, news, marketData: overview }} />}
+        {active === "pitfalls" && <Pitfalls />}
       </main>
 
       <footer className="mx-auto max-w-[1500px] px-4 text-center text-[11px] text-slate-600">

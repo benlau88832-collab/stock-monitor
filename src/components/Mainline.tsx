@@ -1,6 +1,7 @@
 "use client";
 
 import { fmtMoney, fmtPct, pctColor } from "@/lib/format";
+import { boardRealUrl, stockRealUrl } from "@/lib/realLinks";
 
 const STAGE_STYLE: Record<string, string> = {
   启动期: "bg-sky-500/15 text-sky-300 border-sky-500/40",
@@ -49,7 +50,9 @@ export default function Mainline({ data, loading }: { data: any; loading: boolea
             <tbody>
               {boards.map((b: any) => (
                 <tr key={b.code} className="border-t border-white/5 hover:bg-white/5">
-                  <td className="px-3 py-2 font-medium text-slate-100">{b.name}</td>
+                  <td className="px-3 py-2 font-medium text-slate-100">
+                    <a href={boardRealUrl(b.code, b.boardType)} target="_blank" rel="noopener noreferrer" className="hover:text-amber-300 hover:underline">{b.name}</a>
+                  </td>
                   <td className="px-3 py-2 text-xs text-slate-500">{BOARD_TYPE_LABEL[b.boardType]}</td>
                   <td className={`px-3 py-2 text-right font-semibold ${pctColor(b.pct)}`}>{fmtPct(b.pct)}</td>
                   <td className={`px-3 py-2 text-right ${pctColor(b.mainNet)}`}>{fmtMoney(b.mainNet)}</td>
@@ -78,10 +81,7 @@ export default function Mainline({ data, loading }: { data: any; loading: boolea
         <h3 className="mb-3 text-sm font-bold text-slate-200">潜力股（来自资金领先板块成分股，已经过资金结构一票否决过滤）</h3>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {potential.map((p: any) => (
-            <div
-              key={p.code}
-              className={`rounded-xl border p-3 ${p.vetoed ? "border-slate-600/40 bg-slate-800/30 opacity-60" : "border-white/10 bg-white/5"}`}
-            >
+            <a key={p.code} href={stockRealUrl(p.code)} target="_blank" rel="noopener noreferrer" className={`block rounded-xl border p-3 transition ${p.vetoed ? "border-slate-600/40 bg-slate-800/30 opacity-60 hover:opacity-80 hover:bg-slate-800/40" : "border-white/10 bg-white/5 hover:border-amber-400/30 hover:bg-white/10"}`}>
               <div className="flex items-center justify-between">
                 <div className="font-bold text-slate-100">
                   {p.name} <span className="text-xs text-slate-500">{p.code}</span>
@@ -106,9 +106,9 @@ export default function Mainline({ data, loading }: { data: any; loading: boolea
                   ))}
                 </div>
               ) : (
-                <div className="mt-2 rounded bg-emerald-500/10 p-2 text-[11px] text-emerald-300">✅ 未触发一票否决</div>
+                <div className="mt-2 rounded bg-emerald-500/10 p-2 text-[11px] text-emerald-300">✅ 未触发一票否决 · <span className="text-amber-300">点击查看东方财富真实页面 →</span></div>
               )}
-            </div>
+            </a>
           ))}
           {potential.length === 0 && <div className="text-slate-500">暂无候选（可能当前无明确资金领先板块）</div>}
         </div>
