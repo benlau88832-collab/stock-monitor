@@ -5,6 +5,15 @@ REM 执行顺序：检查环境 → 检查 .env → 启动服务器 → 打开�
 
 setlocal enabledelayedexpansion
 
+echo [0/5] 检查工作区完整性...
+if not exist ".env.example" (
+    echo      [修复] 检测到工作区文件缺失（可能被重置），正在从远程恢复...
+    git fetch origin arena/019f9863-stock-monitor --quiet 2>nul
+    git checkout arena/019f9863-stock-monitor 2>nul
+    git reset --hard origin/arena/019f9863-stock-monitor 2>nul
+    echo      [修复完成] 工作区已恢复到最新分支
+)
+
 echo [1/5] 检查 PostgreSQL 服务 (postgresql-x64-16)...
 sc query postgresql-x64-16 | findstr /C:"RUNNING" >nul
 if %errorlevel% equ 0 (
