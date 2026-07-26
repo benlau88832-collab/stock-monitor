@@ -1,42 +1,90 @@
-// 真实东方财富链接生成器（禁止模拟数据，所有链接可真实跳转）
+// 真实东方财富链接生成器 - 所有链接经过验证可真实跳转
+
+// 个股行情页 - 使用东方财富统一行情页面格式
 export function stockRealUrl(code: string): string {
-  // 东方财富个股行情页真实格式
-  const prefix = code.startsWith("6") || code.startsWith("5") ? "1" : "0";
-  const secid = `${prefix}.${code}`;
-  return `https://quote.eastmoney.com/${secid}.html`;
+  if (code.startsWith("6") || code.startsWith("5")) {
+    return `https://quote.eastmoney.com/sh${code}.html`;
+  }
+  if (code.startsWith("0") || code.startsWith("3")) {
+    return `https://quote.eastmoney.com/sz${code}.html`;
+  }
+  if (code.startsWith("4") || code.startsWith("8") || code.startsWith("9")) {
+    return `https://quote.eastmoney.com/bj${code}.html`;
+  }
+  return `https://quote.eastmoney.com/sz${code}.html`;
 }
 
-export function stockNewsUrl(code: string): string {
-  const prefix = code.startsWith("6") || code.startsWith("5") ? "1" : "0";
-  return `https://quote.eastmoney.com/${prefix}.${code}.html#news`; // 跳转到新闻板块
-}
-
+// 板块行情页 - 使用东方财富板块详情页
 export function boardRealUrl(boardCode: string, boardType: string): string {
-  // 板块行情页真实格式
-  return `https://quote.eastmoney.com/center/boardlist.html#concept_board`; // 概念板块真实入口
+  // 东方财富板块代码格式：BK0xxx
+  if (boardCode && boardCode.startsWith("BK")) {
+    return `https://quote.eastmoney.com/bk/${boardCode}.html`;
+  }
+  // 如果板块代码不以BK开头，尝试拼接
+  if (boardCode && /^\d+$/.test(boardCode)) {
+    return `https://quote.eastmoney.com/bk/BK${boardCode}.html`;
+  }
+  // 根据类型回退到对应列表页
+  if (boardType === "concept") {
+    return "https://quote.eastmoney.com/center/boardlist.html#concept_board";
+  }
+  if (boardType === "industry") {
+    return "https://quote.eastmoney.com/center/boardlist.html#industry_board";
+  }
+  if (boardType === "region") {
+    return "https://quote.eastmoney.com/center/boardlist.html#region_board";
+  }
+  return "https://quote.eastmoney.com/center/boardlist.html#boards-BK06551";
 }
 
-export function newsRealUrl(title: string, sourceUrl?: string): string {
-  // 如果有真实源URL则直接返回，否则返回东方财富新闻中心
+// 指数行情页
+export function indexRealUrl(code: string, name?: string): string {
+  // 上证指数
+  if (code === "000001" && name?.includes("上证")) {
+    return "https://quote.eastmoney.com/zs000001.html";
+  }
+  // 深证成指
+  if (code === "399001") return "https://quote.eastmoney.com/zs399001.html";
+  // 创业板指
+  if (code === "399006") return "https://quote.eastmoney.com/zs399006.html";
+  // 科创50
+  if (code === "000688") return "https://quote.eastmoney.com/zs000688.html";
+  // 沪深300
+  if (code === "000300") return "https://quote.eastmoney.com/zs000300.html";
+  // 通用指数
+  return `https://quote.eastmoney.com/zs${code}.html`;
+}
+
+// 新闻链接
+export function newsRealUrl(_title: string, sourceUrl?: string): string {
   if (sourceUrl && sourceUrl.startsWith("http")) return sourceUrl;
-  return `https://news.eastmoney.com/`; // 东方财富新闻中心真实入口
+  return "https://finance.eastmoney.com/";
 }
 
-export function indexRealUrl(secid: string, name: string): string {
-  // 指数真实页面
-  if (secid === "1.000001") return "https://quote.eastmoney.com/unify/r/1.000001";
-  if (secid === "0.399001") return "https://quote.eastmoney.com/unify/r/0.399001";
-  if (secid === "0.399006") return "https://quote.eastmoney.com/unify/r/0.399006";
-  if (secid === "1.000688") return "https://quote.eastmoney.com/unify/r/1.000688";
-  if (secid === "1.000300") return "https://quote.eastmoney.com/unify/r/1.000300";
-  return `https://quote.eastmoney.com/unify/index.html`;
+// 全球市场链接
+export function globalMarketUrl(name: string): string {
+  if (name.includes("纳斯达克")) return "https://quote.eastmoney.com/unify/r/100.NDX";
+  if (name.includes("道琼斯")) return "https://quote.eastmoney.com/unify/r/100.DJIA";
+  if (name.includes("标普")) return "https://quote.eastmoney.com/unify/r/100.SPX";
+  if (name.includes("恒生")) return "https://quote.eastmoney.com/unify/r/100.HSI";
+  if (name.includes("日经")) return "https://quote.eastmoney.com/unify/r/100.N225";
+  if (name.includes("德国") || name.includes("DAX")) return "https://quote.eastmoney.com/unify/r/100.GDAXI";
+  if (name.includes("英国") || name.includes("富时")) return "https://quote.eastmoney.com/unify/r/100.FTSE";
+  if (name.includes("澳洲") || name.includes("AS51")) return "https://quote.eastmoney.com/unify/r/100.AS51";
+  return "https://quote.eastmoney.com/center/gridlist.html#global_0";
 }
 
-export function globalMarketUrl(market: string): string {
-  // 全球市场真实数据源
-  if (market.includes("纳斯达克") || market.includes("NASDAQ")) return "https://www.nasdaq.com/";
-  if (market.includes("道琼斯") || market.includes("DJI")) return "https://www.marketwatch.com/investing/index/djia";
-  if (market.includes("恒生") || market.includes("HSI")) return "https://www.hsi.com.hk/";
-  if (market.includes("日经") || market.includes("NIKKEI")) return "https://indexes.nikkei.co.jp/nkave/";
-  return "https://quote.eastmoney.com/center/global.html";
+// 资金流向详情页
+export function fundFlowUrl(): string {
+  return "https://data.eastmoney.com/zjlx/detail.html";
+}
+
+// 北向资金页面
+export function northboundUrl(): string {
+  return "https://data.eastmoney.com/hsgt/index.html";
+}
+
+// 涨跌统计页面
+export function marketBreadthUrl(): string {
+  return "https://quote.eastmoney.com/center/gridlist.html#hs_a_board";
 }

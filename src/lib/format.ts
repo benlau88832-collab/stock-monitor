@@ -1,7 +1,7 @@
 export function fmtMoney(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "--";
   const abs = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
+  const sign = v < 0 ? "-" : v > 0 ? "+" : "";
   if (abs >= 1e8) return `${sign}${(abs / 1e8).toFixed(2)}亿`;
   if (abs >= 1e4) return `${sign}${(abs / 1e4).toFixed(1)}万`;
   return `${sign}${abs.toFixed(0)}`;

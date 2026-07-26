@@ -1,17 +1,12 @@
-"use client";
+import { fmtTime } from "../lib/format";
 
-import { fmtTime } from "@/lib/format";
-
-export type TabKey = "market" | "fund" | "risk" | "mainline" | "stock" | "settings" | "llm" | "pitfalls";
+export type TabKey = "market" | "fund" | "mainline" | "stock" | "pitfalls";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "market", label: "市场监控" },
   { key: "fund", label: "资金结构" },
-  { key: "risk", label: "风险扫描" },
   { key: "mainline", label: "主线与潜力" },
   { key: "stock", label: "个股监控" },
-  { key: "settings", label: "设置" },
-  { key: "llm", label: "LLM分析" },
   { key: "pitfalls", label: "避坑指南" },
 ];
 
@@ -56,9 +51,7 @@ export default function TopNav(props: {
 
         <div className="flex items-center gap-3 text-xs text-slate-400">
           <span className="flex items-center gap-1">
-            <span
-              className={`h-2 w-2 rounded-full ${loading ? "bg-amber-400 live-dot" : "bg-emerald-400 live-dot"}`}
-            />
+            <span className={`h-2 w-2 rounded-full ${loading ? "bg-amber-400 animate-pulse" : "bg-emerald-400 animate-pulse"}`} />
             {loading ? "刷新中" : "已更新"} {fmtTime(lastUpdated)}
           </span>
           <button
