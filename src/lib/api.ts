@@ -3,6 +3,9 @@
 
 const PUSH2 = "https://push2.eastmoney.com/api/qt";
 const PUSH2HIS = "https://push2his.eastmoney.com/api/qt";
+// 公开访问令牌（东方财富push2接口的通用ut参数，各类第三方抓取工具均携带此固定值，
+// 补上后可降低接口因缺少常规参数而返回不完整/异常数据的概率）
+const EM_UT = "bd1d9ddb04089700cf9c27f6f7426281";
 
 function num(v: unknown): number {
   const n = Number(v);
@@ -66,7 +69,7 @@ export interface IndexQuote {
 
 export async function fetchIndexOverview(): Promise<IndexQuote[]> {
   const secids = MAJOR_INDICES.map((i) => i.secid).join(",");
-  const url = `${PUSH2}/ulist.np/get?fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
+  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
   const json = await jsonp<any>(url);
   const diff = normalizeDiff(json?.data?.diff);
   return diff.map((d: Record<string, unknown>) => ({
@@ -98,7 +101,7 @@ export interface MarketBreadth {
 const BREADTH_SECIDS = ["1.000001", "0.399001", "0.899050"];
 
 export async function fetchMarketBreadth(): Promise<MarketBreadth> {
-  const url = `${PUSH2}/ulist.np/get?fltt=2&fields=f2,f3,f12,f104,f105,f106&secids=${BREADTH_SECIDS.join(",")}`;
+  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f12,f104,f105,f106&secids=${BREADTH_SECIDS.join(",")}`;
   const json = await jsonp<any>(url, 10000);
   const diff = normalizeDiff(json?.data?.diff);
 
@@ -112,6 +115,13 @@ export async function fetchMarketBreadth(): Promise<MarketBreadth> {
     if (Number.isFinite(pct)) { pctSum += pct; pctCount++; }
   }
   const total = up + down + flat;
+
+  // 数据合理性校验兜底：真实A股全市场几千只股票，不可能出现"下跌0且平盘0"这种全员上涨的极端情况
+  // （历史最大涨停潮也会有个别下跌/停牌平盘股），一旦出现说明接口返回了异常/不完整数据，
+  // 此时直接抛出异常交由上层判定为"数据不足"，避免把明显错误的数字展示给用户
+  if (total > 0 && up > 0 && down === 0 && flat === 0) {
+    throw new Error("涨跌家数数据异常（全员上涨不合理），判定为接口返回不完整");
+  }
 
   // 涨跌停家数为补充指标：单独抓取全市场个股统计，允许尽力而为（若因网络原因未取全，
   // 只影响这两个补充数字，不会影响上面已经从官方口径拿到的total/up/down/flat主指标）
@@ -128,7 +138,7 @@ export async function fetchMarketBreadth(): Promise<MarketBreadth> {
       let segLimitUp = 0, segLimitDown = 0;
       let page = 1;
       while (true) {
-        const segUrl = `${PUSH2}/clist/get?pn=${page}&pz=5000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${seg.fs}&fields=f2,f3,f12`;
+        const segUrl = `${PUSH2}/clist/get?ut=${EM_UT}&pn=${page}&pz=5000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${seg.fs}&fields=f2,f3,f12`;
         try {
           const segJson = await jsonp<any>(segUrl, 15000);
           const rawDiff = segJson?.data?.diff;
@@ -196,7 +206,7 @@ export interface GlobalIndex {
 export async function fetchGlobalIndices(): Promise<GlobalIndex[]> {
   try {
     const secids = GLOBAL_INDICES.map((i) => i.secid).join(",");
-    const url = `${PUSH2}/ulist.np/get?fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
+    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
     const json = await jsonp<any>(url, 10000);
     const diff = normalizeDiff(json?.data?.diff);
     return diff.map((d) => {
@@ -217,7 +227,7 @@ export async function fetchGlobalIndices(): Promise<GlobalIndex[]> {
 // ============== 沪深两市成交额 ==============
 export async function fetchMarketTurnover(): Promise<{ amount: number; available: boolean }> {
   try {
-    const url = `${PUSH2}/ulist.np/get?fltt=2&fields=f2,f3,f12,f14,f6&secids=1.000001,0.399001`;
+    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f12,f14,f6&secids=1.000001,0.399001`;
     const json = await jsonp<any>(url, 6000);
     const diff = normalizeDiff(json?.data?.diff);
     let totalAmount = 0;
@@ -242,7 +252,7 @@ export interface MarketFundData {
 }
 
 export async function fetchMarketMainFund(): Promise<MarketFundData> {
-  const url = `${PUSH2}/ulist.np/get?fltt=2&fields=f2,f3,f12,f14,f62,f66,f69,f72,f75,f78,f81,f84,f87,f164,f165,f174,f175,f184&secids=1.000001,0.399001`;
+  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f12,f14,f62,f66,f69,f72,f75,f78,f81,f84,f87,f164,f165,f174,f175,f184&secids=1.000001,0.399001`;
   const json = await jsonp<any>(url);
   const diff = normalizeDiff(json?.data?.diff);
   const agg: MarketFundData = {
@@ -296,7 +306,7 @@ export async function fetchBoardFundFlow(
 ): Promise<BoardFlowItem[]> {
   const fs = BOARD_FS[boardType];
   const fields = "f12,f14,f3,f62,f66,f72,f78,f84,f164,f165,f174,f175,f184";
-  const url = `${PUSH2}/clist/get?pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
+  const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
   const json = await jsonp<any>(url);
   const diff = normalizeDiff(json?.data?.diff);
   return diff.map((d) => ({
@@ -335,7 +345,7 @@ export interface BoardStock {
 
 export async function fetchBoardConstituents(boardCode: string, limit = 10): Promise<BoardStock[]> {
   const fields = "f12,f14,f2,f3,f62,f66,f72,f78,f84,f184,f8,f9,f10";
-  const url = `${PUSH2}/clist/get?pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=b:${boardCode}&fields=${fields}`;
+  const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=b:${boardCode}&fields=${fields}`;
   const json = await jsonp<any>(url);
   const diff = normalizeDiff(json?.data?.diff);
   return diff.map((d) => ({
@@ -376,7 +386,7 @@ export function stockLimitPct(code: string): number {
 export async function fetchStockOne(code: string) {
   const secid = toSecid(code);
   const fields = "f2,f3,f12,f14,f8,f9,f10,f62,f66,f69,f72,f75,f78,f81,f84,f87,f164,f165,f174,f175,f184";
-  const url = `${PUSH2}/ulist.np/get?fltt=2&fields=${fields}&secids=${secid}`;
+  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=${fields}&secids=${secid}`;
   const json = await jsonp<any>(url);
   const diff = normalizeDiff(json?.data?.diff);
   if (!diff.length) return null;
@@ -419,7 +429,7 @@ export interface FundSnapshot {
 // klines每行格式：日期,主力净额,小单净额,中单净额,大单净额,超大单净额,...(占比等字段)
 export async function fetchMarketFundHistory(days = 30): Promise<FundSnapshot[]> {
   const fields2 = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65";
-  const url = `${PUSH2HIS}/stock/fflow/daykline/get?lmt=${days}&klt=101&secid=1.000001&secid2=0.399001&fields1=f1,f2,f3,f7&fields2=${fields2}`;
+  const url = `${PUSH2HIS}/stock/fflow/daykline/get?ut=${EM_UT}&lmt=${days}&klt=101&secid=1.000001&secid2=0.399001&fields1=f1,f2,f3,f7&fields2=${fields2}`;
   try {
     const json = await jsonp<any>(url, 10000);
     const klines: string[] = json?.data?.klines ?? [];
