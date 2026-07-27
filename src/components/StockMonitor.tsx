@@ -57,8 +57,8 @@ export default function StockMonitor() {
           {loading ? "查询中…" : "查询"}
         </button>
         {["600519", "300750", "000001", "002594", "601318", "000858"].map((c) => (
-          <button key={c} onClick={() => search(c)}
-            className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-400 hover:bg-white/5">
+          <button key={c} onClick={() => search(c)} disabled={loading}
+            className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-400 hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed">
             {c}
           </button>
         ))}

@@ -2,6 +2,7 @@
 // 由于跨域限制，使用JSONP方式或通过公开push2接口获取数据
 
 const PUSH2 = "https://push2.eastmoney.com/api/qt";
+const PUSH2HIS = "https://push2his.eastmoney.com/api/qt";
 
 function num(v: unknown): number {
   const n = Number(v);
@@ -15,8 +16,8 @@ function normalizeDiff(raw: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
-// JSONP请求封装
-function jsonp<T = unknown>(url: string, timeout = 10000): Promise<T> {
+// JSONP请求封装（callbackParam 可指定回调参数名，不同接口要求不同，如 "cb" 或 "callback"）
+function jsonp<T = unknown>(url: string, timeout = 10000, callbackParam = "cb"): Promise<T> {
   return new Promise((resolve, reject) => {
     const callbackName = `jsonp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const script = document.createElement("script");
@@ -37,7 +38,7 @@ function jsonp<T = unknown>(url: string, timeout = 10000): Promise<T> {
     };
 
     const separator = url.includes("?") ? "&" : "?";
-    script.src = `${url}${separator}cb=${callbackName}&_=${Date.now()}`;
+    script.src = `${url}${separator}${callbackParam}=${callbackName}&_=${Date.now()}`;
     script.onerror = () => {
       cleanup();
       reject(new Error("JSONP load error"));
@@ -88,31 +89,27 @@ export interface MarketBreadth {
   avgPct: number;
 }
 
-// 分批获取所有A股涨跌数据（关键修复：处理diff可能是对象而非数组的情况）
+// 并行获取所有A股涨跌数据（关键修复：1.处理diff可能是对象而非数组的情况 2.保证total与up+down+flat内部一致 3.板块并行请求避免超时级联拖慢 4.按板块区分涨跌停幅度）
 export async function fetchMarketBreadth(): Promise<MarketBreadth> {
   // 沪深全部A股 - 各板块分别获取以确保完整
-  const segments = [
-    "m:0+t:6",     // 深圳主板
-    "m:0+t:80",    // 创业板
-    "m:1+t:2",     // 上海主板
-    "m:1+t:23",    // 科创板
-    "m:0+t:81+s:2048", // 北交所
+  // 涨跌停幅度（2025年7月新规后，各板块ST/*ST股票涨跌幅已与该板块普通股统一，无需再单独区分）：
+  // 主板±10%；创业板/科创板±20%；北交所±30%
+  const segments: Array<{ fs: string; limitPct: number }> = [
+    { fs: "m:0+t:6", limitPct: 10 },     // 深圳主板
+    { fs: "m:0+t:80", limitPct: 20 },    // 创业板
+    { fs: "m:1+t:2", limitPct: 10 },     // 上海主板
+    { fs: "m:1+t:23", limitPct: 20 },    // 科创板
+    { fs: "m:0+t:81+s:2048", limitPct: 30 }, // 北交所
   ];
-  
-  let allStocks: Array<{ pct: number; price: number }> = [];
-  let overallTotal = 0;
 
-  // 对每个板块分别获取数据
-  for (const seg of segments) {
+  // 单个板块的抓取逻辑，返回该板块实际抓取到的个股列表（可能因超时/异常而不完整，但至少内部一致）
+  async function fetchSegment(seg: { fs: string; limitPct: number }): Promise<Array<{ pct: number; price: number; limitPct: number }>> {
+    const stocks: Array<{ pct: number; price: number; limitPct: number }> = [];
     let page = 1;
     while (true) {
-      const url = `${PUSH2}/clist/get?pn=${page}&pz=5000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${seg}&fields=f2,f3,f12`;
+      const url = `${PUSH2}/clist/get?pn=${page}&pz=5000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${seg.fs}&fields=f2,f3,f12`;
       try {
         const json = await jsonp<any>(url, 15000);
-        const segTotal = num(json?.data?.total);
-        if (page === 1) overallTotal += segTotal;
-        
-        // diff 可能是对象（{0:{...}, 1:{...}}）或数组
         const rawDiff = json?.data?.diff;
         let diff: Array<Record<string, unknown>> = [];
         if (Array.isArray(rawDiff)) {
@@ -120,17 +117,17 @@ export async function fetchMarketBreadth(): Promise<MarketBreadth> {
         } else if (rawDiff && typeof rawDiff === "object") {
           diff = Object.values(rawDiff);
         }
-        
+
         if (diff.length === 0) break;
-        
+
         for (const d of diff) {
           const pct = num(d.f3);
           const price = num(d.f2);
           if (price > 0) {
-            allStocks.push({ pct, price });
+            stocks.push({ pct, price, limitPct: seg.limitPct });
           }
         }
-        
+
         if (diff.length < 5000) break;
         page++;
         if (page > 3) break;
@@ -138,6 +135,14 @@ export async function fetchMarketBreadth(): Promise<MarketBreadth> {
         break;
       }
     }
+    return stocks;
+  }
+
+  // 各板块并行请求，互不阻塞，减少整体超时风险
+  const results = await Promise.allSettled(segments.map(fetchSegment));
+  const allStocks: Array<{ pct: number; price: number; limitPct: number }> = [];
+  for (const r of results) {
+    if (r.status === "fulfilled") allStocks.push(...r.value);
   }
 
   let up = 0, down = 0, flat = 0, limitUp = 0, limitDown = 0, sum = 0;
@@ -147,13 +152,14 @@ export async function fetchMarketBreadth(): Promise<MarketBreadth> {
     if (pct > 0) up++;
     else if (pct < 0) down++;
     else flat++;
-    // 涨停判断
-    if (pct >= 9.8) limitUp++;
-    if (pct <= -9.8) limitDown++;
+    // 涨跌停判断：按所属板块动态取幅度阈值，留0.2%误差余量（数据精度/四舍五入）
+    if (pct >= s.limitPct - 0.2) limitUp++;
+    if (pct <= -(s.limitPct - 0.2)) limitDown++;
   }
 
-  const total = overallTotal > allStocks.length ? overallTotal : allStocks.length;
-  
+  // 关键修复：total 必须与 up+down+flat 的实际来源保持一致，避免出现"总数4440但涨跌家数只加起来400"这类自相矛盾的展示
+  const total = allStocks.length;
+
   return {
     total,
     up,
@@ -356,6 +362,14 @@ export function toSecid(code: string): string {
   return `${marketPrefix(code)}.${code}`;
 }
 
+// 按股票代码判断所属板块的涨跌停幅度（2025年7月新规后ST股与所属板块普通股涨跌幅一致，无需单独区分）
+// 主板（60/00开头）±10%；创业板（30开头）/科创板（68开头）±20%；北交所（8/4/92开头）±30%
+export function stockLimitPct(code: string): number {
+  if (code.startsWith("30") || code.startsWith("68")) return 20;
+  if (code.startsWith("8") || code.startsWith("4") || code.startsWith("92")) return 30;
+  return 10;
+}
+
 export async function fetchStockOne(code: string) {
   const secid = toSecid(code);
   const fields = "f2,f3,f12,f14,f8,f9,f10,f62,f66,f69,f72,f75,f78,f81,f84,f87,f164,f165,f174,f175,f184";
@@ -385,7 +399,7 @@ export async function fetchStockOne(code: string) {
   };
 }
 
-// ============== 资金快照历史（使用localStorage模拟30天） ==============
+// ============== 资金快照历史（真实数据：东方财富大盘资金流历史K线接口） ==============
 export interface FundSnapshot {
   date: string;
   mainNet: number;
@@ -397,88 +411,74 @@ export interface FundSnapshot {
   mainNet10d: number;
 }
 
-const SNAPSHOT_KEY = "fund_snapshots_v2";
-
-export function saveFundSnapshot(data: MarketFundData): void {
-  const today = new Date().toISOString().slice(0, 10);
-  const existing = loadFundSnapshots();
-  const existingIdx = existing.findIndex((s) => s.date === today);
-  const snapshot: FundSnapshot = { date: today, ...data };
-  if (existingIdx >= 0) {
-    existing[existingIdx] = snapshot;
-  } else {
-    existing.push(snapshot);
-  }
-  // 只保留最近60天
-  const sorted = existing.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 60);
+// 东方财富"数据中心-资金流向-大盘"历史日K线接口（真实数据，非模拟）
+// 参考：http://data.eastmoney.com/zjlx/dpzjlx.html
+// klines每行格式：日期,主力净额,小单净额,中单净额,大单净额,超大单净额,...(占比等字段)
+export async function fetchMarketFundHistory(days = 30): Promise<FundSnapshot[]> {
+  const fields2 = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65";
+  const url = `${PUSH2HIS}/stock/fflow/daykline/get?lmt=${days}&klt=101&secid=1.000001&secid2=0.399001&fields1=f1,f2,f3,f7&fields2=${fields2}`;
   try {
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(sorted));
-  } catch { /* ignore */ }
-}
-
-export function loadFundSnapshots(): FundSnapshot[] {
-  try {
-    const raw = localStorage.getItem(SNAPSHOT_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw);
+    const json = await jsonp<any>(url, 10000);
+    const klines: string[] = json?.data?.klines ?? [];
+    const parsed: FundSnapshot[] = klines.map((line) => {
+      const p = line.split(",");
+      return {
+        date: p[0],
+        mainNet: num(p[1]),
+        smallNet: num(p[2]),
+        mediumNet: num(p[3]),
+        largeNet: num(p[4]),
+        extraLargeNet: num(p[5]),
+        mainNet5d: 0,
+        mainNet10d: 0,
+      };
+    });
+    // 用真实每日主力净额滚动求和，得到近5日/近10日主力净流入（真实计算，非随机）
+    const withRolling = parsed.map((item, idx) => {
+      const window5 = parsed.slice(Math.max(0, idx - 4), idx + 1);
+      const window10 = parsed.slice(Math.max(0, idx - 9), idx + 1);
+      return {
+        ...item,
+        mainNet5d: window5.reduce((s, x) => s + x.mainNet, 0),
+        mainNet10d: window10.reduce((s, x) => s + x.mainNet, 0),
+      };
+    });
+    // 最新日期排在最前面，供表格/图表展示
+    return withRolling.sort((a, b) => b.date.localeCompare(a.date));
   } catch {
     return [];
   }
 }
 
-// 生成模拟历史数据用于展示（首次使用时填充近30天的合理随机数据）
-export function ensureHistoryData(current: MarketFundData): FundSnapshot[] {
-  let existing = loadFundSnapshots();
-  if (existing.length >= 10) {
-    // 已有足够数据
-    saveFundSnapshot(current);
-    return loadFundSnapshots();
-  }
-  
-  // 生成近30天历史数据
-  const today = new Date();
-  const snapshots: FundSnapshot[] = [];
-  
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const dow = d.getDay();
-    if (dow === 0 || dow === 6) continue; // 跳过周末
-    
-    const dateStr = d.toISOString().slice(0, 10);
-    const existItem = existing.find((s) => s.date === dateStr);
-    if (existItem) {
-      snapshots.push(existItem);
-      continue;
-    }
-    
-    // 基于当前数据生成合理波动的历史数据
-    const factor = 0.3 + Math.random() * 1.4;
-    const sign = Math.random() > 0.45 ? 1 : -1;
-    const base = Math.abs(current.mainNet) || 1e8;
-    snapshots.push({
-      date: dateStr,
-      mainNet: sign * base * factor * (0.5 + Math.random()),
-      extraLargeNet: sign * base * factor * 0.4 * (0.5 + Math.random()),
-      largeNet: sign * base * factor * 0.3 * (0.5 + Math.random()),
-      mediumNet: -sign * base * factor * 0.15 * (0.5 + Math.random()),
-      smallNet: -sign * base * factor * 0.15 * (0.5 + Math.random()),
-      mainNet5d: sign * base * factor * 2 * (0.5 + Math.random()),
-      mainNet10d: sign * base * factor * 3 * (0.5 + Math.random()),
-    });
-  }
+// ============== 实时快讯（东方财富7x24全球直播，真实滚动数据） ==============
+export interface FastNewsItem {
+  code: string;
+  title: string;
+  summary: string;
+  time: string; // "YYYY-MM-DD HH:mm:ss"
+  url: string;
+}
 
-  // 添加当天数据
-  const todayStr = today.toISOString().slice(0, 10);
-  if (!snapshots.find(s => s.date === todayStr)) {
-    snapshots.push({ date: todayStr, ...current });
-  }
-  
-  // 保存
-  const sorted = snapshots.sort((a, b) => b.date.localeCompare(a.date));
+// 东方财富快讯详情页真实链接格式：finance.eastmoney.com/a/{code}.html（已实测验证可访问）
+export function newsDetailUrl(code: string): string {
+  return `https://finance.eastmoney.com/a/${code}.html`;
+}
+
+// 东方财富"7x24全球直播"快讯接口（与 kuaixun.eastmoney.com 首页同源，真实滚动更新）
+// 注意：该接口的JSONP回调参数名为 callback（不是cb），否则不会包裹返回值
+export async function fetchFastNews(pageSize = 20): Promise<FastNewsItem[]> {
+  const url = `https://np-weblist.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=${pageSize}&req_trace=${Date.now()}`;
   try {
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(sorted));
-  } catch { /* ignore */ }
-  
-  return sorted;
+    const json = await jsonp<any>(url, 10000, "callback");
+    const list: any[] = json?.data?.fastNewsList ?? [];
+    return list.map((item) => ({
+      code: String(item.code ?? ""),
+      title: String(item.title ?? item.summary ?? ""),
+      summary: String(item.summary ?? ""),
+      time: String(item.showTime ?? ""),
+      url: newsDetailUrl(String(item.code ?? "")),
+    }));
+  } catch {
+    return [];
+  }
 }

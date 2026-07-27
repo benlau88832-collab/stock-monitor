@@ -17,7 +17,8 @@ import {
   fetchMarketTurnover,
   fetchBoardFundFlow,
   fetchBoardConstituents,
-  ensureHistoryData,
+  fetchMarketFundHistory,
+  stockLimitPct,
   type IndexQuote,
   type MarketBreadth,
   type GlobalIndex,
@@ -117,12 +118,13 @@ export default function App() {
     setLoading(true);
     try {
       // Parallel fetches
-      const [indices, breadth, fundMain, globals, turnover] = await Promise.allSettled([
+      const [indices, breadth, fundMain, globals, turnover, fundHistory] = await Promise.allSettled([
         fetchIndexOverview(),
         fetchMarketBreadth(),
         fetchMarketMainFund(),
         fetchGlobalIndices(),
         fetchMarketTurnover(),
+        fetchMarketFundHistory(30),
       ]);
 
       // === Overview ===
@@ -188,7 +190,7 @@ export default function App() {
           reasons.push("资金结构处于分歧状态，今日与近5日方向不一致");
           actionHint = "建议观望，等待资金结构方向进一步明确。";
         }
-        const history = ensureHistoryData(fm);
+        const history = fundHistory.status === "fulfilled" ? fundHistory.value : [];
         setFundStructure({
           structure: {
             today: { mainNet: fm.mainNet, extraLargeNet: fm.extraLargeNet, largeNet: fm.largeNet, mediumNet: fm.mediumNet, smallNet: fm.smallNet },
@@ -207,20 +209,17 @@ export default function App() {
       });
 
       // === Dark Pool (concept boards) ===
+      // 注意：顶部4张汇总卡片（今日暗盘/明盘净流入、近5日/近10日主力净流入）改用全市场真实资金数据
+      // 而非对30个概念板块做加总——因为A股个股通常同时归属多个概念板块，直接加总会造成
+      // 同一笔资金被重复计算数倍，产生远超真实市场规模的失真数字（曾出现"近10日-1.7万亿"这类
+      // 明显脱离实际的错误结果），且会与"资金结构速览"模块展示的同名指标数字自相矛盾。
+      // 板块级别的darkNet/openNet仅用于TOP10板块之间的横向排序对比，这个用途是合理的，予以保留。
       try {
         const conceptBoards = await fetchBoardFundFlow("concept", 30);
-        let totalOpenNet = 0;
-        let totalDarkNet = 0;
-        let totalMainNet5d = 0;
-        let totalMainNet10d = 0;
         const topBoards: DarkPoolData["topBoards"] = [];
         for (const d of conceptBoards) {
           const darkNet = d.extraLargeNet + d.largeNet;
           const openNet = d.mediumNet + d.smallNet;
-          totalDarkNet += darkNet;
-          totalOpenNet += openNet;
-          totalMainNet5d += d.mainNet5d;
-          totalMainNet10d += d.mainNet10d;
           let flowType: string;
           if (darkNet > 0 && openNet < 0 && Math.abs(darkNet) > Math.abs(openNet) * 0.5) {
             flowType = "洗盘（暗盘流入+明盘流出）";
@@ -237,12 +236,22 @@ export default function App() {
         }
         topBoards.sort((a, b) => b.darkNet - a.darkNet);
         const top10 = topBoards.slice(0, 10);
+
+        // 全市场级别的暗盘/明盘净流入与近5/10日主力净流入，直接复用全市场资金结构数据（与资金结构速览同源，避免重复计算与数字矛盾）
+        const fm = fundMain.status === "fulfilled" ? fundMain.value : null;
+        const marketDarkNet = fm ? fm.extraLargeNet + fm.largeNet : 0;
+        const marketOpenNet = fm ? fm.mediumNet + fm.smallNet : 0;
+        const marketMainNet5d = fm ? fm.mainNet5d : 0;
+        const marketMainNet10d = fm ? fm.mainNet10d : 0;
+
         let marketFlowType = "数据不足";
-        if (totalDarkNet > 0 && totalOpenNet < 0) marketFlowType = "全市场暗盘流入、明盘流出 — 可能为洗盘阶段（主力悄悄吸筹）";
-        else if (totalDarkNet < 0 && totalOpenNet > 0) marketFlowType = "全市场暗盘流出、明盘流入 — 可能为出货阶段（主力撤退）";
-        else if (totalDarkNet > 0 && totalOpenNet > 0) marketFlowType = "全市场明暗盘共振做多 — 多方合力";
-        else if (totalDarkNet < 0 && totalOpenNet < 0) marketFlowType = "全市场明暗盘共振做空 — 空方主导";
-        else marketFlowType = "全市场明暗盘方向分歧 — 多空胶着";
+        if (fm) {
+          if (marketDarkNet > 0 && marketOpenNet < 0) marketFlowType = "全市场暗盘流入、明盘流出 — 可能为洗盘阶段（主力悄悄吸筹）";
+          else if (marketDarkNet < 0 && marketOpenNet > 0) marketFlowType = "全市场暗盘流出、明盘流入 — 可能为出货阶段（主力撤退）";
+          else if (marketDarkNet > 0 && marketOpenNet > 0) marketFlowType = "全市场明暗盘共振做多 — 多方合力";
+          else if (marketDarkNet < 0 && marketOpenNet < 0) marketFlowType = "全市场明暗盘共振做空 — 空方主导";
+          else marketFlowType = "全市场明暗盘方向分歧 — 多空胶着";
+        }
 
         // Fetch constituents for ALL top10 boards
         const boardStocks: Record<string, BoardStock[]> = {};
@@ -257,8 +266,8 @@ export default function App() {
         await Promise.allSettled(stockFetchPromises);
 
         setDarkPool({
-          darkPoolToday: totalDarkNet, openPoolToday: totalOpenNet,
-          darkPool5d: totalMainNet5d, darkPool10d: totalMainNet10d,
+          darkPoolToday: marketDarkNet, openPoolToday: marketOpenNet,
+          darkPool5d: marketMainNet5d, darkPool10d: marketMainNet10d,
           marketFlowType, topBoards: top10, boardStocks,
         });
       } catch {
@@ -290,7 +299,7 @@ export default function App() {
             for (const s of stocks) {
               const vetoReasons: string[] = [];
               if (s.mainNet < 0 && s.smallNet > 0) vetoReasons.push("主力净流出而散户净流入，结构不健康");
-              if (s.pct >= 9.8) vetoReasons.push("已涨停，短线博弈风险陡增");
+              if (s.pct >= stockLimitPct(s.code) - 0.2) vetoReasons.push("已涨停，短线博弈风险陡增");
               if (s.turnoverRate > 25) vetoReasons.push("换手率过高（>25%），交易过度拥挤");
               let crowding = "正常";
               if (s.turnoverRate > 20 || s.volumeRatio > 3) crowding = "极度拥挤";
@@ -354,7 +363,7 @@ export default function App() {
             <KeyIndicators data={{ breadth: overview?.breadth, fundStructure }} loading={loading} />
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <h3 className="mb-3 text-sm font-bold text-slate-200">📰 实时快讯（政策与市场动态）</h3>
-              <NewsPanel />
+              <NewsPanel autoRefresh={autoRefresh} />
             </div>
           </>
         )}

@@ -2,6 +2,14 @@
 
 // 个股行情页 - 使用东方财富统一行情页面格式
 export function stockRealUrl(code: string): string {
+  // 900开头为沪市B股，不属于北交所，必须用sh前缀（否则会404）
+  if (code.startsWith("900")) {
+    return `https://quote.eastmoney.com/sh${code}.html`;
+  }
+  // 200开头为深市B股，用sz前缀
+  if (code.startsWith("200")) {
+    return `https://quote.eastmoney.com/sz${code}.html`;
+  }
   if (code.startsWith("6") || code.startsWith("5")) {
     return `https://quote.eastmoney.com/sh${code}.html`;
   }
@@ -9,20 +17,21 @@ export function stockRealUrl(code: string): string {
     return `https://quote.eastmoney.com/sz${code}.html`;
   }
   if (code.startsWith("4") || code.startsWith("8") || code.startsWith("9")) {
-    return `https://quote.eastmoney.com/bj${code}.html`;
+    return `https://quote.eastmoney.com/bj/${code}.html`;
   }
   return `https://quote.eastmoney.com/sz${code}.html`;
 }
 
 // 板块行情页 - 使用东方财富板块详情页
+// 注意：东方财富板块页面URL必须带市场前缀"90."，否则会404（如 quote.eastmoney.com/bk/90.BK1277.html）
 export function boardRealUrl(boardCode: string, boardType: string): string {
   // 东方财富板块代码格式：BK0xxx
   if (boardCode && boardCode.startsWith("BK")) {
-    return `https://quote.eastmoney.com/bk/${boardCode}.html`;
+    return `https://quote.eastmoney.com/bk/90.${boardCode}.html`;
   }
   // 如果板块代码不以BK开头，尝试拼接
   if (boardCode && /^\d+$/.test(boardCode)) {
-    return `https://quote.eastmoney.com/bk/BK${boardCode}.html`;
+    return `https://quote.eastmoney.com/bk/90.BK${boardCode}.html`;
   }
   // 根据类型回退到对应列表页
   if (boardType === "concept") {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { boardRealUrl, stockRealUrl } from "../lib/realLinks";
 import type { DarkPoolData } from "../App";
@@ -91,7 +91,7 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
             </thead>
             <tbody>
               {topBoards.map((b) => (
-                <tbody key={b.code}>
+                <Fragment key={b.code}>
                   <tr className="border-t border-white/5 hover:bg-white/5">
                     <td className="px-3 py-2">
                       <button
@@ -140,7 +140,7 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
                       </td>
                     </tr>
                   )}
-                </tbody>
+                </Fragment>
               ))}
               {topBoards.length === 0 && (
                 <tr><td colSpan={7} className="p-4 text-center text-slate-500">暂无数据</td></tr>

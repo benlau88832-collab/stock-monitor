@@ -62,7 +62,8 @@ export default function TopNav(props: {
           </button>
           <button
             onClick={onRefreshNow}
-            className="rounded bg-white/10 px-2 py-1 font-medium text-slate-100 hover:bg-white/20"
+            disabled={loading}
+            className="rounded bg-white/10 px-2 py-1 font-medium text-slate-100 hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             手动刷新
           </button>

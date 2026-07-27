@@ -158,7 +158,9 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
               </button>
               <button
                 onClick={() => setHistoryExpanded(v => !v)}
-                className="rounded px-2 py-1 text-xs bg-white/10 text-slate-300 hover:bg-white/20"
+                disabled={showChart}
+                title={showChart ? "切换到表格视图后可展开/收起明细行" : undefined}
+                className="rounded px-2 py-1 text-xs bg-white/10 text-slate-300 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white/10"
               >
                 {historyExpanded ? "收起" : `展开全部 ${history.length} 天`}
               </button>
