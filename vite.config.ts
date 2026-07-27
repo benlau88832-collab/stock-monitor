@@ -16,4 +16,11 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  // 构建产物输出到 /docs 目录，与源码保持在同一分支内，
+  // 便于直接用 GitHub Pages 的 "Deploy from a branch /docs" 方式做实时预览，
+  // 不需要额外维护独立的 gh-pages 分支。
+  build: {
+    outDir: "docs",
+    emptyOutDir: true,
+  },
 });
