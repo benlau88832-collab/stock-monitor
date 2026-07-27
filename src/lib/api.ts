@@ -89,76 +89,79 @@ export interface MarketBreadth {
   avgPct: number;
 }
 
-// 并行获取所有A股涨跌数据（关键修复：1.处理diff可能是对象而非数组的情况 2.保证total与up+down+flat内部一致 3.板块并行请求避免超时级联拖慢 4.按板块区分涨跌停幅度）
+// 全市场涨跌家数（关键修复：改用东方财富指数官方自带的涨跌家数统计字段 f104/f105/f106，
+// 这与东方财富网站每个行情页顶部"上证：X 涨:A 平:B 跌:C"展示的数字完全同源、由交易所侧
+// 实时统计好返回，不依赖前端自行翻页抓取全市场几千只个股再计数——旧方案在网络不稳定/接口
+// 分页限流时容易出现漏抓，导致"总数4440但涨跌加起来只有400"这类自相矛盾的错误数字。
+// 覆盖范围：上证指数(沪市全部，含主板+科创板) + 深证成指(深市全部，含主板+创业板) + 北证50(北交所)，
+// 三者合计即为沪深北全市场股票，与"数据来源：沪深主板+创业板+科创板+北交所"的口径一致。
+const BREADTH_SECIDS = ["1.000001", "0.399001", "0.899050"];
+
 export async function fetchMarketBreadth(): Promise<MarketBreadth> {
-  // 沪深全部A股 - 各板块分别获取以确保完整
-  // 涨跌停幅度（2025年7月新规后，各板块ST/*ST股票涨跌幅已与该板块普通股统一，无需再单独区分）：
-  // 主板±10%；创业板/科创板±20%；北交所±30%
-  const segments: Array<{ fs: string; limitPct: number }> = [
-    { fs: "m:0+t:6", limitPct: 10 },     // 深圳主板
-    { fs: "m:0+t:80", limitPct: 20 },    // 创业板
-    { fs: "m:1+t:2", limitPct: 10 },     // 上海主板
-    { fs: "m:1+t:23", limitPct: 20 },    // 科创板
-    { fs: "m:0+t:81+s:2048", limitPct: 30 }, // 北交所
-  ];
+  const url = `${PUSH2}/ulist.np/get?fltt=2&fields=f2,f3,f12,f104,f105,f106&secids=${BREADTH_SECIDS.join(",")}`;
+  const json = await jsonp<any>(url, 10000);
+  const diff = normalizeDiff(json?.data?.diff);
 
-  // 单个板块的抓取逻辑，返回该板块实际抓取到的个股列表（可能因超时/异常而不完整，但至少内部一致）
-  async function fetchSegment(seg: { fs: string; limitPct: number }): Promise<Array<{ pct: number; price: number; limitPct: number }>> {
-    const stocks: Array<{ pct: number; price: number; limitPct: number }> = [];
-    let page = 1;
-    while (true) {
-      const url = `${PUSH2}/clist/get?pn=${page}&pz=5000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${seg.fs}&fields=f2,f3,f12`;
-      try {
-        const json = await jsonp<any>(url, 15000);
-        const rawDiff = json?.data?.diff;
-        let diff: Array<Record<string, unknown>> = [];
-        if (Array.isArray(rawDiff)) {
-          diff = rawDiff;
-        } else if (rawDiff && typeof rawDiff === "object") {
-          diff = Object.values(rawDiff);
-        }
+  let up = 0, down = 0, flat = 0;
+  let pctSum = 0, pctCount = 0;
+  for (const d of diff) {
+    up += num(d.f104);
+    down += num(d.f105);
+    flat += num(d.f106);
+    const pct = num(d.f3);
+    if (Number.isFinite(pct)) { pctSum += pct; pctCount++; }
+  }
+  const total = up + down + flat;
 
-        if (diff.length === 0) break;
-
-        for (const d of diff) {
-          const pct = num(d.f3);
-          const price = num(d.f2);
-          if (price > 0) {
-            stocks.push({ pct, price, limitPct: seg.limitPct });
+  // 涨跌停家数为补充指标：单独抓取全市场个股统计，允许尽力而为（若因网络原因未取全，
+  // 只影响这两个补充数字，不会影响上面已经从官方口径拿到的total/up/down/flat主指标）
+  let limitUp = 0, limitDown = 0;
+  try {
+    const segments: Array<{ fs: string; limitPct: number }> = [
+      { fs: "m:0+t:6", limitPct: 10 },     // 深圳主板
+      { fs: "m:0+t:80", limitPct: 20 },    // 创业板
+      { fs: "m:1+t:2", limitPct: 10 },     // 上海主板
+      { fs: "m:1+t:23", limitPct: 20 },    // 科创板
+      { fs: "m:0+t:81+s:2048", limitPct: 30 }, // 北交所
+    ];
+    async function fetchSegment(seg: { fs: string; limitPct: number }): Promise<{ limitUp: number; limitDown: number }> {
+      let segLimitUp = 0, segLimitDown = 0;
+      let page = 1;
+      while (true) {
+        const segUrl = `${PUSH2}/clist/get?pn=${page}&pz=5000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${seg.fs}&fields=f2,f3,f12`;
+        try {
+          const segJson = await jsonp<any>(segUrl, 15000);
+          const rawDiff = segJson?.data?.diff;
+          let segDiff: Array<Record<string, unknown>> = [];
+          if (Array.isArray(rawDiff)) segDiff = rawDiff;
+          else if (rawDiff && typeof rawDiff === "object") segDiff = Object.values(rawDiff);
+          if (segDiff.length === 0) break;
+          for (const d of segDiff) {
+            const pct = num(d.f3);
+            const price = num(d.f2);
+            if (price <= 0) continue;
+            if (pct >= seg.limitPct - 0.2) segLimitUp++;
+            if (pct <= -(seg.limitPct - 0.2)) segLimitDown++;
           }
+          if (segDiff.length < 5000) break;
+          page++;
+          if (page > 3) break;
+        } catch {
+          break;
         }
-
-        if (diff.length < 5000) break;
-        page++;
-        if (page > 3) break;
-      } catch {
-        break;
+      }
+      return { limitUp: segLimitUp, limitDown: segLimitDown };
+    }
+    const results = await Promise.allSettled(segments.map(fetchSegment));
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        limitUp += r.value.limitUp;
+        limitDown += r.value.limitDown;
       }
     }
-    return stocks;
+  } catch {
+    // 涨跌停统计失败时保持0，不影响主指标
   }
-
-  // 各板块并行请求，互不阻塞，减少整体超时风险
-  const results = await Promise.allSettled(segments.map(fetchSegment));
-  const allStocks: Array<{ pct: number; price: number; limitPct: number }> = [];
-  for (const r of results) {
-    if (r.status === "fulfilled") allStocks.push(...r.value);
-  }
-
-  let up = 0, down = 0, flat = 0, limitUp = 0, limitDown = 0, sum = 0;
-  for (const s of allStocks) {
-    const pct = s.pct;
-    sum += pct;
-    if (pct > 0) up++;
-    else if (pct < 0) down++;
-    else flat++;
-    // 涨跌停判断：按所属板块动态取幅度阈值，留0.2%误差余量（数据精度/四舍五入）
-    if (pct >= s.limitPct - 0.2) limitUp++;
-    if (pct <= -(s.limitPct - 0.2)) limitDown++;
-  }
-
-  // 关键修复：total 必须与 up+down+flat 的实际来源保持一致，避免出现"总数4440但涨跌家数只加起来400"这类自相矛盾的展示
-  const total = allStocks.length;
 
   return {
     total,
@@ -167,7 +170,7 @@ export async function fetchMarketBreadth(): Promise<MarketBreadth> {
     flat,
     limitUp,
     limitDown,
-    avgPct: allStocks.length ? sum / allStocks.length : 0,
+    avgPct: pctCount ? pctSum / pctCount : 0,
   };
 }
 
@@ -478,6 +481,85 @@ export async function fetchFastNews(pageSize = 20): Promise<FastNewsItem[]> {
       time: String(item.showTime ?? ""),
       url: newsDetailUrl(String(item.code ?? "")),
     }));
+  } catch {
+    return [];
+  }
+}
+
+// ============== 个股相关新闻（利好利空资讯） ==============
+export interface StockNewsItem {
+  code: string;
+  title: string;
+  summary: string;
+  time: string; // "YYYY-MM-DD HH:mm:ss"
+  source: string;
+  url: string;
+}
+
+// 东方财富全文检索接口 - 按股票名称/代码搜索相关新闻资讯（真实数据，非模拟）
+// 参考：与东方财富网站搜索框功能同源接口
+export async function fetchStockNews(keyword: string, pageSize = 10): Promise<StockNewsItem[]> {
+  const param = {
+    uid: "",
+    keyword,
+    type: ["cmsArticleWebOld"],
+    client: "web",
+    clientType: "web",
+    clientVersion: "curr",
+    param: {
+      cmsArticleWebOld: {
+        searchScope: "default",
+        sort: "default",
+        pageIndex: 1,
+        pageSize,
+        preTag: "",
+        postTag: "",
+      },
+    },
+  };
+  const url = `https://search-api-web.eastmoney.com/search/jsonp?param=${encodeURIComponent(JSON.stringify(param))}`;
+  try {
+    const json = await jsonp<any>(url, 10000, "cb");
+    const list: any[] = json?.result?.cmsArticleWebOld ?? [];
+    return list.map((item) => ({
+      code: String(item.code ?? ""),
+      title: String(item.title ?? ""),
+      summary: String(item.content ?? ""),
+      time: String(item.date ?? ""),
+      source: String(item.mediaName ?? ""),
+      url: String(item.url ?? ""),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ============== 个股公告（资金面/公司层面重大事项） ==============
+export interface StockAnnouncement {
+  code: string;
+  title: string;
+  columnName: string;
+  time: string; // "YYYY-MM-DD HH:mm:ss"
+  url: string;
+}
+
+// 东方财富个股公告接口（真实数据，与 data.eastmoney.com/notices 公告大全同源）
+export async function fetchStockAnnouncements(code: string, pageSize = 10): Promise<StockAnnouncement[]> {
+  const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=${pageSize}&page_index=1&ann_type=A&client_source=web&f_node=0&s_node=0&stock_list=${code}`;
+  try {
+    const json = await jsonp<any>(url, 10000);
+    const list: any[] = json?.data?.list ?? [];
+    return list.map((item) => {
+      const artCode = String(item.art_code ?? "");
+      const columns: any[] = item.columns ?? [];
+      return {
+        code: String(item.codes?.[0]?.stock_code ?? code),
+        title: String(item.title ?? ""),
+        columnName: columns.length > 0 ? String(columns[0].column_name ?? "") : "",
+        time: String(item.display_time ?? item.notice_date ?? ""),
+        url: `https://data.eastmoney.com/notices/detail/${code}/${artCode}.html`,
+      };
+    });
   } catch {
     return [];
   }
