@@ -41,7 +41,7 @@ function SentimentTag({ text }: { text: string }) {
     s === "利好" ? "bg-rose-500/20 text-rose-300" :
     s === "利空" ? "bg-emerald-500/20 text-emerald-300" :
     "bg-slate-500/20 text-slate-300";
-  return <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${cls}`}>{s}</span>;
+  return <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${cls}`}>{s}</span>;
 }
 
 export default function StockMonitor() {
@@ -195,7 +195,7 @@ export default function StockMonitor() {
                 </div>
               </div>
             </div>
-            <div className="text-[10px] text-amber-300">点击股票名称查看东方财富实时行情页面 →</div>
+            <div className="text-[11px] text-amber-300">点击股票名称查看东方财富实时行情页面 →</div>
             <div className={`mt-3 rounded-lg px-3 py-2 text-sm font-semibold ${vetoTriggered ? "bg-rose-500/20 text-rose-200" : "bg-black/20 text-slate-300"}`}>
               {vetoTriggered ? "🚨 " : ""}{vetoReason}
             </div>
@@ -235,7 +235,7 @@ export default function StockMonitor() {
           <div className="rounded-xl border border-white/10 bg-white/5 p-4">
             <div className="mb-3 flex items-center justify-between">
               <h4 className="text-sm font-bold text-slate-200">📰 {data.name} 相关资讯（利好利空监控）</h4>
-              <span className="text-[10px] text-amber-300">数据来自东方财富全文检索接口，真实抓取</span>
+              <span className="text-[11px] text-amber-300">数据来自东方财富全文检索接口，真实抓取</span>
             </div>
             {newsLoading ? (
               <div className="text-sm text-slate-500">加载中…</div>
@@ -251,12 +251,12 @@ export default function StockMonitor() {
                         <SentimentTag text={n.title + n.summary} />
                         <span className="text-sm font-medium text-slate-200">{n.title}</span>
                       </div>
-                      <span className="shrink-0 text-[10px] text-slate-500">{n.time.slice(0, 16)}</span>
+                      <span className="shrink-0 text-[11px] text-slate-500">{n.time.slice(0, 16)}</span>
                     </div>
                     {n.summary && (
                       <div className="mt-1 line-clamp-2 text-[12px] text-slate-400">{n.summary}</div>
                     )}
-                    <div className="mt-1 text-[10px] text-amber-300/70">来源：{n.source || "东方财富"} · 点击查看原文 →</div>
+                    <div className="mt-1 text-[11px] text-amber-300/70">来源：{n.source || "东方财富"} · 点击查看原文 →</div>
                   </a>
                 ))}
               </div>
@@ -267,7 +267,7 @@ export default function StockMonitor() {
           <div className="rounded-xl border border-white/10 bg-white/5 p-4">
             <div className="mb-3 flex items-center justify-between">
               <h4 className="text-sm font-bold text-slate-200">📋 {data.name} 公司公告（资金面/重大事项监控）</h4>
-              <span className="text-[10px] text-amber-300">数据来自东方财富公告接口，真实抓取</span>
+              <span className="text-[11px] text-amber-300">数据来自东方财富公告接口，真实抓取</span>
             </div>
             {newsLoading ? (
               <div className="text-sm text-slate-500">加载中…</div>
@@ -280,12 +280,12 @@ export default function StockMonitor() {
                     className="block rounded-lg border border-white/5 bg-black/20 p-3 hover:bg-black/30 transition">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        {a.columnName && <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">{a.columnName}</span>}
+                        {a.columnName && <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[11px] font-bold text-sky-300">{a.columnName}</span>}
                         <span className="text-sm font-medium text-slate-200">{a.title}</span>
                       </div>
-                      <span className="shrink-0 text-[10px] text-slate-500">{a.time.slice(0, 16)}</span>
+                      <span className="shrink-0 text-[11px] text-slate-500">{a.time.slice(0, 16)}</span>
                     </div>
-                    <div className="mt-1 text-[10px] text-amber-300/70">点击查看公告原文 →</div>
+                    <div className="mt-1 text-[11px] text-amber-300/70">点击查看公告原文 →</div>
                   </a>
                 ))}
               </div>

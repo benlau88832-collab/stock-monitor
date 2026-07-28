@@ -1,51 +1,65 @@
-import { fmtPct, fmtMoney, pctColor } from "../lib/format";
-import { globalMarketUrl } from "../lib/realLinks";
+import { fmtMoney, fmtPct, pctColor } from "../lib/format";
+import { COMMODITY_INDICES } from "../lib/api";
 import type { GlobalData } from "../App";
 
 export default function GlobalSignals({ data, loading }: { data: GlobalData | null; loading: boolean }) {
-  const signals = data?.globalSignals ?? [];
-  const turnover = data?.turnover;
+  if (loading && !data) return <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-slate-400">正在加载全球市场数据…</div>;
+  if (!data) return null;
 
-  if (loading && signals.length === 0) {
-    return <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-slate-400">正在加载全球市场数据…</div>;
-  }
+  const { globalSignals, commodities, turnover } = data;
 
   return (
-    <section className="rounded-xl border border-white/10 bg-white/5 p-5">
-      <div className="mb-4 flex items-center justify-between">
+    <section className="rounded-xl border border-white/10 bg-white/5 p-5 space-y-4">
+      <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-slate-200">🌍 全球信号 · 主要海外市场和重要指标监控</h3>
-        <span className="text-[10px] text-amber-300">数据来自东方财富全球市场接口，实时更新</span>
+        <span className="text-[11px] text-amber-300">数据来自东方财富全球市场接口，实时更新</span>
       </div>
 
-      {turnover?.available && (
+      {/* 成交额 */}
+      {turnover.available && (
         <a href="https://data.eastmoney.com/zjlx/detail.html" target="_blank" rel="noopener noreferrer"
-          className="mb-4 block rounded-lg border border-white/5 bg-black/20 p-3 hover:bg-black/30 transition">
+          className="block rounded-xl border border-white/10 bg-white/5 p-3 hover:bg-white/8 transition">
           <div className="text-xs text-slate-400">沪深两市成交额</div>
-          <div className="mt-1 text-xl font-black text-slate-100">{fmtMoney(turnover.amount)}</div>
-          <div className="text-[10px] text-amber-300/60">点击查看详情 →</div>
+          <div className="mt-1 text-xl font-bold text-emerald-400">{fmtMoney(turnover.amount)}</div>
         </a>
       )}
 
-      {signals.length === 0 ? (
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-300">
-          全球市场数据暂时无法获取，请稍后重试。数据源为东方财富全球市场接口。
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
-          {signals.map((s) => (
-            <a key={s.name} href={globalMarketUrl(s.name)} target="_blank" rel="noopener noreferrer"
-              className="rounded-lg border border-white/5 bg-black/20 p-3 hover:border-amber-400/20 hover:bg-black/30 transition">
-              <div className="text-xs text-slate-400">{s.name}</div>
-              <div className="mt-1 text-base font-bold text-slate-100">{s.price?.toFixed(2) ?? "--"}</div>
-              <div className={`text-sm font-semibold ${pctColor(s.pct)}`}>{fmtPct(s.pct)}</div>
-              <div className="mt-1 text-[10px] text-amber-300">点击查看真实市场数据 →</div>
-            </a>
-          ))}
+      {/* 海外指数 */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+        {globalSignals.map((idx) => (
+          <a key={idx.name} href={`https://quote.eastmoney.com/unify/r/100.${idx.name}`} target="_blank" rel="noopener noreferrer"
+            className="rounded-xl border border-white/10 bg-white/5 p-3 hover:border-amber-400/30 hover:bg-white/10 transition block">
+            <div className="text-xs text-slate-400">{idx.name}</div>
+            <div className="mt-1 text-base font-bold text-slate-50">{idx.price?.toFixed(2)}</div>
+            <div className={`text-sm font-semibold ${pctColor(idx.pct)}`}>{fmtPct(idx.pct)}</div>
+          </a>
+        ))}
+      </div>
+
+      {/* 隔夜关联品种 */}
+      {commodities.length > 0 && (
+        <div>
+          <div className="text-xs font-bold text-amber-300 mb-2">📦 隔夜关联品种（商品 / 汇率）</div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+            {commodities.map((c) => {
+              const meta = COMMODITY_INDICES.find(ci => ci.name === c.name);
+              return (
+                <div key={c.name} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                  <div className="text-xs text-slate-400">{c.name}</div>
+                  <div className="mt-1 text-base font-bold text-slate-50">{c.price?.toFixed(c.price > 100 ? 1 : c.price > 10 ? 2 : 4)}</div>
+                  <div className={`text-sm font-semibold ${pctColor(c.pct)}`}>{fmtPct(c.pct)}</div>
+                  {meta?.hint && (
+                    <div className="mt-1 text-[11px] text-slate-500 leading-tight">{meta.hint}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      <div className="mt-3 text-[11px] text-slate-600">
-        说明：全球市场数据用于判断A股外部环境。所有数据基于东方财富全球市场接口真实抓取，可点击各卡片跳转验证。
+      <div className="text-[11px] text-slate-600">
+        全球指数和商品数据来自东方财富push2接口（真实数据）。联动提示为预设文字模板。
       </div>
     </section>
   );

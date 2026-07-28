@@ -1,16 +1,17 @@
-import { fmtTime } from "../lib/format";
+import HealthDot from "./HealthDot";
+import { getCurrentSession } from "../lib/tradingSession";
 
-export type TabKey = "market" | "fund" | "mainline" | "stock" | "pitfalls";
+export type TabKey = "dashboard" | "fundline" | "radar" | "dragon" | "news";
 
 const TABS: { key: TabKey; label: string }[] = [
-  { key: "market", label: "市场监控" },
-  { key: "fund", label: "资金结构" },
-  { key: "mainline", label: "主线与潜力" },
-  { key: "stock", label: "个股监控" },
-  { key: "pitfalls", label: "避坑指南" },
+  { key: "dashboard", label: "驾驶舱" },
+  { key: "fundline", label: "资金主线" },
+  { key: "radar", label: "个股雷达" },
+  { key: "dragon", label: "龙虎榜复盘" },
+  { key: "news", label: "消息面" },
 ];
 
-export default function TopNav(props: {
+interface Props {
   active: TabKey;
   onChange: (t: TabKey) => void;
   lastUpdated: string | null;
@@ -18,57 +19,53 @@ export default function TopNav(props: {
   autoRefresh: boolean;
   onToggleAutoRefresh: () => void;
   onRefreshNow: () => void;
-}) {
-  const { active, onChange, lastUpdated, loading, autoRefresh, onToggleAutoRefresh, onRefreshNow } = props;
+  countdown: number;
+}
+
+export default function TopNav({ active, onChange, loading, autoRefresh, onToggleAutoRefresh, onRefreshNow, countdown }: Props) {
   return (
-    <header className="sticky top-0 z-30 border-b border-white/10 bg-[#070a12]/95 backdrop-blur">
-      <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-4 py-3">
+    <nav className="sticky top-0 z-50 border-b border-white/10 bg-[#0b0f1a]/95 backdrop-blur-md">
+      <div className="mx-auto flex max-w-[1500px] items-center justify-between px-4 py-2">
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-gradient-to-br from-rose-500 to-amber-400 text-sm font-black text-black">
-            A
-          </div>
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-amber-400 to-rose-500 text-sm font-black text-white">A</div>
           <div>
-            <div className="text-sm font-bold tracking-wide text-slate-50">A股实时监控终端</div>
-            <div className="text-[10px] text-slate-500">资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号</div>
+            <div className="text-sm font-bold text-slate-100 leading-tight">A股实时监控终端</div>
+            <div className="text-[11px] text-slate-500">资金结构 · 涨跌幅 · 风险信号 · 机会信号</div>
           </div>
         </div>
-
-        <nav className="ml-2 flex flex-1 flex-wrap gap-1 overflow-x-auto">
+        <div className="flex items-center gap-1">
           {TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => onChange(t.key)}
-              className={`whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                active === t.key
-                  ? "bg-amber-400 text-black shadow"
-                  : "text-slate-300 hover:bg-white/5 hover:text-white"
-              }`}
-            >
+            <button key={t.key} onClick={() => onChange(t.key)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                active === t.key ? "bg-amber-500/20 text-amber-300" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+              }`}>
               {t.label}
             </button>
           ))}
-        </nav>
-
-        <div className="flex items-center gap-3 text-xs text-slate-400">
-          <span className="flex items-center gap-1">
-            <span className={`h-2 w-2 rounded-full ${loading ? "bg-amber-400 animate-pulse" : "bg-emerald-400 animate-pulse"}`} />
-            {loading ? "刷新中" : "已更新"} {fmtTime(lastUpdated)}
-          </span>
-          <button
-            onClick={onToggleAutoRefresh}
-            className={`rounded px-2 py-1 font-medium ${autoRefresh ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-700/40 text-slate-300"}`}
-          >
-            自动刷新{autoRefresh ? "开" : "关"}
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          {(() => {
+            const session = getCurrentSession();
+            return (
+              <>
+                <span className="text-[11px] text-slate-600">{session.label}</span>
+                {autoRefresh && countdown > 0 && (
+                  <span className="text-slate-500">{countdown}s</span>
+                )}
+              </>
+            );
+          })()}
+          <button onClick={onToggleAutoRefresh}
+            className={`rounded px-2 py-1 ${autoRefresh ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-500/20 text-slate-400"}`}>
+            {autoRefresh ? "自动刷新开" : "自动刷新关"}
           </button>
-          <button
-            onClick={onRefreshNow}
-            disabled={loading}
-            className="rounded bg-white/10 px-2 py-1 font-medium text-slate-100 hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            手动刷新
+          <button onClick={onRefreshNow} disabled={loading}
+            className="rounded px-2 py-1 bg-white/10 text-slate-300 hover:bg-white/20 disabled:opacity-40">
+            {loading ? "刷新中…" : "手动刷新"}
           </button>
+          <HealthDot />
         </div>
       </div>
-    </header>
+    </nav>
   );
 }

@@ -62,9 +62,9 @@ export default function Pitfalls() {
             className="group rounded-xl border border-rose-500/20 bg-rose-950/10 p-4 hover:border-rose-400/40 hover:bg-rose-950/20 transition">
             <div className="text-sm font-black text-rose-200 group-hover:text-rose-100">{item.title}</div>
             <div className="mt-2 text-xs text-slate-300 leading-relaxed">{item.desc}</div>
-            <div className="mt-2 rounded bg-rose-500/10 px-2 py-1 text-[10px] text-rose-300">真实数据源：{item.realDataSource}</div>
-            <div className="mt-2 rounded bg-emerald-900/20 px-2 py-1 text-[10px] text-emerald-300">避坑建议：{item.avoidTip}</div>
-            <div className="mt-2 text-[10px] text-amber-300 group-hover:text-amber-200">点击查看真实数据 →</div>
+            <div className="mt-2 rounded bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">真实数据源：{item.realDataSource}</div>
+            <div className="mt-2 rounded bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-300">避坑建议：{item.avoidTip}</div>
+            <div className="mt-2 text-[11px] text-amber-300 group-hover:text-amber-200">点击查看真实数据 →</div>
           </a>
         ))}
       </div>

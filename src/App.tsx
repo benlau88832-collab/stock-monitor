@@ -1,37 +1,66 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
 import TopNav, { type TabKey } from "./components/TopNav";
 import MarketOverview from "./components/MarketOverview";
 import FundStructure from "./components/FundStructure";
 import DarkPool from "./components/DarkPool";
 import GlobalSignals from "./components/GlobalSignals";
-import KeyIndicators from "./components/KeyIndicators";
-import NewsPanel from "./components/NewsPanel";
-import Mainline from "./components/Mainline";
-import StockMonitor from "./components/StockMonitor";
-import Pitfalls from "./components/Pitfalls";
+// 深潜组件 lazy 分包：龙虎榜/个股雷达/消息面不在首屏，按需加载
+const StockWatchlist = lazy(() => import("./components/StockWatchlist"));
+const NewsPanel = lazy(() => import("./components/NewsPanel"));
+const DragonTiger = lazy(() => import("./components/DragonTiger"));
+const LimitBoard = lazy(() => import("./components/LimitBoard"));
+import Dashboard from "./components/Dashboard";
+
+import StatusBar from "./components/StatusBar";
+import AlertBanner, { type AlertItem } from "./components/AlertBanner";
+import { appendSignal } from "./lib/signalLedger";
+import { getCurrentSession } from "./lib/tradingSession";
 import {
   fetchIndexOverview,
   fetchMarketBreadth,
   fetchMarketMainFund,
   fetchGlobalIndices,
+  fetchCommodities,
   fetchMarketTurnover,
   fetchBoardFundFlow,
   fetchBoardConstituents,
   fetchMarketFundHistory,
+  fetchBoardRankTopBottom,
+  fetchLimitPoolSummary,
+  fetchTurnoverHistory,
+  isRealConceptBoard,
   stockLimitPct,
   type IndexQuote,
   type MarketBreadth,
   type GlobalIndex,
   type BoardFlowItem,
   type BoardStock,
+  type BoardRankItem,
   type FundSnapshot,
+  type LimitPoolSummary,
 } from "./lib/api";
+
+export interface SentimentFactors {
+  upDownScore: number;
+  limitScore: number;
+  avgPctScore: number;
+  indexScore: number;
+  limitUpBonus: number;
+  blastedPenalty: number;
+  fundFlowScore: number;
+}
 
 export interface OverviewData {
   indices: IndexQuote[];
   breadth: MarketBreadth | null;
   sentiment: number;
   sentimentLabel: string;
+  sentimentFactors: SentimentFactors | null;
+  sentimentYesterday: number | null;
+  limitPool: LimitPoolSummary | null;
+  turnoverAmount: number;
+  turnoverYesterday: number | null;
+  turnoverAvg5d: number | null;
 }
 
 export interface FundStructureData {
@@ -46,21 +75,30 @@ export interface FundStructureData {
     actionHint: string;
   };
   history: FundSnapshot[];
+  boardRank: {
+    inflow: BoardRankItem[];
+    outflow: BoardRankItem[];
+  } | null;
+  turnoverAmount: number; // 两市成交额（用于出货强度计算）
 }
 
 export interface DarkPoolData {
-  darkPoolToday: number;
-  openPoolToday: number;
-  darkPool5d: number;
-  darkPool10d: number;
-  marketFlowType: string;
+  // 明盘 = 超大单+大单（明面上的大资金行为）
+  // 暗盘 = 中单+小单（看似散户，但可能包含主力拆单的隐蔽资金）
+  // 资金总体 = 主力净流入（f62）
+  totalFlow: number;      // 资金总体流向（主力净流入）
+  openPoolToday: number;  // 今日明盘净流入（超大单+大单）
+  darkPoolToday: number;  // 今日暗盘净流入（中单+小单）
+  darkPool5d: number;     // 近5日主力净流入
+  darkPool10d: number;    // 近10日主力净流入
+  marketFlowType: string; // 主力动向判断（同花顺6种组合）
   topBoards: Array<{
     code: string;
     name: string;
     pct: number;
-    darkNet: number;
-    openNet: number;
-    flowType: string;
+    openNet: number;    // 明盘净流入（超大单+大单）
+    darkNet: number;    // 暗盘净流入（中单+小单）
+    flowType: string;   // 主力动向判断
     boardType: string;
   }>;
   boardStocks: Record<string, BoardStock[]>;
@@ -68,6 +106,7 @@ export interface DarkPoolData {
 
 export interface GlobalData {
   globalSignals: GlobalIndex[];
+  commodities: GlobalIndex[];
   turnover: { amount: number; available: boolean };
 }
 
@@ -101,10 +140,11 @@ function boardWeight(stage: string) {
 }
 
 export default function App() {
-  const [active, setActive] = useState<TabKey>("market");
+  const [active, setActive] = useState<TabKey>("dashboard");
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [countdown, setCountdown] = useState(60);
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [fundStructure, setFundStructure] = useState<FundStructureData | null>(null);
   const [darkPool, setDarkPool] = useState<DarkPoolData | null>(null);
@@ -115,46 +155,88 @@ export default function App() {
   const refreshAll = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
-    setLoading(true);
+    // 静默刷新：仅首次加载显示 loading 骨架，后续刷新数据原位更新不闪烁
+    const isFirstLoad = overview === null;
+    if (isFirstLoad) setLoading(true);
     try {
       // Parallel fetches
-      const [indices, breadth, fundMain, globals, turnover, fundHistory] = await Promise.allSettled([
+      const [indices, breadth, fundMain, globals, turnover, fundHistory, limitPoolRes, turnoverHistRes] = await Promise.allSettled([
         fetchIndexOverview(),
         fetchMarketBreadth(),
         fetchMarketMainFund(),
         fetchGlobalIndices(),
         fetchMarketTurnover(),
         fetchMarketFundHistory(30),
+        fetchLimitPoolSummary(),
+        fetchTurnoverHistory(10),
       ]);
 
       // === Overview ===
       const idxData = indices.status === "fulfilled" ? indices.value : [];
       const brData = breadth.status === "fulfilled" ? breadth.value : null;
+      const limitPool = limitPoolRes.status === "fulfilled" ? limitPoolRes.value : null;
+      const turnoverData = turnover.status === "fulfilled" ? turnover.value : { amount: 0, available: false };
+      const fm0 = fundMain.status === "fulfilled" ? fundMain.value : null;
       
       let sentiment = 50;
       let sentimentLabel = "数据不足";
+      let sentimentFactors: SentimentFactors | null = null;
       if (brData && brData.total > 0) {
         const upRatio = brData.up / brData.total;
-        const upDownScore = upRatio * 40;
+        const upDownScore = Math.round(upRatio * 40 * 10) / 10;
         const limitDiff = brData.limitUp - brData.limitDown;
-        const limitScore = Math.max(-15, Math.min(15, limitDiff * 0.3));
-        const avgPctScore = Math.max(-15, Math.min(15, brData.avgPct * 3));
+        const limitScore = Math.round(Math.max(-15, Math.min(15, limitDiff * 0.3)) * 10) / 10;
+        const avgPctScore = Math.round(Math.max(-15, Math.min(15, brData.avgPct * 3)) * 10) / 10;
         let indexScore = 0;
         if (idxData.length > 0) {
           const avgIdxPct = idxData.reduce((s, idx) => s + (idx.pct ?? 0), 0) / idxData.length;
-          indexScore = Math.max(-15, Math.min(15, avgIdxPct * 5));
+          indexScore = Math.round(Math.max(-15, Math.min(15, avgIdxPct * 5)) * 10) / 10;
         }
-        sentiment = Math.round(upDownScore + limitScore + avgPctScore + indexScore + 15);
+        // 涨停池加分（涨停多=市场活跃）
+        const limitUpBonus = limitPool ? Math.round(Math.min(10, limitPool.limitUpCount * 0.1) * 10) / 10 : 0;
+        // 炸板率扣分（炸板多=情绪不稳）
+        const blastedPenalty = limitPool ? Math.round(Math.min(8, limitPool.blastedRate * 0.15) * 10) / 10 : 0;
+        // 主力资金方向加减分
+        const fundFlowScore = fm0 ? Math.round(Math.max(-8, Math.min(8, fm0.mainNet / 1e10)) * 10) / 10 : 0;
+
+        sentimentFactors = { upDownScore, limitScore, avgPctScore, indexScore, limitUpBonus, blastedPenalty, fundFlowScore };
+        sentiment = Math.round(upDownScore + limitScore + avgPctScore + indexScore + limitUpBonus - blastedPenalty + fundFlowScore + 15);
         sentiment = Math.max(0, Math.min(100, sentiment));
-        if (sentiment >= 75) sentimentLabel = "极度亢奋（注意追高风险）";
-        else if (sentiment >= 60) sentimentLabel = "偏热（注意控制仓位）";
-        else if (sentiment >= 50) sentimentLabel = "偏暖";
-        else if (sentiment >= 40) sentimentLabel = "中性";
-        else if (sentiment >= 30) sentimentLabel = "偏冷";
-        else if (sentiment >= 20) sentimentLabel = "恐慌（关注超跌机会）";
-        else sentimentLabel = "极度悲观（警惕恐慌踩踏）";
+
+        if (sentiment >= 80) sentimentLabel = "极度贪婪";
+        else if (sentiment >= 65) sentimentLabel = "贪婪";
+        else if (sentiment >= 45) sentimentLabel = "中性";
+        else if (sentiment >= 25) sentimentLabel = "恐慌";
+        else sentimentLabel = "极度恐慌";
+        // 信号账本：情绪分穿越关键阈值时记录
+        if (sentiment >= 80 || sentiment <= 25) {
+          const today = new Date().toISOString().slice(0, 10);
+          appendSignal({
+            date: today, type: "sentiment_cross", typeLabel: sentiment >= 80 ? "极度贪婪" : "极度恐慌",
+            code: "MARKET", name: "全市场", priceAtSignal: idxData[0]?.price ?? 0,
+            description: `情绪温度计${sentiment}分(${sentimentLabel})`,
+          });
+        }
       }
-      setOverview({ indices: idxData, breadth: brData, sentiment, sentimentLabel });
+      // 昨日情绪分（从localStorage简单缓存）
+      const prevSentiment = Number(localStorage.getItem("prev_sentiment")) || null;
+      if (sentiment !== 50) localStorage.setItem("prev_sentiment", String(sentiment));
+
+      // 计算昨日成交额和近5日均值
+      const turnoverHist = turnoverHistRes.status === "fulfilled" ? turnoverHistRes.value : [];
+      // turnoverHist[0] 是最新日（可能是今天），[1] 是昨天
+      const yesterdayAmount = turnoverHist.length >= 2 ? turnoverHist[1].amount : null;
+      const avg5dArr = turnoverHist.slice(1, 6); // 排除今天，取前5天
+      const turnoverAvg5d = avg5dArr.length > 0 ? avg5dArr.reduce((s, t) => s + t.amount, 0) / avg5dArr.length : null;
+
+      setOverview({
+        indices: idxData, breadth: brData, sentiment, sentimentLabel,
+        sentimentFactors, sentimentYesterday: prevSentiment,
+        limitPool,
+        turnoverAmount: turnoverData.amount,
+        turnoverYesterday: yesterdayAmount,
+        turnoverAvg5d,
+      });
 
       // === Fund Structure ===
       if (fundMain.status === "fulfilled") {
@@ -191,6 +273,11 @@ export default function App() {
           actionHint = "建议观望，等待资金结构方向进一步明确。";
         }
         const history = fundHistory.status === "fulfilled" ? fundHistory.value : [];
+        // 获取板块资金流排行（净流入/净流出 Top10）
+        let boardRank: FundStructureData["boardRank"] = null;
+        try {
+          boardRank = await fetchBoardRankTopBottom("concept", 10);
+        } catch { /* 板块排行获取失败不影响主数据 */ }
         setFundStructure({
           structure: {
             today: { mainNet: fm.mainNet, extraLargeNet: fm.extraLargeNet, largeNet: fm.largeNet, mediumNet: fm.mediumNet, smallNet: fm.smallNet },
@@ -199,59 +286,73 @@ export default function App() {
             verdict, vetoTriggered, reasons, actionHint,
           },
           history,
+          boardRank,
+          turnoverAmount: turnoverData.amount,
         });
       }
 
       // === Global ===
+      let commodities: GlobalIndex[] = [];
+      try { commodities = await fetchCommodities(); } catch { /* skip */ }
       setGlobalData({
         globalSignals: globals.status === "fulfilled" ? globals.value : [],
+        commodities,
         turnover: turnover.status === "fulfilled" ? turnover.value : { amount: 0, available: false },
       });
 
       // === Dark Pool (concept boards) ===
-      // 注意：顶部4张汇总卡片（今日暗盘/明盘净流入、近5日/近10日主力净流入）改用全市场真实资金数据
-      // 而非对30个概念板块做加总——因为A股个股通常同时归属多个概念板块，直接加总会造成
-      // 同一笔资金被重复计算数倍，产生远超真实市场规模的失真数字（曾出现"近10日-1.7万亿"这类
-      // 明显脱离实际的错误结果），且会与"资金结构速览"模块展示的同名指标数字自相矛盾。
-      // 板块级别的darkNet/openNet仅用于TOP10板块之间的横向排序对比，这个用途是合理的，予以保留。
+      // 明暗盘判断逻辑（参照同花顺6种组合模型）：
+      // 明盘 = 超大单+大单（明面上的大资金行为）
+      // 暗盘 = 中单+小单（看似散户，但可能包含主力拆单的隐蔽资金）
+      // 资金总体 = 主力净流入（f62 = 超大单+大单净额）
+      //
+      // 同花顺6种组合判断：
+      // 1. 总体流入 + 明盘流入 + 暗盘流入 → 主力看多
+      // 2. 总体流入 + 明盘流入更多 + 暗盘流出 → 主力可能拉升做T
+      // 3. 总体流入 + 明盘流出 + 暗盘流入更多 → 主力可能洗盘低吸
+      // 4. 总体流出 + 明盘流出 + 暗盘流出 → 主力看空
+      // 5. 总体流出 + 明盘流出更多 + 暗盘流入 → 主力可能吸筹
+      // 6. 总体流出 + 明盘流入 + 暗盘流出更多 → 主力可能诱多出货
+      // 明暗盘判断（同花顺6种组合，需要同时考虑totalFlow方向+明盘暗盘对比）
+      // totalFlow = 主力净流入(f62)，openNet = 超大单+大单，darkNet = 中单+小单
+      function judgeFlowType(totalFlow: number, openNet: number, darkNet: number): string {
+        const totalIn = totalFlow >= 0;
+        const openIn = openNet >= 0;
+        const darkIn = darkNet >= 0;
+        if (totalIn && openIn && darkIn) return "主力看多（明暗共振流入）";
+        if (totalIn && openIn && !darkIn) return "拉升做T（明盘主导，暗盘分歧）";
+        if (totalIn && !openIn && darkIn) return "洗盘低吸（暗盘流入，明盘承压）";
+        if (!totalIn && !openIn && !darkIn) return "主力看空（明暗共振流出）";
+        if (!totalIn && !openIn && darkIn) return "主力出货（大单撤退，散户接盘）";
+        if (!totalIn && openIn && !darkIn) return "诱多出货（明盘托底，暗盘出逃）";
+        return totalIn ? "方向分歧（偏多）" : "方向分歧（偏空）";
+      }
+
       try {
-        const conceptBoards = await fetchBoardFundFlow("concept", 30);
+        const conceptBoards = await fetchBoardFundFlow("concept", 60);
         const topBoards: DarkPoolData["topBoards"] = [];
         for (const d of conceptBoards) {
-          const darkNet = d.extraLargeNet + d.largeNet;
-          const openNet = d.mediumNet + d.smallNet;
-          let flowType: string;
-          if (darkNet > 0 && openNet < 0 && Math.abs(darkNet) > Math.abs(openNet) * 0.5) {
-            flowType = "洗盘（暗盘流入+明盘流出）";
-          } else if (darkNet < 0 && openNet > 0 && Math.abs(darkNet) > Math.abs(openNet) * 0.5) {
-            flowType = "出货（暗盘流出+明盘流入）";
-          } else if (darkNet > 0 && openNet > 0) {
-            flowType = "共振做多";
-          } else if (darkNet < 0 && openNet < 0) {
-            flowType = "共振做空";
-          } else {
-            flowType = "方向分歧";
-          }
-          topBoards.push({ code: d.code, name: d.name, pct: d.pct, darkNet, openNet, flowType, boardType: "concept" });
+          // 过滤掉非真正概念板块（指数成分/风格标签等）
+          if (!isRealConceptBoard(d.name)) continue;
+          const openNet = d.extraLargeNet + d.largeNet;  // 明盘 = 超大单+大单
+          const darkNet = d.mediumNet + d.smallNet;       // 暗盘 = 中单+小单
+          const totalFlow = d.mainNet;                    // 资金总体 = 主力净流入
+          const flowType = judgeFlowType(totalFlow, openNet, darkNet);
+          topBoards.push({ code: d.code, name: d.name, pct: d.pct, openNet, darkNet, flowType, boardType: "concept" });
         }
-        topBoards.sort((a, b) => b.darkNet - a.darkNet);
+        // 按主力净流入（mainNet = openNet）排序
+        topBoards.sort((a, b) => b.openNet - a.openNet);
         const top10 = topBoards.slice(0, 10);
 
-        // 全市场级别的暗盘/明盘净流入与近5/10日主力净流入，直接复用全市场资金结构数据（与资金结构速览同源，避免重复计算与数字矛盾）
+        // 全市场级别
         const fm = fundMain.status === "fulfilled" ? fundMain.value : null;
-        const marketDarkNet = fm ? fm.extraLargeNet + fm.largeNet : 0;
-        const marketOpenNet = fm ? fm.mediumNet + fm.smallNet : 0;
+        const marketTotalFlow = fm ? fm.mainNet : 0;
+        const marketOpenNet = fm ? fm.extraLargeNet + fm.largeNet : 0;  // 明盘
+        const marketDarkNet = fm ? fm.mediumNet + fm.smallNet : 0;       // 暗盘
         const marketMainNet5d = fm ? fm.mainNet5d : 0;
         const marketMainNet10d = fm ? fm.mainNet10d : 0;
 
-        let marketFlowType = "数据不足";
-        if (fm) {
-          if (marketDarkNet > 0 && marketOpenNet < 0) marketFlowType = "全市场暗盘流入、明盘流出 — 可能为洗盘阶段（主力悄悄吸筹）";
-          else if (marketDarkNet < 0 && marketOpenNet > 0) marketFlowType = "全市场暗盘流出、明盘流入 — 可能为出货阶段（主力撤退）";
-          else if (marketDarkNet > 0 && marketOpenNet > 0) marketFlowType = "全市场明暗盘共振做多 — 多方合力";
-          else if (marketDarkNet < 0 && marketOpenNet < 0) marketFlowType = "全市场明暗盘共振做空 — 空方主导";
-          else marketFlowType = "全市场明暗盘方向分歧 — 多空胶着";
-        }
+        const marketFlowType = fm ? judgeFlowType(marketTotalFlow, marketOpenNet, marketDarkNet) : "数据不足";
 
         // Fetch constituents for ALL top10 boards
         const boardStocks: Record<string, BoardStock[]> = {};
@@ -266,12 +367,15 @@ export default function App() {
         await Promise.allSettled(stockFetchPromises);
 
         setDarkPool({
-          darkPoolToday: marketDarkNet, openPoolToday: marketOpenNet,
+          totalFlow: marketTotalFlow,
+          openPoolToday: marketOpenNet, darkPoolToday: marketDarkNet,
           darkPool5d: marketMainNet5d, darkPool10d: marketMainNet10d,
           marketFlowType, topBoards: top10, boardStocks,
         });
       } catch {
-        setDarkPool(null);
+        // 失败时保留上一次有效数据（比清空显示"获取失败"更好）
+        // 首次即失败才显示null→"数据不可用"
+        if (!darkPool) setDarkPool(null);
       }
 
       // === Mainline ===
@@ -328,53 +432,106 @@ export default function App() {
     }
   }, []);
 
+  // 首次加载
   useEffect(() => { refreshAll(); }, [refreshAll]);
+  // 交易时段状态机驱动刷新：盘中60s、集合竞价30s、盘后300s、休市不刷
   useEffect(() => {
     if (!autoRefresh) return;
-    const timer = setInterval(refreshAll, 60000);
+    const session = getCurrentSession();
+    const intervalMs = session.refreshIntervalMs || 60000; // 默认60s兜底
+    const countdownSec = Math.ceil(intervalMs / 1000);
+    setCountdown(countdownSec);
+    const timer = setInterval(() => {
+      setCountdown(prev => {
+        if (prev <= 1) {
+          // 静默刷新：后台刷新不触发全屏 loading（setLoading 只在首次用）
+          refreshAll();
+          // 刷新时重新检测时段（可能跨越了时段边界）
+          const newSession = getCurrentSession();
+          return Math.ceil((newSession.refreshIntervalMs || 60000) / 1000);
+        }
+        return prev - 1;
+      });
+    }, 1000);
     return () => clearInterval(timer);
   }, [autoRefresh, refreshAll]);
 
   const vetoActive = fundStructure?.structure?.vetoTriggered;
+
+  // 构建三级警报列表
+  const alerts: AlertItem[] = [];
+  if (vetoActive) {
+    alerts.push({ id: "veto_main", level: "critical", message: "重度背离：主力持续流出+散户接盘，不建议加仓" });
+  }
+  if (overview && overview.sentiment >= 80) {
+    alerts.push({ id: "sentiment_high", level: "warning", message: `情绪温度计${overview.sentiment}分（极度贪婪），注意追高风险` });
+  }
+  if (overview && overview.sentiment <= 25) {
+    alerts.push({ id: "sentiment_low", level: "warning", message: `情绪温度计${overview.sentiment}分（极度恐慌），关注超跌机会` });
+  }
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#0d1424,_#05070d_60%)] pb-16">
       <TopNav
         active={active} onChange={setActive} lastUpdated={lastUpdated} loading={loading}
         autoRefresh={autoRefresh} onToggleAutoRefresh={() => setAutoRefresh(v => !v)} onRefreshNow={refreshAll}
+        countdown={countdown}
       />
 
-      {vetoActive && (
-        <div className="border-b border-rose-500/40 bg-rose-600/20 px-4 py-2 text-center text-sm font-bold text-rose-200">
-          🚨 一票否决警报：当前市场资金结构呈现「主力持续流出 + 散户接盘」，不建议加仓
-        </div>
-      )}
+      {/* 常驻状态条（所有Tab可见） */}
+      <StatusBar overview={overview} fund={fundStructure} />
 
-      <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-6">
-        {active === "market" && (
+      {/* 三级警报横幅 */}
+      <AlertBanner alerts={alerts} />
+
+      <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-4">
+        {/* ====== 驾驶舱 ====== */}
+        {active === "dashboard" && (
+          <Dashboard overview={overview} fund={fundStructure} loading={loading} />
+        )}
+
+        {/* ====== 资金主线（深潜：完整资金结构+明暗盘+全球信号） ====== */}
+        {active === "fundline" && (
           <>
-            <MarketOverview data={overview} loading={loading} />
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构速览</h3>
+              <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构详情</h3>
               <FundStructure data={fundStructure} loading={loading} />
             </div>
             <DarkPool data={darkPool} loading={loading} />
             <GlobalSignals data={globalData} loading={loading} />
-            <KeyIndicators data={{ breadth: overview?.breadth, fundStructure }} loading={loading} />
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <h3 className="mb-3 text-sm font-bold text-slate-200">📰 实时快讯（政策与市场动态）</h3>
-              <NewsPanel autoRefresh={autoRefresh} />
-            </div>
           </>
         )}
-        {active === "fund" && <FundStructure data={fundStructure} loading={loading} />}
-        {active === "mainline" && <Mainline data={mainline} loading={loading} />}
-        {active === "stock" && <StockMonitor />}
-        {active === "pitfalls" && <Pitfalls />}
+
+        {/* ====== 龙虎榜复盘（lazy） ====== */}
+        {active === "dragon" && (
+          <Suspense fallback={<div className="text-slate-400 p-6">加载龙虎榜模块…</div>}>
+            <DragonTiger />
+            <LimitBoard />
+          </Suspense>
+        )}
+
+        {/* ====== 个股雷达（lazy） ====== */}
+        {active === "radar" && (
+          <Suspense fallback={<div className="text-slate-400 p-6">加载个股雷达…</div>}>
+            <StockWatchlist />
+          </Suspense>
+        )}
+
+        {/* ====== 消息面（lazy） ====== */}
+        {active === "news" && (
+          <Suspense fallback={<div className="text-slate-400 p-6">加载消息面…</div>}>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <h3 className="mb-3 text-sm font-bold text-slate-200">实时快讯（政策与市场动态）</h3>
+              <NewsPanel autoRefresh={autoRefresh} />
+            </div>
+          </Suspense>
+        )}
       </main>
 
-      <footer className="mx-auto max-w-[1500px] px-4 text-center text-[11px] text-slate-600">
-        本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议 · 资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标
+      <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
+        <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
+        <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
+        <div className="text-slate-700">v6.2 · 最后更新 2026-07-28 · 数据源：东方财富</div>
       </footer>
     </div>
   );

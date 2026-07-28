@@ -38,7 +38,7 @@ export default function KeyIndicators({ data, loading }: { data?: any; loading?:
     <section className="rounded-xl border border-white/10 bg-white/5 p-5">
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-sm font-bold text-slate-200">📊 重要指标监控 · 实时数据</h3>
-        <span className="text-[10px] text-amber-300">所有数据来自东方财富公开接口真实抓取</span>
+        <span className="text-[11px] text-amber-300">所有数据来自东方财富公开接口真实抓取</span>
       </div>
       {indicators.length === 0 ? (
         <div className="text-sm text-slate-500">数据加载中或暂无数据…</div>
@@ -49,7 +49,7 @@ export default function KeyIndicators({ data, loading }: { data?: any; loading?:
               className="rounded-lg border border-white/5 bg-black/20 p-4 hover:border-amber-400/20 hover:bg-black/30 transition">
               <div className="text-xs text-slate-400">{ind.name}</div>
               <div className={`mt-1 text-xl font-black ${ind.color || "text-slate-100"}`}>{ind.value}</div>
-              <div className="mt-2 text-[10px] text-amber-300">点击查看详细数据 →</div>
+              <div className="mt-2 text-[11px] text-amber-300">点击查看详细数据 →</div>
             </a>
           ))}
         </div>
