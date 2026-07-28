@@ -127,8 +127,6 @@ export interface MarketBreadth {
   up: number;
   down: number;
   flat: number;
-  limitUp: number;
-  limitDown: number;
   avgPct: number;
 }
 
@@ -163,55 +161,11 @@ export async function fetchMarketBreadth(): Promise<MarketBreadth> {
     throw new Error("涨跌家数数据异常（全员上涨不合理），判定为接口返回不完整");
   }
 
-  // 涨跌停家数统计（v4.6 修复：改为串行请求避免浏览器并发限流导致跌停为0）
-  // 策略：每个板块分别取涨幅最高100（降序）和最低100（升序），串行执行避免并发问题
-  let limitUp = 0, limitDown = 0;
-  try {
-    const segments: Array<{ fs: string; limitPct: number; label: string }> = [
-      { fs: "m:0+t:6", limitPct: 10, label: "深圳主板" },
-      { fs: "m:0+t:80", limitPct: 20, label: "创业板" },
-      { fs: "m:1+t:2", limitPct: 10, label: "上海主板" },
-      { fs: "m:1+t:23", limitPct: 20, label: "科创板" },
-      { fs: "m:0+t:81+s:2048", limitPct: 30, label: "北交所" },
-    ];
-    // 串行执行每个板块的涨跌停统计（避免10个并发JSONP请求触发浏览器/接口限流）
-    for (const seg of segments) {
-      // 涨停端：涨幅最高的前50条
-      try {
-        const topUrl = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=50&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${seg.fs}&fields=f2,f3,f12`;
-        const topJson = await jsonp<any>(topUrl, 10000);
-        const topDiff = normalizeDiff(topJson?.data?.diff);
-        for (const d of topDiff) {
-          const pct = num(d.f3);
-          const price = num(d.f2);
-          if (price <= 0) continue;
-          if (pct >= seg.limitPct - 0.2) limitUp++;
-        }
-      } catch { /* skip */ }
-      // 跌停端：涨幅最低的前50条
-      try {
-        const btmUrl = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=50&po=0&np=1&fltt=2&invt=2&fid=f3&fs=${seg.fs}&fields=f2,f3,f12`;
-        const btmJson = await jsonp<any>(btmUrl, 10000);
-        const btmDiff = normalizeDiff(btmJson?.data?.diff);
-        for (const d of btmDiff) {
-          const pct = num(d.f3);
-          const price = num(d.f2);
-          if (price <= 0) continue;
-          if (pct <= -(seg.limitPct - 0.2)) limitDown++;
-        }
-      } catch { /* skip */ }
-    }
-  } catch {
-    // 涨跌停统计失败时保持0，不影响主指标
-  }
-
   return {
     total,
     up,
     down,
     flat,
-    limitUp,
-    limitDown,
     avgPct: pctCount ? pctSum / pctCount : 0,
   };
 }

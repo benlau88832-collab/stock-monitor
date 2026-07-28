@@ -57,21 +57,21 @@ function matchTheme(name: string, industry: string): string {
 function themeColor(theme: string): string {
   const map: Record<string, string> = {
     "AI概念": "bg-violet-500/20 text-violet-300",
-    "半导体": "bg-violet-500/20 text-violet-300",
+    "半导体": "bg-slate-500/20 text-slate-300",
     "并购重组": "bg-amber-500/20 text-amber-300",
     "ST": "bg-rose-500/20 text-rose-300",
     "军工": "bg-red-500/20 text-red-300",
     "新能源": "bg-green-500/20 text-green-300",
     "医药": "bg-slate-500/20 text-slate-300",
-    "消费": "bg-orange-500/20 text-orange-300",
+    "消费": "bg-amber-500/20 text-amber-300",
   };
   return map[theme] ?? "bg-slate-500/20 text-slate-300";
 }
 
 function boardCountColor(count: number): string {
-  if (count >= 5) return "from-yellow-400 to-red-500";
-  if (count >= 4) return "from-orange-400 to-red-400";
-  if (count >= 3) return "from-amber-400 to-orange-400";
+  if (count >= 5) return "from-amber-400 to-rose-500";
+  if (count >= 4) return "from-amber-400 to-rose-400";
+  if (count >= 3) return "from-amber-300 to-amber-500";
   if (count >= 2) return "from-rose-400 to-rose-500";
   return "from-slate-400 to-slate-500";
 }
@@ -327,7 +327,7 @@ export default function LimitBoard() {
         <StatCard label="今日跌停" value={limitDownCount} sub="只" color="text-emerald-400" />
         <StatCard label="炸板数量" value={blastedCount} sub="只（曾涨停未封住）" color="text-amber-400" />
         <StatCard label="炸板率" value={`${blastedRate.toFixed(1)}%`} sub="炸板/(涨停+炸板)" color="text-amber-300" />
-        <StatCard label="晋级率" value={`${promotionRate.toFixed(1)}%`} sub="2连板+/全部涨停" color="text-sky-400" />
+        <StatCard label="晋级率" value={`${promotionRate.toFixed(1)}%`} sub="2连板+/全部涨停" color="text-slate-400" />
       </div>
 
       {/* 题材热度 + 连板梯队 */}

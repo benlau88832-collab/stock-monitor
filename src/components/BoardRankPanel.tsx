@@ -9,7 +9,7 @@ type SortKey = "mainNet" | "mainNet5d" | "mainNet10d" | "pct" | "turnoverRate";
 function DivergeBadge({ mainNet, pct }: { mainNet: number; pct: number }) {
   const isDiverge = (mainNet > 0 && pct < -0.3) || (mainNet < 0 && pct > 0.3);
   if (!isDiverge) return null;
-  return <span className="ml-1 rounded px-1 py-0.5 text-[11px] font-bold bg-orange-500/20 text-orange-300">量价背离</span>;
+  return <span className="ml-1 rounded px-1 py-0.5 text-[11px] font-bold bg-amber-500/20 text-amber-300">量价背离</span>;
 }
 
 interface Props {
@@ -60,7 +60,7 @@ export default function BoardRankPanel({ inflow, outflow }: Props) {
         {([
           { key: "inflow" as TabKey, label: "🔥 净流入 Top10", color: "text-emerald-400" },
           { key: "outflow" as TabKey, label: "💧 净流出 Top10", color: "text-rose-400" },
-          { key: "diverge" as TabKey, label: `⚠️ 流入转流出(${divergeBoards.length})`, color: "text-orange-400" },
+          { key: "diverge" as TabKey, label: `⚠️ 流入转流出(${divergeBoards.length})`, color: "text-amber-400" },
         ] as const).map(t => (
           <button key={t.key} onClick={() => { setTab(t.key); setSortKey("mainNet"); setSortAsc(false); }}
             className={`rounded px-3 py-1.5 text-xs font-bold transition ${
@@ -73,7 +73,7 @@ export default function BoardRankPanel({ inflow, outflow }: Props) {
 
       {/* 流入转流出提示 */}
       {tab === "diverge" && (
-        <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-xs text-orange-300">
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
           ⚠️ 以下板块近5日累计净流入为正，但今日转为净流出 — 警惕获利了结信号
         </div>
       )}

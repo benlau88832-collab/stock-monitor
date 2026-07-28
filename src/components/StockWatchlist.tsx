@@ -258,7 +258,7 @@ export default function StockWatchlist() {
         type: "fund", title: `${stock.name} 实时资金面`,
         summary: `现价${stock.price} | ${fmtPct(stock.pct)} | 主力${fmtMoney(stock.mainNet)}(${fmtPct(stock.mainNetPct)}) | 5日${fmtMoney(stock.mainNet5d)} | 10日${fmtMoney(stock.mainNet10d)} | 换手${stock.turnoverRate}% | 量比${stock.volumeRatio}${isLU ? " | ⚡涨停" : ""}${isLD ? " | ⚡跌停" : ""}`,
         time: new Date().toISOString().slice(11, 16), url: stockRealUrl(code),
-        tag: "资金面", tagColor: "bg-sky-500/20 text-sky-300",
+        tag: "资金面", tagColor: "bg-slate-500/20 text-slate-300",
       });
       const mainOut = stock.mainNet < 0 && stock.smallNet > 0;
       items.push({

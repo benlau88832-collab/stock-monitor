@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
+import { saveTodaySentiment, loadPrevTradingDaySentiment } from "./lib/sentimentStore";
 import TopNav, { type TabKey } from "./components/TopNav";
 import MarketOverview from "./components/MarketOverview";
 import FundStructure from "./components/FundStructure";
@@ -68,7 +69,6 @@ export interface FundStructureData {
     today: { mainNet: number; extraLargeNet: number; largeNet: number; mediumNet: number; smallNet: number };
     mainNet5d: number;
     mainNet10d: number;
-    north: { available: boolean; net: number; note: string };
     verdict: string;
     vetoTriggered: boolean;
     reasons: string[];
@@ -184,7 +184,7 @@ export default function App() {
       if (brData && brData.total > 0) {
         const upRatio = brData.up / brData.total;
         const upDownScore = Math.round(upRatio * 40 * 10) / 10;
-        const limitDiff = brData.limitUp - brData.limitDown;
+        const limitDiff = limitPool ? limitPool.limitUpCount - limitPool.limitDownCount : 0;
         const limitScore = Math.round(Math.max(-15, Math.min(15, limitDiff * 0.3)) * 10) / 10;
         const avgPctScore = Math.round(Math.max(-15, Math.min(15, brData.avgPct * 3)) * 10) / 10;
         let indexScore = 0;
@@ -218,9 +218,10 @@ export default function App() {
           });
         }
       }
-      // 昨日情绪分（从localStorage简单缓存）
-      const prevSentiment = Number(localStorage.getItem("prev_sentiment")) || null;
-      if (sentiment !== 50) localStorage.setItem("prev_sentiment", String(sentiment));
+      // 情绪分按交易日冻结存储
+      saveTodaySentiment(sentiment);
+      const prevData = loadPrevTradingDaySentiment();
+      const prevSentiment = prevData?.score ?? null;
 
       // 计算昨日成交额和近5日均值
       const turnoverHist = turnoverHistRes.status === "fulfilled" ? turnoverHistRes.value : [];
@@ -282,7 +283,6 @@ export default function App() {
           structure: {
             today: { mainNet: fm.mainNet, extraLargeNet: fm.extraLargeNet, largeNet: fm.largeNet, mediumNet: fm.mediumNet, smallNet: fm.smallNet },
             mainNet5d: fm.mainNet5d, mainNet10d: fm.mainNet10d,
-            north: { available: false, net: 0, note: "东方财富北向资金接口自2024年8月起间歇性断供" },
             verdict, vetoTriggered, reasons, actionHint,
           },
           history,
@@ -304,40 +304,22 @@ export default function App() {
       // 明暗盘判断逻辑（参照同花顺6种组合模型）：
       // 明盘 = 超大单+大单（明面上的大资金行为）
       // 暗盘 = 中单+小单（看似散户，但可能包含主力拆单的隐蔽资金）
-      // 资金总体 = 主力净流入（f62 = 超大单+大单净额）
-      //
-      // 同花顺6种组合判断：
-      // 1. 总体流入 + 明盘流入 + 暗盘流入 → 主力看多
-      // 2. 总体流入 + 明盘流入更多 + 暗盘流出 → 主力可能拉升做T
-      // 3. 总体流入 + 明盘流出 + 暗盘流入更多 → 主力可能洗盘低吸
-      // 4. 总体流出 + 明盘流出 + 暗盘流出 → 主力看空
-      // 5. 总体流出 + 明盘流出更多 + 暗盘流入 → 主力可能吸筹
-      // 6. 总体流出 + 明盘流入 + 暗盘流出更多 → 主力可能诱多出货
-      // 明暗盘判断（同花顺6种组合，需要同时考虑totalFlow方向+明盘暗盘对比）
-      // totalFlow = 主力净流入(f62)，openNet = 超大单+大单，darkNet = 中单+小单
-      function judgeFlowType(totalFlow: number, openNet: number, darkNet: number): string {
-        const totalIn = totalFlow >= 0;
-        const openIn = openNet >= 0;
-        const darkIn = darkNet >= 0;
-        if (totalIn && openIn && darkIn) return "主力看多（明暗共振流入）";
-        if (totalIn && openIn && !darkIn) return "拉升做T（明盘主导，暗盘分歧）";
-        if (totalIn && !openIn && darkIn) return "洗盘低吸（暗盘流入，明盘承压）";
-        if (!totalIn && !openIn && !darkIn) return "主力看空（明暗共振流出）";
-        if (!totalIn && !openIn && darkIn) return "主力出货（大单撤退，散户接盘）";
-        if (!totalIn && openIn && !darkIn) return "诱多出货（明盘托底，暗盘出逃）";
-        return totalIn ? "方向分歧（偏多）" : "方向分歧（偏空）";
+      // 四象限判断（f62≡f66+f72，totalFlow与openNet恒等，只有openNet与darkNet两个独立维度）
+      function judgeFlowType(openNet: number, darkNet: number): string {
+        if (openNet >= 0 && darkNet >= 0) return "共振流入（看多）";
+        if (openNet < 0 && darkNet < 0) return "共振流出（看空）";
+        if (openNet >= 0 && darkNet < 0) return "主力承接（分歧偏多）";
+        return "主力撤离（分歧偏空）";
       }
 
       try {
         const conceptBoards = await fetchBoardFundFlow("concept", 60);
         const topBoards: DarkPoolData["topBoards"] = [];
         for (const d of conceptBoards) {
-          // 过滤掉非真正概念板块（指数成分/风格标签等）
           if (!isRealConceptBoard(d.name)) continue;
-          const openNet = d.extraLargeNet + d.largeNet;  // 明盘 = 超大单+大单
-          const darkNet = d.mediumNet + d.smallNet;       // 暗盘 = 中单+小单
-          const totalFlow = d.mainNet;                    // 资金总体 = 主力净流入
-          const flowType = judgeFlowType(totalFlow, openNet, darkNet);
+          const openNet = d.extraLargeNet + d.largeNet;
+          const darkNet = d.mediumNet + d.smallNet;
+          const flowType = judgeFlowType(openNet, darkNet);
           topBoards.push({ code: d.code, name: d.name, pct: d.pct, openNet, darkNet, flowType, boardType: "concept" });
         }
         // 按主力净流入（mainNet = openNet）排序
@@ -346,13 +328,12 @@ export default function App() {
 
         // 全市场级别
         const fm = fundMain.status === "fulfilled" ? fundMain.value : null;
-        const marketTotalFlow = fm ? fm.mainNet : 0;
         const marketOpenNet = fm ? fm.extraLargeNet + fm.largeNet : 0;  // 明盘
         const marketDarkNet = fm ? fm.mediumNet + fm.smallNet : 0;       // 暗盘
         const marketMainNet5d = fm ? fm.mainNet5d : 0;
         const marketMainNet10d = fm ? fm.mainNet10d : 0;
 
-        const marketFlowType = fm ? judgeFlowType(marketTotalFlow, marketOpenNet, marketDarkNet) : "数据不足";
+        const marketFlowType = fm ? judgeFlowType(marketOpenNet, marketDarkNet) : "数据不足";
 
         // Fetch constituents for ALL top10 boards
         const boardStocks: Record<string, BoardStock[]> = {};
@@ -531,7 +512,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v6.2 · 最后更新 2026-07-28 · 数据源：东方财富</div>
+        <div className="text-slate-700">v6.3 · 最后更新 2026-07-28 · 数据源：东方财富</div>
       </footer>
     </div>
   );

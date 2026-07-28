@@ -4,13 +4,12 @@ import { boardRealUrl, stockRealUrl } from "../lib/realLinks";
 import type { DarkPoolData } from "../App";
 
 function FlowBadge({ type }: { type: string }) {
+  // 四象限标签颜色（已删除旧的洗盘/诱多/拉升做T等不可达分支）
   let color = "bg-slate-500/20 text-slate-300";
-  if (type.includes("看多")) color = "bg-emerald-500/20 text-emerald-300";
-  else if (type.includes("看空")) color = "bg-rose-500/20 text-rose-300";
-  else if (type.includes("洗盘低吸")) color = "bg-amber-500/20 text-amber-300";
-  else if (type.includes("吸筹")) color = "bg-amber-500/20 text-amber-300";
-  else if (type.includes("拉升做T")) color = "bg-sky-500/20 text-sky-300";
-  else if (type.includes("诱多出货")) color = "bg-rose-500/20 text-rose-300";
+  if (type.includes("看多") || type.includes("共振流入")) color = "bg-emerald-500/20 text-emerald-300";
+  else if (type.includes("看空") || type.includes("共振流出")) color = "bg-rose-500/20 text-rose-300";
+  else if (type.includes("偏多") || type.includes("承接")) color = "bg-amber-500/20 text-amber-300";
+  else if (type.includes("偏空") || type.includes("撤离")) color = "bg-rose-500/20 text-rose-300";
   return <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${color}`}>{type}</span>;
 }
 
@@ -159,7 +158,6 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
 
       <div className="text-[11px] text-slate-600 leading-relaxed">
         明盘=超大单+大单（公开可见的大资金操作）；暗盘=中单+小单（含主力拆单的隐蔽资金）。
-        判断逻辑参照同花顺6种组合模型：资金总体流向+明盘+暗盘三者组合 → 主力看多/看空/洗盘低吸/拉升做T/吸筹/诱多出货。
         数据源为东方财富概念板块资金流接口（实时）。
       </div>
     </section>

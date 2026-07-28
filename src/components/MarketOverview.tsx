@@ -13,9 +13,9 @@ function sentimentColor(value: number): string {
 
 function sentimentBgClass(value: number): string {
   if (value >= 80) return "border-red-500/40 bg-red-500/10";
-  if (value >= 65) return "border-orange-500/40 bg-orange-500/10";
-  if (value >= 45) return "border-yellow-500/30 bg-yellow-500/10";
-  if (value >= 25) return "border-blue-500/30 bg-blue-500/10";
+  if (value >= 65) return "border-amber-500/40 bg-amber-500/10";
+  if (value >= 45) return "border-amber-500/30 bg-amber-500/10";
+  if (value >= 25) return "border-slate-500/30 bg-slate-500/10";
   return "border-violet-500/30 bg-violet-500/10";
 }
 
@@ -54,9 +54,9 @@ function SentimentGauge({ value, label, factors, yesterday }: {
           <div className="flex gap-0.5 mt-1">
             {[
               { label: "极度恐慌", color: "bg-violet-500", range: "0-24" },
-              { label: "恐慌", color: "bg-blue-500", range: "25-44" },
-              { label: "中性", color: "bg-yellow-500", range: "45-64" },
-              { label: "贪婪", color: "bg-orange-500", range: "65-79" },
+              { label: "恐慌", color: "bg-slate-500", range: "25-44" },
+              { label: "中性", color: "bg-amber-500", range: "45-64" },
+              { label: "贪婪", color: "bg-amber-500", range: "65-79" },
               { label: "极度贪婪", color: "bg-red-500", range: "80-100" },
             ].map(s => (
               <div key={s.label} className="text-center">
@@ -183,12 +183,12 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
                 <span className="text-rose-400">上涨 <b>{breadth.up}</b></span>
                 <span className="text-emerald-400">下跌 <b>{breadth.down}</b></span>
                 <span className="text-slate-400">平盘 <b>{breadth.flat}</b></span>
-                <span className="text-rose-300">涨停 <b>{limitPool?.limitUpCount ?? breadth.limitUp}</b></span>
-                <span className="text-emerald-300">跌停 <b>{limitPool?.limitDownCount ?? breadth.limitDown}</b></span>
+                <span className="text-rose-300">涨停 <b>{limitPool?.limitUpCount ?? 0}</b></span>
+                <span className="text-emerald-300">跌停 <b>{limitPool?.limitDownCount ?? 0}</b></span>
                 {limitPool && (
                   <>
                     <span className="text-amber-300">炸板 <b>{limitPool.blastedCount}</b> <span className="text-[11px]">({limitPool.blastedRate.toFixed(0)}%)</span></span>
-                    {boardDistText && <span className="text-sky-300 text-xs">连板: {boardDistText}</span>}
+                    {boardDistText && <span className="text-slate-300 text-xs">连板: {boardDistText}</span>}
                   </>
                 )}
               </div>

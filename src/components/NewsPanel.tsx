@@ -79,7 +79,7 @@ function NewsCard({ item, highlight }: { item: EnrichedNews; highlight: boolean 
           {item.boards.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
               {item.boards.map(b => (
-                <span key={b} className="rounded px-1 py-0.5 text-[11px] font-bold bg-sky-500/20 text-sky-300">{b}</span>
+                <span key={b} className="rounded px-1 py-0.5 text-[11px] font-bold bg-slate-500/20 text-slate-300">{b}</span>
               ))}
             </div>
           )}
@@ -192,7 +192,7 @@ export default function NewsPanel({ autoRefresh = true }: { autoRefresh?: boolea
 
       <div className="flex gap-4">
         <ScrollColumn title="国内重要消息" icon="🇨🇳" color="text-rose-400" news={domestic} linkUrl="https://kuaixun.eastmoney.com/" />
-        <ScrollColumn title="外围国际消息" icon="🌍" color="text-sky-400" news={overseas} linkUrl="https://kuaixun.eastmoney.com/" />
+        <ScrollColumn title="外围国际消息" icon="🌍" color="text-slate-400" news={overseas} linkUrl="https://kuaixun.eastmoney.com/" />
       </div>
     </section>
   );

@@ -3,9 +3,9 @@ import { boardRealUrl, stockRealUrl } from "../lib/realLinks";
 import type { MainlineData } from "../App";
 
 const STAGE_STYLE: Record<string, string> = {
-  "启动期": "bg-sky-500/15 text-sky-300 border-sky-500/40",
+  "启动期": "bg-slate-500/15 text-slate-300 border-slate-500/40",
   "发酵期": "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
-  "高潮期": "bg-orange-500/15 text-orange-300 border-orange-500/40",
+  "高潮期": "bg-amber-500/15 text-amber-300 border-amber-500/40",
   "退潮期": "bg-slate-500/15 text-slate-400 border-slate-500/40",
   "观察中": "bg-slate-500/10 text-slate-400 border-slate-500/30",
 };

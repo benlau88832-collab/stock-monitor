@@ -4,6 +4,25 @@
 
 ---
 
+## v6.3 — 构建产物级残留清理 + 旧逻辑死活核对 + 工程基线 (2026-07-28)
+
+> 经构建产物 grep 验证 v6.2 声明有残留，本版补齐。
+
+**构建级验证结果（源码级清零）：**
+- 字号<11px: 0处 ✅
+- 源码 orange/yellow/cyan/sky/blue/purple: 0处 ✅
+- prev_sentiment(业务代码): 0处（仅注释中历史说明保留）✅
+- 洗盘低吸/诱多出货/拉升做T(业务代码): 0处 ✅
+- pz=50(旧串行统计): 0处 ✅
+
+**旧逻辑清除：**
+- 北向残留：FundStructure北向卡片删除，App.tsx north字段删除
+- 旧涨跌停统计：MarketBreadth.limitUp/limitDown删除，串行pz=50代码删除
+- 明暗盘旧模型：judgeFlowType改为四象限（2参数），DarkPool FlowBadge删除旧标签
+- 旧情绪存储：prev_sentiment替换为sentimentStore按日存储
+
+**v6.2 勘误**：v6.2 声称"106处字号全部提升、cyan→slate、purple→amber"，实际构建产物仍有残留（LimitBoard渐变色用了orange/yellow、DarkPool FlowBadge保留了旧6组合标签、MarketBreadth仍含limitUp/limitDown字段和串行统计代码），本版v6.3完成真正的构建级清零。
+
 ## v6.2 — 字号/色彩语义收敛、移动端优化与路由级分包 (2026-07-28)
 
 > 视觉一致性与性能收尾。

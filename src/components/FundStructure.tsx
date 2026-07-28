@@ -21,7 +21,7 @@ function getAlertLevel(structure: FundStructureData["structure"]): AlertLevel {
   }
   // 中度：主力流出+散户流入，或5日持续流出
   if ((mainOut && retailIn) || (mainOut && persistent5)) {
-    return { label: "⚠️ 中度背离 — 资金结构偏弱，注意仓位控制", border: "border-orange-500/40", bg: "bg-orange-500/10", text: "text-orange-300" };
+    return { label: "⚠️ 中度背离 — 资金结构偏弱，注意仓位控制", border: "border-amber-500/40", bg: "bg-amber-500/10", text: "text-amber-300" };
   }
   // 轻度：今日主力流出但幅度不大
   if (mainOut) {
@@ -32,7 +32,7 @@ function getAlertLevel(structure: FundStructureData["structure"]): AlertLevel {
     return { label: "✅ 结构健康 — 资金面支持顺势操作", border: "border-emerald-500/30", bg: "bg-emerald-500/10", text: "text-emerald-300" };
   }
   // 中性
-  return { label: "⚡ 结构分歧 — 今日与近5日方向不一致，建议观望", border: "border-yellow-500/30", bg: "bg-yellow-500/10", text: "text-yellow-300" };
+  return { label: "⚡ 结构分歧 — 今日与近5日方向不一致，建议观望", border: "border-amber-500/30", bg: "bg-amber-500/10", text: "text-amber-300" };
 }
 
 // ============== 出货强度 ==============
@@ -192,8 +192,6 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
         </div>
 
         <div className="rounded-lg bg-black/20 p-3">
-          <div className="text-xs text-slate-400">北向资金</div>
-          <div className="mt-1 text-sm text-slate-500">{structure.north.note}</div>
         </div>
       </div>
 
@@ -228,7 +226,7 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
               </ResponsiveContainer>
               <div className="flex justify-center gap-4 text-[11px] text-slate-500 mt-1">
                 <span><span className="inline-block w-3 h-2 bg-rose-500 rounded mr-1" />主力净流入(亿)</span>
-                <span><span className="inline-block w-3 h-2 bg-sky-400 rounded mr-1" />散户净流入(亿)</span>
+                <span><span className="inline-block w-3 h-2 bg-slate-400 rounded mr-1" />散户净流入(亿)</span>
               </div>
             </div>
           )}

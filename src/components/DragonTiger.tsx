@@ -5,21 +5,21 @@ import { stockRealUrl } from "../lib/realLinks";
 
 // ============== 知名游资/机构营业部标签库 ==============
 const KNOWN_TAGS: Array<{ keywords: string[]; label: string; color: string }> = [
-  { keywords: ["机构专用"], label: "机构席位", color: "bg-blue-500/20 text-blue-300" },
-  { keywords: ["沪股通专用", "深股通专用"], label: "北向资金", color: "bg-slate-500/20 text-slate-300" },
+  { keywords: ["机构专用"], label: "机构席位", color: "bg-slate-500/20 text-slate-300" },
+  { keywords: ["沪股通专用", "深股通专用"], label: "沪深股通", color: "bg-slate-500/20 text-slate-300" },
   // 知名游资营业部关键词
-  { keywords: ["华鑫证券上海分公司", "华鑫上海分"], label: "知名游资", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["东方财富拉萨"], label: "知名游资(拉萨帮)", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["国泰海通上海江苏路", "国泰君安上海江苏路"], label: "知名游资(章盟主)", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["中国银河绍兴"], label: "知名游资(赵老哥)", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["华泰南京太平南路", "华泰证券南京太平南路"], label: "知名游资", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["中信建投杭州"], label: "知名游资", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["国泰海通成都北一环", "国泰君安成都北一环"], label: "知名游资", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["开源证券西安太华路"], label: "知名游资", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["中国中金财富深圳深南大道"], label: "知名游资", color: "bg-orange-500/20 text-orange-300" },
-  { keywords: ["东方证券上海浦东新区源深路"], label: "知名游资", color: "bg-orange-500/20 text-orange-300" },
+  { keywords: ["华鑫证券上海分公司", "华鑫上海分"], label: "知名游资", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["东方财富拉萨"], label: "知名游资(拉萨帮)", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["国泰海通上海江苏路", "国泰君安上海江苏路"], label: "知名游资(章盟主)", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["中国银河绍兴"], label: "知名游资(赵老哥)", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["华泰南京太平南路", "华泰证券南京太平南路"], label: "知名游资", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["中信建投杭州"], label: "知名游资", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["国泰海通成都北一环", "国泰君安成都北一环"], label: "知名游资", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["开源证券西安太华路"], label: "知名游资", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["中国中金财富深圳深南大道"], label: "知名游资", color: "bg-amber-500/20 text-amber-300" },
+  { keywords: ["东方证券上海浦东新区源深路"], label: "知名游资", color: "bg-amber-500/20 text-amber-300" },
   // 量化
-  { keywords: ["量化", "对冲"], label: "量化席位", color: "bg-violet-500/20 text-violet-300" },
+  { keywords: ["量化", "对冲"], label: "量化席位", color: "bg-slate-500/20 text-slate-300" },
 ];
 
 function getDeptTag(name: string): { label: string; color: string } | null {
@@ -34,8 +34,8 @@ function reasonColor(explanation: string): string {
   if (explanation.includes("涨幅偏离")) return "bg-rose-500/20 text-rose-300";
   if (explanation.includes("跌幅偏离")) return "bg-emerald-500/20 text-emerald-300";
   if (explanation.includes("换手率")) return "bg-amber-500/20 text-amber-300";
-  if (explanation.includes("振幅")) return "bg-purple-500/20 text-purple-300";
-  if (explanation.includes("连续三个交易日")) return "bg-sky-500/20 text-sky-300";
+  if (explanation.includes("振幅")) return "bg-amber-500/20 text-amber-300";
+  if (explanation.includes("连续三个交易日")) return "bg-slate-500/20 text-slate-300";
   return "bg-slate-500/20 text-slate-300";
 }
 
@@ -132,7 +132,7 @@ function HistoryPerformance({ items }: { items: DragonTigerItem[] }) {
   if (withHistory.length === 0) {
     return (
       <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-        <div className="text-xs font-bold text-sky-300 mb-2">📈 龙虎榜历史表现统计</div>
+        <div className="text-xs font-bold text-slate-300 mb-2">📈 龙虎榜历史表现统计</div>
         <div className="text-xs text-slate-500">当前批次龙虎榜尚无后续涨跌数据（最新一期需等待后续交易日收盘后更新）。该功能需要历史龙虎榜数据中包含上榜后的后续行情，当API返回的后续涨跌字段不为null时自动计算。</div>
       </div>
     );
@@ -154,7 +154,7 @@ function HistoryPerformance({ items }: { items: DragonTigerItem[] }) {
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-      <div className="text-xs font-bold text-sky-300 mb-2">📈 龙虎榜历史表现统计（基于{withHistory.length}条有后续数据的记录）</div>
+      <div className="text-xs font-bold text-slate-300 mb-2">📈 龙虎榜历史表现统计（基于{withHistory.length}条有后续数据的记录）</div>
       <div className="grid grid-cols-4 gap-2 text-center text-xs">
         {stats.map(d => (
           <div key={d.label} className="rounded-lg bg-black/20 p-2">

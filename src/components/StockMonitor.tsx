@@ -280,7 +280,7 @@ export default function StockMonitor() {
                     className="block rounded-lg border border-white/5 bg-black/20 p-3 hover:bg-black/30 transition">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        {a.columnName && <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[11px] font-bold text-sky-300">{a.columnName}</span>}
+                        {a.columnName && <span className="rounded bg-slate-500/20 px-1.5 py-0.5 text-[11px] font-bold text-slate-300">{a.columnName}</span>}
                         <span className="text-sm font-medium text-slate-200">{a.title}</span>
                       </div>
                       <span className="shrink-0 text-[11px] text-slate-500">{a.time.slice(0, 16)}</span>

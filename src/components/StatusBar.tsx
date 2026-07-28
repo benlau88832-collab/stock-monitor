@@ -21,7 +21,7 @@ export default function StatusBar({ overview, fund }: {
         {overview && (
           <span className="flex items-center gap-1">
             <Activity size={12} className="text-amber-400" />
-            <span className={`font-bold ${overview.sentiment >= 65 ? "text-rose-400" : overview.sentiment >= 45 ? "text-amber-300" : "text-blue-400"}`}>
+            <span className={`font-bold ${overview.sentiment >= 65 ? "text-rose-400" : overview.sentiment >= 45 ? "text-amber-300" : "text-slate-400"}`}>
               {overview.sentiment}
             </span>
             <span className="text-slate-500">{overview.sentimentLabel}</span>
@@ -68,8 +68,8 @@ export default function StatusBar({ overview, fund }: {
         {/* 信号数 */}
         {todaySignals > 0 && (
           <span className="flex items-center gap-1">
-            <Zap size={11} className="text-violet-400" />
-            <span className="text-violet-400 font-semibold">{todaySignals}信号</span>
+            <Zap size={11} className="text-amber-400" />
+            <span className="text-amber-400 font-semibold">{todaySignals}信号</span>
           </span>
         )}
 
