@@ -715,8 +715,7 @@ export async function fetchDragonTigerList(pageSize = 50): Promise<DragonTigerIt
   const cols = "SECURITY_CODE,SECURITY_NAME_ABBR,TRADE_DATE,CLOSE_PRICE,CHANGE_RATE,EXPLAIN,BILLBOARD_NET_AMT,BILLBOARD_BUY_AMT,BILLBOARD_SELL_AMT,EXPLANATION,D1_CLOSE_ADJCHRATE,D2_CLOSE_ADJCHRATE,D5_CLOSE_ADJCHRATE,D10_CLOSE_ADJCHRATE";
   const url = `${DATACENTER}?sortColumns=TRADE_DATE,SECURITY_CODE&sortTypes=-1,1&pageSize=${pageSize}&pageNumber=1&reportName=RPT_DAILYBILLBOARD_DETAILSNEW&columns=${cols}&source=WEB&client=WEB`;
   try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(12000) });
-    const json = await resp.json();
+    const json = await trackedJsonp<any>("龙虎榜", url, 12000, "callback");
     const list: any[] = json?.result?.data ?? [];
     // 去重（同一只股票同一天可能有多条上榜原因）
     const seen = new Map<string, DragonTigerItem>();
@@ -760,8 +759,8 @@ export async function fetchDragonTigerSeats(code: string, tradeDate: string): Pr
     net: num(d.NET),
   });
   const [buyRes, sellRes] = await Promise.allSettled([
-    fetch(buyUrl, { signal: AbortSignal.timeout(10000) }).then(r => r.json()),
-    fetch(sellUrl, { signal: AbortSignal.timeout(10000) }).then(r => r.json()),
+    trackedJsonp<any>("龙虎榜席位", buyUrl, 10000, "callback"),
+    trackedJsonp<any>("龙虎榜席位", sellUrl, 10000, "callback"),
   ]);
   return {
     buy: buyRes.status === "fulfilled" ? (buyRes.value?.result?.data ?? []).map(parseSeat).slice(0, 5) : [],
@@ -837,65 +836,48 @@ export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSum
 }
 
 // ============== 两市历史日成交额（用于量能对比）==============
-// 修复：
-// 1) 用真实近期 beg/end（旧 beg=0 会返回 1990 年远古数据）
-// 2) 沪深改"顺序"请求，降低 push2his 并发，规避 ERR_EMPTY_RESPONSE
-// 3) 模块级缓存 10 分钟（成交额为日级数据，无需每 60s 重抓）+ 单调用重试退避
+// 修复：beg=0 会返回 1990 年远古数据 + 限流 0% + 顺序请求降低并发
 export interface TurnoverDay { date: string; amount: number; }
 
 const turnoverCache = { data: null as TurnoverDay[] | null, ts: 0 };
 const TURNOVER_TTL = 10 * 60 * 1000; // 10 分钟
 
-function ymdPlusDays(offset: number): string {
+function ymdPlus(offset: number): string {
   const d = new Date();
   d.setDate(d.getDate() + offset);
-  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+  return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
 }
-
 export async function fetchTurnoverHistory(days = 10): Promise<TurnoverDay[]> {
-  // 命中缓存
   if (turnoverCache.data && Date.now() - turnoverCache.ts < TURNOVER_TTL) return turnoverCache.data;
-
   const fields2 = "f51,f52,f53,f54,f55,f56,f57";
-  const beg = ymdPlusDays(-(days + 15)); // 多取几天兜底
-  const end = ymdPlusDays(1);
-
-  // 带重试的单市场抓取（push2his 易空响应）
-  async function fetchOneWithRetry(secid: string): Promise<Map<string, number>> {
-    const url = `${PUSH2HIS}/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=${fields2}&klt=101&fqt=0&beg=${beg}&end=${end}&lmt=${days + 5}&ut=${EM_UT}`;
-    for (let attempt = 0; attempt < 2; attempt++) {
+  const beg = ymdPlus(-(days + 15));
+  const end = ymdPlus(1);
+  async function one(secid: string): Promise<Map<string, number>> {
+    const url = `${PUSH2HIS}/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=${fields2}&klt=101&fqt=0&beg=${beg}&end=${end}&ut=${EM_UT}`;
+    for (let a = 0; a < 2; a++) {
       try {
-        const json = await trackedJsonp<any>("成交额历史", url, 8000);
-        const klines: string[] = json?.data?.klines ?? [];
-        if (klines.length > 0) {
+        const json = await trackedJsonp<any>("成交额历史", url, 10000);
+        const kl: string[] = json?.data?.klines ?? [];
+        if (kl.length) {
           const m = new Map<string, number>();
-          for (const line of klines) {
-            const p = line.split(",");
-            const amt = Number(p[6]); // f57 = 成交额
-            if (p[0] && Number.isFinite(amt)) m.set(p[0], amt);
-          }
-          if (m.size > 0) return m;
+          for (const line of kl) { const p = line.split(","); const amt = Number(p[6]); if (p[0] && Number.isFinite(amt)) m.set(p[0], amt); }
+          if (m.size) return m;
         }
-      } catch { /* 空响应/超时 → 退避重试 */ }
-      await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+      } catch {}
+      await new Promise(r => setTimeout(r, 900 * (a + 1)));
     }
     return new Map();
   }
-
   try {
-    const sh = await fetchOneWithRetry("1.000001"); // 顺序请求，降低并发
-    const sz = await fetchOneWithRetry("0.399001");
-    const allDates = new Set([...sh.keys(), ...sz.keys()]);
-    const result: TurnoverDay[] = [];
-    for (const date of allDates) result.push({ date, amount: (sh.get(date) ?? 0) + (sz.get(date) ?? 0) });
-    result.sort((a, b) => b.date.localeCompare(a.date)); // 最新在前
-    const sliced = result.slice(0, days);
-    turnoverCache.data = sliced;
-    turnoverCache.ts = Date.now();
+    const sh = await one("1.000001");
+    const sz = await one("0.399001");
+    const dates = new Set([...sh.keys(), ...sz.keys()]);
+    const res = [...dates].map(date => ({ date, amount: (sh.get(date) ?? 0) + (sz.get(date) ?? 0) }));
+    res.sort((a, b) => b.date.localeCompare(a.date));
+    const sliced = res.slice(0, days);
+    turnoverCache.data = sliced; turnoverCache.ts = Date.now();
     return sliced;
-  } catch {
-    return turnoverCache.data ?? []; // 失败也返回上次缓存，不崩
-  }
+  } catch { return turnoverCache.data ?? []; }
 }
 
 // ============== 限售解禁查询（用于个股否决项） ==============
@@ -911,8 +893,7 @@ export interface LiftBanItem {
 export async function fetchLiftBan(code: string): Promise<LiftBanItem[]> {
   const url = `https://datacenter-web.eastmoney.com/api/data/v1/get?sortColumns=FREE_DATE&sortTypes=1&pageSize=5&pageNumber=1&reportName=RPT_LIFT_STAGE&columns=SECURITY_CODE,SECURITY_NAME_ABBR,FREE_DATE,LIFT_MARKET_CAP,FREE_RATIO&source=WEB&client=WEB&filter=(SECURITY_CODE=%22${code}%22)`;
   try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    const json = await resp.json();
+    const json = await trackedJsonp<any>("解禁", url, 8000, "callback");
     const list: any[] = json?.result?.data ?? [];
     return list.map(d => ({
       code: String(d.SECURITY_CODE ?? ""),
