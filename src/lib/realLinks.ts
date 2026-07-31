@@ -80,6 +80,18 @@ export function globalMarketUrl(name: string): string {
   if (name.includes("德国") || name.includes("DAX")) return "https://quote.eastmoney.com/unify/r/100.GDAXI";
   if (name.includes("英国") || name.includes("富时")) return "https://quote.eastmoney.com/unify/r/100.FTSE";
   if (name.includes("澳洲") || name.includes("AS51")) return "https://quote.eastmoney.com/unify/r/100.AS51";
+  if (name.includes("韩国") || name.includes("KOSPI")) return "https://quote.eastmoney.com/unify/r/100.KS11";
+  if (name.includes("台湾")) return "https://quote.eastmoney.com/unify/r/100.TWII";
+  return "https://quote.eastmoney.com/center/gridlist.html#global_0";
+}
+
+// 隔夜关联品种链接
+export function commodityUrl(name: string): string {
+  if (name.includes("美元指数")) return "https://quote.eastmoney.com/unify/r/100.UDI";
+  if (name.includes("人民币")) return "https://quote.eastmoney.com/unify/r/133.USDCNH";
+  if (name.includes("黄金")) return "https://quote.eastmoney.com/unify/r/101.GC00Y";
+  if (name.includes("原油")) return "https://quote.eastmoney.com/unify/r/101.CL00Y";
+  if (name.includes("铜")) return "https://quote.eastmoney.com/unify/r/101.HG00Y";
   return "https://quote.eastmoney.com/center/gridlist.html#global_0";
 }
 

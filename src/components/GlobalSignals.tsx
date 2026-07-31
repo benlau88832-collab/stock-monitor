@@ -1,5 +1,6 @@
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { COMMODITY_INDICES } from "../lib/api";
+import { globalMarketUrl, commodityUrl } from "../lib/realLinks";
 import type { GlobalData } from "../App";
 
 export default function GlobalSignals({ data, loading }: { data: GlobalData | null; loading: boolean }) {
@@ -27,7 +28,7 @@ export default function GlobalSignals({ data, loading }: { data: GlobalData | nu
       {/* 海外指数 */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         {globalSignals.map((idx) => (
-          <a key={idx.name} href={`https://quote.eastmoney.com/unify/r/100.${idx.name}`} target="_blank" rel="noopener noreferrer"
+          <a key={idx.name} href={globalMarketUrl(idx.name)} target="_blank" rel="noopener noreferrer"
             className="rounded-xl border border-white/10 bg-white/5 p-3 hover:border-amber-400/30 hover:bg-white/10 transition block">
             <div className="text-xs text-slate-400">{idx.name}</div>
             <div className="mt-1 text-base font-bold text-slate-50">{idx.price?.toFixed(2)}</div>
@@ -44,14 +45,14 @@ export default function GlobalSignals({ data, loading }: { data: GlobalData | nu
             {commodities.map((c) => {
               const meta = COMMODITY_INDICES.find(ci => ci.name === c.name);
               return (
-                <div key={c.name} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <a key={c.name} href={commodityUrl(c.name)} target="_blank" rel="noopener noreferrer" className="block rounded-xl border border-white/10 bg-white/5 p-3 hover:border-amber-400/30 hover:bg-white/10 transition">
                   <div className="text-xs text-slate-400">{c.name}</div>
                   <div className="mt-1 text-base font-bold text-slate-50">{c.price?.toFixed(c.price > 100 ? 1 : c.price > 10 ? 2 : 4)}</div>
                   <div className={`text-sm font-semibold ${pctColor(c.pct)}`}>{fmtPct(c.pct)}</div>
                   {meta?.hint && (
                     <div className="mt-1 text-[11px] text-slate-500 leading-tight">{meta.hint}</div>
                   )}
-                </div>
+                </a>
               );
             })}
           </div>
