@@ -7,7 +7,7 @@ import type { NewsItem, AnnItem } from "./llmNewsIntelligence";
 const NEWS_KEY = "ds_news";
 const ANN_KEY = "ds_ann";
 /** 两库合计硬上限（可调） */
-const HARD_LIMIT = 6000;
+const HARD_LIMIT = 10000;
 /** summary 截断长度（可调） */
 const SUMMARY_MAX = 150;
 /** 滚动淘汰天数（可调） */

@@ -223,7 +223,11 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
       {/* 状态条 */}
       <div className="text-[11px] text-slate-600">
         本次基于 {sourceCount.news}条快讯+{sourceCount.ann}条公告 · {scopeLabel || SLOT_LABELS[slot ?? "afterclose"]} · 更新{lastUpdateTime || "—"}
-        {stats.totalCount > 0 && <span className="ml-2">累积库{stats.totalCount}条</span>}
+        {stats.totalCount > 0 && <span className="ml-2">累积库{stats.totalCount}条{stats.oldestDate ? `（最早${stats.oldestDate}）` : ""}</span>}
+      </div>
+      {/* 容量说明 */}
+      <div className="text-[11px] text-slate-700">
+        网页存储容量有限，仅保留近期数据；完整月级追溯请在本地部署后接入 PostgreSQL（存储抽象层已就绪）。
       </div>
 
       {noKey && !memo && (
