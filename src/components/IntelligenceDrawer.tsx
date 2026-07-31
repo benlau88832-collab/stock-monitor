@@ -70,6 +70,30 @@ async function buildSupervisorPrompt(question: string): Promise<{ system: string
   try { const s = localStorage.getItem(`sentiment:${dateLabel}`); if (s && Number(s) > 0) sentScore = `${s}分`; } catch {}
   dataParts.push(`情绪温度计：${sentScore || "暂缺"}`);
 
+  // 1.5 市场整体行情（指数 + 涨跌家数 + 成交额）
+  try {
+    const { fetchIndexOverview, fetchMarketBreadth, fetchMarketTurnover } = await import("../lib/api");
+    const [indices, breadth, turnover] = await Promise.allSettled([
+      fetchIndexOverview(),
+      fetchMarketBreadth(),
+      fetchMarketTurnover(),
+    ]);
+    
+    const idxStr = indices.status === "fulfilled" && indices.value.length > 0
+      ? indices.value.map(i => `${i.name}=${i.price.toFixed(2)}(${i.pct > 0 ? '+' : ''}${i.pct.toFixed(2)}%)`).join(" ")
+      : "暂缺";
+    
+    const brStr = breadth.status === "fulfilled"
+      ? `涨${breadth.value.up}跌${breadth.value.down}平${breadth.value.flat} 平均涨幅${breadth.value.avgPct.toFixed(2)}%`
+      : "暂缺";
+    
+    const toStr = turnover.status === "fulfilled" && turnover.value.available
+      ? `成交额${(turnover.value.amount / 1e8).toFixed(1)}亿元`
+      : "暂缺";
+    
+    dataParts.push(`市场快照：${idxStr} | ${brStr} | ${toStr}`);
+  } catch { /* skip */ }
+
   // 2. 情报台结论
   try {
     const memo = loadDailyMemo(qd?.ymd ?? td);
@@ -104,20 +128,48 @@ async function buildSupervisorPrompt(question: string): Promise<{ system: string
     }
   } catch { /* skip */ }
 
-  // 5. 自选股（仅当天、且非日期提问时拉取）
-  if (!qd) {
-    const codes: string[] = (() => { try { return JSON.parse(localStorage.getItem("stock_watchlist") || "[]"); } catch { return []; } })();
+  // 5. 自选股（当天数据，若指定日期则拉取该日历史消息）
+  const codes: string[] = (() => { try { return JSON.parse(localStorage.getItem("stock_watchlist") || "[]"); } catch { return []; } })();
+  if (codes.length > 0) {
     const wl: string[] = [];
-    for (const code of codes.slice(0, 6)) {
+    
+    // 批量获取行情数据（当天实时行情）
+    const { fetchStockOne } = await import("../lib/api");
+    const quotes = await Promise.all(
+      codes.slice(0, 6).map(code => fetchStockOne(code).catch(() => null))
+    );
+    
+    for (let i = 0; i < codes.length && i < 6; i++) {
+      const code = codes[i];
       try {
-        const [sNews, sAnns] = await Promise.all([fetchStockNews(code, 3), fetchStockAnnouncements(code, 2)]);
+        // 如果指定了日期，拉取该日历史消息；否则拉取最新消息
+        const targetDate = qd ? qd.dash : undefined;
+        const [sNews, sAnns] = await Promise.all([
+          targetDate ? fetchStockNews(code, 3) : fetchStockNews(code, 3),
+          targetDate ? fetchStockAnnouncements(code, 2) : fetchStockAnnouncements(code, 2)
+        ]);
+        const quote = quotes[i];
+        
+        // 构建消息字符串（包含正文摘要）
         const tag = (t: string) => /利空|下跌|减持|亏损/.test(t) ? "利空" : /利好|上涨|增持|中标|回购|预增/.test(t) ? "利好" : "中性";
-        const newsStr = sNews.map(n => `[${tag(n.title + n.summary)}]${n.title}`).join(";") || "无";
-        const annStr = sAnns.map(a => a.title).join(";") || "无";
-        wl.push(`${code}: ${newsStr} | 公告:${annStr}`);
+        const newsItems = sNews.map(n => {
+          const content = n.summary ? `${n.title} - ${n.summary.slice(0, 80)}` : n.title;
+          return `[${tag(n.title + n.summary)}]${content}`;
+        }).join("; ") || "无";
+        const annStr = sAnns.map(a => a.title).join("; ") || "无";
+        
+        // 构建行情字符串
+        const quoteStr = quote 
+          ? `价格=${quote.price.toFixed(2)} 涨跌=${(quote.pct * 100).toFixed(2)}% 主力净流=${quote.mainNet > 0 ? '+' : ''}${quote.mainNet.toFixed(0)}万`
+          : "行情暂缺";
+        
+        wl.push(`${code} ${quote?.name || ''}: ${quoteStr} | 消息:${newsItems} | 公告:${annStr}`);
       } catch { /* skip */ }
     }
-    if (wl.length > 0) dataParts.push(`自选股消息：\n${wl.join("\n")}`);
+    if (wl.length > 0) {
+      const label = qd ? `自选股详情(${qd.dash})` : "自选股详情";
+      dataParts.push(`${label}：\n${wl.join("\n")}`);
+    }
   }
 
   // 构建 system（角色指令 + 日期提示）
