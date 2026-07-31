@@ -162,7 +162,7 @@ export async function fetchCommodities(): Promise<GlobalIndex[]> {
   try {
     const secids = COMMODITY_INDICES.map((i) => i.secid).join(",");
     const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
-    const json = await trackedJsonp<any>("板块资金流", url, 10000);
+    const json = await trackedJsonp<any>("商品汇率", url, 10000);
     const diff = normalizeDiff(json?.data?.diff);
     return diff.map((d) => {
       const code = String(d.f12 ?? "");
@@ -176,7 +176,7 @@ export async function fetchGlobalIndices(): Promise<GlobalIndex[]> {
   try {
     const secids = GLOBAL_INDICES.map((i) => i.secid).join(",");
     const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
-    const json = await trackedJsonp<any>("板块成分股", url, 10000);
+    const json = await trackedJsonp<any>("全球指数", url, 10000);
     const diff = normalizeDiff(json?.data?.diff);
     return diff.map((d) => {
       const code = String(d.f12 ?? "");
@@ -224,7 +224,7 @@ export async function fetchMarketMainFund(): Promise<MarketFundData> {
   // 精简请求字段：去掉 f69/f75/f81/f87/f165/f175/f184 等占比类冗余字段
   // 这些字段组合过多时东方财富服务端会返回 502 Bad Gateway
   const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f12,f62,f66,f72,f78,f84,f164,f174&secids=1.000001,0.399001`;
-  const json = await trackedJsonp<any>("全球指数", url);
+  const json = await trackedJsonp<any>("主力资金", url);
   const diff = normalizeDiff(json?.data?.diff);
   const agg: MarketFundData = {
     mainNet: 0,
@@ -278,7 +278,7 @@ export async function fetchBoardFundFlow(
   const fs = BOARD_FS[boardType];
   const fields = "f12,f14,f3,f62,f66,f72,f78,f84,f164,f165,f174,f175,f184";
   const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
-  const json = await trackedJsonp<any>("商品汇率", url);
+  const json = await trackedJsonp<any>("板块资金流", url);
   const diff = normalizeDiff(json?.data?.diff);
   return diff.map((d) => ({
     code: String(d.f12 ?? ""),
@@ -411,7 +411,7 @@ export interface BoardStock {
 export async function fetchBoardConstituents(boardCode: string, limit = 10): Promise<BoardStock[]> {
   const fields = "f12,f14,f2,f3,f62,f66,f72,f78,f84,f184,f8,f9,f10";
   const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=b:${boardCode}&fields=${fields}`;
-  const json = await trackedJsonp<any>("个股行情", url);
+  const json = await trackedJsonp<any>("板块成分股", url);
   const diff = normalizeDiff(json?.data?.diff);
   return diff.map((d) => ({
     code: String(d.f12 ?? ""),
@@ -455,7 +455,7 @@ export async function fetchStockOne(code: string) {
   const secid = toSecid(code);
   const fields = "f2,f3,f12,f14,f8,f9,f10,f62,f66,f69,f72,f75,f78,f81,f84,f87,f164,f165,f174,f175,f184";
   const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=${fields}&secids=${secid}`;
-  const json = await trackedJsonp<any>("板块资金排行", url);
+  const json = await trackedJsonp<any>("个股行情", url);
   const diff = normalizeDiff(json?.data?.diff);
   if (!diff.length) return null;
   const d = diff[0];
@@ -665,7 +665,7 @@ export interface StockAnnouncement {
 export async function fetchStockAnnouncements(code: string, pageSize = 10): Promise<StockAnnouncement[]> {
   const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=${pageSize}&page_index=1&ann_type=A&client_source=web&f_node=0&s_node=0&stock_list=${code}`;
   try {
-    const json = await trackedJsonp<any>("资金历史", url, 10000);
+    const json = await trackedJsonp<any>("个股公告", url, 10000);
     const list: any[] = json?.data?.list ?? [];
     return list.map((item) => {
       const artCode = String(item.art_code ?? "");

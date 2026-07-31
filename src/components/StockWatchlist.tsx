@@ -16,6 +16,7 @@ interface WatchStock {
   alertCount: number; // 异动信号数
   healthScore: number | null; // AI健康度评分(1-100)
   healthTip: string; // 一句话提示
+  llmDegraded?: boolean; // AI降级标识
 }
 
 interface InfoItem {
@@ -175,11 +176,11 @@ function buildScanPrompt(stock: WatchStock): string {
 }
 
 // ============== LLM 调用（统一走 AI 中枢，享受缓存/限速/降级） ==============
-async function callLLM(_apiKey: string, messages: ChatMsg[], _maxTokens = 600): Promise<string> {
+async function callLLM(_apiKey: string, messages: ChatMsg[], _maxTokens = 600): Promise<{ text: string; degraded: boolean }> {
   // 将 messages 合并为一个 prompt 透传给 callAI stockJudge 任务
   const prompt = messages.map(m => m.content).join("\n\n");
   const result = await callAI("stockJudge", { prompt });
-  return result.text;
+  return { text: result.text, degraded: result.degraded };
 }
 
 // ============== 健康度颜色 ==============
@@ -310,9 +311,13 @@ export default function StockWatchlist() {
     const newsCtx = infoItems.filter(i => i.type === "news" || i.type === "announcement").slice(0, 6).map(i => `[${i.tag}] ${i.title}`).join("\n");
     const prompt = buildDetailPrompt(stock, newsCtx);
     try {
-      const result = await callLLM(apiKey, [{ role: "user", content: prompt }], 800);
-      setLlmResult(result);
-      setChatHistory([{ role: "user", content: prompt }, { role: "assistant", content: result }]);
+      const { text, degraded } = await callLLM(apiKey, [{ role: "user", content: prompt }], 800);
+      setLlmResult(text);
+      setChatHistory([{ role: "user", content: prompt }, { role: "assistant", content: text }]);
+      // 存储降级状态用于显示角标
+      if (degraded) {
+        setStocks(prev => ({ ...prev, [selected]: { ...prev[selected], llmDegraded: true } }));
+      }
     } catch (err) {
       setLlmResult(`❌ ${err instanceof Error ? err.message : String(err)}`);
     } finally { setLlmLoading(false); }
@@ -327,10 +332,14 @@ export default function StockWatchlist() {
     const userMsg: ChatMsg = { role: "user", content: `针对${stock.name}(${stock.code})的追问：${followUp}\n\n当前数据快照：现价${stock.price} ${fmtPct(stock.pct)} 主力${fmtMoney(stock.mainNet)} 5日${fmtMoney(stock.mainNet5d)} 换手${stock.turnoverRate}% 量比${stock.volumeRatio}` };
     const newHistory = [...chatHistory, userMsg];
     try {
-      const result = await callLLM(apiKey, newHistory, 500);
-      const assistantMsg: ChatMsg = { role: "assistant", content: result };
+      const { text, degraded } = await callLLM(apiKey, newHistory, 500);
+      const assistantMsg: ChatMsg = { role: "assistant", content: text };
       setChatHistory([...newHistory, assistantMsg]);
       setFollowUp("");
+      // 存储降级状态
+      if (degraded) {
+        setStocks(prev => ({ ...prev, [selected]: { ...prev[selected], llmDegraded: true } }));
+      }
     } catch (err) {
       setChatHistory([...newHistory, { role: "assistant", content: `❌ ${err instanceof Error ? err.message : String(err)}` }]);
     } finally { setFollowUpLoading(false); }
@@ -345,11 +354,11 @@ export default function StockWatchlist() {
       const s = newStocks[code];
       if (!s) continue;
       try {
-        const result = await callLLM(apiKey, [{ role: "user", content: buildScanPrompt(s) }], 60);
-        const lines = result.trim().split("\n").filter(l => l.trim());
+        const { text, degraded } = await callLLM(apiKey, [{ role: "user", content: buildScanPrompt(s) }], 60);
+        const lines = text.trim().split("\n").filter(l => l.trim());
         const score = parseInt(lines[0]) || 50;
         const tip = lines[1] || "暂无评价";
-        newStocks[code] = { ...s, healthScore: Math.max(1, Math.min(100, score)), healthTip: tip };
+        newStocks[code] = { ...s, healthScore: Math.max(1, Math.min(100, score)), healthTip: tip, llmDegraded: degraded };
       } catch {
         newStocks[code] = { ...s, healthScore: null, healthTip: "扫描失败" };
       }
@@ -494,9 +503,14 @@ export default function StockWatchlist() {
           )}
 
           {/* AI研判结果 + 追问历史 */}
-          {(llmResult || chatHistory.length > 2) && (
+          {(llmResult || chatHistory.length > 2) && selected && (
             <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2 max-h-72 overflow-y-auto">
-              <div className="text-[11px] font-bold text-violet-400">🤖 AI 研判（Agnes AI · 六段式）</div>
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] font-bold text-violet-400">🤖 AI 研判（Agnes AI · 六段式）</span>
+                {stocks[selected]?.llmDegraded && (
+                  <span className="rounded px-1 text-[10px] bg-rose-500/20 text-rose-300">⚡ 规则版</span>
+                )}
+              </div>
               {chatHistory.filter(m => m.role === "assistant").map((m, i) => (
                 <div key={i} className="text-xs text-violet-200 whitespace-pre-wrap leading-relaxed border-b border-violet-500/10 pb-2 mb-2 last:border-0 last:mb-0 last:pb-0">
                   {i > 0 && <div className="text-[11px] text-violet-400/60 mb-1">追问回复 #{i}</div>}
