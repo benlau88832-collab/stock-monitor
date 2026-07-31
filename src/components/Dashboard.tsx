@@ -100,11 +100,11 @@ function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: Ga
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-center space-y-2">
       <div className="text-[11px] text-slate-500">情绪 × 闸门</div>
-      <div className="text-3xl font-black" style={{ color }}>{s}</div>
+      <div className="text-3xl font-black" style={{ color }}>{s != null && s > 0 ? s : "—"}</div>
       <div className="text-xs text-slate-400">{overview.sentimentLabel}</div>
       {gate && (
-        <div className={`text-2xl font-black ${gate.factor >= 0.8 ? "text-emerald-400" : gate.factor >= 0.5 ? "text-amber-300" : "text-rose-400"}`}>
-          ×{gate.factor.toFixed(1)}
+        <div className={`text-2xl font-black ${gate.factor != null && gate.factor >= 0.8 ? "text-emerald-400" : gate.factor != null && gate.factor >= 0.5 ? "text-amber-300" : "text-rose-400"}`}>
+          ×{gate.factor != null ? gate.factor.toFixed(1) : "—"}
         </div>
       )}
       {gate && <div className="text-[11px] text-slate-500">{gate.label}</div>}

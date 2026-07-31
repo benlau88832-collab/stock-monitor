@@ -23,13 +23,17 @@ const FUSE_BLASTED_RATE = 40;
 const FUSE_PROMOTION_RATE = 0.10;
 
 export interface GateResult {
-  factor: number;    // 0.2~1.0
+  factor: number | null;   // null = 数据不足，不给出系数
   label: string;
   reason: string[];  // 熔断原因列表
 }
 
 export function computeGate(overview: OverviewData): GateResult {
   const s = overview.sentiment;
+  // 数据缺失护栏：sentiment 无效(0/null/NaN)时，绝不下"极度恐慌"结论
+  if (s == null || !Number.isFinite(s) || s <= 0) {
+    return { factor: null, label: "数据不足·暂不给出系数", reason: [] };
+  }
 
   // 基础映射
   let baseFactor = 1.0;

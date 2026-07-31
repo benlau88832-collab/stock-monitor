@@ -4,6 +4,27 @@
 
 ---
 
+## v9.8.6 — 修复：市场闸门在情绪数据缺失(0/null)时不再误判为"极度恐慌×0.2" (2026-07-31)
+
+修复：市场闸门在情绪数据缺失(0/null)时不再误判为"极度恐慌×0.2"，改为显示"数据不足·暂不给出系数"；仪表盘情绪分/闸门系数无效时显示"—"。
+
+**A. 闸门计算护栏**：
+- `regimeGate.ts`: `GateResult.factor` 改为 `number | null`
+- `computeGate`: 最开头插入数据缺失护栏，当 `sentiment == null || !Number.isFinite(s) || s <= 0` 时，返回 `{ factor: null, label: "数据不足·暂不给出系数", reason: [] }`
+
+**B. UI展示兜底**：
+- `Dashboard.tsx` GateGauge: 情绪分显示改为 `s != null && s > 0 ? s : "—"`
+- `Dashboard.tsx` GateGauge: 闸门系数显示改为 `gate.factor != null ? gate.factor.toFixed(1) : "—"`
+- `BattlePlan.tsx`: 闸门系数显示改为 `gate.factor != null ? gate.factor.toFixed(1) : "—"`
+- `BattlePlan.tsx`: 所有 `gate.factor >= X` 比较前加 `gate.factor != null &&` 守卫
+- `BattlePlan.tsx`: `showNoRec` 条件中 `gate.factor <= 0.3` 改为 `gate.factor != null && gate.factor <= 0.3`
+
+**效果**：
+- 夜间/周末/接口失败时，首页"情绪×闸门"卡片显示"— / 数据不足"，不再出现 ×0.2 极度恐慌
+- 盘中情绪正常时（如 55），仍正常显示 55 与 ×1.0 等
+
+---
+
 ## v9.8.5 — 修复：推荐命中率统计改为真实日K收盘价回填T+1/T+3 (2026-07-31)
 
 修复：推荐命中率统计改为真实日K收盘价回填T+1/T+3(原用当前价冒充)；删除无意义的"个股超额胜率"(同组自比必然≈50%)，改为"T+1上涨率+平均T+1收益"。

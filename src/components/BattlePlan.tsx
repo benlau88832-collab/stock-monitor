@@ -186,7 +186,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   const { gate, themes, stocks, etfs } = data;
   // "今日无推荐"仅在三种情况出现：闸门≤0.3 / 硬熔断且全C档 / 数据管道失败
   const allCTier = [...themes, ...stocks].every(x => x.tier === "C") && etfs.every(x => x.tier === "C");
-  const showNoRec = (gate.factor <= 0.3) || (gate.reason.length > 0 && allCTier && themes.length + stocks.length + etfs.length > 0) || (themes.length === 0 && stocks.length === 0 && etfs.length === 0);
+  const showNoRec = (gate.factor != null && gate.factor <= 0.3) || (gate.reason.length > 0 && allCTier && themes.length + stocks.length + etfs.length > 0) || (themes.length === 0 && stocks.length === 0 && etfs.length === 0);
 
   return (
     <div className="rounded-xl border border-amber-500/20 bg-amber-950/10 p-4 space-y-3">
@@ -195,11 +195,11 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold text-amber-200">⚔️ 今日作战卡</span>
           <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${
-            gate.factor >= 0.8 ? "bg-emerald-500/20 text-emerald-300" :
-            gate.factor >= 0.5 ? "bg-amber-500/20 text-amber-300" :
+            gate.factor != null && gate.factor >= 0.8 ? "bg-emerald-500/20 text-emerald-300" :
+            gate.factor != null && gate.factor >= 0.5 ? "bg-amber-500/20 text-amber-300" :
             "bg-rose-500/20 text-rose-300"
           }`}>
-            闸门×{gate.factor.toFixed(1)} {gate.label}
+            闸门×{gate.factor != null ? gate.factor.toFixed(1) : "—"} {gate.label}
           </span>
         </div>
         {gate.reason.length > 0 && (
@@ -226,7 +226,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
             <div className="text-[11px] font-bold text-slate-400">个股推荐</div>
             {stocks.length > 0 ? stocks.map(s => <StockCard key={s.code} s={s} />) : (
               <div className="text-[11px] text-slate-500">
-                {gate.factor <= 0.3 ? "低闸门期仅推荐ETF" : "无符合条件个股"}
+                {gate.factor != null && gate.factor <= 0.3 ? "低闸门期仅推荐ETF" : "无符合条件个股"}
               </div>
             )}
           </div>
