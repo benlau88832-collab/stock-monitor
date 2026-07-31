@@ -61,20 +61,9 @@ function clamp(v: number, lo = 0, hi = 100): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-// ============== 板块关键词（复用 NewsPanel 的归组逻辑） ==============
-export const BOARD_NEWS_KEYWORDS: Array<{ keywords: string[]; board: string }> = [
-  { keywords: ["芯片", "半导体", "光刻", "封装", "台积电"], board: "半导体" },
-  { keywords: ["AI", "人工智能", "算力", "大模型", "ChatGPT", "Kimi"], board: "AI概念" },
-  { keywords: ["新能源", "锂电", "光伏", "储能", "风电"], board: "新能源" },
-  { keywords: ["汽车", "整车", "新能源车", "特斯拉", "比亚迪"], board: "汽车" },
-  { keywords: ["医药", "医疗", "生物", "创新药", "疫苗"], board: "医药" },
-  { keywords: ["军工", "航天", "国防", "导弹"], board: "军工" },
-  { keywords: ["银行", "保险", "证券", "券商", "金融"], board: "金融" },
-  { keywords: ["地产", "房地产", "楼市", "房价"], board: "地产" },
-  { keywords: ["消费", "白酒", "食品", "零售", "旅游"], board: "消费" },
-  { keywords: ["黄金", "贵金属", "金价"], board: "黄金" },
-  { keywords: ["石油", "原油", "天然气", "化工"], board: "能源化工" },
-];
+// ============== 板块关键词：改用数据驱动的 boardMap ==============
+// 导入动态板块词表匹配函数，替代旧的硬编码关键词
+import { matchBoardsByText } from "./boardMap";
 
 // ============== 输入类型 ==============
 import type { BoardKind } from "./boardTaxonomy";
@@ -122,14 +111,15 @@ export function computeThemeScores(
     for (const o of llmOverrides) llmMap.set(o.board, o);
   }
 
-  // 新闻按板块归组（规则版基线）
+  // 新闻按板块归组（规则版基线）：使用数据驱动的 boardMap
   const newsMap = new Map<string, number>();
   for (const item of newsItems) {
-    for (const bk of BOARD_NEWS_KEYWORDS) {
-      if (bk.keywords.some(kw => item.title.includes(kw))) {
-        const prev = newsMap.get(bk.board) ?? 0;
-        const add = item.stars >= 3 ? 25 : item.stars >= 2 ? 12 : 5;
-        newsMap.set(bk.board, prev + add);
+    const matchedBoards = matchBoardsByText(item.title);
+    if (matchedBoards.length > 0) {
+      const add = item.stars >= 3 ? 25 : item.stars >= 2 ? 12 : 5;
+      for (const board of matchedBoards) {
+        const prev = newsMap.get(board) ?? 0;
+        newsMap.set(board, prev + add);
       }
     }
   }
