@@ -42,75 +42,98 @@ function parseQueryDate(q: string): { ymd: string; dash: string } | null {
   return null;
 }
 
-// ============== 全站快照式 Prompt（覆盖市场/情报/板块/涨停/自选，禁编造） ==============
+// ============== 督导室专用 system prompt ==============
+const SUPERVISOR_SYSTEM = `你是A股实战交易督导，具备游资与机构双视角。
+
+回答规则：
+1. 用户问什么就答什么——问主线就说主线、问新闻就列新闻、问操作就给方向
+2. 用自然段落回答，像一个老练的操盘手跟搭档说话，不要复述数据标签
+3. 必须基于下方【数据快照】中的真实内容回答，禁止编造任何具体数字
+4. 数据缺失就明说"暂缺"，不要凑字数
+5. 引用消息/公告时带标题或股票代码
+6. 禁止免责声明、禁止"仅供参考"类措辞`;
+
+// ============== 全站快照 Prompt 构建（返回 system + user 分离） ==============
 // 自动识别用户提问中的日期，切换到该天的快照数据
-async function buildSupervisorPrompt(question: string): Promise<string> {
-  const parts: string[] = [];
+async function buildSupervisorPrompt(question: string): Promise<{ system: string; user: string }> {
+  const dataParts: string[] = [];
   const now = new Date();
   const bj = new Date(now.getTime() + (now.getTimezoneOffset() + 480) * 60000);
   const td = `${bj.getFullYear()}${String(bj.getMonth() + 1).padStart(2, "0")}${String(bj.getDate()).padStart(2, "0")}`;
 
   // ① 日期检测
   const qd = parseQueryDate(question);
+  const dateLabel = qd ? qd.dash : bj.toISOString().slice(0, 10);
 
-  // 1. 市场盘面（情绪分——按日期读取）
-  const sentDate = qd ? qd.dash : bj.toISOString().slice(0, 10);
+  // 1. 市场盘面（情绪分）
   let sentScore = "";
-  try { const s = localStorage.getItem(`sentiment:${sentDate}`); if (s && Number(s) > 0) sentScore = `${s}分`; } catch {}
-  parts.push(`【市场盘面】情绪${sentScore || "暂缺"}`);
+  try { const s = localStorage.getItem(`sentiment:${dateLabel}`); if (s && Number(s) > 0) sentScore = `${s}分`; } catch {}
+  dataParts.push(`情绪温度计：${sentScore || "暂缺"}`);
 
-  // 2. 情报台结论（识别到日期→取该日 memo，否则取今日）
+  // 2. 情报台结论
   try {
     const memo = loadDailyMemo(qd?.ymd ?? td);
-    parts.push(memo
-      ? `【情报台结论${qd ? "(" + qd.dash + ")" : ""}】阶段:${memo.cycleStage} 主线:${(memo.focusThemes ?? []).join("/")} | 交易:${memo.whatMarketTrades ?? "—"} | 趋势:${memo.trend ?? "—"} | 指引:${memo.directionAdvice ?? "—"}`
-      : "【情报台结论】暂未生成");
-  } catch { /* skip */ }
-
-  // 3. 板块情绪统计（识别到日期→精确取该日，否则取今日至今）
-  try {
-    const { news, ann } = qd
-      ? getAllOnDate(qd.dash)
-      : getAllSince(new Date().toISOString().slice(0, 10));
-    if (news.length || ann.length) {
-      parts.push(formatStatsForPrompt(computeStats(news, ann)));
+    if (memo) {
+      dataParts.push(`情报台研判(${dateLabel})：阶段=${memo.cycleStage} 主线=${(memo.focusThemes ?? []).join("/")} 市场在交易=${memo.whatMarketTrades ?? "—"} 趋势=${memo.trend ?? "—"} 指引=${memo.directionAdvice ?? "—"}`);
+      if (memo.rawSummary) dataParts.push(`全盘分析：${memo.rawSummary.slice(0, 300)}`);
     } else {
-      parts.push("【板块统计】该日期无存储数据");
+      dataParts.push("情报台研判：暂未生成");
     }
   } catch { /* skip */ }
 
-  // 4. 涨停池快照（历史日期也可读取）
+  // 3. 板块情绪统计
+  try {
+    const { news, ann } = qd
+      ? getAllOnDate(qd.dash)
+      : getAllSince(bj.toISOString().slice(0, 10));
+    if (news.length || ann.length) {
+      dataParts.push(formatStatsForPrompt(computeStats(news, ann)));
+    }
+  } catch { /* skip */ }
+
+  // 4. 涨停池快照
   try {
     const ztKey = `ztpool:${qd?.ymd ?? td}`;
     const ztRaw = localStorage.getItem(ztKey);
     if (ztRaw) {
       const ztData = JSON.parse(ztRaw);
       if (Array.isArray(ztData) && ztData.length > 0) {
-        const names = ztData.slice(0, 8).map((s: any) => s.name || s.n || "").filter(Boolean).join("/");
-        parts.push(`【涨停池快照】${ztData.length}只涨停 含:${names}`);
+        const names = ztData.slice(0, 10).map((s: any) => s.name || s.n || "").filter(Boolean).join("/");
+        dataParts.push(`涨停池(${ztData.length}只)：${names}`);
       }
     }
   } catch { /* skip */ }
 
-  // 5. 自选股真实数据（识别到日期时跳过，专注该日市场总结）
+  // 5. 自选股（仅当天、且非日期提问时拉取）
   if (!qd) {
     const codes: string[] = (() => { try { return JSON.parse(localStorage.getItem("stock_watchlist") || "[]"); } catch { return []; } })();
     const wl: string[] = [];
-    for (const code of codes.slice(0, 10)) {
+    for (const code of codes.slice(0, 6)) {
       try {
-        const [sNews, sAnns] = await Promise.all([fetchStockNews(code, 4), fetchStockAnnouncements(code, 3)]);
+        const [sNews, sAnns] = await Promise.all([fetchStockNews(code, 3), fetchStockAnnouncements(code, 2)]);
         const tag = (t: string) => /利空|下跌|减持|亏损/.test(t) ? "利空" : /利好|上涨|增持|中标|回购|预增/.test(t) ? "利好" : "中性";
-        wl.push(`${code}: 新闻${sNews.map(n => `[${tag(n.title + n.summary)}]${n.title}`).join(";") || "无"} | 公告${sAnns.map(a => a.title).join(";") || "无"}`);
-      } catch { wl.push(`${code}: 获取失败`); }
+        const newsStr = sNews.map(n => `[${tag(n.title + n.summary)}]${n.title}`).join(";") || "无";
+        const annStr = sAnns.map(a => a.title).join(";") || "无";
+        wl.push(`${code}: ${newsStr} | 公告:${annStr}`);
+      } catch { /* skip */ }
     }
-    parts.push("【自选股真实消息】\n" + (wl.join("\n") || "暂无自选股"));
+    if (wl.length > 0) dataParts.push(`自选股消息：\n${wl.join("\n")}`);
   }
 
-  return `你是A股交易督导。严格规则：只基于下面【全站快照】的真实数据回答；任何字段缺失就明说"暂缺/暂无"，严禁编造订单数、毛利率、营收百分比等任何具体数字；引用必须带板块名/股票代码/标题。${qd ? `\n注意：用户问的是【${qd.dash}】的消息面，请基于该日板块统计与情报台结论做总结，不要纠缠自选股实时数据。` : ""}
+  // 构建 system（角色指令 + 日期提示）
+  let system = SUPERVISOR_SYSTEM;
+  if (qd) {
+    system += `\n\n⚠️ 用户问的是【${qd.dash}】的行情/消息，请基于该日数据回答。`;
+  }
 
-${parts.join("\n")}
+  // 构建 user（数据快照 + 用户问题，明确分隔）
+  const user = `【数据快照(${dateLabel})】
+${dataParts.join("\n")}
 
-【用户提问】${question}`;
+【我的问题】
+${question}`;
+
+  return { system, user };
 }
 
 // ============== Props ==============
@@ -157,8 +180,8 @@ export default function IntelligenceDrawer({ open, onClose }: Props) {
     setLoading(true);
 
     try {
-      const prompt = await buildSupervisorPrompt(text.trim());
-      const result: AIResult = await callAI("stockJudge", { prompt });
+      const { system, user } = await buildSupervisorPrompt(text.trim());
+      const result: AIResult = await callAI("supervisor", { system, user });
       const aiMsg: ChatMsg = { role: "assistant", content: result.text, ts: Date.now() };
       setChatHistory(prev => [...prev, aiMsg]);
     } catch {

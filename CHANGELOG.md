@@ -4,6 +4,16 @@
 
 ---
 
+## v9.6 — 督导室AI回答质量修复(system/user分离+专用任务) (2026-07-31)
+
+根因：督导室走stockJudge任务，system用"复盘分析师"角色+数据和指令混在user里→AI复述数据不回答问题。
+修复：
+①新增supervisor任务(aiPrompts.ts)：system/user由IntelligenceDrawer构建透传，不复用SYSTEM_PREFIX
+②SUPERVISOR_SYSTEM专用角色指令："问什么答什么/自然段落/像操盘手说话/不要复述数据标签"
+③buildSupervisorPrompt返回{system,user}分离：system=角色指令+日期提示，user=数据快照+用户问题
+④supervisor任务参数：temperature=0.4(更自然) maxTokens=4000 thinking=false(避免思考模式空内容)
+⑤数据标签改为可读文本(情绪温度计/情报台研判/涨停池)，不再用【】包裹数据块
+
 ## v9.5.1 — 盘中驾驶舱补回MarketOverview+PopularityRadar (2026-07-31)
 
 盘中(trading)布局左侧补回指数详情(MarketOverview)和人气榜拥挤度(PopularityRadar)，解决盘中时段驾驶舱组件过少的问题。
