@@ -295,14 +295,38 @@ export default function LimitBoard() {
 
   if (loading) return <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-slate-400">正在加载涨停板复盘数据…</div>;
 
-  const limitUpCount = ztStocks.length;
-  const blastedCount = zbStocks.length;
-  const limitDownCount = dtStocks.length;
-  const blastedRate = (limitUpCount + blastedCount) > 0 ? blastedCount / (limitUpCount + blastedCount) * 100 : 0;
-  // 晋级率：昨日首板中今日继续涨停（2连板+）的比例
-  const twoPlusCount = ztStocks.filter(s => s.boardCount >= 2).length;
-  const firstBoardYesterday = limitUpCount + blastedCount; // 近似
-  const promotionRate = firstBoardYesterday > 0 ? twoPlusCount / firstBoardYesterday * 100 : 0;
+      const limitUpCount = ztStocks.length;
+      const blastedCount = zbStocks.length;
+      const limitDownCount = dtStocks.length;
+      const blastedRate = (limitUpCount + blastedCount) > 0 ? blastedCount / (limitUpCount + blastedCount) * 100 : 0;
+      
+      // 晋级率：昨日 lbc===1（首板）的个股中，今日 lbc>=2（继续涨停）的比例
+      // 需要昨日涨停池快照数据，从 localStorage 加载
+      let promotionRate: number | null = null;
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const d = new Date(today + "T00:00:00+08:00");
+        const yesterday = new Date(d.getTime() - 86400000);
+        const yd = yesterday.toISOString().slice(0, 10).replace(/-/g, "");
+        const snapshotRaw = localStorage.getItem(`ztpool:${yd}`);
+        if (snapshotRaw) {
+          const yesterdayPool: any[] = JSON.parse(snapshotRaw);
+          // 昨日首板股（lbc===1）
+          const yesterdayFirstBoard = yesterdayPool.filter((s: any) => (s.lbc ?? 1) === 1);
+          if (yesterdayFirstBoard.length > 0) {
+            // 今日这些股票的代码集合（去重）
+            const yesterdayFirstBoardCodes = new Set(yesterdayFirstBoard.map((s: any) => String(s.c)));
+            // 今日这些股票中 lbc>=2 的数量
+            let promotedCount = 0;
+            for (const todayStock of ztStocks) {
+              if (yesterdayFirstBoardCodes.has(todayStock.code) && todayStock.boardCount >= 2) {
+                promotedCount++;
+              }
+            }
+            promotionRate = Math.round(promotedCount / yesterdayFirstBoard.length * 1000) / 1000;
+          }
+        }
+      } catch { /* 昨日快照缺失或解析失败，promotionRate 保持 null */ }
 
   return (
     <section className="space-y-4">
@@ -316,7 +340,7 @@ export default function LimitBoard() {
         <StatCard label="今日跌停" value={limitDownCount} sub="只" color="text-emerald-400" />
         <StatCard label="炸板数量" value={blastedCount} sub="只（曾涨停未封住）" color="text-amber-400" />
         <StatCard label="炸板率" value={`${blastedRate.toFixed(1)}%`} sub="炸板/(涨停+炸板)" color="text-amber-300" />
-        <StatCard label="晋级率" value={`${promotionRate.toFixed(1)}%`} sub="2连板+/全部涨停" color="text-slate-400" />
+        <StatCard label="晋级率" value={promotionRate != null ? `${(promotionRate * 100).toFixed(1)}%` : "—"} sub="昨日首板今日2连板+比例" color="text-slate-400" />
       </div>
 
       {/* 题材热度 + 连板梯队 */}

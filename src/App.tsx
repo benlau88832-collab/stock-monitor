@@ -65,7 +65,7 @@ import {
 /** 溢价因子：溢价1%计1分，clamp在±5（即溢价±5%封顶） */
 const PREMIUM_SCORE_MIN = -5;
 const PREMIUM_SCORE_MAX = 5;
-/** 晋级率因子阈值：≥50%→+5, ≥30%→+2.5, ≥15%→0, ≥5%→-2.5, <5%→-5 */
+/** 晋级率因子阈值：昨日首板今日继续封板的比例 → ≥50%→+5, ≥30%→+2.5, ≥15%→0, ≥5%→-2.5, <5%→-5 */
 const PROMO_TIER = [
   { threshold: 0.5,  score:  5   },
   { threshold: 0.3,  score:  2.5 },
@@ -257,21 +257,22 @@ export default function App() {
           } catch { /* 查询失败 → premiumAvg 保持 null */ }
         }
 
-        // 晋级率：昨日 lbc===2 的个股，今日在涨停池且 lbc>=3 的比例
-        const yesterday2Board = prevZTPool.filter(s => (s.lbc ?? 1) === 2);
-        if (yesterday2Board.length > 0 && limitPool && limitPool.rawZTPool) {
+        // 晋级率：昨日 lbc===1（首板）的个股中，今日在涨停池且 lbc>=2（继续涨停）的比例
+        // 这是真实"晋级率"：昨日首板今日继续封板的比例
+        const yesterdayFirstBoard = prevZTPool.filter(s => (s.lbc ?? 1) === 1);
+        if (yesterdayFirstBoard.length > 0 && limitPool && limitPool.rawZTPool) {
           const todayPoolCodes = new Map<string, number>();
           for (const s of limitPool.rawZTPool) {
             todayPoolCodes.set(String(s.c), s.lbc ?? 1);
           }
           let promoted = 0;
-          for (const s of yesterday2Board) {
+          for (const s of yesterdayFirstBoard) {
             const todayLbc = todayPoolCodes.get(String(s.c));
-            if (todayLbc != null && todayLbc >= 3) promoted++;
+            if (todayLbc != null && todayLbc >= 2) promoted++;
           }
-          promotionRate = Math.round(promoted / yesterday2Board.length * 1000) / 1000;
+          promotionRate = Math.round(promoted / yesterdayFirstBoard.length * 1000) / 1000;
         }
-        // 昨日没有2板个股→promotionRate保持null（无样本，不是0）
+        // 昨日没有首板个股→promotionRate保持null（无样本，不是0）
       }
 
       let sentiment: number | null = null;

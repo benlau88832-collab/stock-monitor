@@ -19,7 +19,7 @@ const FUSE_MULTIPLIER = 0.5;
 const FUSE_FLOOR = 0.2;
 /** 炸板率熔断阈值（可调） */
 const FUSE_BLASTED_RATE = 40;
-/** 晋级率熔断阈值（可调） */
+/** 晋级率熔断阈值（可调）：昨日首板今日继续封板比例 < 10% 时触发熔断 */
 const FUSE_PROMOTION_RATE = 0.10;
 
 export interface GateResult {
