@@ -21,8 +21,11 @@ export default function StatusBar({ overview, fund }: {
         {overview && (
           <span className="flex items-center gap-1">
             <Activity size={12} className="text-amber-400" />
-            <span className={`font-bold ${overview.sentiment >= 65 ? "text-rose-400" : overview.sentiment >= 45 ? "text-amber-300" : "text-slate-400"}`}>
-              {overview.sentiment}
+            <span className={`font-bold ${
+              overview.sentiment != null && overview.sentiment >= 65 ? "text-rose-400" :
+              overview.sentiment != null && overview.sentiment >= 45 ? "text-amber-300" : "text-slate-400"
+            }`}>
+              {overview.sentiment != null ? overview.sentiment : "—"}
             </span>
             <span className="text-slate-500">{overview.sentimentLabel}</span>
           </span>

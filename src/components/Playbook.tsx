@@ -116,8 +116,8 @@ function buildPreopenPayload(
 
   return {
     date: getBJDate(),
-    sentiment: prev?.score ?? (overview?.sentiment ?? 50),
-    sentimentLabel: prev ? (prev.score >= 80 ? "极度贪婪" : prev.score >= 65 ? "贪婪" : prev.score >= 45 ? "中性" : prev.score >= 25 ? "恐慌" : "极度恐慌") : (overview?.sentimentLabel ?? "中性"),
+    sentiment: prev?.score ?? overview?.sentiment ?? null,
+    sentimentLabel: prev ? (prev.score >= 80 ? "极度贪婪" : prev.score >= 65 ? "贪婪" : prev.score >= 45 ? "中性" : prev.score >= 25 ? "恐慌" : "极度恐慌") : (overview?.sentimentLabel ?? (overview?.sentiment != null ? (overview.sentiment >= 80 ? "极度贪婪" : overview.sentiment >= 65 ? "贪婪" : overview.sentiment >= 45 ? "中性" : overview.sentiment >= 25 ? "恐慌" : "极度恐慌") : "数据不足")),
     limitUpCount: pool?.limitUpCount ?? 0,
     blastedRate: pool?.blastedRate ?? 0,
     maxBoard,
@@ -154,7 +154,7 @@ function buildClosePayload(
   return {
     date: getBJDate(),
     planText,
-    sentiment: overview?.sentiment ?? 50,
+    sentiment: overview?.sentiment ?? null,
     limitUpCount: pool?.limitUpCount ?? 0,
     limitDownCount: pool?.limitDownCount ?? 0,
     blastedRate: pool?.blastedRate ?? 0,

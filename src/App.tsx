@@ -89,7 +89,7 @@ export interface SentimentFactors {
 export interface OverviewData {
   indices: IndexQuote[];
   breadth: MarketBreadth | null;
-  sentiment: number;
+  sentiment: number | null;
   sentimentLabel: string;
   sentimentFactors: SentimentFactors | null;
   sentimentYesterday: number | null;
@@ -274,7 +274,7 @@ export default function App() {
         // 昨日没有2板个股→promotionRate保持null（无样本，不是0）
       }
 
-      let sentiment = 50;
+      let sentiment: number | null = null;
       let sentimentLabel = "数据不足";
       let sentimentFactors: SentimentFactors | null = null;
       if (brData && brData.total > 0) {
@@ -328,10 +328,27 @@ export default function App() {
           });
         }
       }
-      // 情绪分按交易日冻结存储
-      saveTodaySentiment(sentiment);
+      // 情绪分按交易日冻结存储（有效值才保存，null 不保存）
+      if (sentiment != null) {
+        saveTodaySentiment(sentiment);
+      }
       const prevData = loadPrevTradingDaySentiment();
       const prevSentiment = prevData?.score ?? null;
+
+      // 若当前情绪为 null（数据缺失），尝试用昨日情绪填充，仍为 null 则保持 null
+      if (sentiment == null) {
+        sentiment = prevSentiment; // 可能为 null（首日无数据）
+        if (sentiment != null) {
+          // 从存储恢复的昨日情绪，需要反推 sentimentLabel
+          if (sentiment >= 80) sentimentLabel = "极度贪婪";
+          else if (sentiment >= 65) sentimentLabel = "贪婪";
+          else if (sentiment >= 45) sentimentLabel = "中性";
+          else if (sentiment >= 25) sentimentLabel = "恐慌";
+          else sentimentLabel = "极度恐慌";
+        } else {
+          sentimentLabel = "数据不足";
+        }
+      }
 
       // 计算昨日成交额和近5日均值
       const turnoverHist = turnoverHistRes.status === "fulfilled" ? turnoverHistRes.value : [];
@@ -797,12 +814,12 @@ export default function App() {
 
     // 极度贪婪
     const sent = overview.sentiment;
-    if (sent >= 80) {
+    if (sent != null && sent >= 80) {
       if (!lastSignalActive["overbought"]) { lastSignalActive["overbought"] = true; emitAlert({ severity: "warning", id: "sentiment_high", message: `情绪${sent}分（极度贪婪），追高风险` }); }
     } else lastSignalActive["overbought"] = false;
 
-    // 极度恐慌：sentiment≤0 不报（数据异常）
-    if (sent <= 0) lastSignalActive["oversold"] = false;
+    // 极度恐慌：sentiment≤0 不报（数据异常），null 也不报
+    if (sent == null || sent <= 0) lastSignalActive["oversold"] = false;
     else if (sent < 20) {
       if (!lastSignalActive["oversold"]) { lastSignalActive["oversold"] = true; emitAlert({ severity: "warning", id: "sentiment_low", message: `情绪${sent}分（极度恐慌），超跌机会` }); }
     } else lastSignalActive["oversold"] = false;
@@ -861,10 +878,10 @@ export default function App() {
   if (vetoActive) {
     alerts.push({ id: "veto_main", level: "critical", message: "重度背离：主力持续流出+散户接盘，不建议加仓" });
   }
-  if (overview && overview.sentiment >= 80) {
+  if (overview && overview.sentiment != null && overview.sentiment >= 80) {
     alerts.push({ id: "sentiment_high", level: "warning", message: `情绪温度计${overview.sentiment}分（极度贪婪），注意追高风险` });
   }
-  if (overview && overview.sentiment <= 25) {
+  if (overview && overview.sentiment != null && overview.sentiment <= 25) {
     alerts.push({ id: "sentiment_low", level: "warning", message: `情绪温度计${overview.sentiment}分（极度恐慌），关注超跌机会` });
   }
   // 高低切切换警报

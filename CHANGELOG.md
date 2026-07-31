@@ -4,6 +4,33 @@
 
 ---
 
+## v9.8.8 — 修复：情绪分源头在数据缺失时返回 null（根因） (2026-07-31)
+
+修复：App.tsx 在涨跌家数接口失败时把 sentiment 算成 50（误导性默认值），改为 null + 回退昨日有效值；sentimentStore 不再跳过 50 的保存（原逻辑 `if (score === 50) return` 导致数据缺失时无记录）。
+
+**A. 情绪分根因修复**：
+- `App.tsx`: `sentiment` 类型改为 `number | null`，数据缺失时设为 null 并回退昨日情绪
+- `App.tsx`: 所有 `sentiment` 比较（告警/显示）加 null 守卫
+- `OverviewData` 接口：`sentiment: number | null`
+
+**B. 存储层修复**：
+- `sentimentStore.ts`: 删除 `if (score === 50) return` 过滤（该逻辑导致数据缺失时无法保存，且 50 也是有效情绪值）
+
+**C. 下游组件适配**：
+- `StatusBar.tsx`: 情绪分显示改为 `sentiment != null ? sentiment : "—"`
+- `Playbook.tsx`: payload 中 sentiment 默认值改为 null（不再默认 50）
+- `Dashboard.tsx`: 已通过 `overview?.sentiment` 可空类型兼容
+
+**D. 闸门层联动**：
+- `regimeGate.ts` 已在 v9.8.6 中加 null 守卫，此时会返回 "数据不足·暂不给出系数"
+
+**效果**：
+- 夜间/周末/接口失败时，情绪分显示"—/数据不足"，不再误导为 50 分
+- 闸门/告警/盘前剧本等下游模块收到 null 时统一兜底，不再误判
+- 情绪分按交易日冻结存储，有效值（包括 50）均正常保存
+
+---
+
 ## v9.8.7 — 新增：全局ErrorBoundary防单点崩溃白屏 (2026-07-31)
 
 新增：全局 ErrorBoundary，单个数据模块崩溃时显示友好兜底页(可一键刷新)而非整页白屏；本地数据保留。
