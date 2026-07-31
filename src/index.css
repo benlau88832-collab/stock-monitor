@@ -9,4 +9,6 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans SC', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 等宽数字：防止数字变化时宽度抖动 */
+  font-variant-numeric: tabular-nums;
 }
