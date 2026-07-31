@@ -1061,3 +1061,21 @@ export async function fetchStockIndustryMap(): Promise<Record<string, string>> {
   }
   return out;
 }
+
+/** 取个股近N日{日期:收盘价}，用于推荐命中率的真实T+1/T+3回填 */
+export async function fetchStockDailyCloses(code: string, days = 40): Promise<Map<string, number>> {
+  try {
+    const url = `${PUSH2HIS}/stock/kline/get?secid=${toSecid(code)}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55&klt=101&fqt=0&lmt=${days}&ut=${EM_UT}`;
+    const json = await jsonp(url, 10000);
+    const kl: string[] = json?.data?.klines ?? [];
+    const m = new Map<string, number>();
+    for (const line of kl) {
+      const p = line.split(",");
+      const c = Number(p[2]);
+      if (p[0] && Number.isFinite(c)) m.set(p[0], c);
+    }
+    return m;
+  } catch {
+    return new Map();
+  }
+}

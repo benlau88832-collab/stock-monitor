@@ -1,7 +1,7 @@
 // 推荐归因闭环：落盘 → T+1/T+3 回填 → 命中率统计
 // 每日首次推荐落盘，盘后幂等回填，滚动胜率注入复盘
 
-import { fetchStockBriefBatch } from "./api";
+import { fetchStockDailyCloses } from "./api";
 
 const REC_KEY = "rec_tracker";
 const ATTR_KEY_PREFIX = "rec_attr:"; // rec_attr:YYYY-MM-DD = 当日已归因标记
@@ -78,36 +78,28 @@ export async function runAttribution(today: string): Promise<void> {
   const pending = all.filter(r => !r.backfilled);
   if (pending.length === 0) { markAttributedToday(today); return; }
 
-  // 找需要回填的代码（距推荐日≥2天的）
+  // 用真实日K收盘价回填 T+1/T+3（替代旧的"当前价近似"）
   const now = Date.now();
   const codesToFetch = new Set<string>();
   for (const r of pending) {
+    if (r.type !== "stock") continue;
     const daysSince = Math.floor((now - new Date(r.date + "T00:00:00+08:00").getTime()) / 86400000);
-    if (daysSince >= 2 && r.type === "stock") {
-      codesToFetch.add(r.code);
-    }
+    if (daysSince >= 2 && (!r.backfilled || r.pctT3 == null)) codesToFetch.add(r.code);
   }
-
-  if (codesToFetch.size > 0) {
-    try {
-      const briefs = await fetchStockBriefBatch([...codesToFetch].slice(0, 100));
-      for (const r of pending) {
-        if (r.type !== "stock") continue;
-        const daysSince = Math.floor((now - new Date(r.date + "T00:00:00+08:00").getTime()) / 86400000);
-        const brief = briefs.get(r.code);
-        if (!brief) continue;
-
-        // 简化：用当前价 vs 推荐价计算涨跌幅作为近似回填
-        // 真实场景应按日期取历史收盘价，这里用当前价作近似值
-        if (r.priceAtRec > 0) {
-          const currentPct = Math.round((brief.price / r.priceAtRec - 1) * 10000) / 100;
-          if (daysSince >= 2 && r.pctT1 == null) r.pctT1 = currentPct;
-          if (daysSince >= 4 && r.pctT3 == null) r.pctT3 = currentPct;
-          if (daysSince >= 4) r.backfilled = true;
-          else if (daysSince >= 2) r.backfilled = false; // 只填了T+1还没T+3
-        }
+  for (const code of [...codesToFetch].slice(0, 50)) {
+    const closes = await fetchStockDailyCloses(code, 40);
+    const dates = [...closes.keys()].sort();
+    for (const r of pending) {
+      if (r.code !== code || r.type !== "stock") continue;
+      const idx = dates.indexOf(r.date);
+      if (idx < 0) continue;
+      const base = closes.get(dates[idx]);
+      if (base && base > 0) {
+        if (r.pctT1 == null && dates[idx + 1]) r.pctT1 = Math.round((closes.get(dates[idx + 1])! / base - 1) * 10000) / 100;
+        if (r.pctT3 == null && dates[idx + 3]) r.pctT3 = Math.round((closes.get(dates[idx + 3])! / base - 1) * 10000) / 100;
       }
-    } catch { /* 回填失败不阻塞 */ }
+      if (r.pctT1 != null && r.pctT3 != null) r.backfilled = true;
+    }
   }
 
   // 板块类推荐标记为已回填（无法精确回填板块涨幅）
@@ -124,42 +116,23 @@ export async function runAttribution(today: string): Promise<void> {
 
 // ============== 命中率统计 ==============
 export interface HitRateStats {
-  total: number;          // 总推荐数
-  directionHitRate: number | null;  // 方向命中率(板块涨>0占比)
-  alphaWinRate: number | null;      // 个股超额胜率(个股涨幅-板块涨幅>0占比)
-  sampleSufficient: boolean;        // 样本≥20
+  total: number;
+  directionHitRate: number | null; // T+1收盘上涨的占比
+  avgT1: number | null;            // 平均T+1收益%
+  sampleSufficient: boolean;
 }
 
-/** 计算近N次推荐的命中率 */
 export function computeHitRates(maxSamples = 20): HitRateStats {
   const all = loadRecords();
-  // 只统计有回填数据的个股推荐
   const backfilled = all.filter(r => r.backfilled && r.type === "stock" && r.pctT1 != null);
-
   const total = backfilled.length;
-  if (total === 0) {
-    return { total: 0, directionHitRate: null, alphaWinRate: null, sampleSufficient: false };
-  }
-
+  if (total === 0) return { total: 0, directionHitRate: null, avgT1: null, sampleSufficient: false };
   const recent = backfilled.slice(0, maxSamples);
   const n = recent.length;
-
-  // 方向命中率：推荐个股涨幅>0 的占比（简化：用个股自身方向代替板块方向）
   const dirHits = recent.filter(r => (r.pctT1 ?? 0) > 0).length;
   const directionHitRate = Math.round(dirHits / n * 100);
-
-  // 个股超额胜率：个股涨幅 > 0 的占比（简化口径，后续接入板块涨幅后可做差值）
-  // 由于板块 T+1 涨幅暂无精确回填，这里用"个股涨幅 > 平均涨幅"作近似超额
-  const avgPct = recent.reduce((s, r) => s + (r.pctT1 ?? 0), 0) / n;
-  const alphaHits = recent.filter(r => (r.pctT1 ?? 0) > avgPct).length;
-  const alphaWinRate = Math.round(alphaHits / n * 100);
-
-  return {
-    total,
-    directionHitRate,
-    alphaWinRate,
-    sampleSufficient: total >= maxSamples,
-  };
+  const avgT1 = Math.round(recent.reduce((s, r) => s + (r.pctT1 ?? 0), 0) / n * 100) / 100;
+  return { total, directionHitRate, avgT1, sampleSufficient: total >= maxSamples };
 }
 
 /** 获取命中率文案（供作战卡底部显示） */
@@ -167,12 +140,14 @@ export function getHitRateText(): string {
   const stats = computeHitRates(20);
   if (stats.total === 0) return "样本积累中 0/20";
   if (!stats.sampleSufficient) return `样本积累中 ${stats.total}/20`;
-  return `近20次推荐 · 方向命中 ${stats.directionHitRate}% · 个股超额 ${stats.alphaWinRate}%`;
+  const avg = stats.avgT1 ?? 0;
+  return `近20次推荐 · T+1上涨率${stats.directionHitRate}% · 平均T+1${avg >= 0 ? "+" : ""}${avg}%`;
 }
 
 /** 获取命中率数据（供 WeeklyCoach prompt 注入） */
 export function getHitRateForPrompt(): string {
   const stats = computeHitRates(20);
   if (stats.total < 5) return "推荐样本不足，暂无统计";
-  return `近${Math.min(stats.total, 20)}次推荐统计：方向命中率${stats.directionHitRate}%，个股超额胜率${stats.alphaWinRate}%（样本${stats.total}条）`;
+  const avg = stats.avgT1 ?? 0;
+  return `近${Math.min(stats.total, 20)}次推荐统计：T+1上涨率${stats.directionHitRate}%，平均T+1收益${avg}%（样本${stats.total}条）`;
 }
