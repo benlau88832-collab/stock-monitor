@@ -1,13 +1,13 @@
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
 import { fetchDragonTigerList, fetchDragonTigerSeats, type DragonTigerItem, type DragonTigerSeat } from "../lib/api";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 import { matchSeatTag } from "../lib/seatProfiles";
 import {
-  writeSeatRecords, runBackfill, buildSeatProfiles, detectSeatSignals, buildSeatRepeatActions,
+  writeSeatRecords, runBackfill, buildSeatProfiles, detectSeatSignals, buildSeatRepeatActions, buildSeatHistoryByDept,
   type SeatRecord, type SeatProfile, type StockSeatSignal, type SeatRepeatAction,
 } from "../lib/seatLedger";
-import { buildSeatBehaviors, type SeatBehavior } from "../lib/seatBehavior";
+import { buildSeatBehaviors, analyzeSeatsGroup, type SeatBehavior } from "../lib/seatBehavior";
 
 // ============== 上榜原因标签颜色 ==============
 function reasonColor(explanation: string): string {
@@ -18,14 +18,18 @@ function reasonColor(explanation: string): string {
   return "bg-slate-500/20 text-slate-300";
 }
 
-// ============== 席位表格 ==============
-function SeatTable({ seats, type }: { seats: DragonTigerSeat[]; type: "buy" | "sell" }) {
+// ============== 席位表格（v9.13：每行加行为模式徽标） ==============
+function SeatTable({ seats, type, behaviorMap }: {
+  seats: DragonTigerSeat[]; type: "buy" | "sell"; behaviorMap: Map<string, SeatBehavior>;
+}) {
   const isBuy = type === "buy";
   return (
     <table className="w-full text-xs">
       <thead>
         <tr className={`border-b ${isBuy ? "border-rose-500/20" : "border-emerald-500/20"} text-slate-400`}>
           <th className="px-2 py-1.5 text-left">{isBuy ? "买入" : "卖出"}席位</th>
+          <th className="px-2 py-1.5 text-center">画像</th>
+          <th className="px-2 py-1.5 text-center">行为</th>
           <th className="px-2 py-1.5 text-right">买入额</th>
           <th className="px-2 py-1.5 text-right">卖出额</th>
           <th className="px-2 py-1.5 text-right">净额</th>
@@ -34,11 +38,23 @@ function SeatTable({ seats, type }: { seats: DragonTigerSeat[]; type: "buy" | "s
       <tbody>
         {seats.map((s, i) => {
           const tag = matchSeatTag(s.deptName);
+          const bh = behaviorMap.get(s.deptName);
           return (
             <tr key={i} className={`border-b border-white/5 ${isBuy ? "bg-rose-500/5" : "bg-emerald-500/5"}`}>
-              <td className="px-2 py-1.5 text-slate-200">
+              <td className="px-2 py-1.5 text-slate-200 max-w-[200px] truncate" title={s.deptName}>
                 <span className="mr-1">{s.deptName}</span>
-                {tag && <span className={`rounded px-1 py-0.5 text-[11px] font-bold ${tag.color}`}>{tag.label}</span>}
+              </td>
+              <td className="px-2 py-1.5 text-center">
+                {tag && <span className={`rounded px-1 py-0.5 text-[10px] font-bold ${tag.color}`}>{tag.label}</span>}
+              </td>
+              <td className="px-2 py-1.5 text-center">
+                {bh && bh.behavior !== "新面孔" && bh.behavior !== "数据不足" ? (
+                  <span className={`rounded border px-1 py-0.5 text-[10px] font-bold ${bh.behaviorColor}`} title={bh.hint}>
+                    {bh.behavior}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-500">{bh?.behavior ?? "新面孔"}</span>
+                )}
               </td>
               <td className="px-2 py-1.5 text-right text-rose-400">{fmtMoney(s.buy)}</td>
               <td className="px-2 py-1.5 text-right text-emerald-400">{fmtMoney(s.sell)}</td>
@@ -47,7 +63,7 @@ function SeatTable({ seats, type }: { seats: DragonTigerSeat[]; type: "buy" | "s
           );
         })}
         {seats.length === 0 && (
-          <tr><td colSpan={4} className="px-2 py-3 text-center text-slate-500">暂无数据</td></tr>
+          <tr><td colSpan={6} className="px-2 py-3 text-center text-slate-500">暂无数据</td></tr>
         )}
       </tbody>
     </table>
@@ -55,9 +71,11 @@ function SeatTable({ seats, type }: { seats: DragonTigerSeat[]; type: "buy" | "s
 }
 
 // ============== 席位画像卡片 ==============
-// v9.12：新增"行为模式"列（格局派/砸盘派/波段派/接力派/一日游）—— 长期跟踪自动打标
+// v9.12：新增"行为模式"列（格局派/砸盘派/波段派/接力派/一日游）
+// v9.13：每行加 + 按钮，展开看该席位的最近上榜历史
 function SeatProfileCard({ profiles, behaviors }: { profiles: SeatProfile[]; behaviors: SeatBehavior[] }) {
   const [showAll, setShowAll] = useState(false);
+  const [expandedDept, setExpandedDept] = useState<string | null>(null);
   // 行为 lookup 索引
   const behaviorByDept = new Map<string, SeatBehavior>();
   for (const b of behaviors) behaviorByDept.set(b.deptName, b);
@@ -68,7 +86,7 @@ function SeatProfileCard({ profiles, behaviors }: { profiles: SeatProfile[]; beh
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-xs font-bold text-amber-300">🏷️ 席位画像（近120日）</div>
+        <div className="text-xs font-bold text-amber-300">🏷️ 席位画像（近120日 · 点击 + 看操作历史）</div>
         {filtered.length > 15 && (
           <button onClick={() => setShowAll(v => !v)}
             className="text-[11px] text-amber-400 hover:text-amber-300">
@@ -83,6 +101,7 @@ function SeatProfileCard({ profiles, behaviors }: { profiles: SeatProfile[]; beh
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-white/10 text-slate-400">
+                <th className="px-2 py-1 text-center w-6"></th>
                 <th className="px-2 py-1 text-left">席位</th>
                 <th className="px-2 py-1 text-left">行为模式</th>
                 <th className="px-2 py-1 text-right">上榜</th>
@@ -95,41 +114,60 @@ function SeatProfileCard({ profiles, behaviors }: { profiles: SeatProfile[]; beh
               {display.map(p => {
                 const tag = matchSeatTag(p.deptName);
                 const bh = behaviorByDept.get(p.deptName);
+                const isExp = expandedDept === p.deptName;
                 return (
-                  <tr key={p.deptName} className="border-b border-white/5 hover:bg-white/5">
-                    <td className="px-2 py-1 text-slate-200 max-w-[200px] truncate">
-                      {p.deptName.slice(0, 20)}
-                      {tag && <span className={`ml-1 rounded px-1 py-0.5 text-[10px] ${tag.color}`}>{tag.label}</span>}
-                    </td>
-                    <td className="px-2 py-1">
-                      {bh && bh.behavior !== "新面孔" && bh.behavior !== "数据不足" ? (
-                        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${bh.behaviorColor}`} title={bh.hint + " · " + bh.reasons.join("；")}>
-                          {bh.behavior}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-slate-500">{bh?.behavior ?? "新面孔"}</span>
-                      )}
-                    </td>
-                    <td className="px-2 py-1 text-right text-slate-300">{p.appearances}次</td>
-                    <td className={`px-2 py-1 text-right font-semibold ${p.avgPctT1 != null ? pctColor(p.avgPctT1) : "text-slate-500"}`}>
-                      {p.sampleCount < 5 ? (
-                        <span className="text-slate-500 text-[11px]">样本积累中</span>
-                      ) : (
-                        `${p.avgPctT1! >= 0 ? "+" : ""}${p.avgPctT1!.toFixed(2)}%`
-                      )}
-                    </td>
-                    <td className="px-2 py-1 text-right text-slate-300">
-                      {p.sampleCount >= 5 ? `${p.winRateT1}%` : "—"}
-                    </td>
-                    <td className="px-2 py-1 text-center">
-                      {p.premiumLevel === "high" && (
-                        <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-rose-500/20 text-rose-300">高溢价</span>
-                      )}
-                      {p.premiumLevel === "negative" && (
-                        <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-slate-500/20 text-slate-400">负溢价</span>
-                      )}
-                    </td>
-                  </tr>
+                  <Fragment key={p.deptName}>
+                    <tr className={`border-b border-white/5 hover:bg-white/5 ${isExp ? "bg-amber-500/5" : ""}`}>
+                      <td className="px-2 py-1 text-center">
+                        <button
+                          onClick={() => setExpandedDept(isExp ? null : p.deptName)}
+                          className="inline-flex h-4 w-4 items-center justify-center rounded bg-white/10 text-[10px] text-slate-300 hover:bg-amber-500/30 hover:text-amber-200"
+                          title="查看该席位上榜历史"
+                        >
+                          {isExp ? "−" : "+"}
+                        </button>
+                      </td>
+                      <td className="px-2 py-1 text-slate-200 max-w-[200px] truncate">
+                        {p.deptName.slice(0, 20)}
+                        {tag && <span className={`ml-1 rounded px-1 py-0.5 text-[10px] ${tag.color}`}>{tag.label}</span>}
+                      </td>
+                      <td className="px-2 py-1">
+                        {bh && bh.behavior !== "新面孔" && bh.behavior !== "数据不足" ? (
+                          <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${bh.behaviorColor}`} title={bh.hint + " · " + bh.reasons.join("；")}>
+                            {bh.behavior}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-500">{bh?.behavior ?? "新面孔"}</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-right text-slate-300">{p.appearances}次</td>
+                      <td className={`px-2 py-1 text-right font-semibold ${p.avgPctT1 != null ? pctColor(p.avgPctT1) : "text-slate-500"}`}>
+                        {p.sampleCount < 5 ? (
+                          <span className="text-slate-500 text-[11px]">样本积累中</span>
+                        ) : (
+                          `${p.avgPctT1! >= 0 ? "+" : ""}${p.avgPctT1!.toFixed(2)}%`
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-right text-slate-300">
+                        {p.sampleCount >= 5 ? `${p.winRateT1}%` : "—"}
+                      </td>
+                      <td className="px-2 py-1 text-center">
+                        {p.premiumLevel === "high" && (
+                          <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-rose-500/20 text-rose-300">高溢价</span>
+                        )}
+                        {p.premiumLevel === "negative" && (
+                          <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-slate-500/20 text-slate-400">负溢价</span>
+                        )}
+                      </td>
+                    </tr>
+                    {isExp && (
+                      <tr>
+                        <td colSpan={7} className="px-2 py-2 bg-black/30">
+                          <SeatHistoryExpansion deptName={p.deptName} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -164,6 +202,125 @@ function SignalBanner({ signals }: { signals: StockSeatSignal[] }) {
           <span className="font-normal text-slate-400 ml-1">{s.detail}</span>
         </span>
       ))}
+    </div>
+  );
+}
+
+// ============== 买卖主导派分析 + 操作建议（v9.13 核心新增） ==============
+// 综合买入/卖出前五席位的"行为模式"，给出主导派 + 一句话操作建议
+function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
+  buyers: DragonTigerSeat[]; sellers: DragonTigerSeat[]; behaviorMap: Map<string, SeatBehavior>;
+}) {
+  const analysis = useMemo(() => analyzeSeatsGroup(
+    buyers.map(b => ({ deptName: b.deptName, net: b.net })),
+    sellers.map(s => ({ deptName: s.deptName, net: s.net })),
+    behaviorMap,
+  ), [buyers, sellers, behaviorMap]);
+
+  const renderDist = (label: string, dist: typeof analysis.buyerDist) => {
+    if (dist.size === 0) return null;
+    return (
+      <div className="flex-1">
+        <div className="text-[10px] text-slate-500 mb-1">{label}</div>
+        <div className="space-y-0.5">
+          {[...dist.entries()].sort((a, b) => b[1].count - a[1].count).map(([tag, v]) => (
+            <div key={tag} className="flex items-center gap-1 text-[10px]">
+              <span className="rounded border px-1 py-0.5 bg-white/5 border-white/10 w-12 text-center font-bold">
+                {tag}
+              </span>
+              <span className="text-slate-400">{v.count}家</span>
+              <span className={v.totalNet >= 0 ? "text-rose-400" : "text-emerald-400"}>
+                {v.totalNet >= 0 ? "+" : ""}{fmtMoney(v.totalNet)}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const dominantColor = (tag: string) => {
+    if (tag === "格局派") return "bg-rose-500/20 text-rose-300";
+    if (tag === "砸盘派") return "bg-slate-500/30 text-slate-300";
+    if (tag === "波段派") return "bg-amber-500/20 text-amber-300";
+    if (tag === "接力派") return "bg-violet-500/20 text-violet-300";
+    if (tag === "一日游") return "bg-slate-500/20 text-slate-400";
+    return "bg-white/5 text-slate-500";
+  };
+
+  return (
+    <div className="mt-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-2.5 space-y-2">
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="font-bold text-violet-300">🎯 主导派与操作建议</span>
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${dominantColor(analysis.buyerDominant)}`}>
+          买方主导: {analysis.buyerDominant}
+        </span>
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${dominantColor(analysis.sellerDominant)}`}>
+          卖方主导: {analysis.sellerDominant}
+        </span>
+        <span className="ml-auto text-[10px] text-slate-500">信号强度 {(analysis.strength * 100).toFixed(0)}%</span>
+      </div>
+      <div className="text-[11px] text-slate-200 leading-relaxed border-l-2 border-violet-500/30 pl-2">
+        {analysis.suggestion}
+      </div>
+      <div className="flex gap-3">
+        {renderDist("买方派系分布", analysis.buyerDist)}
+        {renderDist("卖方派系分布", analysis.sellerDist)}
+      </div>
+    </div>
+  );
+}
+
+// ============== 单席位历史展开行（v9.13 新增） ==============
+// 席位画像表格里 + 号展开：显示该席位的最近上榜记录
+function SeatHistoryExpansion({ deptName }: { deptName: string }) {
+  const [rows, setRows] = useState<ReturnType<typeof buildSeatHistoryByDept> | null>(null);
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <button onClick={() => { setOpen(true); if (!rows) setRows(buildSeatHistoryByDept(deptName, 30)); }}
+        className="text-[10px] text-amber-300 hover:text-amber-200">
+        + 查看该席位上榜历史
+      </button>
+    );
+  }
+  if (!rows) return <div className="text-[10px] text-slate-500">加载中…</div>;
+  if (rows.length === 0) return <div className="text-[10px] text-slate-500">无历史记录</div>;
+  return (
+    <div className="mt-1 rounded border border-white/10 bg-black/30 p-1.5">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] text-slate-400">近30日上榜 {rows.length} 次（按日期降序）</span>
+        <button onClick={() => setOpen(false)} className="text-[10px] text-slate-500 hover:text-slate-300">收起</button>
+      </div>
+      <table className="w-full text-[10px]">
+        <thead><tr className="text-slate-500">
+          <th className="px-1 py-0.5 text-left">日期</th>
+          <th className="px-1 py-0.5 text-left">股票</th>
+          <th className="px-1 py-0.5 text-center">方向</th>
+          <th className="px-1 py-0.5 text-right">净额</th>
+          <th className="px-1 py-0.5 text-right">T+1</th>
+        </tr></thead>
+        <tbody>
+          {rows.slice(0, 15).map((r, i) => (
+            <tr key={i} className="border-t border-white/5">
+              <td className="px-1 py-0.5 text-slate-400">{r.date.slice(5)}</td>
+              <td className="px-1 py-0.5">
+                <a href={stockRealUrl(r.stockCode)} target="_blank" rel="noopener noreferrer" className="text-slate-200 hover:text-amber-300">{r.stockName}</a>
+                <span className="text-slate-500 ml-1">{r.stockCode}</span>
+              </td>
+              <td className="px-1 py-0.5 text-center">
+                <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${r.direction === "买" ? "bg-rose-500/20 text-rose-300" : "bg-emerald-500/20 text-emerald-300"}`}>
+                  {r.direction}
+                </span>
+              </td>
+              <td className={`px-1 py-0.5 text-right ${r.net >= 0 ? "text-rose-400" : "text-emerald-400"}`}>{fmtMoney(r.net)}</td>
+              <td className={`px-1 py-0.5 text-right ${r.pctT1 == null ? "text-slate-600" : r.pctT1 >= 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                {r.pctT1 != null ? `${r.pctT1 >= 0 ? "+" : ""}${r.pctT1.toFixed(2)}%` : "待回填"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -281,6 +438,12 @@ export default function DragonTiger() {
   const [seatBehaviors, setSeatBehaviors] = useState<SeatBehavior[]>([]);
   const [seatSignals, setSeatSignals] = useState<StockSeatSignal[]>([]);
   const [repeatActions, setRepeatActions] = useState<SeatRepeatAction[]>([]);
+  // v9.13：行为模式索引（用于展开行 SeatTable + BuySellAnalysisPanel）
+  const behaviorByDept = useMemo(() => {
+    const m = new Map<string, SeatBehavior>();
+    for (const b of seatBehaviors) m.set(b.deptName, b);
+    return m;
+  }, [seatBehaviors]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -458,15 +621,19 @@ export default function DragonTiger() {
                             {seatsLoading[key] ? (
                               <div className="text-xs text-slate-500">加载席位数据中…</div>
                             ) : seatData ? (
-                              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                                <div>
-                                  <div className="text-xs font-bold text-rose-400 mb-1">买入前五</div>
-                                  <SeatTable seats={seatData.buy} type="buy" />
+                              <div className="space-y-2">
+                                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                                  <div>
+                                    <div className="text-xs font-bold text-rose-400 mb-1">买入前五</div>
+                                    <SeatTable seats={seatData.buy} type="buy" behaviorMap={behaviorByDept} />
+                                  </div>
+                                  <div>
+                                    <div className="text-xs font-bold text-emerald-400 mb-1">卖出前五</div>
+                                    <SeatTable seats={seatData.sell} type="sell" behaviorMap={behaviorByDept} />
+                                  </div>
                                 </div>
-                                <div>
-                                  <div className="text-xs font-bold text-emerald-400 mb-1">卖出前五</div>
-                                  <SeatTable seats={seatData.sell} type="sell" />
-                                </div>
+                                {/* v9.13：综合分析 + 操作建议 */}
+                                <BuySellAnalysisPanel buyers={seatData.buy} sellers={seatData.sell} behaviorMap={behaviorByDept} />
                               </div>
                             ) : (
                               <div className="text-xs text-slate-500">暂无席位数据</div>

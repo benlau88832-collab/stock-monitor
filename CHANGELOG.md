@@ -4,6 +4,28 @@
 
 ---
 
+## v9.13 — 席位画像 + 号展开 + 龙虎榜操作建议 (2026-08-01)
+
+### A. 席位画像 + 号展开（点击行查该席位历史）
+- `seatLedger.ts` 新增 `buildSeatHistoryByDept(deptName, maxDays)`：返回该席位近 N 天上榜记录
+- `DragonTiger.tsx` SeatProfileCard 每行加 + 按钮，展开显示该席位最近操作
+  - 列：日期 / 股票名 / 方向（买/卖）/ 净额 / T+1收益（已回填）
+  - 鼠标悬停 + 按钮高亮（amber）
+
+### B. 龙虎榜买入/卖出前五加行为模式 + 操作建议（核心新增）
+- `seatBehavior.ts` 新增 `analyzeSeatsGroup(buyers, sellers, behaviorMap)`：
+  - 综合买卖双方前五的"行为模式"分布
+  - 输出：买方主导派 / 卖方主导派 / 派系分布 / 一句话操作建议 / 信号强度
+  - 6 大操作建议规则（格局派主买+砸盘派主卖 → "洗盘嫌疑大、可作中线跟踪"等）
+- `DragonTiger.tsx` SeatTable 每行加两列：画像（席位名标签）+ 行为（格局派/砸盘派/波段派等）
+- 展开行加 BuySellAnalysisPanel：显示主导派徽标 + 一句话操作建议 + 派系分布
+
+### 其他
+- `index.html` title v9.12 → v9.13
+- `App.tsx` footer v9.13 · build 08-01 19:56
+
+---
+
 ## v9.12 — 持仓-主线匹配修复 + 游资行为模式长期打标 (2026-08-01)
 
 ### A. 持仓-主线匹配 bug 修复（v9.10 P3 增强）

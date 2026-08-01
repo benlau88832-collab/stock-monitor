@@ -144,3 +144,87 @@ export function buildSeatBehaviors(profiles: SeatProfile[]): SeatBehavior[] {
 export function behaviorMeta(b: BehaviorTag): { color: string; label: string; hint: string } {
   return { color: BEHAVIOR_COLORS[b], label: b, hint: BEHAVIOR_HINT[b] };
 }
+
+// ============== v9.13：组席主导派分析（买入/卖出前五） ==============
+// 综合判断买入/卖出前五的整体派系，给出"主导派"和操作建议
+// 输入：买入前五 + 卖出前五的席位名 + 已有的 SeatBehavior map（deptName → Behavior）
+// 输出：买方主导派系 + 卖方主导派系 + 一句话操作建议
+export interface GroupAnalysis {
+  /** 买入方主导派：占比最高的派系 */
+  buyerDominant: BehaviorTag | "未识别";
+  /** 卖出方主导派 */
+  sellerDominant: BehaviorTag | "未识别";
+  /** 派系分布：每个派系有几只席位 + 平均净买入 */
+  buyerDist: Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }>;
+  sellerDist: Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }>;
+  /** 一句话操作建议 */
+  suggestion: string;
+  /** 信号强度：0-1 越高越明确 */
+  strength: number;
+}
+
+interface SeatWithNet {
+  deptName: string;
+  net: number;
+}
+
+/** 主导派 = 占比最高的派系；信号强度 = 该派系占比 */
+export function analyzeSeatsGroup(
+  buyers: SeatWithNet[],
+  sellers: SeatWithNet[],
+  behaviorMap: Map<string, SeatBehavior>,
+): GroupAnalysis {
+  function dist(seats: SeatWithNet[]): Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }> {
+    const d = new Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }>();
+    for (const s of seats) {
+      const bh = behaviorMap.get(s.deptName);
+      if (!bh) continue;
+      const cur = d.get(bh.behavior) ?? { count: 0, avgNet: 0, totalNet: 0 };
+      cur.count++;
+      cur.totalNet += s.net;
+      cur.avgNet = cur.totalNet / cur.count;
+      d.set(bh.behavior, cur);
+    }
+    return d;
+  }
+  const buyerDist = dist(buyers);
+  const sellerDist = dist(sellers);
+
+  function dominant(d: Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }>): { tag: BehaviorTag | "未识别"; strength: number } {
+    if (d.size === 0) return { tag: "未识别", strength: 0 };
+    let best: [BehaviorTag, { count: number; avgNet: number; totalNet: number }] | null = null;
+    let totalCount = 0;
+    for (const [tag, v] of d) {
+      totalCount += v.count;
+      if (!best || v.count > best[1].count) best = [tag, v];
+    }
+    if (!best) return { tag: "未识别", strength: 0 };
+    return { tag: best[0], strength: best[1].count / totalCount };
+  }
+  const buyerDom = dominant(buyerDist);
+  const sellerDom = dominant(sellerDist);
+
+  // 生成操作建议
+  const bTag = buyerDom.tag;
+  const sTag = sellerDom.tag;
+  let suggestion = "";
+  if (bTag === "格局派" && (sTag === "砸盘派" || sTag === "一日游")) {
+    suggestion = "✅ **格局派主买 + 砸盘/一日游主卖** —— 主力派发中，由长期持有的格局派接盘。**洗盘嫌疑大，可作中线跟踪**。";
+  } else if (bTag === "格局派" && sTag === "格局派") {
+    suggestion = "✅ **格局派对倒** —— 多空均为长期持有者，属于股东内部调仓，**信号中性**。";
+  } else if (bTag === "砸盘派") {
+    suggestion = "⚠ **砸盘派主买** —— 上榜后股价常回吐，**务必警惕**（可能是新庄家接货/左手倒右手）。";
+  } else if (bTag === "波段派" || bTag === "接力派") {
+    suggestion = `🟡 **${bTag}主买** —— 短线博弈，按${bTag === "接力派" ? "其历史胜率（可长线跟）" : "波段节奏操作"}。`;
+  } else if (bTag === "未识别" || bTag === "新面孔" || bTag === "数据不足") {
+    suggestion = "❔ 买方多为新面孔或数据不足，**信号不明确，建议观望**。";
+  } else {
+    suggestion = "🟡 买方派系不明显，结合其他信号判断。";
+  }
+  if (sTag === "格局派" && bTag !== "砸盘派") {
+    suggestion += "（卖方为格局派，可能是有序减仓，需关注后续走势）";
+  }
+
+  const strength = Math.max(buyerDom.strength, sellerDom.strength);
+  return { buyerDominant: buyerDom.tag, sellerDominant: sellerDom.tag, buyerDist, sellerDist, suggestion, strength };
+}

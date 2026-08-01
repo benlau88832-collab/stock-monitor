@@ -228,6 +228,37 @@ export function buildSeatProfiles(maxDays = 120): SeatProfile[] {
   return profiles;
 }
 
+// ============== v9.13：单席位历史查询（席位画像 + 展开） ==============
+export interface SeatHistoryRow {
+  date: string;
+  stockCode: string;
+  stockName: string;
+  direction: "买" | "卖";
+  net: number;
+  pctT1: number | null;
+  pctT5: number | null;
+  backfilled: boolean;
+}
+
+/** 查某席位近 N 天所有上榜记录（按日期倒序） */
+export function buildSeatHistoryByDept(deptName: string, maxDays = 60): SeatHistoryRow[] {
+  const dates = getAllSeatDates().slice(0, maxDays);
+  const out: SeatHistoryRow[] = [];
+  for (const date of dates) {
+    const records = loadDayRecords(date);
+    for (const r of records) {
+      if (r.deptName !== deptName) continue;
+      out.push({
+        date, stockCode: r.stockCode, stockName: r.stockName,
+        direction: r.direction, net: r.net, pctT1: r.pctT1, pctT5: r.pctT5,
+        backfilled: r.backfilled,
+      });
+    }
+  }
+  out.sort((a, b) => b.date.localeCompare(a.date));
+  return out;
+}
+
 // ============== 合力/独食检测 ==============
 export interface StockSeatSignal {
   stockCode: string;
