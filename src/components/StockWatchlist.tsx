@@ -28,31 +28,92 @@ interface InfoItem {
 
 interface ChatMsg { role: "user" | "assistant"; content: string }
 
-// ============== 个股融资信号卡 ==============
+// ============== 个股两融观察卡（v9.11 券商风格） ==============
+// 切换个股时一眼看清杠杆资金动向：余额/净买入/多窗口变化率/迷你资金流
 function MarginSignalCard({ info, stockName }: { info: StockMarginInfo | null; stockName: string }) {
   const sig: MarginSignal = detectMarginSignal(info);
   // 无数据（非两融标的或加载中）：不显示卡片，避免刷屏
   if (!info) return null;
 
-  const netColor = (v: number | null) => {
+  const colorOf = (v: number | null | undefined) => {
     if (v == null) return "text-slate-500";
     return v > 0 ? "text-rose-400" : v < 0 ? "text-emerald-400" : "text-slate-400";
   };
+  const signOf = (v: number | null | undefined) => v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+  const moneyOf = (v: number | null | undefined) => v == null ? "—" : fmtMoney(v);
+
+  // 多窗口变化率小柱（3/5/10日）—— 一眼看出加速/减速
+  const chgs = [info.chg3d, info.chg5d, info.chg10d];
+  const maxAbs = Math.max(1, ...chgs.filter(v => v != null).map(v => Math.abs(v!)));
+  const widthPct = (v: number | null) => v == null ? 0 : (Math.abs(v) / maxAbs) * 100;
+
   return (
-    <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+    <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-2.5 space-y-1.5">
+      {/* 头部：标的+信号徽章 */}
       <div className="flex items-center justify-between flex-wrap gap-1">
-        <div className="text-[11px] text-slate-500">融资融券 · {info.name || stockName}（{info.date.slice(5)}）</div>
+        <div className="text-[11px] text-violet-300 font-bold">📊 融资融券 · {info.name || stockName}（{info.date.slice(5)}）</div>
         <span className={`rounded border px-1.5 py-0.5 text-[11px] font-bold ${marginSignalColor(sig.level)}`}>{sig.label}</span>
       </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
-        <span className="text-slate-400">融资余额 <b className="text-slate-200">{fmtMoney(info.rzBalance)}</b></span>
-        <span className="text-slate-400">今日净买入 <b className={netColor(info.rzNet)}>{fmtMoney(info.rzNet)}</b></span>
-        <span className="text-slate-400">5日 <b className={netColor(info.chg5d)}>{info.chg5d != null ? `${info.chg5d > 0 ? "+" : ""}${info.chg5d.toFixed(1)}%` : "—"}</b></span>
-        <span className="text-slate-400">10日 <b className={netColor(info.chg10d)}>{info.chg10d != null ? `${info.chg10d > 0 ? "+" : ""}${info.chg10d.toFixed(1)}%` : "—"}</b></span>
-        {info.net5d != null && <span className="text-slate-400">5日净买入 <b className={netColor(info.net5d)}>{fmtMoney(info.net5d)}</b></span>}
+
+      {/* 4 指标卡：融资余额/融券余额/今日净买入/5日净买入 */}
+      <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-4">
+        <div className="rounded bg-black/30 px-2 py-1">
+          <div className="text-[10px] text-slate-500">融资余额</div>
+          <div className="text-xs font-bold text-rose-400">{fmtMoney(info.rzBalance)}</div>
+        </div>
+        <div className="rounded bg-black/30 px-2 py-1">
+          <div className="text-[10px] text-slate-500">融券余额</div>
+          <div className="text-xs font-bold text-sky-400">{fmtMoney(info.rqBalance)}</div>
+        </div>
+        <div className="rounded bg-black/30 px-2 py-1">
+          <div className="text-[10px] text-slate-500">今日融资净买入</div>
+          <div className={`text-xs font-bold ${colorOf(info.rzNet)}`}>{moneyOf(info.rzNet)}</div>
+        </div>
+        <div className="rounded bg-black/30 px-2 py-1">
+          <div className="text-[10px] text-slate-500">5日融资净买入</div>
+          <div className={`text-xs font-bold ${colorOf(info.net5d)}`}>{moneyOf(info.net5d)}</div>
+        </div>
       </div>
-      <div className="mt-1 text-[10px] text-slate-500">{sig.hint}</div>
-      <div className="mt-0.5 text-[10px] text-slate-600">融资余额 = 融资客借钱持有的市值；持续上升说明杠杆资金看多</div>
+
+      {/* 融资余额变化率多窗口对比（迷你柱状） */}
+      <div className="rounded bg-black/20 px-2 py-1.5">
+        <div className="text-[10px] text-slate-500 mb-1">融资余额变化率（3/5/10日）— 加速看多/看空</div>
+        <div className="space-y-0.5">
+          {[
+            { label: "3日", val: info.chg3d },
+            { label: "5日", val: info.chg5d },
+            { label: "10日", val: info.chg10d },
+          ].map(r => (
+            <div key={r.label} className="flex items-center gap-2 text-[10px]">
+              <span className="w-8 text-slate-400">{r.label}</span>
+              <div className="flex-1 h-2.5 bg-white/5 rounded overflow-hidden relative">
+                <div className="absolute left-1/2 top-0 bottom-0 w-px bg-slate-600" />
+                {r.val != null && (
+                  <div
+                    className={`absolute top-0 bottom-0 ${r.val >= 0 ? "bg-rose-500/70" : "bg-emerald-500/70"}`}
+                    style={{
+                      left: r.val >= 0 ? "50%" : `${50 - widthPct(r.val) / 2}%`,
+                      width: `${widthPct(r.val) / 2}%`,
+                    }}
+                  />
+                )}
+              </div>
+              <span className={`w-14 text-right font-mono ${colorOf(r.val)}`}>{signOf(r.val)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 净买入多窗口对比 */}
+      <div className="flex items-center justify-between flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-300">
+        <span>3日净买入 <b className={colorOf(info.net3d)}>{moneyOf(info.net3d)}</b></span>
+        <span>5日净买入 <b className={colorOf(info.net5d)}>{moneyOf(info.net5d)}</b></span>
+        <span>10日净买入 <b className={colorOf(info.net10d)}>{moneyOf(info.net10d)}</b></span>
+      </div>
+
+      {/* 一句话解释 */}
+      <div className="text-[10px] text-slate-500">{sig.hint}</div>
+      <div className="text-[10px] text-slate-600">融资余额 = 融资客借钱持有的市值；持续上升说明杠杆资金看多</div>
     </div>
   );
 }
