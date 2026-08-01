@@ -1,16 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { callAI, type AIResult } from "../lib/ai";
 import { getHitRateForPrompt } from "../lib/recTracker";
+import { localDateStrOffset } from "../lib/format";
 
 // 周报教练：周五15:30后或周末首次打开触发
 // 存 weekly:YYYY-Www key，可回看历史
 
 const WEEKLY_PREFIX = "weekly:";
 
-function getBJNow(): Date {
-  const n = new Date();
-  return new Date(n.getTime() + (n.getTimezoneOffset() + 480) * 60000);
-}
+function getBJNow(): Date { return new Date(); }
 
 function getISOWeek(d: Date): string {
   // ISO 周号计算
@@ -51,14 +49,13 @@ function getWeekPlaybookEntries(): Array<{
   date: string; plan: string; executed: string | null;
   aiHitRate: string; sentiment: number | null;
 }> {
-  const bj = getBJNow();
-  const dayOfWeek = bj.getDay();
-  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-  const monday = new Date(bj.getTime() + mondayOffset * 86400000);
+  const today = new Date();
+  // 修复：直接用本地日期计算周一（toISOString 在 CST 凌晨会取到昨天，且 +86400000 在跨日时漂移）
+  // 周一距今天数：周日为 6 天前，其他为 (周几-1) 天前
+  const mondayDaysAgo = today.getDay() === 0 ? 6 : today.getDay() - 1;
   const entries: ReturnType<typeof getWeekPlaybookEntries> = [];
   for (let i = 0; i < 5; i++) {
-    const d = new Date(monday.getTime() + i * 86400000);
-    const dateStr = d.toISOString().slice(0, 10);
+    const dateStr = localDateStrOffset(mondayDaysAgo - i, today);
     try {
       const pbRaw = localStorage.getItem(`playbook:${dateStr}`);
       const sentRaw = localStorage.getItem(`sentiment:${dateStr}`);
@@ -85,9 +82,9 @@ function getWeekPlaybookEntries(): Array<{
 
 // 判断是否该触发
 function shouldTrigger(): boolean {
-  const bj = getBJNow();
-  const day = bj.getDay();
-  const hhmm = bj.getHours() * 100 + bj.getMinutes();
+  const d = new Date();
+  const day = d.getDay();
+  const hhmm = d.getHours() * 100 + d.getMinutes();
   // 周五15:30后 或 周末
   return (day === 5 && hhmm >= 1530) || day === 0 || day === 6;
 }

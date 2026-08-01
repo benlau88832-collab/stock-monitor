@@ -3,6 +3,7 @@ import { callAI, type AIResult } from "../lib/ai";
 import type { OverviewData, GlobalData, MainlineData } from "../App";
 import { loadPrevTradingDaySentiment } from "../lib/sentimentStore";
 import { buildThemeLadder, type ZTPoolItem } from "../lib/themeLadder";
+import { localDateStr, localDateStrOffset } from "../lib/format";
 
 // ============== 常量 ==============
 const LOCK_TIME = "09:30";
@@ -26,16 +27,13 @@ function emptyPlaybook(date: string): PlaybookData {
 }
 
 // ============== 时间工具（北京时间） ==============
-function getBJNow(): Date {
-  const now = new Date();
-  return new Date(now.getTime() + (now.getTimezoneOffset() + 480) * 60000);
-}
+// 修复：getBJNow 在 CST 时区等价于 new Date()，统一改用本地时间（避免 toISOString 漂移到 UTC 昨天）
 function getBJHHMM(): string {
-  const bj = getBJNow();
-  return `${String(bj.getHours()).padStart(2, "0")}:${String(bj.getMinutes()).padStart(2, "0")}`;
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
-function getBJDate(): string { return getBJNow().toISOString().slice(0, 10); }
-function isWeekend(): boolean { const d = getBJNow().getDay(); return d === 0 || d === 6; }
+function getBJDate(): string { return localDateStr(); }
+function isWeekend(): boolean { return new Date().getDay() === 0 || new Date().getDay() === 6; }
 
 // ============== localStorage ==============
 function loadPlaybook(date: string): PlaybookData {
@@ -58,14 +56,12 @@ function savePlaybook(data: PlaybookData) {
 }
 
 function getWeekPlaybooks(): PlaybookData[] {
-  const today = new Date(getBJDate() + "T00:00:00+08:00");
-  const dayOfWeek = today.getDay();
-  const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-  const monday = new Date(today.getTime() + mondayOffset * 86400000);
+  const today = new Date();
+  const mondayDaysAgo = today.getDay() === 0 ? 6 : today.getDay() - 1;
   const result: PlaybookData[] = [];
   for (let i = 0; i < 5; i++) {
-    const d = new Date(monday.getTime() + i * 86400000);
-    result.push(loadPlaybook(d.toISOString().slice(0, 10)));
+    const dateStr = localDateStrOffset(mondayDaysAgo - i, today);
+    result.push(loadPlaybook(dateStr));
   }
   return result;
 }

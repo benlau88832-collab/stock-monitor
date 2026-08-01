@@ -3,6 +3,7 @@
 // 去重 + summary 截断 + 30天滚动淘汰 + FIFO 硬上限 6000 条
 
 import type { NewsItem, AnnItem } from "./llmNewsIntelligence";
+import { localDateStrOffset } from "./format";
 
 const NEWS_KEY = "ds_news";
 const ANN_KEY = "ds_ann";
@@ -28,9 +29,8 @@ function saveArr<T>(key: string, arr: T[]): void {
 }
 
 function cutoffDate(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - RETENTION_DAYS);
-  return d.toISOString().slice(0, 10);
+  // 修复：用本地日期计算淘汰边界（toISOString 在 CST 凌晨会取到昨天）
+  return localDateStrOffset(RETENTION_DAYS);
 }
 
 // ============== 公共接口 ==============
@@ -87,11 +87,9 @@ export function upsertAnnouncements(items: AnnItem[]): void {
 /** 按板块查新闻（板块名模糊匹配 boards 数组） */
 export function getNewsByBoard(board: string, days = 7): NewsItem[] {
   try {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const cutoff = localDateStrOffset(days);
     return loadArr<NewsItem>(NEWS_KEY).filter(n =>
-      (n.time ?? "").slice(0, 10) >= cutoffStr && n.boards?.some(b => b.includes(board) || board.includes(b))
+      (n.time ?? "").slice(0, 10) >= cutoff && n.boards?.some(b => b.includes(board) || board.includes(b))
     );
   } catch { return []; }
 }
@@ -99,10 +97,9 @@ export function getNewsByBoard(board: string, days = 7): NewsItem[] {
 /** 按板块查公告（boards 数组模糊匹配） */
 export function getAnnByBoard(board: string, days = 7): AnnItem[] {
   try {
-    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const cutoff = localDateStrOffset(days);
     return loadArr<AnnItem>(ANN_KEY).filter(a =>
-      (a.time ?? "").slice(0, 10) >= cutoffStr &&
+      (a.time ?? "").slice(0, 10) >= cutoff &&
       (a as any).boards?.some((b: string) => b.includes(board) || board.includes(b))
     );
   } catch { return []; }

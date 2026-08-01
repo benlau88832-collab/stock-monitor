@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import HealthDot from "./HealthDot";
 import IntelligenceDrawer from "./IntelligenceDrawer";
 import SettingsModal from "./SettingsModal";
@@ -7,6 +7,7 @@ import { getTodayCalls } from "../lib/ai";
 import {
   isSoundOn, isNotifyOn, setSoundOn, setNotifyOn,
   resumeAudio, requestNotifyPermission, getUnreadCount, clearUnread, getFeed,
+  subscribe,
 } from "../lib/alertBus";
 
 export type TabKey = "dashboard" | "fundline" | "radar" | "dragon" | "news";
@@ -36,10 +37,18 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
   const [showBell, setShowBell] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const unread = getUnreadCount();
-
-  // 计算督导徽标数：critical 级警报数
-  const criticalCount = getFeed().filter(e => e.severity === "critical").length;
+  // 修复：之前直接 const unread = getUnreadCount() 在每次 render 取值，bus 变化不会重渲染。
+  // 改为订阅 alertBus，emit 触发时强制重渲染 → 角标实时更新。
+  const [unread, setUnread] = useState(0);
+  const [criticalCount, setCriticalCount] = useState(0);
+  useEffect(() => {
+    const refresh = () => {
+      setUnread(getUnreadCount());
+      setCriticalCount(getFeed().filter(e => e.severity === "critical").length);
+    };
+    refresh();
+    return subscribe(refresh);
+  }, []);
 
   const toggleSound = () => {
     const next = !soundOn;

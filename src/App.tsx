@@ -32,6 +32,7 @@ import { appendSignal } from "./lib/signalLedger";
 import { recordRecommendation, runAttribution } from "./lib/recTracker";
 import { getCurrentSession, type SessionPhase } from "./lib/tradingSession";
 import { emit as emitAlert } from "./lib/alertBus";
+import { localDateStr } from "./lib/format";
 
 // 告警跃迁护栏：只在 false→true 时报一次，避免每分钟刷屏
 const lastSignalActive: Record<string, boolean> = {};
@@ -331,7 +332,7 @@ export default function App() {
         else sentimentLabel = "极度恐慌";
         // 信号账本：情绪分穿越关键阈值时记录
         if (sentiment >= 80 || sentiment <= 25) {
-          const today = new Date().toISOString().slice(0, 10);
+          const today = localDateStr();
           appendSignal({
             date: today, type: "sentiment_cross", typeLabel: sentiment >= 80 ? "极度贪婪" : "极度恐慌",
             code: "MARKET", name: "全市场", priceAtSignal: idxData[0]?.price ?? 0,
@@ -692,7 +693,7 @@ export default function App() {
         }
 
         // 推荐落盘（每日首次，同日同code不重复）
-        const recDate = new Date().toISOString().slice(0, 10);
+        const recDate = localDateStr();
         for (const t of ruleThemes) {
           recordRecommendation({ date: recDate, type: "theme", code: t.board, board: t.board, priceAtRec: 0, totalScore: t.total, gateFactor: gate.factor });
         }
@@ -769,26 +770,30 @@ export default function App() {
   // 每日构建板块映射表（数据驱动，零硬编码）
   useEffect(() => { ensureBoardMap().catch(e => console.warn("[boardMap] 首次构建失败:", e)); }, []);
   // 交易时段状态机驱动刷新：盘中60s、集合竞价30s、盘后300s、休市不刷
+  // 修复：把 refreshAll() 从 setState updater 内移到 setInterval 回调（updater 应该是纯函数，
+  // 副作用在 StrictMode 下双调会绕过 inFlight 护栏）
   useEffect(() => {
     if (!autoRefresh) return;
-    const session = getCurrentSession();
-    const intervalMs = session.refreshIntervalMs || 60000; // 默认60s兜底
-    const countdownSec = Math.ceil(intervalMs / 1000);
-    setCountdown(countdownSec);
+    let cancelled = false;
+    const computeIntervalSec = (): number => {
+      const s = getCurrentSession();
+      return Math.ceil((s.refreshIntervalMs || 60000) / 1000);
+    };
+    setCountdown(computeIntervalSec());
     const timer = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) {
-          // 静默刷新：后台刷新不触发全屏 loading（setLoading 只在首次用）
-          refreshAll();
-          // 刷新时重新检测时段（可能跨越了时段边界）
-          const newSession = getCurrentSession();
-          return Math.ceil((newSession.refreshIntervalMs || 60000) / 1000);
-        }
-        return prev - 1;
-      });
+      if (cancelled) return;
+      setCountdown(prev => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
-    return () => clearInterval(timer);
-  }, [autoRefresh, refreshAll]);
+    // 单独的刷新 watchdog：等 countdown 归零后触发，再重置
+    const refreshTimer = setInterval(() => {
+      if (cancelled) return;
+      if (countdown === 0) {
+        refreshAll();
+        setCountdown(computeIntervalSec());
+      }
+    }, 1000);
+    return () => { cancelled = true; clearInterval(timer); clearInterval(refreshTimer); };
+  }, [autoRefresh, refreshAll, countdown]);
 
   // 每分钟更新时段
   useEffect(() => {
@@ -857,7 +862,7 @@ export default function App() {
   // 盘后归因：phase=post 时触发 T+1/T+3 回填（每交易日只跑一次，幂等）
   useEffect(() => {
     if (currentPhase !== "post") return;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateStr();
     runAttribution(today).catch(() => { /* 回填失败不阻塞 */ });
   }, [currentPhase]);
 
@@ -1017,7 +1022,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.9 · build 08-01 15:30 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.9.1 · build 08-01 18:10 · 数据源：东方财富</div>
       </footer>
     </div>
   );

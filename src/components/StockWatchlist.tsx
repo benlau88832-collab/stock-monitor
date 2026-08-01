@@ -5,7 +5,7 @@ import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 
 // ============== LLM 配置（引用 AI 中枢的统一常量） ==============
-import { callAI, APIKEY_STORAGE_KEY } from "../lib/ai";
+import { callAI, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
 
 // ============== 数据结构 ==============
 interface WatchStock {
@@ -206,7 +206,9 @@ function buildScanPrompt(stock: WatchStock): string {
 }
 
 // ============== LLM 调用（统一走 AI 中枢，享受缓存/限速/降级） ==============
-async function callLLM(_apiKey: string, messages: ChatMsg[], _maxTokens = 600): Promise<{ text: string; degraded: boolean }> {
+// 修复：参数 _apiKey / _maxTokens 之前是占位（callAI 走 ai_settings_v1），
+// 避免误导调用方以为在传 key，统一用 () 签名
+async function callLLM(messages: ChatMsg[]): Promise<{ text: string; degraded: boolean }> {
   // 将 messages 合并为一个 prompt 透传给 callAI stockJudge 任务
   const prompt = messages.map(m => m.content).join("\n\n");
   const result = await callAI("stockJudge", { prompt });
@@ -248,24 +250,36 @@ export default function StockWatchlist() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // ---- 加载所有监控股行情 ----
+  // 修复：1) 改用 Promise.allSettled 并发请求（30 只股票 ~6s 串行 → 一次并发）
+  //      2) 失败的股票保留旧数据（之前 setStocks(results) 整体替换，失败股票从列表消失）
+  //      3) 使用 setStocks(prev => ...) 函数式更新，避免依赖 stocks 闭包导致 effect 反复重建
   const refreshStocks = useCallback(async () => {
-    const results: Record<string, WatchStock> = {};
-    for (const code of codes) {
-      try {
-        const data = await fetchStockOne(code);
-        if (data) {
-          const s: WatchStock = { ...data, alertCount: 0, healthScore: null, healthTip: "" };
-          s.alertCount = countAlerts(s);
-          // 保留已有的健康度评分
-          const prev = stocks[code];
-          if (prev) { s.healthScore = prev.healthScore; s.healthTip = prev.healthTip; }
-          results[code] = s;
-        }
-      } catch { /* skip */ }
+    if (codes.length === 0) {
+      setStocks({});
+      return;
     }
-    setStocks(results);
+    const settled = await Promise.allSettled(
+      codes.map(code => fetchStockOne(code).then(data => ({ code, data })))
+    );
+    setStocks(prev => {
+      const next: Record<string, WatchStock> = { ...prev };
+      for (let i = 0; i < settled.length; i++) {
+        const r = settled[i];
+        const code = codes[i];
+        if (r.status === "fulfilled" && r.value.data) {
+          const s: WatchStock = { ...r.value.data, alertCount: 0, healthScore: null, healthTip: "" };
+          s.alertCount = countAlerts(s);
+          // 保留已有健康度评分（避免 60s 刷新清空 AI 评分）
+          const old = next[code];
+          if (old) { s.healthScore = old.healthScore; s.healthTip = old.healthTip; s.llmDegraded = old.llmDegraded; }
+          next[code] = s;
+        }
+        // 失败的 code 保留 prev[code]，避免从列表消失
+      }
+      return next;
+    });
     if (!selected && codes.length > 0) setSelected(codes[0]);
-  }, [codes, selected, stocks]);
+  }, [codes, selected]);
 
   useEffect(() => { refreshStocks(); }, [codes]); // eslint-disable-line
   useEffect(() => { const t = setInterval(refreshStocks, 60000); return () => clearInterval(t); }, [refreshStocks]);
@@ -352,7 +366,7 @@ export default function StockWatchlist() {
     const newsCtx = infoItems.filter(i => i.type === "news" || i.type === "announcement").slice(0, 6).map(i => `[${i.tag}] ${i.title}`).join("\n");
     const prompt = buildDetailPrompt(stock, newsCtx);
     try {
-      const { text, degraded } = await callLLM(apiKey, [{ role: "user", content: prompt }], 800);
+      const { text, degraded } = await callLLM([{ role: "user", content: prompt }]);
       setLlmResult(text);
       setChatHistory([{ role: "user", content: prompt }, { role: "assistant", content: text }]);
       // 存储降级状态用于显示角标
@@ -373,7 +387,7 @@ export default function StockWatchlist() {
     const userMsg: ChatMsg = { role: "user", content: `针对${stock.name}(${stock.code})的追问：${followUp}\n\n当前数据快照：现价${stock.price} ${fmtPct(stock.pct)} 主力${fmtMoney(stock.mainNet)} 5日${fmtMoney(stock.mainNet5d)} 换手${stock.turnoverRate}% 量比${stock.volumeRatio}` };
     const newHistory = [...chatHistory, userMsg];
     try {
-      const { text, degraded } = await callLLM(apiKey, newHistory, 500);
+      const { text, degraded } = await callLLM(newHistory);
       const assistantMsg: ChatMsg = { role: "assistant", content: text };
       setChatHistory([...newHistory, assistantMsg]);
       setFollowUp("");
@@ -395,7 +409,7 @@ export default function StockWatchlist() {
       const s = newStocks[code];
       if (!s) continue;
       try {
-        const { text, degraded } = await callLLM(apiKey, [{ role: "user", content: buildScanPrompt(s) }], 60);
+        const { text, degraded } = await callLLM([{ role: "user", content: buildScanPrompt(s) }]);
         const lines = text.trim().split("\n").filter(l => l.trim());
         const score = parseInt(lines[0]) || 50;
         const tip = lines[1] || "暂无评价";
@@ -452,7 +466,7 @@ export default function StockWatchlist() {
         <div className="mb-3 flex gap-2 items-center">
           <input value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" placeholder="输入 Agnes AI API Key"
             className="flex-1 rounded bg-black/30 border border-white/10 px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:border-amber-400/50 outline-none" />
-          <button onClick={() => { localStorage.setItem(APIKEY_STORAGE, apiKey); setShowKeyInput(false); }}
+          <button onClick={() => { persistApiKey(apiKey); setShowKeyInput(false); }}
             className="rounded px-3 py-1.5 text-xs bg-amber-500/20 text-amber-300 hover:bg-amber-500/30">保存</button>
         </div>
       )}

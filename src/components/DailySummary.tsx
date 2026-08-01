@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { fmtMoney, fmtPct } from "../lib/format";
+import { fmtMoney, fmtPct, localDateStr } from "../lib/format";
 import type { OverviewData, FundStructureData } from "../App";
 import type { LimitPoolSummary } from "../lib/api";
 import { callAI, getApiKey } from "../lib/ai";
@@ -66,7 +66,7 @@ export default function DailySummary({ overview, fund }: {
       const aiResult = await callAI("stockJudge", { prompt });
       const result = aiResult.text;
       setContent(result);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDateStr();
       const newHistory = [{ date: today, content: result, timestamp: Date.now() }, ...history.filter(h => h.date !== today)].slice(0, 10);
       setHistory(newHistory);
       saveHistory(newHistory);

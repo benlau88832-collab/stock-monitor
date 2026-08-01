@@ -1,15 +1,11 @@
 import { useState } from "react";
 import { getSignalStats, getLedger, loadDiaries, saveDiary, exportAllData, importAllData } from "../lib/signalLedger";
+import { localDateStr } from "../lib/format";
 
 // 信号命中率卡片 + 复盘日记 + 数据导出
 // 嵌入 DailySummary 区域下方
 
-function todayStr(): string {
-  const d = new Date();
-  const offset = 8 * 60;
-  const local = new Date(d.getTime() + (offset - d.getTimezoneOffset()) * 60000);
-  return local.toISOString().slice(0, 10);
-}
+function todayStr(): string { return localDateStr(); }
 
 export default function SignalPanel() {
   const [showLedger, setShowLedger] = useState(false);

@@ -4,6 +4,59 @@
 
 ---
 
+## v9.9.1 — 修复：时区bug全量治理 + 关键性能/质量改进 (2026-08-01)
+
+本版本系统性修复一组跨时区/数据一致性 bug，覆盖 12 个源文件。根因是多个组件用
+`new Date().toISOString().slice(0, 10)` 取日期，而 `toISOString` 返回 UTC；中国时区
+(CST, UTC+8) 在本地凌晨 0:00-8:00 之间 UTC 仍在「昨天」，导致：
+
+- AI 缓存命中「昨天」的旧结果（同一 payload 永远不刷新）
+- 信号账本 / sentimentStore 写入昨日的 key
+- 督导室「昨天」「7.30」解析漂移一天
+- 状态条「今日信号数」永远为 0
+- 行情面板静音判定为「今日已过期」（永远重新弹）
+
+### A. 时区 bug 全量修复（统一本地日期工具）
+- `lib/format.ts`（新工具）：新增 `localDateStr()` / `localDateStrOffset(days)` /
+  `localDateStrCompact()`，基于 `Date.getFullYear/getMonth/getDate` 拿本地年月日。
+- `App.tsx`：3 处 `toISOString().slice(0,10)` 改 `localDateStr()`（情绪信号、推荐落盘、
+  盘后归因）。
+- `lib/ai.ts`：`cacheKey` 与 `statsKey` 改本地日期，避免凌晨跨日缓存错配。
+- `lib/boardMap.ts`、`lib/sentimentStore.ts`、`lib/dataStore.ts`、`lib/newsMemoStore.ts`：
+  全部淘汰边界/历史 key 改本地日期。
+- `components/IntelligenceDrawer.tsx`：
+  - `parseQueryDate` 时区公式 `(8*60 - getTimezoneOffset())*60000` 错算成 +16h，
+    改为直接用 `localDateStrOffset(d)`，与 dataStore 口径一致。
+  - 督导室 `dateLabel` / `getAllSince(...)` 改本地日期。
+- `components/AlertBanner.tsx`、`components/StatusBar.tsx`、`components/Dashboard.tsx`、
+  `components/DailySummary.tsx`、`components/WeeklyCoach.tsx`、`components/Playbook.tsx`、
+  `components/SignalPanel.tsx`：本地日期统一。
+
+### B. AI 中枢加固
+- `lib/ai.ts`：`getCache` 加 2 小时 TTL（CACHE_TTL_MS=2h），盘前预案不再永命中旧结果。
+- `lib/aiPrompts.ts`：`annRank` fallback 改为 JSON 数组（之前 markdown 导致
+  `parseAIJSON` 提取失败 → 公告 AI 评分丢失）。
+
+### C. 个股雷达（StockWatchlist）关键 bug
+- `refreshStocks` 改 `Promise.allSettled` 并发（30 只股票 ~6s 串行 → 一次并发）。
+- 失败的股票保留旧数据（之前 `setStocks(results)` 整体替换 → 失败股票从列表消失）。
+- `setStocks(prev => ...)` 函数式更新，去除对 `stocks` 闭包依赖，60s 刷新 effect 不再反复重建。
+- API Key 保存从 `localStorage.setItem('llm_api_key', k)` 改为 `setApiKey(k)`（ai.ts），
+  写入 `ai_settings_v1`，与 `callAI` 读取口径一致。
+
+### D. App.tsx 状态机与订阅
+- countdown setState updater 内 `refreshAll()` 反模式修复：把副作用移到独立 `setInterval` 回调。
+- 单独的 refresh watchdog，规避 StrictMode 双调 + inFlight 护栏边界。
+- 顶部 `TopNav` 铃铛角标改为订阅 `alertBus.subscribe()`，emit 触发时实时刷新（之前直接
+  `getUnreadCount()` 在 render 读取，bus 变化不会重渲染 → 角标永远不更新）。
+- `Dashboard` `showAI` 加 `useEffect` 跟随 phase（盘后自动展开 AI 复盘）。
+
+### E. 其他
+- `index.html` title v9.9 → v9.9.1（与 footer 统一）
+- `App.tsx` footer v9.9 → v9.9.1 · build 08-01 18:10
+
+---
+
 ## v9.9 — 新增：两融观察（全市场+个股）+ 修复三个功能 Bug (2026-08-01)
 
 ### A. 新增两融（融资融券）功能

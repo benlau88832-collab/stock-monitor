@@ -9,7 +9,7 @@ import LadderPulse from "./LadderPulse";
 import WeeklyCoach from "./WeeklyCoach";
 import BattlePlan, { type BattlePlanData } from "./BattlePlan";
 import GlobalSignals from "./GlobalSignals";
-import { fmtMoney, fmtPct, pctColor } from "../lib/format";
+import { fmtMoney, fmtPct, pctColor, localDateStrOffset } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 import { buildThemeLadder, type ZTPoolItem } from "../lib/themeLadder";
 import { getFeed, type AlertEvent } from "../lib/alertBus";
@@ -123,8 +123,8 @@ function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: Ga
 function ImportantFeed() {
   const [items, setItems] = useState<Array<{ title: string; summary: string; url: string; time: string; tag: string }>>([]);
   useEffect(() => {
-    const d = new Date(); d.setDate(d.getDate() - 2);
-    const cutoff = d.toISOString().slice(0, 10);
+    // 修复：用本地日期（前 2 天），与 dataStore 存储口径一致
+    const cutoff = localDateStrOffset(2);
     const { news, ann } = getAllSince(cutoff);
     const picks = [
       ...news.filter(n => n.stars >= 2 || n.sentiment !== "neutral").map(n => ({
@@ -215,8 +215,13 @@ export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
   phase = "post", watchStocks = [], onSwitchTab,
 }: DashboardProps) {
+  // 修复：原代码只在组件首次挂载时算一次 phase，phase 改变时不会重新打开 AI 复盘
   const [showAI, setShowAI] = useState(phase === "post");
   const [showSignal, setShowSignal] = useState(false);
+  useEffect(() => {
+    // 当 phase 变到 post 时自动打开 AI 复盘（盘后场景）
+    if (phase === "post") setShowAI(true);
+  }, [phase]);
 
   const isTrading = phase === "trading";
   const isPost = phase === "post";

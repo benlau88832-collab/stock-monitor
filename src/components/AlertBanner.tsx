@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AlertTriangle, Info, VolumeX } from "lucide-react";
+import { localDateStr } from "../lib/format";
 
 // 三级警报体系
 // 提示(info/灰) / 警告(warning/amber) / 严重(critical/red+横幅)
@@ -18,7 +19,8 @@ function getMutedToday(): Set<string> {
     const raw = localStorage.getItem(MUTED_KEY);
     if (!raw) return new Set();
     const { date, ids } = JSON.parse(raw);
-    if (date !== new Date().toISOString().slice(0, 10)) return new Set(); // 过期
+    // 修复：用本地日期判断是否过期（toISOString 在 CST 凌晨会取到"昨天"导致今日不静音）
+    if (date !== localDateStr()) return new Set();
     return new Set(ids);
   } catch { return new Set(); }
 }
@@ -27,7 +29,7 @@ function muteToday(id: string) {
   const muted = getMutedToday();
   muted.add(id);
   localStorage.setItem(MUTED_KEY, JSON.stringify({
-    date: new Date().toISOString().slice(0, 10),
+    date: localDateStr(),
     ids: [...muted],
   }));
 }

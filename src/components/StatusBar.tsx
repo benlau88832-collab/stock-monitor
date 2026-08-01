@@ -1,5 +1,5 @@
 import { Activity, TrendingUp, TrendingDown, Minus, Zap } from "lucide-react";
-import { fmtMoney, pctColor } from "../lib/format";
+import { fmtMoney, pctColor, localDateStr } from "../lib/format";
 import type { OverviewData, FundStructureData } from "../App";
 import { getLedger } from "../lib/signalLedger";
 import { getOverallHealth } from "../lib/apiHealth";
@@ -12,7 +12,8 @@ export default function StatusBar({ overview, fund }: {
   const b = overview?.breadth;
   const lp = overview?.limitPool;
   const healthColor = { green: "text-emerald-400", yellow: "text-amber-400", red: "text-rose-400" }[getOverallHealth()];
-  const todaySignals = getLedger().filter(e => e.date === new Date().toISOString().slice(0, 10)).length;
+  // 修复：本地日期与 signalLedger/appendSignal 的 date 字段口径一致
+  const todaySignals = getLedger().filter(e => e.date === localDateStr()).length;
 
   return (
     <div className="border-b border-white/5 bg-[#080c18]/90 backdrop-blur-sm px-4 py-1 overflow-x-auto whitespace-nowrap">

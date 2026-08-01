@@ -2,6 +2,8 @@
 // 支持分段存储（盘前/早盘/午盘/盘后/终盘）+ 终盘定格
 // 保留 30 个交易日，为 AI 长上下文研判提供历史记忆
 
+import { localDateStr } from "./format";
+
 const MEMO_PREFIX = "news_memo_";
 const SEG_PREFIX = "intel_seg_";
 const MAX_DAYS = 30;
@@ -122,7 +124,7 @@ export function exportMemoBackup(): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `stock-monitor-memos-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `stock-monitor-memos-${localDateStr()}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

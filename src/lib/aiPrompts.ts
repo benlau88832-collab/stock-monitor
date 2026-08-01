@@ -166,7 +166,18 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
     return `【今日主线假设】昨日情绪${s}分，涨停${p.limitUpCount}只，中性震荡\n【出手条件】放量突破跟进；缩量观望\n【风险红线】单票亏5%止损；仓位不超6成\n【备选剧本】主线走弱→${p.ladderTop3 ? "新晋方向" : "低位补涨"}`;
   },
   closeReview: (p) => `【剧本命中度】—/3（规则版）\n预案：${(p.planText || "未填写").slice(0, 80)}\n今日：情绪${p.sentiment} 涨停${p.limitUpCount} 跌停${p.limitDownCount} 炸板${p.blastedRate.toFixed(1)}%\n【偏差归因】规则版无法归因\n【明日剧本草案】请AI可用时重试`,
-  annRank: (p) => p.announcements.slice(0, 5).map((a, i) => `${i + 1}. ${a.name}: ${a.title.slice(0, 30)}`).join("\n"),
+  annRank: (p) => {
+    // 修复：fallback 必须返回 JSON 数组，prompt 明确要求「只返回JSON数组」。
+    // 之前返回 markdown（"1. xxx: xxx..."），导致 parseAIJSON 提取失败 → 用户看不到任何评分。
+    const arr = p.announcements.slice(0, 5).map((a) => ({
+      code: a.code,
+      theme: a.column || "未分类",
+      score: 3, // 规则版兜底：中性偏多
+      logic: `${a.name} ${a.title.slice(0, 25)}`.slice(0, 30),
+      watch: "AI暂不可用",
+    }));
+    return JSON.stringify(arr);
+  },
   ladderScan: (p) => {
     const top = p.groups.filter(g => g.height >= 3);
     const zt = p.groups.reduce((s, g) => s + g.count, 0);

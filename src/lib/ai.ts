@@ -3,6 +3,7 @@
 
 import { type AITask, type AITaskPayload, FALLBACKS, buildPrompt, TASK_CONFIG } from "./aiPrompts";
 import { loadSettings, saveSettings } from "./aiSettings";
+import { localDateStr } from "./format";
 
 // ============== Agnes 备用域名（仅 provider=agnes 时作 fallback） ==============
 export const AGNES_ENDPOINTS = [
@@ -27,6 +28,9 @@ const AI_TIMEOUT_MS = 30_000;
 
 /** ai:cache:* 条目上限，超过按时间删最旧 */
 const MAX_CACHE_ENTRIES = 300;
+
+/** AI 缓存 TTL(ms)：2 小时。盘前预案类任务不应永远命中旧结果，超过 TTL 强制重打。 */
+const CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 
 /** 每分钟滑动窗口限速：超过直接走规则版，不排队等待 */
 export const AI_RATE_PER_MIN = 10;
@@ -54,7 +58,8 @@ function simpleHash(str: string): number {
 }
 
 function cacheKey(task: AITask, payload: unknown): string {
-  const today = new Date().toISOString().slice(0, 10);
+  // 修复：用本地日期（CST 凌晨 0-8 点 toISOString 仍返回昨天，会导致缓存命中旧结果）
+  const today = localDateStr();
   const h = simpleHash(JSON.stringify(payload) || "");
   return `ai:cache:${task}:${today}:${h}`;
 }
@@ -63,7 +68,12 @@ function getCache(key: string): string | null {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
-    const { text } = JSON.parse(raw);
+    const { text, ts } = JSON.parse(raw);
+    // TTL 校验：超过 CACHE_TTL_MS 视为过期，强制重新请求
+    if (ts != null && Date.now() - ts > CACHE_TTL_MS) {
+      localStorage.removeItem(key);
+      return null;
+    }
     return text ?? null;
   } catch { return null; }
 }
@@ -118,7 +128,8 @@ interface DailyStats {
 }
 
 function statsKey(): string {
-  return `ai:stats:${new Date().toISOString().slice(0, 10)}`;
+  // 修复：与 cacheKey 对齐用本地日期，避免凌晨跨日统计错位
+  return `ai:stats:${localDateStr()}`;
 }
 
 function loadStats(): DailyStats {

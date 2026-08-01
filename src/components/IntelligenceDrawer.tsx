@@ -5,6 +5,7 @@ import { loadDailyMemo } from "../lib/newsMemoStore";
 import { fetchStockNews, fetchStockAnnouncements } from "../lib/api";
 import { getAllSince, getAllOnDate } from "../lib/dataStore";
 import { computeStats, formatStatsForPrompt } from "../lib/intelStats";
+import { localDateStr, localDateStrOffset } from "../lib/format";
 
 // ============== 聊天消息类型 ==============
 interface ChatMsg {
@@ -16,13 +17,15 @@ interface ChatMsg {
 // ============== 日期解析器：从用户提问中提取目标日期 ==============
 // 返回 { ymd: "20260730", dash: "2026-07-30" } 或 null
 // 支持：昨天/前天/7.30/7月30日/7-30/7/30/20260730/2026-07-30
+//
+// 时区策略：直接用本地时间（CST 时区 getMonth/getDate 就是本地月日），
+// 不再做 UTC↔北京时间的换算（之前的 `(8*60 - getTimezoneOffset())` 公式错算成 +16h，
+// 在 CST 时区 getTimezoneOffset()=-480 → 8*60-(-480)=960min=+16h，导致"今天/昨天"漂移到下一天）
 function parseQueryDate(q: string): { ymd: string; dash: string } | null {
   const now = new Date();
-  const bj = new Date(now.getTime() + (8 * 60 - now.getTimezoneOffset()) * 60000);
-  const Y = bj.getFullYear();
+  const Y = now.getFullYear();
   const rel = (d: number) => {
-    const x = new Date(bj); x.setDate(x.getDate() - d);
-    const ds = `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+    const ds = localDateStrOffset(d, now);
     return { ymd: ds.replace(/-/g, ""), dash: ds };
   };
   if (/昨天|昨日/.test(q)) return rel(1);
@@ -59,12 +62,13 @@ const SUPERVISOR_SYSTEM = `你是A股实战交易督导，具备游资与机构�
 async function buildSupervisorPrompt(question: string): Promise<{ system: string; user: string }> {
   const dataParts: string[] = [];
   const now = new Date();
-  const bj = new Date(now.getTime() + (now.getTimezoneOffset() + 480) * 60000);
-  const td = `${bj.getFullYear()}${String(bj.getMonth() + 1).padStart(2, "0")}${String(bj.getDate()).padStart(2, "0")}`;
+  // 用本地时间构建"今天"的紧凑 key（YYYYMMDD），与 ztSnapshot/dataStore 一致
+  const td = localDateStr(now).replace(/-/g, "");
 
   // ① 日期检测
   const qd = parseQueryDate(question);
-  const dateLabel = qd ? qd.dash : bj.toISOString().slice(0, 10);
+  // 修复：原 bj.toISOString().slice(0,10) 在 CST 凌晨 0-8 点会取到"昨天"
+  const dateLabel = qd ? qd.dash : localDateStr(now);
 
   // ===== 1. 市场盘面 =====
   let sentScore = "";
@@ -115,7 +119,7 @@ async function buildSupervisorPrompt(question: string): Promise<{ system: string
   try {
     const { news, ann } = qd
       ? getAllOnDate(qd.dash)
-      : getAllSince(bj.toISOString().slice(0, 10));
+      : getAllSince(localDateStr(now));
     if (news.length || ann.length) {
       dataParts.push(`【板块情绪】${formatStatsForPrompt(computeStats(news, ann))}`);
     }

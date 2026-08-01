@@ -37,3 +37,30 @@ export function fmtTime(iso: string | null | undefined): string {
     return "--:--:--";
   }
 }
+
+// ============== 本地日期工具（统一时区，替代 toISOString().slice(0,10)） ==============
+// 为什么不用 toISOString().slice(0,10)：
+// toISOString 返回 UTC 时间。中国时区(CST, UTC+8)在本地凌晨 0:00-8:00 之间，
+// UTC 仍在「昨天」→ 用 toISOString 取日期会少一天，导致凌晨时段：
+//   1. AI 缓存命中「昨天」的旧结果，相同 payload 永远不会刷新
+//   2. 信号账本/sentimentStore 写入昨日的 key
+//   3. dataStore.getAllSince 取错日期，漏掉今日 0-8 点的数据
+// 修复策略：统一使用本地年月日，输出格式为 "YYYY-MM-DD"。
+export function localDateStr(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** 本地 YYYYMMDD（紧凑格式，涨停池 key/缓存 key 用） */
+export function localDateStrCompact(d: Date = new Date()): string {
+  return localDateStr(d).replace(/-/g, "");
+}
+
+/** 距今 d 天的本地日期 YYYY-MM-DD（d>0 向前，d<0 向后） */
+export function localDateStrOffset(days: number, base: Date = new Date()): string {
+  const x = new Date(base);
+  x.setDate(x.getDate() - days);
+  return localDateStr(x);
+}

@@ -2,11 +2,12 @@
 // 1) 股票代码 -> 申万行业（精确）
 // 2) boardVocab：全部真实行业名 + 真实概念板块名（新闻文本匹配 & 产业链下拉用）
 import { fetchStockIndustryMap, fetchBoardFundFlow, isRealConceptBoard } from "./api";
+import { localDateStr } from "./format";
 
 const DATE_KEY = "bm_date";
 const MAP_KEY = "bm_industry_map";   // { code: industry }
 const VOCAB_KEY = "bm_vocab";        // string[]
-function todayStr(): string { return new Date().toISOString().slice(0, 10); }
+function todayStr(): string { return localDateStr(); }
 function loadJSON<T>(k: string, fb: T): T {
   try { const r = localStorage.getItem(k); return r ? JSON.parse(r) as T : fb; } catch { return fb; }
 }
