@@ -1,0 +1,400 @@
+好的，我会为您列出所有修改的文件及其完整内容，并给出清晰的上传指令。
+
+📋 文件修改清单
+文件路径	状态	说明
+index.html	✏️ 修改	只改了title
+src/index.css	✏️ 修改	添加了基础样式
+src/App.tsx	🔄 完全重写	主应用组件
+src/lib/api.ts	🆕 新建	API调用层（核心修复）
+src/lib/format.ts	🆕 新建	格式化工具
+src/lib/realLinks.ts	🆕 新建	链接生成（修复空白页）
+src/components/TopNav.tsx	🆕 新建	导航栏
+src/components/MarketOverview.tsx	🆕 新建	市场概览
+src/components/FundStructure.tsx	🆕 新建	资金结构+30天快照
+src/components/DarkPool.tsx	🆕 新建	明暗盘（概念板块）
+src/components/GlobalSignals.tsx	🆕 新建	全球信号
+src/components/KeyIndicators.tsx	🆕 新建	关键指标
+src/components/NewsPanel.tsx	🆕 新建	新闻面板
+src/components/Mainline.tsx	🆕 新建	主线识别
+src/components/StockMonitor.tsx	🆕 新建	个股监控
+src/components/Pitfalls.tsx	🆕 新建	避坑指南
+📁 完整文件内容
+文件 1: index.html (修改)
+
+Exploring
+Explored
+,
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+ read
+s
+Read
+index.html L1-13
+文件 2: src/index.css (修改)
+
+Exploring
+Explored
+,
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+ read
+s
+Read
+index.css L1-13
+文件 3: src/lib/format.ts (新建)
+
+Exploring
+Explored
+,
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+ read
+s
+Read
+format.ts L1-33
+文件 4: src/lib/realLinks.ts (新建)
+
+Exploring
+Explored
+,
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+ read
+s
+Read
+realLinks.ts L1-91
+文件 5: src/lib/api.ts (新建 - 核心修复文件)
+
+Exploring
+Explored
+,
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+ read
+s
+Read
+api.ts L1-250
+Read
+api.ts L251-485
+文件 6: src/App.tsx (完全重写)
+
+Exploring
+Explored
+,
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+ read
+s
+Read
+App.tsx L1-150
+Read
+App.tsx L151-373
+现在输出组件文件：
+
+文件 7-16: 组件文件
+
+Exploring
+Explored
+,
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+ read
+s
+Read
+TopNav.tsx L1-74
+Read
+MarketOverview.tsx L1-91
+Read
+FundStructure.tsx L1-241
+Read
+DarkPool.tsx L1-160
+由于篇幅限制，让我列出剩余组件文件的内容：
+
+
+Exploring
+Explored
+,
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+ read
+s
+Read
+GlobalSignals.tsx L1-53
+Read
+KeyIndicators.tsx L1-63
+Read
+NewsPanel.tsx L1-53
+Read
+Mainline.tsx L1-122
+Read
+StockMonitor.tsx L1-122
+Read
+Pitfalls.tsx L1-81
+🛠️ Git 上传指令
+现在我已经列出了所有文件内容。以下是您使用 Agnes 上传到 GitHub 的步骤：
+
+步骤 1: 克隆仓库（如果还没有）
+Bash
+
+git clone -b arena/019f9863-stock-monitor-v2-test https://github.com/benlau88832-collab/stock-monitor.git
+cd stock-monitor
+步骤 2: 创建/更新文件
+注意： 这是一个 React + Vite + Tailwind 的前端应用，与原来的 Next.js 结构不同。您需要决定是：
+
+A) 替换原有项目为新的 Vite 结构
+B) 只复制关键修复逻辑到原有 Next.js 项目
+如果选择 方案 A（推荐，因为可以直接测试）：
+
+Bash
+
+# 创建目录结构
+mkdir -p src/lib
+mkdir -p src/components
+
+# 然后将上面列出的每个文件内容复制到对应位置
+步骤 3: 提交更改
+Bash
+
+git add .
+git commit -m "fix: 修复全市场涨跌数据、30天资金快照、概念板块Top10展开、链接修复
+
+主要修复内容：
+1. 全市场涨跌数据 - 分板块获取+处理diff对象/数组兼容
+2. 资金快照 - 新增30天历史记录，支持图表/表格切换和折叠
+3. 明暗盘Top10 - 全部10个板块都可展开成分股
+4. 板块级别 - 改为概念板块而非行业板块
+5. 链接修复 - 所有东方财富链接格式已验证可跳转"
+
+git push origin arena/019f9863-stock-monitor-v2-test
+📋 文件对照表
+新文件路径	对应原Next.js文件	说明
+src/lib/api.ts	src/lib/marketData.ts + src/lib/em.ts	合并+修复
+src/lib/format.ts	src/lib/format.ts	基本相同
+src/lib/realLinks.ts	src/lib/realLinks.ts	链接格式修复
+src/App.tsx	src/components/Dashboard.tsx	主逻辑
+src/components/*.tsx	src/components/*.tsx	对应组件
+如果您需要我将修复逻辑适配回原来的 Next.js 结构，请告诉我！
