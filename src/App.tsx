@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
-import { saveTodaySentiment, loadPrevTradingDaySentiment } from "./lib/sentimentStore";
+import { saveTodaySentiment, loadPrevTradingDaySentiment, recordIntradaySentiment } from "./lib/sentimentStore";
 import TopNav, { type TabKey } from "./components/TopNav";
 import FundStructure from "./components/FundStructure";
 import DarkPool from "./components/DarkPool";
@@ -29,6 +29,7 @@ import type { LLMCatalystOverride } from "./lib/themeScore";
 import StatusBar from "./components/StatusBar";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
 import { appendSignal } from "./lib/signalLedger";
+import { runSignalBackfill, isBackfilledToday, markBackfilledToday } from "./lib/signalLedger";
 import { recordRecommendation, runAttribution } from "./lib/recTracker";
 import { getCurrentSession, type SessionPhase } from "./lib/tradingSession";
 import { emit as emitAlert } from "./lib/alertBus";
@@ -343,6 +344,8 @@ export default function App() {
       // 情绪分按交易日冻结存储（有效值才保存，null 不保存）
       if (sentiment != null) {
         saveTodaySentiment(sentiment);
+        // P2：日内轨迹采样（5分钟节流），供情绪动量折线/仓位建议使用
+        recordIntradaySentiment(sentiment);
       }
       const prevData = loadPrevTradingDaySentiment();
       const prevSentiment = prevData?.score ?? null;
@@ -859,12 +862,25 @@ export default function App() {
     }
   }, [overview, fundStructure]);
 
-  // 盘后归因：phase=post 时触发 T+1/T+3 回填（每交易日只跑一次，幂等）
+  // ============== P1 信号回填三保险 ==============
+  // 1) 首载兜底：页面打开即尝试补全（之前只在 phase=post 且当天打开才触发）
+  // 2) 定时兜底：每 30 分钟尝试一次（盘中也会补 T+1 的昨日信号）
+  // 3) 手动按钮：SignalPanel 提供"补全回填"
+  // 幂等：signalLedger 按天记录 isBackfilledToday / recTracker 按天 markAttributedToday
   useEffect(() => {
-    if (currentPhase !== "post") return;
-    const today = localDateStr();
-    runAttribution(today).catch(() => { /* 回填失败不阻塞 */ });
-  }, [currentPhase]);
+    const tryBackfill = () => {
+      // 信号账本回填（T+1/T+5）
+      if (!isBackfilledToday()) {
+        runSignalBackfill().catch(() => {});
+        markBackfilledToday();
+      }
+      // 推荐归因回填（T+1/T+3）
+      runAttribution(localDateStr()).catch(() => { /* 回填失败不阻塞 */ });
+    };
+    tryBackfill();
+    const t = setInterval(tryBackfill, 30 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const vetoActive = fundStructure?.structure?.vetoTriggered;
 
@@ -1022,7 +1038,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.9.1 · build 08-01 18:10 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.10 · build 08-01 18:46 · 数据源：东方财富</div>
       </footer>
     </div>
   );

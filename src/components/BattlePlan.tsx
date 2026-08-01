@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
-import { getHitRateText } from "../lib/recTracker";
+import { getHitRateText, getBoardHitBadge, getStockHitBadge } from "../lib/recTracker";
 import type { GateResult } from "../lib/regimeGate";
 import type { ThemeScoreResult } from "../lib/themeScore";
 import type { StockScoreResult } from "../lib/stockScore";
@@ -31,6 +31,22 @@ function TierBadge({ tier }: { tier: "A" | "B" | "C" }) {
   return <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${cls}`}>{label}</span>;
 }
 
+// ============== P1：历史命中率徽标（信号验证闭环回灌） ==============
+// 用历史推荐记录给"今日推荐"打命中率角标：让用户知道这个信号以前准不准。
+// 样本>=3 才显示；胜率>=60%绿 / >=40%黄 / <40%红（与信号账本健康度口径一致）
+function HitBadge({ badge }: { badge: { label: string; hitRate: number | null; color: "good" | "mid" | "bad" | "none" } }) {
+  if (badge.hitRate == null) return null;
+  const cls = badge.color === "good" ? "bg-emerald-500/20 text-emerald-300"
+    : badge.color === "mid" ? "bg-amber-500/20 text-amber-300"
+    : "bg-rose-500/20 text-rose-300";
+  const title = badge.color === "bad" ? "历史胜率<40%，该信号可信度存疑" : `历史推荐命中率 ${badge.hitRate}%`;
+  return (
+    <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${cls}`} title={title}>
+      🎯 {badge.label}
+    </span>
+  );
+}
+
 function scoreBg(s: number): string {
   if (s >= 80) return "border-rose-500/30 bg-rose-500/5";
   if (s >= 60) return "border-amber-500/30 bg-amber-500/5";
@@ -50,10 +66,12 @@ function FactorRow({ label, score, weight }: { label: string; score: number; wei
 // ============== 板块卡 ==============
 function ThemeCard({ t }: { t: ThemeScoreResult }) {
   const [open, setOpen] = useState(false);
+  // P1：历史命中率徽标（纯读 localStorage，非 hook）
+  const hitBadge = getBoardHitBadge(t.board);
   return (
     <div className={`rounded-lg border p-2 ${scoreBg(t.total)}`}>
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(v => !v)}>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap">
           <span className="text-xs font-bold text-slate-200">{t.board}</span>
           <span className={`rounded px-1 py-0.5 text-[9px] ${t.kind === "industry" ? "bg-slate-500/20 text-slate-400" : "bg-amber-500/20 text-amber-300"}`}>
             {t.kind === "industry" ? "行业" : "题材"}
@@ -64,6 +82,7 @@ function ThemeCard({ t }: { t: ThemeScoreResult }) {
               {t.newsSource}
             </span>
           )}
+          <HitBadge badge={hitBadge} />
         </div>
         <span className={`text-lg font-black ${scoreColor(t.total)}`}>{t.total}</span>
       </div>
@@ -84,14 +103,17 @@ function ThemeCard({ t }: { t: ThemeScoreResult }) {
 // ============== 个股卡 ==============
 function StockCard({ s }: { s: StockScoreResult }) {
   const [open, setOpen] = useState(false);
+  // P1：历史命中率徽标
+  const hitBadge = getStockHitBadge(s.code);
   return (
     <div className={`rounded-lg border p-2 ${scoreBg(s.total)}`}>
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(v => !v)}>
-        <div>
+        <div className="flex items-center gap-1 flex-wrap">
           <a href={stockRealUrl(s.code)} target="_blank" rel="noopener noreferrer"
             className="text-xs font-bold text-slate-200 hover:text-amber-300">{s.name}</a>
           <span className="text-[11px] text-slate-500 ml-1">{s.code}</span>
           <TierBadge tier={s.tier} />
+          <HitBadge badge={hitBadge} />
         </div>
         <span className={`text-lg font-black ${scoreColor(s.total)}`}>{s.total}</span>
       </div>

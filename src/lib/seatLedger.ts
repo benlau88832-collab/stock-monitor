@@ -276,3 +276,61 @@ export function detectSeatSignals(
 
   return signals;
 }
+
+// ============== P4 游资连续动作跟踪 ==============
+// 十年机构视角：单个游资对同一只票的反复操作（隔日回补/连续加仓/对倒）往往暗示
+// 该席位对该标的的长期意图。聚合近 N 天台账，找出"同席位同股票≥2次"的连续动作。
+export interface SeatRepeatAction {
+  deptName: string;
+  stockCode: string;
+  stockName: string;
+  count: number;        // 出现次数
+  dates: string[];      // 上榜日期
+  direction: "买" | "卖" | "买卖";
+  avgPctT1: number | null; // 平均 T+1 涨幅（回填后有效）
+  lastNet: number;      // 最近一次净额
+}
+
+/** 聚合近 N 天游资连续动作（同席位同股票 ≥2 次上榜） */
+export function buildSeatRepeatActions(maxDays = 60): SeatRepeatAction[] {
+  const dates = getAllSeatDates().slice(0, maxDays);
+  // key: deptName|stockCode
+  const agg = new Map<string, { deptName: string; stockCode: string; stockName: string; dates: string[]; buys: number; sells: number; t1s: number[]; lastNet: number; lastDate: string }>();
+
+  for (const date of dates) {
+    const records = loadDayRecords(date);
+    for (const r of records) {
+      const key = `${r.deptName}|${r.stockCode}`;
+      let entry = agg.get(key);
+      if (!entry) {
+        entry = { deptName: r.deptName, stockCode: r.stockCode, stockName: r.stockName, dates: [], buys: 0, sells: 0, t1s: [], lastNet: 0, lastDate: "" };
+        agg.set(key, entry);
+      }
+      entry.dates.push(date);
+      if (r.direction === "买") entry.buys++; else entry.sells++;
+      if (r.pctT1 != null) entry.t1s.push(r.pctT1);
+      // 记录最近一次净额（日期升序遍历，后覆盖前 → 最终为最新）
+      if (date >= entry.lastDate) { entry.lastNet = r.net; entry.lastDate = date; }
+    }
+  }
+
+  const actions: SeatRepeatAction[] = [];
+  for (const e of agg.values()) {
+    if (e.dates.length < 2) continue; // 只统计反复动作
+    const direction: SeatRepeatAction["direction"] = e.buys > 0 && e.sells > 0 ? "买卖" : e.buys > 0 ? "买" : "卖";
+    actions.push({
+      deptName: e.deptName,
+      stockCode: e.stockCode,
+      stockName: e.stockName,
+      count: e.dates.length,
+      dates: e.dates.sort().reverse(),
+      direction,
+      avgPctT1: e.t1s.length > 0 ? Math.round(e.t1s.reduce((s, v) => s + v, 0) / e.t1s.length * 100) / 100 : null,
+      lastNet: e.lastNet,
+    });
+  }
+
+  // 排序：次数多者优先，其次平均溢价高者优先
+  actions.sort((a, b) => b.count - a.count || (b.avgPctT1 ?? -99) - (a.avgPctT1 ?? -99));
+  return actions;
+}

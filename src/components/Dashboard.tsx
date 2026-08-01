@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import MarketOverview from "./MarketOverview";
 import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
@@ -10,10 +10,12 @@ import WeeklyCoach from "./WeeklyCoach";
 import BattlePlan, { type BattlePlanData } from "./BattlePlan";
 import GlobalSignals from "./GlobalSignals";
 import { fmtMoney, fmtPct, pctColor, localDateStrOffset } from "../lib/format";
+import { loadIntradaySeries, computeMomentum, suggestPosition } from "../lib/sentimentStore";
 import { stockRealUrl } from "../lib/realLinks";
 import { buildThemeLadder, type ZTPoolItem } from "../lib/themeLadder";
 import { getFeed, type AlertEvent } from "../lib/alertBus";
 import { getAllSince } from "../lib/dataStore";
+import { matchStocksToMainline, summarizeMatches } from "../lib/positionMatch";
 import type { OverviewData, FundStructureData, GlobalData, MainlineData } from "../App";
 import type { SessionPhase } from "../lib/tradingSession";
 import type { GateResult } from "../lib/regimeGate";
@@ -70,6 +72,49 @@ function LimitTempBar({ overview }: { overview: OverviewData | null }) {
   );
 }
 
+// ============== P3 持仓-主线匹配（自选股 vs 当日主线） ==============
+// 十年机构视角：交易员每天第一问是"我的票还在主线上吗？"
+// 顺风=在主线上 / 孤立=不在任何主线 / 逆风=所在板块退潮（提示减仓）
+function PositionMatchStrip({ stocks, boards }: {
+  stocks: WatchStockBrief[];
+  boards: MainlineData["boards"] | undefined;
+}) {
+  const matches = useMemo(() => matchStocksToMainline(
+    stocks.map(s => ({ code: s.code, name: s.name })),
+    (boards ?? []).map(b => ({ name: b.name, pct: b.pct, stage: b.stage })),
+  ), [stocks, boards]);
+  if (matches.length === 0) return null;
+  const sum = summarizeMatches(matches);
+  const statusColor = (st: string) => st === "tailwind" ? "border-emerald-500/30 bg-emerald-500/5" : st === "headwind" ? "border-rose-500/30 bg-rose-500/5" : "border-white/10 bg-black/20";
+  const badge = (st: string) => st === "tailwind" ? "text-emerald-300 bg-emerald-500/20" : st === "headwind" ? "text-rose-300 bg-rose-500/20" : "text-slate-400 bg-slate-500/20";
+  const label = (st: string) => st === "tailwind" ? "顺风" : st === "headwind" ? "逆风" : st === "isolated" ? "孤立" : "未知";
+  return (
+    <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3 space-y-1.5">
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-bold text-violet-300">🎯 持仓 × 主线匹配</div>
+        <div className="flex gap-1.5 text-[10px]">
+          <span className="text-emerald-300">顺风{sum.tailwind}</span>
+          <span className="text-slate-400">孤立{sum.isolated}</span>
+          {sum.headwind > 0 && <span className="text-rose-300 font-bold">逆风{sum.headwind}</span>}
+        </div>
+      </div>
+      {sum.headwind > 0 && (
+        <div className="text-[11px] text-rose-300">⚠️ 有持仓所在板块已退潮，考虑减仓控制风险</div>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        {matches.map(m => (
+          <span key={m.code} className={`rounded-lg border px-2 py-1 text-[10px] ${statusColor(m.status)}`} title={m.hint}>
+            <span className="text-slate-200 font-semibold">{m.name}</span>
+            <span className="ml-1 text-slate-500">{m.code}</span>
+            <span className={`ml-1 rounded px-1 py-0.5 text-[9px] font-bold ${badge(m.status)}`}>{label(m.status)}</span>
+            {m.board && <span className="ml-1 text-slate-400">{m.board}</span>}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ============== 自选股异动带 ==============
 function WatchlistStrip({ stocks }: { stocks: WatchStockBrief[] }) {
   if (stocks.length === 0) return null;
@@ -92,11 +137,52 @@ function WatchlistStrip({ stocks }: { stocks: WatchStockBrief[] }) {
   );
 }
 
+// ============== 情绪日内折线（纯 SVG，零依赖） ==============
+// P2：把静态情绪分升级为"日内轨迹"，直观展示升温/降温
+function SentimentSparkline({ pts }: { pts: { t: string; s: number }[] }) {
+  if (pts.length < 2) return null;
+  const w = 280, h = 44, pad = 4;
+  const min = Math.min(...pts.map(p => p.s), 0);
+  const max = Math.max(...pts.map(p => p.s), 100);
+  const range = Math.max(1, max - min);
+  const step = (w - pad * 2) / (pts.length - 1);
+  const xy = pts.map((p, i) => ({
+    x: pad + i * step,
+    y: h - pad - ((p.s - min) / range) * (h - pad * 2),
+  }));
+  const path = xy.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const last = xy[xy.length - 1];
+  const first = xy[0];
+  const rising = last.y < first.y;
+  return (
+    <div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-11">
+        <line x1={pad} y1={h - pad - ((50 - min) / range) * (h - pad * 2)} x2={w - pad} y2={h - pad - ((50 - min) / range) * (h - pad * 2)} stroke="rgba(255,255,255,0.12)" strokeWidth="1" strokeDasharray="3 3" />
+        <path d={path} fill="none" stroke={rising ? "#f59e0b" : "#38bdf8"} strokeWidth="2" strokeLinecap="round" />
+        <circle cx={first.x} cy={first.y} r="2" fill="rgba(255,255,255,0.4)" />
+        <circle cx={last.x} cy={last.y} r="3" fill={rising ? "#f59e0b" : "#38bdf8"} />
+      </svg>
+      <div className="flex justify-between text-[9px] text-slate-600">
+        <span>{pts[0].t}</span>
+        <span>情绪日内轨迹</span>
+        <span>{pts[pts.length - 1].t}</span>
+      </div>
+    </div>
+  );
+}
+
 // ============== 闸门+温度计超大号卡 ==============
 function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: GateResult | null }) {
   if (!overview) return null;
   const s = overview.sentiment;
-  const color = s >= 80 ? "#ef4444" : s >= 65 ? "#f59e0b" : s >= 45 ? "#eab308" : s >= 25 ? "#3b82f6" : "#8b5cf6";
+  // 修复：s 可能是 null（类型收窄），color 用兜底值
+  const color = s == null ? "#8b5cf6" : s >= 80 ? "#ef4444" : s >= 65 ? "#f59e0b" : s >= 45 ? "#eab308" : s >= 25 ? "#3b82f6" : "#8b5cf6";
+  // P2：情绪动量 + 仓位建议
+  const intraday = loadIntradaySeries();
+  const { momentum, delta } = computeMomentum(intraday);
+  const advice = suggestPosition(s, momentum, gate?.factor ?? null);
+  const momentumLabel = momentum === "heating" ? `🔥 升温 ${delta > 0 ? "+" : ""}${delta.toFixed(0)}` : momentum === "cooling" ? `❄️ 降温 ${delta.toFixed(0)}` : momentum === "flat" ? "→ 平稳" : "—";
+  const posColor = advice.positionPct >= 70 ? "text-emerald-400" : advice.positionPct >= 40 ? "text-amber-300" : "text-rose-400";
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-center space-y-2">
       <div className="text-[11px] text-slate-500">情绪 × 闸门</div>
@@ -108,6 +194,17 @@ function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: Ga
         </div>
       )}
       {gate && <div className="text-[11px] text-slate-500">{gate.label}</div>}
+      {/* P2：情绪动量标签 */}
+      <div className="text-[11px] font-semibold text-slate-300">动量 {momentumLabel}</div>
+      {/* P2：建议总仓位（十年机构视角：先定仓位，再谈标的） */}
+      <div className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5">
+        <div className="text-[10px] text-slate-500">建议总仓位</div>
+        <div className={`text-2xl font-black ${posColor}`}>{advice.positionPct}%</div>
+        <div className="text-[10px] text-slate-400">{advice.label}</div>
+        <div className="text-[9px] text-slate-600 mt-0.5">{advice.hint}</div>
+      </div>
+      {/* P2：日内轨迹折线 */}
+      <SentimentSparkline pts={intraday} />
       {gate && gate.reason.length > 0 && (
         <div className="space-y-0.5">
           {gate.reason.map((r, i) => (
@@ -240,6 +337,7 @@ export default function Dashboard({
           <div className="space-y-2">
             <BattlePlan data={battlePlan ?? null} />
             <WatchlistStrip stocks={watchStocks} />
+            <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
             <LimitTempBar overview={overview} />
             <MarketOverview data={overview} loading={loading} />
             <PopularityRadar />
@@ -291,6 +389,8 @@ export default function Dashboard({
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
             <div className="space-y-2">
               <BattlePlan data={battlePlan ?? null} />
+              <WatchlistStrip stocks={watchStocks} />
+              <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
               <MarketOverview data={overview} loading={loading} />
               <PopularityRadar />
             </div>

@@ -4,8 +4,8 @@ import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 import { matchSeatTag } from "../lib/seatProfiles";
 import {
-  writeSeatRecords, runBackfill, buildSeatProfiles, detectSeatSignals,
-  type SeatRecord, type SeatProfile, type StockSeatSignal,
+  writeSeatRecords, runBackfill, buildSeatProfiles, detectSeatSignals, buildSeatRepeatActions,
+  type SeatRecord, type SeatProfile, type StockSeatSignal, type SeatRepeatAction,
 } from "../lib/seatLedger";
 
 // ============== 上榜原因标签颜色 ==============
@@ -183,6 +183,66 @@ function HotMoneyStats({ items }: { items: DragonTigerItem[] }) {
   );
 }
 
+// ============== P4 游资连续动作跟踪 ==============
+// 十年机构视角：单一游资席位对同一只票的反复上榜（隔日回补/连续加仓/对倒）
+// 暗示该席位对该标的的长期意图，比单日上榜更有信息量。
+function SeatRepeatPanel({ actions }: { actions: SeatRepeatAction[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const display = showAll ? actions : actions.slice(0, 12);
+  if (actions.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-bold text-violet-300">🎯 游资连续动作（近60日 · 同席位同票≥2次）</div>
+        {actions.length > 12 && (
+          <button onClick={() => setShowAll(v => !v)} className="text-[11px] text-violet-400 hover:text-violet-300">
+            {showAll ? "收起" : `全部(${actions.length})`}
+          </button>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-white/10 text-slate-400">
+              <th className="px-2 py-1 text-left">席位</th>
+              <th className="px-2 py-1 text-left">标的</th>
+              <th className="px-2 py-1 text-right">次数</th>
+              <th className="px-2 py-1 text-center">方向</th>
+              <th className="px-2 py-1 text-right">T+1均值</th>
+              <th className="px-2 py-1 text-left">上榜日</th>
+            </tr>
+          </thead>
+          <tbody>
+            {display.map((a, i) => (
+              <tr key={i} className="border-b border-white/5 hover:bg-white/5">
+                <td className="px-2 py-1 text-slate-200 max-w-[180px] truncate">{a.deptName.slice(0, 18)}</td>
+                <td className="px-2 py-1">
+                  <a href={stockRealUrl(a.stockCode)} target="_blank" rel="noopener noreferrer" className="text-slate-100 hover:text-amber-300">
+                    {a.stockName}<span className="text-slate-500 ml-1">{a.stockCode}</span>
+                  </a>
+                </td>
+                <td className="px-2 py-1 text-right">
+                  <span className="rounded px-1.5 py-0.5 bg-violet-500/20 text-violet-300 font-bold">{a.count}次</span>
+                </td>
+                <td className="px-2 py-1 text-center">
+                  {a.direction === "买" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-rose-500/20 text-rose-300">持续买入</span>}
+                  {a.direction === "卖" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-emerald-500/20 text-emerald-300">持续卖出</span>}
+                  {a.direction === "买卖" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-amber-500/20 text-amber-300">买卖反复</span>}
+                </td>
+                <td className={`px-2 py-1 text-right font-semibold ${a.avgPctT1 != null ? pctColor(a.avgPctT1) : "text-slate-500"}`}>
+                  {a.avgPctT1 != null ? `${a.avgPctT1 >= 0 ? "+" : ""}${a.avgPctT1.toFixed(2)}%` : "—"}
+                </td>
+                <td className="px-2 py-1 text-slate-500">{a.dates.slice(0, 3).join(" ")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-[11px] text-slate-600 mt-1.5">持续买入 = 游资反复加仓，关注度持续提升；持续卖出 = 游资派发中，注意回避；买卖反复 = 该票为游资博弈主战场，波动大</div>
+    </div>
+  );
+}
+
 // ============== 主组件 ==============
 export default function DragonTiger() {
   const [items, setItems] = useState<DragonTigerItem[]>([]);
@@ -192,6 +252,7 @@ export default function DragonTiger() {
   const [seatsLoading, setSeatsLoading] = useState<Record<string, boolean>>({});
   const [seatProfiles, setSeatProfiles] = useState<SeatProfile[]>([]);
   const [seatSignals, setSeatSignals] = useState<StockSeatSignal[]>([]);
+  const [repeatActions, setRepeatActions] = useState<SeatRepeatAction[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -249,8 +310,9 @@ export default function DragonTiger() {
         }
       }
 
-      // 构建席位画像
+      // 构建席位画像 + 连续动作
       setSeatProfiles(buildSeatProfiles());
+      setRepeatActions(buildSeatRepeatActions());
 
       // 异步回填历史台账（不阻塞页面）
       runBackfill().catch(() => { /* 静默 */ });
@@ -294,6 +356,9 @@ export default function DragonTiger() {
 
       {/* 统计卡片 */}
       <HotMoneyStats items={items} />
+
+      {/* 游资连续动作（P4） */}
+      <SeatRepeatPanel actions={repeatActions} />
 
       {/* 席位画像 */}
       <SeatProfileCard profiles={seatProfiles} />

@@ -4,6 +4,47 @@
 
 ---
 
+## v9.10 — 十年机构视角四大优化：信号验证闭环 / 情绪动量仓位 / 持仓主线匹配 / 游资连续动作 (2026-08-01)
+
+按"机构决策闭环"原则实施四大优化，让工具从"信息聚合器"升级为"决策系统"。
+
+### P1 信号验证闭环（最高优先：没有胜率的信号=噪音）
+- `lib/signalLedger.ts`：
+  - 新增 `runSignalBackfill()` 批量自动回填 T+1/T+5（真实日K收盘价），配合 `isBackfilledToday`/`markBackfilledToday` 幂等
+  - `getSignalStats()` 增加 `health` 字段：胜率≥55%有效 / 45-55%一般 / <45%存疑 / 样本<10不足
+- `App.tsx`：回填三保险（首载自动 + 30分钟定时 + SignalPanel手动按钮），不再依赖"盘后打开页面"
+- `components/SignalPanel.tsx`：新增"补全回填"按钮 + 健康度角标（存疑红色高亮）
+- `lib/recTracker.ts`：新增 `getBoardHitBadge`/`getStockHitBadge`（按板块/个股查历史推荐命中率）
+- `components/BattlePlan.tsx`：板块卡/个股卡新增 🎯 历史命中率徽标（绿≥60% / 黄40-60% / 红<40%）
+
+### P2 情绪动量 + 仓位映射（机构看变化率，不看绝对值）
+- `lib/sentimentStore.ts`：
+  - 新增 `recordIntradaySentiment()` 日内采样（5分钟节流，保留80点）
+  - 新增 `loadIntradaySeries()` / `computeMomentum()`（30分钟斜率 → 升温/降温/平稳）
+  - 新增 `suggestPosition()` 仓位建议：情绪×动量×闸门 → 建议总仓位%（10%-100%）
+- `components/Dashboard.tsx` GateGauge 升级：
+  - 情绪日内折线（纯SVG零依赖）
+  - 动量标签（🔥升温/❄️降温/→平稳）
+  - 建议总仓位卡片（先定仓位，再谈标的）
+
+### P3 持仓-主线匹配（交易员每天第一问：我的票还在主线上吗？）
+- `lib/positionMatch.ts`（新）：`matchStockToMainline()` 用行业映射把自选股对应到主线板块阶段
+- `components/Dashboard.tsx` 新增 PositionMatchStrip 卡片：
+  - 顺风（在主线上）/ 孤立（不在任何主线）/ 逆风（所在板块退潮→提示减仓）
+  - 逆风数量>0 时红字警示 + 每只票的板块阶段徽标
+
+### P4 龙虎榜游资连续动作跟踪（单日上榜 vs 反复动作）
+- `lib/seatLedger.ts`：新增 `buildSeatRepeatActions()` 聚合近60日"同席位同票≥2次"的连续动作
+- `components/DragonTiger.tsx`：新增 SeatRepeatPanel：
+  - 持续买入（游资反复加仓）/ 持续卖出（派发中回避）/ 买卖反复（博弈主战场）
+  - 每次动作显示次数、方向、T+1均值溢价、上榜日期
+
+### 其他
+- `index.html` title v9.9.1 → v9.10（与 footer 统一）
+- `App.tsx` footer v9.10 · build 08-01 18:46
+
+---
+
 ## v9.9.1 — 修复：时区bug全量治理 + 关键性能/质量改进 (2026-08-01)
 
 本版本系统性修复一组跨时区/数据一致性 bug，覆盖 12 个源文件。根因是多个组件用
