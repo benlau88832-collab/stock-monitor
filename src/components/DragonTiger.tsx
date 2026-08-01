@@ -4,7 +4,7 @@ import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 import { matchSeatTag } from "../lib/seatProfiles";
 import {
-  writeSeatRecords, runBackfill, buildSeatProfiles, detectSeatSignals, buildSeatRepeatActions, buildSeatHistoryByDept,
+  writeSeatRecords, runBackfill, buildSeatProfiles, detectSeatSignals, buildSeatRepeatActions, buildSeatStocksByDept,
   type SeatRecord, type SeatProfile, type StockSeatSignal, type SeatRepeatAction,
 } from "../lib/seatLedger";
 import { buildSeatBehaviors, analyzeSeatsGroup, type SeatBehavior } from "../lib/seatBehavior";
@@ -206,8 +206,9 @@ function SignalBanner({ signals }: { signals: StockSeatSignal[] }) {
   );
 }
 
-// ============== 买卖主导派分析 + 操作建议（v9.13 核心新增） ==============
-// 综合买入/卖出前五席位的"行为模式"，给出主导派 + 一句话操作建议
+// ============== v9.14：买卖主导派分析 + 5 维评分（多重信号交叉验证） ==============
+// 综合买入/卖出前五席位的 5 维评分，给出主导派 + 操作建议
+// 评分维度（加权）：行为模式(35%) + 集中度(25%) + 历史T+1(20%) + 席位类别(10%) + 新面孔比例(10%)
 function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
   buyers: DragonTigerSeat[]; sellers: DragonTigerSeat[]; behaviorMap: Map<string, SeatBehavior>;
 }) {
@@ -220,7 +221,7 @@ function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
   const renderDist = (label: string, dist: typeof analysis.buyerDist) => {
     if (dist.size === 0) return null;
     return (
-      <div className="flex-1">
+      <div className="flex-1 min-w-0">
         <div className="text-[10px] text-slate-500 mb-1">{label}</div>
         <div className="space-y-0.5">
           {[...dist.entries()].sort((a, b) => b[1].count - a[1].count).map(([tag, v]) => (
@@ -248,79 +249,164 @@ function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
     return "bg-white/5 text-slate-500";
   };
 
+  // 评分条：5 维
+  const scoreColor = (s: number) => s >= 70 ? "bg-emerald-500" : s >= 40 ? "bg-amber-500" : "bg-rose-500";
+  const scoreLabel = (s: number) => s >= 70 ? "优" : s >= 40 ? "中" : "弱";
+  const scoreBar = (label: string, score: number, weight: string) => (
+    <div className="space-y-0.5">
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-slate-400">{label} <span className="text-slate-600">({weight})</span></span>
+        <span className={`font-mono font-bold ${score >= 70 ? "text-emerald-300" : score >= 40 ? "text-amber-300" : "text-rose-300"}`}>
+          {score.toFixed(0)} <span className="text-[9px] text-slate-500">({scoreLabel(score)})</span>
+        </span>
+      </div>
+      <div className="h-1.5 bg-white/5 rounded overflow-hidden">
+        <div className={`h-full ${scoreColor(score)} transition-all`} style={{ width: `${score}%` }} />
+      </div>
+    </div>
+  );
+
+  // 信号徽标
+  const signalColor = (tone: string) => {
+    if (tone === "good") return "bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+    if (tone === "warn") return "bg-amber-500/20 text-amber-300 border-amber-500/30";
+    if (tone === "bad") return "bg-rose-500/20 text-rose-300 border-rose-500/30";
+    return "bg-sky-500/20 text-sky-300 border-sky-500/30";
+  };
+
   return (
-    <div className="mt-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-2.5 space-y-2">
-      <div className="flex items-center gap-2 text-[11px]">
+    <div className="mt-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2.5">
+      {/* 头部：主导派 + 总分 + 信号强度 */}
+      <div className="flex items-center gap-2 text-[11px] flex-wrap">
         <span className="font-bold text-violet-300">🎯 主导派与操作建议</span>
         <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${dominantColor(analysis.buyerDominant)}`}>
-          买方主导: {analysis.buyerDominant}
+          买方: {analysis.buyerDominant}
         </span>
         <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${dominantColor(analysis.sellerDominant)}`}>
-          卖方主导: {analysis.sellerDominant}
+          卖方: {analysis.sellerDominant}
         </span>
-        <span className="ml-auto text-[10px] text-slate-500">信号强度 {(analysis.strength * 100).toFixed(0)}%</span>
+        <span className="ml-auto flex items-center gap-1 text-[10px]">
+          <span className="text-slate-400">综合分</span>
+          <span className={`font-mono font-black text-base ${
+            analysis.scores.total >= 70 ? "text-emerald-400" :
+            analysis.scores.total >= 40 ? "text-amber-400" : "text-rose-400"
+          }`}>{analysis.scores.total}</span>
+          <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+            analysis.confidence === "强" ? "bg-emerald-500/20 text-emerald-300" :
+            analysis.confidence === "中" ? "bg-amber-500/20 text-amber-300" :
+            "bg-rose-500/20 text-rose-300"
+          }`}>信号{analysis.confidence}</span>
+        </span>
       </div>
-      <div className="text-[11px] text-slate-200 leading-relaxed border-l-2 border-violet-500/30 pl-2">
+
+      {/* 信号徽标（多重） */}
+      {analysis.signals.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {analysis.signals.map((s, i) => (
+            <span key={i} className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${signalColor(s.tone)}`}>
+              {s.label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* 一句话操作建议 */}
+      <div className="text-[11px] text-slate-200 leading-relaxed border-l-2 border-violet-500/30 pl-2 whitespace-pre-wrap">
         {analysis.suggestion}
       </div>
+
+      {/* 风险警示 */}
+      {analysis.warnings.length > 0 && (
+        <div className="rounded border border-rose-500/20 bg-rose-500/5 px-2 py-1.5 space-y-0.5">
+          {analysis.warnings.map((w, i) => (
+            <div key={i} className="text-[10px] text-rose-300">⚠️ {w}</div>
+          ))}
+        </div>
+      )}
+
+      {/* 5 维评分 */}
+      <div className="rounded bg-black/30 p-2 space-y-1.5">
+        <div className="text-[10px] text-slate-500 font-bold">5 维评分（多重信号交叉验证）</div>
+        {scoreBar("行为模式", analysis.scores.behavior, "35%")}
+        {scoreBar("集中度", analysis.scores.concentration, "25%")}
+        {scoreBar("历史 T+1", analysis.scores.historicalT1, "20%")}
+        {scoreBar("席位类别", analysis.scores.seatCategory, "10%")}
+        {scoreBar("新面孔比", analysis.scores.recogRate, "10%")}
+      </div>
+
+      {/* 派系分布 */}
       <div className="flex gap-3">
-        {renderDist("买方派系分布", analysis.buyerDist)}
-        {renderDist("卖方派系分布", analysis.sellerDist)}
+        {renderDist("买方派系", analysis.buyerDist)}
+        {renderDist("卖方派系", analysis.sellerDist)}
       </div>
     </div>
   );
 }
 
-// ============== 单席位历史展开行（v9.13 新增） ==============
-// 席位画像表格里 + 号展开：显示该席位的最近上榜记录
+// ============== v9.14：席位画像 + 展开（按股票聚合） ==============
+// 显示该席位近 30 日做过的所有票（按股票聚合），+ 上榜次数、累计净买入、末次 T+1
 function SeatHistoryExpansion({ deptName }: { deptName: string }) {
-  const [rows, setRows] = useState<ReturnType<typeof buildSeatHistoryByDept> | null>(null);
+  const [rows, setRows] = useState<ReturnType<typeof buildSeatStocksByDept> | null>(null);
   const [open, setOpen] = useState(false);
   if (!open) {
     return (
-      <button onClick={() => { setOpen(true); if (!rows) setRows(buildSeatHistoryByDept(deptName, 30)); }}
+      <button onClick={() => { setOpen(true); if (!rows) setRows(buildSeatStocksByDept(deptName, 30)); }}
         className="text-[10px] text-amber-300 hover:text-amber-200">
-        + 查看该席位上榜历史
+        + 查看该席位做过的票
       </button>
     );
   }
   if (!rows) return <div className="text-[10px] text-slate-500">加载中…</div>;
   if (rows.length === 0) return <div className="text-[10px] text-slate-500">无历史记录</div>;
+  const totalStocks = rows.length;
+  const totalApperances = rows.reduce((s, r) => s + r.count, 0);
+  const totalNet = rows.reduce((s, r) => s + r.totalNet, 0);
   return (
     <div className="mt-1 rounded border border-white/10 bg-black/30 p-1.5">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] text-slate-400">近30日上榜 {rows.length} 次（按日期降序）</span>
+        <span className="text-[10px] text-slate-400">
+          近30日做过的票 <b className="text-amber-300">{totalStocks} 只</b>（累计 {totalApperances} 次上榜，累计净买入 <b className={totalNet >= 0 ? "text-rose-400" : "text-emerald-400"}>{fmtMoney(totalNet)}</b>）
+        </span>
         <button onClick={() => setOpen(false)} className="text-[10px] text-slate-500 hover:text-slate-300">收起</button>
       </div>
       <table className="w-full text-[10px]">
         <thead><tr className="text-slate-500">
-          <th className="px-1 py-0.5 text-left">日期</th>
           <th className="px-1 py-0.5 text-left">股票</th>
+          <th className="px-1 py-0.5 text-center">次数</th>
           <th className="px-1 py-0.5 text-center">方向</th>
-          <th className="px-1 py-0.5 text-right">净额</th>
-          <th className="px-1 py-0.5 text-right">T+1</th>
+          <th className="px-1 py-0.5 text-right">累计净买入</th>
+          <th className="px-1 py-0.5 text-right">平均T+1</th>
+          <th className="px-1 py-0.5 text-right">末次T+1</th>
+          <th className="px-1 py-0.5 text-right">末次上榜</th>
         </tr></thead>
         <tbody>
-          {rows.slice(0, 15).map((r, i) => (
+          {rows.slice(0, 12).map((r, i) => (
             <tr key={i} className="border-t border-white/5">
-              <td className="px-1 py-0.5 text-slate-400">{r.date.slice(5)}</td>
               <td className="px-1 py-0.5">
                 <a href={stockRealUrl(r.stockCode)} target="_blank" rel="noopener noreferrer" className="text-slate-200 hover:text-amber-300">{r.stockName}</a>
                 <span className="text-slate-500 ml-1">{r.stockCode}</span>
               </td>
+              <td className="px-1 py-0.5 text-center font-mono">
+                <span className="rounded bg-amber-500/20 text-amber-300 px-1">{r.count}</span>
+              </td>
               <td className="px-1 py-0.5 text-center">
-                <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${r.direction === "买" ? "bg-rose-500/20 text-rose-300" : "bg-emerald-500/20 text-emerald-300"}`}>
+                <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${r.direction === "买" ? "bg-rose-500/20 text-rose-300" : r.direction === "卖" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>
                   {r.direction}
                 </span>
               </td>
-              <td className={`px-1 py-0.5 text-right ${r.net >= 0 ? "text-rose-400" : "text-emerald-400"}`}>{fmtMoney(r.net)}</td>
-              <td className={`px-1 py-0.5 text-right ${r.pctT1 == null ? "text-slate-600" : r.pctT1 >= 0 ? "text-rose-400" : "text-emerald-400"}`}>
-                {r.pctT1 != null ? `${r.pctT1 >= 0 ? "+" : ""}${r.pctT1.toFixed(2)}%` : "待回填"}
+              <td className={`px-1 py-0.5 text-right font-mono ${r.totalNet >= 0 ? "text-rose-400" : "text-emerald-400"}`}>{fmtMoney(r.totalNet)}</td>
+              <td className={`px-1 py-0.5 text-right font-mono ${r.avgPctT1 == null ? "text-slate-600" : r.avgPctT1 >= 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                {r.avgPctT1 != null ? `${r.avgPctT1 >= 0 ? "+" : ""}${r.avgPctT1.toFixed(2)}%` : "—"}
               </td>
+              <td className={`px-1 py-0.5 text-right font-mono ${r.lastPctT1 == null ? "text-slate-600" : r.lastPctT1 >= 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                {r.lastPctT1 != null ? `${r.lastPctT1 >= 0 ? "+" : ""}${r.lastPctT1.toFixed(2)}%` : "—"}
+              </td>
+              <td className="px-1 py-0.5 text-right text-slate-500">{r.lastDate.slice(5)}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      {rows.length > 12 && <div className="text-[10px] text-slate-600 mt-0.5">…等共 {rows.length} 只票</div>}
     </div>
   );
 }
@@ -367,17 +453,19 @@ function HotMoneyStats({ items }: { items: DragonTigerItem[] }) {
   );
 }
 
-// ============== P4 游资连续动作跟踪 ==============
+// ============== v9.14：游资连续动作 + 展开（看该席位做过的所有票） ==============
 // 十年机构视角：单一游资席位对同一只票的反复上榜（隔日回补/连续加仓/对倒）
 // 暗示该席位对该标的的长期意图，比单日上榜更有信息量。
+// v9.14: 每行 + 按钮，展开看该席位做过的所有票（不只 ≥2 次的连续动作）
 function SeatRepeatPanel({ actions }: { actions: SeatRepeatAction[] }) {
   const [showAll, setShowAll] = useState(false);
+  const [expandedDept, setExpandedDept] = useState<string | null>(null);
   const display = showAll ? actions : actions.slice(0, 12);
   if (actions.length === 0) return null;
   return (
     <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-xs font-bold text-violet-300">🎯 游资连续动作（近60日 · 同席位同票≥2次）</div>
+        <div className="text-xs font-bold text-violet-300">🎯 游资连续动作（近60日 · 同席位同票≥2次 · 点 + 看所有票）</div>
         {actions.length > 12 && (
           <button onClick={() => setShowAll(v => !v)} className="text-[11px] text-violet-400 hover:text-violet-300">
             {showAll ? "收起" : `全部(${actions.length})`}
@@ -388,6 +476,7 @@ function SeatRepeatPanel({ actions }: { actions: SeatRepeatAction[] }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-white/10 text-slate-400">
+              <th className="px-2 py-1 text-center w-6"></th>
               <th className="px-2 py-1 text-left">席位</th>
               <th className="px-2 py-1 text-left">标的</th>
               <th className="px-2 py-1 text-right">次数</th>
@@ -397,28 +486,50 @@ function SeatRepeatPanel({ actions }: { actions: SeatRepeatAction[] }) {
             </tr>
           </thead>
           <tbody>
-            {display.map((a, i) => (
-              <tr key={i} className="border-b border-white/5 hover:bg-white/5">
-                <td className="px-2 py-1 text-slate-200 max-w-[180px] truncate">{a.deptName.slice(0, 18)}</td>
-                <td className="px-2 py-1">
-                  <a href={stockRealUrl(a.stockCode)} target="_blank" rel="noopener noreferrer" className="text-slate-100 hover:text-amber-300">
-                    {a.stockName}<span className="text-slate-500 ml-1">{a.stockCode}</span>
-                  </a>
-                </td>
-                <td className="px-2 py-1 text-right">
-                  <span className="rounded px-1.5 py-0.5 bg-violet-500/20 text-violet-300 font-bold">{a.count}次</span>
-                </td>
-                <td className="px-2 py-1 text-center">
-                  {a.direction === "买" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-rose-500/20 text-rose-300">持续买入</span>}
-                  {a.direction === "卖" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-emerald-500/20 text-emerald-300">持续卖出</span>}
-                  {a.direction === "买卖" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-amber-500/20 text-amber-300">买卖反复</span>}
-                </td>
-                <td className={`px-2 py-1 text-right font-semibold ${a.avgPctT1 != null ? pctColor(a.avgPctT1) : "text-slate-500"}`}>
-                  {a.avgPctT1 != null ? `${a.avgPctT1 >= 0 ? "+" : ""}${a.avgPctT1.toFixed(2)}%` : "—"}
-                </td>
-                <td className="px-2 py-1 text-slate-500">{a.dates.slice(0, 3).join(" ")}</td>
-              </tr>
-            ))}
+            {display.map((a, i) => {
+              const key = `${a.deptName}|${a.stockCode}`;
+              const isExp = expandedDept === key;
+              return (
+                <Fragment key={i}>
+                  <tr className={`border-b border-white/5 hover:bg-white/5 ${isExp ? "bg-violet-500/5" : ""}`}>
+                    <td className="px-2 py-1 text-center">
+                      <button
+                        onClick={() => setExpandedDept(isExp ? null : key)}
+                        className="inline-flex h-4 w-4 items-center justify-center rounded bg-white/10 text-[10px] text-slate-300 hover:bg-violet-500/30 hover:text-violet-200"
+                        title="查看该席位做过的所有票"
+                      >
+                        {isExp ? "−" : "+"}
+                      </button>
+                    </td>
+                    <td className="px-2 py-1 text-slate-200 max-w-[180px] truncate">{a.deptName.slice(0, 18)}</td>
+                    <td className="px-2 py-1">
+                      <a href={stockRealUrl(a.stockCode)} target="_blank" rel="noopener noreferrer" className="text-slate-100 hover:text-amber-300">
+                        {a.stockName}<span className="text-slate-500 ml-1">{a.stockCode}</span>
+                      </a>
+                    </td>
+                    <td className="px-2 py-1 text-right">
+                      <span className="rounded px-1.5 py-0.5 bg-violet-500/20 text-violet-300 font-bold">{a.count}次</span>
+                    </td>
+                    <td className="px-2 py-1 text-center">
+                      {a.direction === "买" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-rose-500/20 text-rose-300">持续买入</span>}
+                      {a.direction === "卖" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-emerald-500/20 text-emerald-300">持续卖出</span>}
+                      {a.direction === "买卖" && <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-amber-500/20 text-amber-300">买卖反复</span>}
+                    </td>
+                    <td className={`px-2 py-1 text-right font-semibold ${a.avgPctT1 != null ? pctColor(a.avgPctT1) : "text-slate-500"}`}>
+                      {a.avgPctT1 != null ? `${a.avgPctT1 >= 0 ? "+" : ""}${a.avgPctT1.toFixed(2)}%` : "—"}
+                    </td>
+                    <td className="px-2 py-1 text-slate-500">{a.dates.slice(0, 3).join(" ")}</td>
+                  </tr>
+                  {isExp && (
+                    <tr>
+                      <td colSpan={7} className="px-2 py-2 bg-black/30">
+                        <SeatHistoryExpansion deptName={a.deptName} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

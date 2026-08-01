@@ -145,22 +145,44 @@ export function behaviorMeta(b: BehaviorTag): { color: string; label: string; hi
   return { color: BEHAVIOR_COLORS[b], label: b, hint: BEHAVIOR_HINT[b] };
 }
 
-// ============== v9.13：组席主导派分析（买入/卖出前五） ==============
+// ============== v9.14：组席主导派分析（5 维评分，多重信号交叉验证） ==============
 // 综合判断买入/卖出前五的整体派系，给出"主导派"和操作建议
-// 输入：买入前五 + 卖出前五的席位名 + 已有的 SeatBehavior map（deptName → Behavior）
-// 输出：买方主导派系 + 卖方主导派系 + 一句话操作建议
+// 评分维度（加权）：
+//   行为模式分布  35%  —— 派系组合（如 格局派主买+砸盘派主卖 强信号）
+//   集中度        25%  —— 合力加分（≥3家同买）/ 独食减分（单家>60%）
+//   历史 T+1      20%  —— 买方前五的 T+1 均收益方向
+//   席位类别      10%  —— 机构/北向/游资 占比
+//   新面孔比例    10%  —— 已识别派系的席位占比
+
+import { matchSeatTag } from "./seatProfiles";
+
 export interface GroupAnalysis {
-  /** 买入方主导派：占比最高的派系 */
+  /** 买方主导派：占比最高的派系 */
   buyerDominant: BehaviorTag | "未识别";
-  /** 卖出方主导派 */
+  /** 卖方主导派 */
   sellerDominant: BehaviorTag | "未识别";
-  /** 派系分布：每个派系有几只席位 + 平均净买入 */
+  /** 派系分布 */
   buyerDist: Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }>;
   sellerDist: Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }>;
+  /** 5 维评分（0-100） */
+  scores: {
+    behavior: number;       // 行为模式分布
+    concentration: number;  // 集中度（合力/独食）
+    historicalT1: number;   // 买方历史 T+1
+    seatCategory: number;   // 席位类别（机构/北向/游资）
+    recogRate: number;      // 新面孔比例（已识别占比）
+    total: number;          // 加权综合
+  };
+  /** 信号徽标（多枚） */
+  signals: { kind: string; label: string; tone: "good" | "warn" | "bad" | "info" }[];
   /** 一句话操作建议 */
   suggestion: string;
-  /** 信号强度：0-1 越高越明确 */
+  /** 信号强度（强/中/弱） */
+  confidence: "强" | "中" | "弱";
+  /** 兼容旧字段：0-1 强度 */
   strength: number;
+  /** 风险警示（如果低分/新面孔多） */
+  warnings: string[];
 }
 
 interface SeatWithNet {
@@ -168,12 +190,12 @@ interface SeatWithNet {
   net: number;
 }
 
-/** 主导派 = 占比最高的派系；信号强度 = 该派系占比 */
 export function analyzeSeatsGroup(
   buyers: SeatWithNet[],
   sellers: SeatWithNet[],
   behaviorMap: Map<string, SeatBehavior>,
 ): GroupAnalysis {
+  // ============== 1. 行为模式分布 ==============
   function dist(seats: SeatWithNet[]): Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }> {
     const d = new Map<BehaviorTag, { count: number; avgNet: number; totalNet: number }>();
     for (const s of seats) {
@@ -203,28 +225,154 @@ export function analyzeSeatsGroup(
   }
   const buyerDom = dominant(buyerDist);
   const sellerDom = dominant(sellerDist);
-
-  // 生成操作建议
   const bTag = buyerDom.tag;
   const sTag = sellerDom.tag;
+
+  // 派系组合分（0-100）：最强的几种组合
+  let behaviorScore = 50; // 基础分
+  if (bTag === "格局派" && (sTag === "砸盘派" || sTag === "一日游")) behaviorScore = 95;  // 最强
+  else if (bTag === "格局派" && sTag === "格局派") behaviorScore = 70;                   // 中性
+  else if (bTag === "砸盘派" || bTag === "一日游") behaviorScore = 15;                   // 弱
+  else if (bTag === "波段派" || bTag === "接力派") behaviorScore = 60;                   // 中
+  else if (bTag === "新面孔" || bTag === "数据不足" || bTag === "未识别") behaviorScore = 35;
+  // 卖方是格局派的减分（可能是股东减仓）
+  if (sTag === "格局派" && bTag !== "砸盘派") behaviorScore -= 10;
+
+  // ============== 2. 集中度（合力/独食） ==============
+  const totalBuyerNet = buyers.reduce((s, b) => s + Math.max(0, b.net), 0);
+  const maxBuyerNet = buyers.length > 0 ? Math.max(...buyers.map(b => Math.max(0, b.net))) : 0;
+  const buyerTopPct = totalBuyerNet > 0 ? maxBuyerNet / totalBuyerNet : 0;
+  const buyerSeats = buyers.length;
+  // 合力：≥3 家不同席位有非零净买
+  const heLiCount = buyers.filter(b => b.net > 0).length;
+  const concentrationScore = (() => {
+    let s = 60; // 基础
+    if (buyerTopPct > 0.6) s -= 30;  // 独食
+    else if (buyerTopPct > 0.45) s -= 10;
+    if (heLiCount >= 4) s += 25;       // 强合力
+    else if (heLiCount >= 3) s += 15;
+    else if (heLiCount <= 1 && buyerSeats >= 3) s -= 15;  // 高度集中
+    return Math.max(0, Math.min(100, s));
+  })();
+
+  // ============== 3. 买方历史 T+1 整体均收益 ==============
+  const buyerT1s: number[] = [];
+  for (const b of buyers) {
+    const bh = behaviorMap.get(b.deptName);
+    if (bh && bh.avgPctT1 != null) buyerT1s.push(bh.avgPctT1);
+  }
+  const avgBuyerT1 = buyerT1s.length > 0 ? buyerT1s.reduce((s, v) => s + v, 0) / buyerT1s.length : null;
+  const historicalT1Score = (() => {
+    if (avgBuyerT1 == null) return 50; // 数据不足，给中性分
+    if (avgBuyerT1 >= 5) return 90;
+    if (avgBuyerT1 >= 2) return 75;
+    if (avgBuyerT1 >= 0) return 60;
+    if (avgBuyerT1 >= -2) return 35;
+    return 10;
+  })();
+
+  // ============== 4. 席位类别（机构/北向/游资） ==============
+  function catCount(seats: SeatWithNet[]): { inst: number; north: number; hot: number; other: number; total: number } {
+    let inst = 0, north = 0, hot = 0, other = 0;
+    for (const s of seats) {
+      const tag = matchSeatTag(s.deptName);
+      if (tag?.category === "institution") inst++;
+      else if (tag?.category === "northbound") north++;
+      else if (tag?.category === "hotmoney") hot++;
+      else if (s.net > 0) other++;  // 未识别但有买入
+    }
+    return { inst, north, hot, other, total: seats.length };
+  }
+  const buyerCat = catCount(buyers);
+  const sellerCat = catCount(sellers);
+  const seatCategoryScore = (() => {
+    let s = 50;
+    if (buyerCat.total > 0) {
+      const instPct = buyerCat.inst / buyerCat.total;
+      const northPct = buyerCat.north / buyerCat.total;
+      if (instPct >= 0.5) s += 15;       // 机构主导
+      else if (instPct >= 0.3) s += 8;
+      if (northPct >= 0.3) s += 8;        // 北向加仓
+    }
+    if (sellerCat.total > 0) {
+      const instSellPct = sellerCat.inst / sellerCat.total;
+      if (instSellPct >= 0.5) s -= 10;  // 机构派发
+    }
+    return Math.max(0, Math.min(100, s));
+  })();
+
+  // ============== 5. 新面孔比例（已识别派系占比） ==============
+  const buyerRecogCount = buyers.filter(b => behaviorMap.has(b.deptName) && !["新面孔", "数据不足"].includes(behaviorMap.get(b.deptName)!.behavior)).length;
+  const recogRate = buyers.length > 0 ? buyerRecogCount / buyers.length : 0;
+  const recogRateScore = (() => {
+    if (recogRate >= 0.8) return 85;
+    if (recogRate >= 0.6) return 70;
+    if (recogRate >= 0.4) return 50;
+    if (recogRate >= 0.2) return 30;
+    return 10;  // 全是不认识的新面孔
+  })();
+
+  // ============== 综合评分 ==============
+  const scores = {
+    behavior: behaviorScore,
+    concentration: concentrationScore,
+    historicalT1: historicalT1Score,
+    seatCategory: seatCategoryScore,
+    recogRate: recogRateScore,
+    total: Math.round(behaviorScore * 0.35 + concentrationScore * 0.25 + historicalT1Score * 0.20 + seatCategoryScore * 0.10 + recogRateScore * 0.10),
+  };
+
+  // ============== 信号徽标 ==============
+  const signals: { kind: string; label: string; tone: "good" | "warn" | "bad" | "info" }[] = [];
+  if (heLiCount >= 3) signals.push({ kind: "合力", label: `🤝 合力 (${heLiCount}家同买)`, tone: "good" });
+  if (buyerTopPct > 0.6) signals.push({ kind: "独食", label: `🍽️ 独食 (单家占 ${(buyerTopPct * 100).toFixed(0)}%)`, tone: "bad" });
+  if (buyerCat.inst / Math.max(1, buyerCat.total) >= 0.5) signals.push({ kind: "机构", label: `🏦 机构主导 (${buyerCat.inst}/${buyerCat.total})`, tone: "info" });
+  if (buyerCat.north / Math.max(1, buyerCat.total) >= 0.3) signals.push({ kind: "北向", label: `🌏 北向加仓 (${buyerCat.north}/${buyerCat.total})`, tone: "good" });
+  if (bTag === "砸盘派" || bTag === "一日游") signals.push({ kind: "砸盘", label: `⚠️ 砸盘派主买 (历史T+1 ${avgBuyerT1?.toFixed(1) ?? "—"}%)`, tone: "bad" });
+  if (sTag === "砸盘派" || sTag === "一日游") signals.push({ kind: "派发", label: `📤 卖方主力派发`, tone: "warn" });
+  if (bTag === "格局派") signals.push({ kind: "格局", label: `🏆 格局派主买 (胜率 ${behaviorMap.get(buyers.find(b => behaviorMap.get(b.deptName)?.behavior === "格局派")?.deptName ?? "")?.winRateT1 ?? "—"}%)`, tone: "good" });
+  if (recogRate < 0.4 && buyers.length > 0) signals.push({ kind: "新面孔", label: `❔ 买方新面孔多 (${(recogRate * 100).toFixed(0)}% 已识别)`, tone: "warn" });
+  if (scores.historicalT1 >= 75) signals.push({ kind: "强势T1", label: `📈 买方历史 T+1 均 ${avgBuyerT1?.toFixed(1)}%`, tone: "good" });
+  else if (scores.historicalT1 <= 35 && avgBuyerT1 != null) signals.push({ kind: "弱势T1", label: `📉 买方历史 T+1 均 ${avgBuyerT1?.toFixed(1)}%`, tone: "bad" });
+
+  // ============== 操作建议（基于 5 维评分） ==============
+  const confidence: GroupAnalysis["confidence"] = scores.total >= 70 ? "强" : scores.total >= 40 ? "中" : "弱";
   let suggestion = "";
-  if (bTag === "格局派" && (sTag === "砸盘派" || sTag === "一日游")) {
-    suggestion = "✅ **格局派主买 + 砸盘/一日游主卖** —— 主力派发中，由长期持有的格局派接盘。**洗盘嫌疑大，可作中线跟踪**。";
+  const warnings: string[] = [];
+  if (bTag === "格局派" && (sTag === "砸盘派" || sTag === "一日游") && confidence !== "弱") {
+    suggestion = "✅ **格局派主买 + 砸盘派主卖** —— 主力派发中，由长期持有的格局派接盘。**洗盘嫌疑大，可作中线跟踪**。";
   } else if (bTag === "格局派" && sTag === "格局派") {
     suggestion = "✅ **格局派对倒** —— 多空均为长期持有者，属于股东内部调仓，**信号中性**。";
-  } else if (bTag === "砸盘派") {
-    suggestion = "⚠ **砸盘派主买** —— 上榜后股价常回吐，**务必警惕**（可能是新庄家接货/左手倒右手）。";
+  } else if (bTag === "砸盘派" || bTag === "一日游") {
+    suggestion = "⚠️ **砸盘派主买** —— 上榜后股价常回吐，**务必警惕**（可能是新庄家接货/左手倒右手）。";
+    warnings.push("买方主导为砸盘派/一日游，历史胜率<35%");
   } else if (bTag === "波段派" || bTag === "接力派") {
-    suggestion = `🟡 **${bTag}主买** —— 短线博弈，按${bTag === "接力派" ? "其历史胜率（可长线跟）" : "波段节奏操作"}。`;
-  } else if (bTag === "未识别" || bTag === "新面孔" || bTag === "数据不足") {
+    suggestion = `🟡 **${bTag}主买** —— ${bTag === "接力派" ? "高频高胜，可作长线跟" : "适合做波段"}。建议分批，不一次性重仓。`;
+  } else if (bTag === "新面孔" || bTag === "数据不足" || bTag === "未识别") {
     suggestion = "❔ 买方多为新面孔或数据不足，**信号不明确，建议观望**。";
+    warnings.push("买方已识别派系席位占比<40%");
   } else {
     suggestion = "🟡 买方派系不明显，结合其他信号判断。";
   }
-  if (sTag === "格局派" && bTag !== "砸盘派") {
-    suggestion += "（卖方为格局派，可能是有序减仓，需关注后续走势）";
+  if (sTag === "格局派" && bTag !== "砸盘派" && confidence !== "弱") {
+    suggestion += "（卖方为格局派，可能是有序减仓）";
+  }
+  if (scores.concentration < 30) {
+    warnings.push("买盘高度集中（独食），信号可靠度低");
+  }
+  if (scores.historicalT1 < 40 && avgBuyerT1 != null) {
+    warnings.push(`买方历史 T+1 平均 ${avgBuyerT1.toFixed(2)}%，偏弱`);
   }
 
-  const strength = Math.max(buyerDom.strength, sellerDom.strength);
-  return { buyerDominant: buyerDom.tag, sellerDominant: sellerDom.tag, buyerDist, sellerDist, suggestion, strength };
+  return {
+    buyerDominant: bTag,
+    sellerDominant: sTag,
+    buyerDist, sellerDist,
+    scores,
+    signals,
+    suggestion,
+    confidence,
+    strength: scores.total / 100,
+    warnings,
+  };
 }

@@ -259,6 +259,76 @@ export function buildSeatHistoryByDept(deptName: string, maxDays = 60): SeatHist
   return out;
 }
 
+// ============== v9.14：按股票聚合（席位画像/连续动作 + 展开） ==============
+// 单只股票层面的聚合：每只股票上榜 N 次、累计净买入、最近一次 T+1
+export interface SeatStockAgg {
+  stockCode: string;
+  stockName: string;
+  /** 该席位对该股的总上榜次数（含买/卖） */
+  count: number;
+  buyCount: number;   // 上榜买入次数
+  sellCount: number;  // 上榜卖出次数
+  totalNet: number;   // 累计净买入（正=净流入，负=净流出）
+  totalBuy: number;
+  totalSell: number;
+  /** 最近一次上榜的 T+1 收益（已回填） */
+  lastDate: string;
+  lastPctT1: number | null;
+  /** 该股平均 T+1 收益（已回填样本） */
+  avgPctT1: number | null;
+  /** 方向："买"=净流入；"卖"=净流出；"买卖"=有进有出 */
+  direction: "买" | "卖" | "买卖";
+}
+
+/** 按股票聚合某席位近 N 天的上榜动作（按累计净额绝对值降序） */
+export function buildSeatStocksByDept(deptName: string, maxDays = 60): SeatStockAgg[] {
+  const dates = getAllSeatDates().slice(0, maxDays);
+  const agg = new Map<string, { stockCode: string; stockName: string; count: number; buyCount: number; sellCount: number; totalNet: number; totalBuy: number; totalSell: number; lastDate: string; lastPctT1: number | null; t1s: number[] }>();
+  for (const date of dates) {
+    const records = loadDayRecords(date);
+    for (const r of records) {
+      if (r.deptName !== deptName) continue;
+      const key = r.stockCode;
+      let entry = agg.get(key);
+      if (!entry) {
+        entry = { stockCode: r.stockCode, stockName: r.stockName, count: 0, buyCount: 0, sellCount: 0, totalNet: 0, totalBuy: 0, totalSell: 0, lastDate: "", lastPctT1: null, t1s: [] };
+        agg.set(key, entry);
+      }
+      entry.count++;
+      if (r.direction === "买") {
+        entry.buyCount++;
+        entry.totalBuy += Math.max(0, r.net);
+      } else {
+        entry.sellCount++;
+        entry.totalSell += Math.abs(Math.min(0, r.net));
+      }
+      entry.totalNet += r.net;
+      if (r.pctT1 != null) entry.t1s.push(r.pctT1);
+      if (date >= entry.lastDate) { entry.lastDate = date; entry.lastPctT1 = r.pctT1; }
+    }
+  }
+  const out: SeatStockAgg[] = [];
+  for (const e of agg.values()) {
+    out.push({
+      stockCode: e.stockCode,
+      stockName: e.stockName,
+      count: e.count,
+      buyCount: e.buyCount,
+      sellCount: e.sellCount,
+      totalNet: e.totalNet,
+      totalBuy: e.totalBuy,
+      totalSell: e.totalSell,
+      lastDate: e.lastDate,
+      lastPctT1: e.lastPctT1,
+      avgPctT1: e.t1s.length > 0 ? Math.round(e.t1s.reduce((s, v) => s + v, 0) / e.t1s.length * 100) / 100 : null,
+      direction: e.buyCount > 0 && e.sellCount > 0 ? "买卖" : e.buyCount > 0 ? "买" : "卖",
+    });
+  }
+  // 按累计净额绝对值降序
+  out.sort((a, b) => Math.abs(b.totalNet) - Math.abs(a.totalNet));
+  return out;
+}
+
 // ============== 合力/独食检测 ==============
 export interface StockSeatSignal {
   stockCode: string;
