@@ -4,6 +4,29 @@
 
 ---
 
+## v9.9 — 新增：两融观察（全市场+个股）+ 修复三个功能 Bug (2026-08-01)
+
+### A. 新增两融（融资融券）功能
+- `lib/margin.ts`（新）：东财数据中心两融接口封装
+  - `fetchMarginHistory(days)`：全市场两融历史汇总（RPTA_RZRQ_LSHJ，沪深合计，2010至今）
+  - `fetchStockMargin(code)`：个股两融明细（RPTA_WEB_RZRQ_GGMX，沪/深/创/科全覆盖）
+  - `detectMarginSignal()`：融资客动向信号检测（加速建仓/持续流入/流出），依据融资余额 3/5/10 日变化率梯度
+- `components/MarginPanel.tsx`（新）：全市场两融观察面板
+  - 融资余额/今日净买入/融资买入额/融券余额 四指标卡 + 环比
+  - 历史趋势图（融资余额折线 + 净买入柱，1月/3月/半年/1年切换）
+- `components/StockWatchlist.tsx`：个股雷达新增融资信号卡（余额/今日净买入/5日10日变化率 + 🔥加速建仓徽章）
+- `components/FundStructure.tsx`：两融 TODO 占位卡替换为真实数据（融资余额+环比+今日净买入）
+
+### B. 修复三个功能 Bug
+- **个股雷达 60s 刷新清空 AI 研判**：effect 依赖从 `loadInfo`（每 60s 重建的引用）改为仅 `selected`，刷新不再清空 AI 结果/追问记录
+- **LimitBoard 晋级率时区混算**：改为接口真实交易日 qdate + `loadPrevZTSnapshot`（与 App 同口径，兼容节假日/跨日），删除 UTC toISOString 推算
+- **AnnouncementPanel AI 归因去重失效**：判断键统一为 stockCode（原 has(artCode)/存 stockCode 不一致 → 重复调用 AI）
+
+### C. 其他
+- `index.html` title v6 → v9.9（版本号与 footer 统一）
+
+---
+
 ## v9.8.10 — 修复：themeScore 新闻归组改用数据驱动 boardMap (2026-07-31)
 
 修复：themeScore 自带第二份硬编码板块词表（11 个板块关键词），与已数据驱动化的 boardMap 脱节。板块评分的"消息"维度用陈旧硬编码词表，新题材（低空/算力/机器人）评不到分。

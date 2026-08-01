@@ -196,8 +196,10 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
   }, [items, aiScores, onTopAnnouncements]);
 
   // AI 归因：新★★/★★★条目出现时批量调用
+  // 修复：去重键统一为 stockCode（与 aiScores 的存取、UI 展示完全一致）。
+  // 之前 has(a.artCode) 判断但存 s.code(stockCode) → 永远判"未评分" → 重复触发 AI 调用
   const triggerAIRank = useCallback(async (anns: EnrichedAnnouncement[]) => {
-    const highStars = anns.filter(a => a.stars >= 2 && !aiScores.has(a.artCode));
+    const highStars = anns.filter(a => a.stars >= 2 && !aiScores.has(a.stockCode));
     if (highStars.length === 0) return;
     // 每次最多15条
     const batch = highStars.slice(0, 15);

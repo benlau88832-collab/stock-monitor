@@ -83,6 +83,7 @@ function formatTime(t: number): string {
 
 // 走全局队列，不绕过并发控制
 import { queuedJsonp } from "../lib/jsonpQueue";
+import { loadPrevZTSnapshot } from "../lib/ztSnapshot";
 const jsonpReq = <T = any>(url: string, timeout = 6000) => queuedJsonp<T>(url, timeout, "cb", 2);
 
 // ============== 数据获取（东方财富涨停池/炸板池/跌停池 真实接口） ==============
@@ -97,24 +98,29 @@ function todayStr(): string {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 }
 
-async function fetchZTPool(date?: string): Promise<ZTStock[]> {
+async function fetchZTPool(date?: string): Promise<{ stocks: ZTStock[]; qdate: string | null }> {
   const d = date || todayStr();
   const url = `https://push2ex.eastmoney.com/getTopicZTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
   try {
     const json = await jsonpReq<any>(url);
     const pool: any[] = json?.data?.pool ?? [];
-    return pool.map(s => ({
-      code: String(s.c), name: String(s.n),
-      price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
-      amount: s.amount ?? 0, boardCount: s.lbc ?? 1,
-      firstBoardTime: formatTime(s.fbt ?? 0),
-      lastBoardTime: formatTime(s.lbt ?? 0),
-      sealFund: s.fund ?? 0, blastCount: s.zbc ?? 0,
-      industry: String(s.hybk ?? ""),
-      ztDays: s.zttj?.days ?? 0, ztCt: s.zttj?.ct ?? 0,
-      theme: matchTheme(String(s.n ?? ""), String(s.hybk ?? "")),
-    }));
-  } catch { return []; }
+    // 接口返回的真实交易日（如"20260731"），晋级率用它找昨日快照，天然兼容节假日
+    const qdate: string | null = json?.data?.qdate != null ? String(json.data.qdate) : null;
+    return {
+      qdate,
+      stocks: pool.map(s => ({
+        code: String(s.c), name: String(s.n),
+        price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
+        amount: s.amount ?? 0, boardCount: s.lbc ?? 1,
+        firstBoardTime: formatTime(s.fbt ?? 0),
+        lastBoardTime: formatTime(s.lbt ?? 0),
+        sealFund: s.fund ?? 0, blastCount: s.zbc ?? 0,
+        industry: String(s.hybk ?? ""),
+        ztDays: s.zttj?.days ?? 0, ztCt: s.zttj?.ct ?? 0,
+        theme: matchTheme(String(s.n ?? ""), String(s.hybk ?? "")),
+      })),
+    };
+  } catch { return { stocks: [], qdate: null }; }
 }
 
 async function fetchZBPool(date?: string): Promise<ZBStock[]> {
@@ -271,22 +277,25 @@ export default function LimitBoard() {
   const [dtStocks, setDtStocks] = useState<DTStock[]>([]);
   const [loading, setLoading] = useState(true);
   const [dateStr, setDateStr] = useState("");
+  const [qdate, setQdate] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     const d = todayStr();
     setDateStr(d);
     const [zt, zb, dt] = await Promise.all([fetchZTPool(d), fetchZBPool(d), fetchDTPool(d)]);
+    setQdate(zt.qdate);
     // 如果今天没数据（非交易日/盘前），尝试前一天
-    if (zt.length === 0 && zb.length === 0 && dt.length === 0) {
+    if (zt.stocks.length === 0 && zb.length === 0 && dt.length === 0) {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
       const yd = `${yesterday.getFullYear()}${String(yesterday.getMonth() + 1).padStart(2, "0")}${String(yesterday.getDate()).padStart(2, "0")}`;
       setDateStr(yd);
       const [zt2, zb2, dt2] = await Promise.all([fetchZTPool(yd), fetchZBPool(yd), fetchDTPool(yd)]);
-      setZtStocks(zt2); setZbStocks(zb2); setDtStocks(dt2);
+      setQdate(zt2.qdate);
+      setZtStocks(zt2.stocks); setZbStocks(zb2); setDtStocks(dt2);
     } else {
-      setZtStocks(zt); setZbStocks(zb); setDtStocks(dt);
+      setZtStocks(zt.stocks); setZbStocks(zb); setDtStocks(dt);
     }
     setLoading(false);
   }, []);
@@ -301,18 +310,14 @@ export default function LimitBoard() {
       const blastedRate = (limitUpCount + blastedCount) > 0 ? blastedCount / (limitUpCount + blastedCount) * 100 : 0;
       
       // 晋级率：昨日 lbc===1（首板）的个股中，今日 lbc>=2（继续涨停）的比例
-      // 需要昨日涨停池快照数据，从 localStorage 加载
+      // 修复：用接口真实交易日 qdate + loadPrevZTSnapshot 找"最近历史快照"（与 App.tsx 同口径，
+      // 兼容法定节假日/跨日），替代旧的 UTC toISOString 推算（凌晨/节假日会 key 错位）
       let promotionRate: number | null = null;
       try {
-        const today = new Date().toISOString().slice(0, 10);
-        const d = new Date(today + "T00:00:00+08:00");
-        const yesterday = new Date(d.getTime() - 86400000);
-        const yd = yesterday.toISOString().slice(0, 10).replace(/-/g, "");
-        const snapshotRaw = localStorage.getItem(`ztpool:${yd}`);
-        if (snapshotRaw) {
-          const yesterdayPool: any[] = JSON.parse(snapshotRaw);
+        const prevPool = loadPrevZTSnapshot(qdate);
+        if (prevPool && prevPool.length > 0) {
           // 昨日首板股（lbc===1）
-          const yesterdayFirstBoard = yesterdayPool.filter((s: any) => (s.lbc ?? 1) === 1);
+          const yesterdayFirstBoard = prevPool.filter((s: any) => (s.lbc ?? 1) === 1);
           if (yesterdayFirstBoard.length > 0) {
             // 今日这些股票的代码集合（去重）
             const yesterdayFirstBoardCodes = new Set(yesterdayFirstBoard.map((s: any) => String(s.c)));

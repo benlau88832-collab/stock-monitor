@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { fmtMoney, pctColor } from "../lib/format";
 import { fundFlowUrl } from "../lib/realLinks";
 import type { FundStructureData } from "../App";
+import { fetchMarginHistory, type MarginHistoryRow } from "../lib/margin";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, LineChart, Line } from "recharts";
 import BoardRankPanel from "./BoardRankPanel";
 
@@ -66,6 +67,13 @@ function FundBar({ label, value, max }: { label: string; value: number; max: num
 export default function FundStructure({ data, loading }: { data: FundStructureData | null; loading: boolean }) {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [showChart, setShowChart] = useState(true);
+  // 两融数据（独立拉取：T+1 数据，10分钟缓存，不占用主刷新管道）
+  const [marginRows, setMarginRows] = useState<MarginHistoryRow[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchMarginHistory(5).then(rows => { if (!cancelled) setMarginRows(rows); });
+    return () => { cancelled = true; };
+  }, []);
 
   if (!data && loading) return <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-slate-400">正在加载资金结构…</div>;
   const structure = data?.structure;
@@ -125,11 +133,26 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
           <div className={`mt-1 text-xl font-black ${ship.color}`}>{ship.label}</div>
           <div className="mt-1 text-[11px] text-slate-500">|主力净额|/成交额估算</div>
         </div>
-        {/* 两融卡片 (TODO: 接入真实全市场两融接口) */}
+        {/* 两融卡片：全市场融资余额 + 今日净买入（真实接口 RPTA_RZRQ_LSHJ） */}
         <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-          <div className="text-xs text-slate-400">两融资金净买入 <span className="text-[11px] text-amber-400">(TODO)</span></div>
-          <div className="mt-1 text-xl font-black text-slate-500">数据待接入</div>
-          <div className="mt-1 text-[11px] text-slate-600">全市场两融汇总接口待对接</div>
+          <div className="text-xs text-slate-400">两融 · 融资余额</div>
+          {marginRows.length >= 2 ? (
+            <>
+              <div className="mt-1 text-xl font-black text-slate-100">
+                {(marginRows[0].rzBalance / 1e8).toFixed(0)}亿
+              </div>
+              <div className={`mt-1 text-[11px] font-bold ${marginRows[0].rzBalance >= marginRows[1].rzBalance ? "text-rose-400" : "text-emerald-400"}`}>
+                {marginRows[0].rzBalance >= marginRows[1].rzBalance ? "▲ 融资客加仓" : "▼ 融资客减仓"}
+                {" "}（{(Math.abs(marginRows[0].rzBalance - marginRows[1].rzBalance) / 1e8).toFixed(0)}亿/日）
+              </div>
+              <div className={`mt-0.5 text-[11px] ${marginRows[0].rzNet >= 0 ? "text-rose-300" : "text-emerald-300"}`}>
+                今日净买入 {(marginRows[0].rzNet >= 0 ? "+" : "")}{(marginRows[0].rzNet / 1e8).toFixed(0)}亿
+              </div>
+              <div className="mt-0.5 text-[10px] text-slate-600">数据 {marginRows[0].date.slice(5)} · 全市场两融</div>
+            </>
+          ) : (
+            <div className="mt-1 text-xl font-black text-slate-500">{marginRows.length === 0 ? "加载中…" : "—"}</div>
+          )}
         </div>
       </div>
 

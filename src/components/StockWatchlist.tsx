@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchStockOne, fetchStockNews, fetchStockAnnouncements, fetchLiftBan, stockLimitPct, type StockNewsItem, type StockAnnouncement } from "../lib/api";
+import { fetchStockMargin, detectMarginSignal, marginSignalColor, type StockMarginInfo, type MarginSignal } from "../lib/margin";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 
@@ -26,6 +27,35 @@ interface InfoItem {
 }
 
 interface ChatMsg { role: "user" | "assistant"; content: string }
+
+// ============== 个股融资信号卡 ==============
+function MarginSignalCard({ info, stockName }: { info: StockMarginInfo | null; stockName: string }) {
+  const sig: MarginSignal = detectMarginSignal(info);
+  // 无数据（非两融标的或加载中）：不显示卡片，避免刷屏
+  if (!info) return null;
+
+  const netColor = (v: number | null) => {
+    if (v == null) return "text-slate-500";
+    return v > 0 ? "text-rose-400" : v < 0 ? "text-emerald-400" : "text-slate-400";
+  };
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+      <div className="flex items-center justify-between flex-wrap gap-1">
+        <div className="text-[11px] text-slate-500">融资融券 · {info.name || stockName}（{info.date.slice(5)}）</div>
+        <span className={`rounded border px-1.5 py-0.5 text-[11px] font-bold ${marginSignalColor(sig.level)}`}>{sig.label}</span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+        <span className="text-slate-400">融资余额 <b className="text-slate-200">{fmtMoney(info.rzBalance)}</b></span>
+        <span className="text-slate-400">今日净买入 <b className={netColor(info.rzNet)}>{fmtMoney(info.rzNet)}</b></span>
+        <span className="text-slate-400">5日 <b className={netColor(info.chg5d)}>{info.chg5d != null ? `${info.chg5d > 0 ? "+" : ""}${info.chg5d.toFixed(1)}%` : "—"}</b></span>
+        <span className="text-slate-400">10日 <b className={netColor(info.chg10d)}>{info.chg10d != null ? `${info.chg10d > 0 ? "+" : ""}${info.chg10d.toFixed(1)}%` : "—"}</b></span>
+        {info.net5d != null && <span className="text-slate-400">5日净买入 <b className={netColor(info.net5d)}>{fmtMoney(info.net5d)}</b></span>}
+      </div>
+      <div className="mt-1 text-[10px] text-slate-500">{sig.hint}</div>
+      <div className="mt-0.5 text-[10px] text-slate-600">融资余额 = 融资客借钱持有的市值；持续上升说明杠杆资金看多</div>
+    </div>
+  );
+}
 
 const STORAGE_KEY = "stock_watchlist";
 const APIKEY_STORAGE = APIKEY_STORAGE_KEY;
@@ -212,6 +242,8 @@ export default function StockWatchlist() {
   const [chatHistory, setChatHistory] = useState<ChatMsg[]>([]);
   const [followUp, setFollowUp] = useState("");
   const [followUpLoading, setFollowUpLoading] = useState(false);
+  // 融资融券（按代码缓存展示，T+1 数据 5 分钟缓存）
+  const [marginInfo, setMarginInfo] = useState<Record<string, StockMarginInfo | null>>({});
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -295,11 +327,20 @@ export default function StockWatchlist() {
       setVetoList([]);
     }
 
+    // 融资融券（非两融标的返回 null，界面显示"非两融标的"）
+    fetchStockMargin(code).then(m => {
+      setMarginInfo(prev => ({ ...prev, [code]: m }));
+    });
+
     setInfoItems(items);
     setInfoLoading(false);
   }, [stocks]);
 
-  useEffect(() => { if (selected) loadInfo(selected); }, [selected, loadInfo]);
+  // ⚠️ 修复：effect 只依赖 selected（代码值），不再依赖 loadInfo 引用。
+  // 之前依赖 loadInfo（内部依赖 stocks，每 60s 刷新会重建）→ 每 60s 重跑 loadInfo
+  // → setLlmResult(null)/setChatHistory([]) 把 AI 研判和追问清空。改为仅切换个股时加载。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (selected) loadInfo(selected); }, [selected]);
 
   // ---- 详细研判 ----
   const runDetailLLM = useCallback(async () => {
@@ -493,6 +534,11 @@ export default function StockWatchlist() {
                 <span key={i} className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${v.color}`}>⛔ {v.reason}</span>
               ))}
             </div>
+          )}
+
+          {/* 融资融券信号卡（融资客动向） */}
+          {selected && (
+            <MarginSignalCard info={marginInfo[selected] ?? null} stockName={stocks[selected]?.name ?? selected} />
           )}
 
           {/* 制度提示（常驻小字） */}

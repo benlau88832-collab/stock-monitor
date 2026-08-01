@@ -12,6 +12,7 @@ const LimitBoard = lazy(() => import("./components/LimitBoard"));
 import Dashboard, { type WatchStockBrief } from "./components/Dashboard";
 import ThemeLadder from "./components/ThemeLadder";
 import CommodityChain from "./components/CommodityChain";
+import MarginPanel from "./components/MarginPanel";
 import { type BattlePlanData } from "./components/BattlePlan";
 import { detectHighLowSwitch, type ZTPoolItem } from "./lib/themeLadder";
 import { classifyBoard } from "./lib/boardTaxonomy";
@@ -178,7 +179,16 @@ function boardWeight(stage: string) {
 }
 
 export default function App() {
-  const [active, setActive] = useState<TabKey>("dashboard");
+  // 启动 tab 优先级：URL hash > localStorage > 默认 dashboard
+  const initialTab = (() => {
+    const fromUrl = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
+    const fromLs = typeof window !== "undefined" ? localStorage.getItem("stock:activeTab") : null;
+    const keys: TabKey[] = ["dashboard", "fundline", "radar", "dragon", "news"];
+    if (keys.includes(fromUrl as TabKey)) return fromUrl as TabKey;
+    if (fromLs && keys.includes(fromLs as TabKey)) return fromLs as TabKey;
+    return "dashboard";
+  })();
+  const [active, setActive] = useState<TabKey>(initialTab);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -747,6 +757,13 @@ export default function App() {
     }
   }, []);
 
+  // 同步当前 tab → URL hash + localStorage（便于分享/记忆）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.location.hash = active;
+    try { localStorage.setItem("stock:activeTab", active); } catch {}
+  }, [active]);
+
   // 首次加载
   useEffect(() => { refreshAll(); }, [refreshAll]);
   // 每日构建板块映射表（数据驱动，零硬编码）
@@ -935,6 +952,8 @@ export default function App() {
             </div>
             <DarkPool data={darkPool} loading={loading} />
             <GlobalSignals data={globalData} loading={loading} />
+            {/* 两融观察：全市场融资余额/净买入/历史趋势（独立拉取，T+1 数据） */}
+            <MarginPanel />
             {/* 产业链价格：板块联动列复用 mainline.boards 已有数据，零新增请求 */}
             <CommodityChain boardPcts={(() => {
               const map: Record<string, number> = {};
@@ -998,7 +1017,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.8 · build 07-31 22:30 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.9 · build 08-01 15:30 · 数据源：东方财富</div>
       </footer>
     </div>
   );
