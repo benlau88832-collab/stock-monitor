@@ -74,32 +74,53 @@ function LimitTempBar({ overview }: { overview: OverviewData | null }) {
 
 // ============== P3 持仓-主线匹配（自选股 vs 当日主线） ==============
 // 十年机构视角：交易员每天第一问是"我的票还在主线上吗？"
-// 顺风=在主线上 / 孤立=不在任何主线 / 逆风=所在板块退潮（提示减仓）
+// 顺风=在主线上 / 概念异动=强势但偏离主线（涨停/大幅上涨） / 逆风=所在板块退潮 / 孤立/弱势孤立
 function PositionMatchStrip({ stocks, boards }: {
   stocks: WatchStockBrief[];
   boards: MainlineData["boards"] | undefined;
 }) {
   const matches = useMemo(() => matchStocksToMainline(
-    stocks.map(s => ({ code: s.code, name: s.name })),
+    stocks.map(s => ({ code: s.code, name: s.name, pct: s.pct })),
     (boards ?? []).map(b => ({ name: b.name, pct: b.pct, stage: b.stage })),
   ), [stocks, boards]);
   if (matches.length === 0) return null;
   const sum = summarizeMatches(matches);
-  const statusColor = (st: string) => st === "tailwind" ? "border-emerald-500/30 bg-emerald-500/5" : st === "headwind" ? "border-rose-500/30 bg-rose-500/5" : "border-white/10 bg-black/20";
-  const badge = (st: string) => st === "tailwind" ? "text-emerald-300 bg-emerald-500/20" : st === "headwind" ? "text-rose-300 bg-rose-500/20" : "text-slate-400 bg-slate-500/20";
-  const label = (st: string) => st === "tailwind" ? "顺风" : st === "headwind" ? "逆风" : st === "isolated" ? "孤立" : "未知";
+  // 五种状态色
+  const statusColor = (st: string) => st === "tailwind" ? "border-emerald-500/30 bg-emerald-500/5" :
+    st === "headwind" ? "border-rose-500/30 bg-rose-500/5" :
+    st === "concept_breakout" ? "border-amber-500/30 bg-amber-500/5" :
+    st === "isolated_bear" ? "border-rose-500/30 bg-rose-500/5" :
+    "border-white/10 bg-black/20";
+  const badge = (st: string) => st === "tailwind" ? "text-emerald-300 bg-emerald-500/20" :
+    st === "headwind" ? "text-rose-300 bg-rose-500/20" :
+    st === "concept_breakout" ? "text-amber-300 bg-amber-500/20" :
+    st === "isolated_bear" ? "text-rose-300 bg-rose-500/20" :
+    "text-slate-400 bg-slate-500/20";
+  const label = (st: string) => st === "tailwind" ? "顺风" :
+    st === "headwind" ? "逆风" :
+    st === "concept_breakout" ? "🔥概念异动" :
+    st === "isolated_bear" ? "⚠弱势" :
+    "孤立";
+  // 警示条：有异动/逆风/弱势时显示
+  const warnings: string[] = [];
+  if (sum.concept_breakout > 0) warnings.push(`🔥 ${sum.concept_breakout}只强势异动（不在主线，谨慎追高）`);
+  if (sum.headwind > 0) warnings.push(`⚠ ${sum.headwind}只逆风减仓`);
+  if (sum.isolated_bear > 0) warnings.push(`⚠ ${sum.isolated_bear}只弱势孤立`);
   return (
     <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3 space-y-1.5">
       <div className="flex items-center justify-between">
         <div className="text-[11px] font-bold text-violet-300">🎯 持仓 × 主线匹配</div>
         <div className="flex gap-1.5 text-[10px]">
           <span className="text-emerald-300">顺风{sum.tailwind}</span>
+          {sum.concept_breakout > 0 && <span className="text-amber-300 font-bold">🔥异动{sum.concept_breakout}</span>}
           <span className="text-slate-400">孤立{sum.isolated}</span>
           {sum.headwind > 0 && <span className="text-rose-300 font-bold">逆风{sum.headwind}</span>}
         </div>
       </div>
-      {sum.headwind > 0 && (
-        <div className="text-[11px] text-rose-300">⚠️ 有持仓所在板块已退潮，考虑减仓控制风险</div>
+      {warnings.length > 0 && (
+        <div className="space-y-0.5">
+          {warnings.map((w, i) => <div key={i} className="text-[11px] text-amber-300">{w}</div>)}
+        </div>
       )}
       <div className="flex flex-wrap gap-1.5">
         {matches.map(m => (
@@ -107,10 +128,12 @@ function PositionMatchStrip({ stocks, boards }: {
             <span className="text-slate-200 font-semibold">{m.name}</span>
             <span className="ml-1 text-slate-500">{m.code}</span>
             <span className={`ml-1 rounded px-1 py-0.5 text-[9px] font-bold ${badge(m.status)}`}>{label(m.status)}</span>
-            {m.board && <span className="ml-1 text-slate-400">{m.board}</span>}
+            {m.matchedBoard && <span className="ml-1 text-slate-400">{m.matchedBoard.name}({m.matchedBoard.pct >= 0 ? "+" : ""}{m.matchedBoard.pct.toFixed(2)}%)</span>}
+            {m.matchFrom === "concept" && <span className="ml-1 text-amber-400/80 text-[9px]">概念</span>}
           </span>
         ))}
       </div>
+      <div className="text-[10px] text-slate-600">顺风=主线行业/概念共振 / 🔥异动=涨幅 ≥5% 但偏离主线（谨慎追高）/ 逆风=主线退潮减仓 / 孤立=与今日主线无关</div>
     </div>
   );
 }

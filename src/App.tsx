@@ -513,10 +513,12 @@ export default function App() {
       // === Mainline ===
       let mainlineBoards: MainlineData["boards"] = []; // 作战引擎需要引用
       try {
+        // v9.12 修复：扩大主线拉取范围（industry 10→30, concept 10→30, region 6→10），
+        // 让"持仓-主线匹配"更容易命中（涨停票常因小众概念发力，不在 top10 industry 内）
         const [industryRes, conceptRes, regionRes] = await Promise.allSettled([
-          fetchBoardFundFlow("industry", 10),
-          fetchBoardFundFlow("concept", 10),
-          fetchBoardFundFlow("region", 6),
+          fetchBoardFundFlow("industry", 30),
+          fetchBoardFundFlow("concept", 30),
+          fetchBoardFundFlow("region", 10),
         ]);
         const boards: MainlineData["boards"] = [];
         for (const r of [industryRes, conceptRes, regionRes]) {
@@ -1038,7 +1040,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.11 · build 08-01 19:25 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.12 · build 08-01 19:42 · 数据源：东方财富</div>
       </footer>
     </div>
   );

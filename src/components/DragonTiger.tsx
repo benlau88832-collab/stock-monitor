@@ -7,6 +7,7 @@ import {
   writeSeatRecords, runBackfill, buildSeatProfiles, detectSeatSignals, buildSeatRepeatActions,
   type SeatRecord, type SeatProfile, type StockSeatSignal, type SeatRepeatAction,
 } from "../lib/seatLedger";
+import { buildSeatBehaviors, type SeatBehavior } from "../lib/seatBehavior";
 
 // ============== 上榜原因标签颜色 ==============
 function reasonColor(explanation: string): string {
@@ -54,8 +55,12 @@ function SeatTable({ seats, type }: { seats: DragonTigerSeat[]; type: "buy" | "s
 }
 
 // ============== 席位画像卡片 ==============
-function SeatProfileCard({ profiles }: { profiles: SeatProfile[] }) {
+// v9.12：新增"行为模式"列（格局派/砸盘派/波段派/接力派/一日游）—— 长期跟踪自动打标
+function SeatProfileCard({ profiles, behaviors }: { profiles: SeatProfile[]; behaviors: SeatBehavior[] }) {
   const [showAll, setShowAll] = useState(false);
+  // 行为 lookup 索引
+  const behaviorByDept = new Map<string, SeatBehavior>();
+  for (const b of behaviors) behaviorByDept.set(b.deptName, b);
   // 只显示出现>=2次的
   const filtered = profiles.filter(p => p.appearances >= 2);
   const display = showAll ? filtered : filtered.slice(0, 15);
@@ -79,6 +84,7 @@ function SeatProfileCard({ profiles }: { profiles: SeatProfile[] }) {
             <thead>
               <tr className="border-b border-white/10 text-slate-400">
                 <th className="px-2 py-1 text-left">席位</th>
+                <th className="px-2 py-1 text-left">行为模式</th>
                 <th className="px-2 py-1 text-right">上榜</th>
                 <th className="px-2 py-1 text-right">T+1均值</th>
                 <th className="px-2 py-1 text-right">胜率</th>
@@ -88,11 +94,21 @@ function SeatProfileCard({ profiles }: { profiles: SeatProfile[] }) {
             <tbody>
               {display.map(p => {
                 const tag = matchSeatTag(p.deptName);
+                const bh = behaviorByDept.get(p.deptName);
                 return (
                   <tr key={p.deptName} className="border-b border-white/5 hover:bg-white/5">
                     <td className="px-2 py-1 text-slate-200 max-w-[200px] truncate">
                       {p.deptName.slice(0, 20)}
                       {tag && <span className={`ml-1 rounded px-1 py-0.5 text-[10px] ${tag.color}`}>{tag.label}</span>}
+                    </td>
+                    <td className="px-2 py-1">
+                      {bh && bh.behavior !== "新面孔" && bh.behavior !== "数据不足" ? (
+                        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${bh.behaviorColor}`} title={bh.hint + " · " + bh.reasons.join("；")}>
+                          {bh.behavior}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-slate-500">{bh?.behavior ?? "新面孔"}</span>
+                      )}
                     </td>
                     <td className="px-2 py-1 text-right text-slate-300">{p.appearances}次</td>
                     <td className={`px-2 py-1 text-right font-semibold ${p.avgPctT1 != null ? pctColor(p.avgPctT1) : "text-slate-500"}`}>
@@ -120,6 +136,17 @@ function SeatProfileCard({ profiles }: { profiles: SeatProfile[] }) {
           </table>
         </div>
       )}
+      {/* 行为模式图例（长期跟踪会持续优化） */}
+      <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+        <span className="rounded border border-rose-500/30 px-1.5 py-0.5 bg-rose-500/10 text-rose-300">格局派</span>
+        <span className="text-slate-600">= 值得跟踪（中长线）</span>
+        <span className="ml-2 rounded border border-amber-500/30 px-1.5 py-0.5 bg-amber-500/10 text-amber-300">波段派</span>
+        <span className="text-slate-600">= 适合跟踪波段</span>
+        <span className="ml-2 rounded border border-slate-500/30 px-1.5 py-0.5 bg-slate-500/10 text-slate-300">砸盘派</span>
+        <span className="text-slate-600">= 务必警惕</span>
+        <span className="ml-2 rounded border border-violet-500/30 px-1.5 py-0.5 bg-violet-500/10 text-violet-300">接力派</span>
+        <span className="text-slate-600">= 高频高胜可长线跟</span>
+      </div>
     </div>
   );
 }
@@ -251,6 +278,7 @@ export default function DragonTiger() {
   const [seats, setSeats] = useState<Record<string, { buy: DragonTigerSeat[]; sell: DragonTigerSeat[] }>>({});
   const [seatsLoading, setSeatsLoading] = useState<Record<string, boolean>>({});
   const [seatProfiles, setSeatProfiles] = useState<SeatProfile[]>([]);
+  const [seatBehaviors, setSeatBehaviors] = useState<SeatBehavior[]>([]);
   const [seatSignals, setSeatSignals] = useState<StockSeatSignal[]>([]);
   const [repeatActions, setRepeatActions] = useState<SeatRepeatAction[]>([]);
 
@@ -310,8 +338,10 @@ export default function DragonTiger() {
         }
       }
 
-      // 构建席位画像 + 连续动作
-      setSeatProfiles(buildSeatProfiles());
+      // 构建席位画像 + 行为模式（v9.12：长期跟踪自动打标）
+      const profiles = buildSeatProfiles();
+      setSeatProfiles(profiles);
+      setSeatBehaviors(buildSeatBehaviors(profiles));
       setRepeatActions(buildSeatRepeatActions());
 
       // 异步回填历史台账（不阻塞页面）
@@ -360,8 +390,8 @@ export default function DragonTiger() {
       {/* 游资连续动作（P4） */}
       <SeatRepeatPanel actions={repeatActions} />
 
-      {/* 席位画像 */}
-      <SeatProfileCard profiles={seatProfiles} />
+      {/* 席位画像（v9.12：含行为模式徽标） */}
+      <SeatProfileCard profiles={seatProfiles} behaviors={seatBehaviors} />
 
       {/* 龙虎榜列表 */}
       {[...dateGroups.entries()].map(([date, dateItems]) => (
