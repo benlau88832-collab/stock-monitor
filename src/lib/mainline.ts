@@ -88,8 +88,9 @@ export function buildMainlineCandidates(
   const candidates: MainlineCandidate[] = [];
 
   for (const g of ladder) {
-    // 涨停潮过滤：涨停数≥2 或 有连板高度
-    if (g.count < 2 && g.height < 2) continue;
+    // v9.17 修复：要求 ztCount ≥ 2 才能进主线（防单只孤峰如 9板独苗进第一主线）
+    // 即使 height≥9，1只涨停也不算"板块效应"，只能是孤峰/脉冲
+    if (g.count < 2) continue;
 
     // 板块资金（hybk 行业名 → boardMap 匹配；概念板块用模糊匹配）
     let boardFlow: BoardFlowLike | null = boardMap.get(g.theme) ?? null;

@@ -11,16 +11,16 @@ import { fmtMoney } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 import { getHitRateText } from "../lib/recTracker";
 import type { GateResult } from "../lib/regimeGate";
-import type { MainlineCandidate } from "../lib/mainline";
 import type { MarketStyleInfo } from "../lib/mainline";
 import type { MainlineLLMResult } from "../lib/mainlineLLM";
 import type { ETFScoreResult } from "../lib/etfScore";
+import type { MainlineGroup } from "../lib/stockToMainline";
 
 // ============== Props ==============
 export interface BattlePlanData {
   gate: GateResult;
-  /** 规则机候选主线（已排序，≥3条） */
-  candidates: MainlineCandidate[];
+  /** LLM 归类后的主线候选（≥1条） */
+  candidates: MainlineGroup[];
   /** LLM 精排结果（可能为 null=未调用或降级） */
   llmRanked: MainlineLLMResult[] | null;
   /** 市场风格 */
@@ -29,6 +29,13 @@ export interface BattlePlanData {
   etfs: ETFScoreResult[];
   /** 候选观察池：第4-8名板块 */
   candidateThemes?: Array<{ board: string; total: number; tier: "A" | "B" | "C" }>;
+  /** LLM 归类总览（v9.17） */
+  classifyOverview?: {
+    totalStocks: number;
+    mainlineCount: number;
+    trueMainlineCount: number;
+    logic: string;
+  };
 }
 
 // ============== 风格徽标 ==============
@@ -60,13 +67,18 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
   const rankColor = rank === 1 ? "border-rose-500/40 bg-rose-500/5" : rank === 2 ? "border-amber-500/30 bg-amber-500/5" : "border-slate-500/20 bg-white/5";
   const rankLabel = rank === 1 ? "🏆 第一主线" : rank === 2 ? "🥈 第二主线" : "🥉 第三主线";
   const rankText = rank === 1 ? "text-rose-300" : rank === 2 ? "text-amber-300" : "text-slate-300";
+  // v9.17 强化：板块效应弱时（小涨停数）显示警示
+  const weakEffect = ztCount < 3;
   return (
     <div className={`rounded-lg border p-2.5 ${rankColor}`}>
       <div className="flex items-center justify-between flex-wrap gap-1">
         <div className="flex items-center gap-2">
           <span className={`text-xs font-black ${rankText}`}>{rankLabel}</span>
           <span className="text-sm font-bold text-slate-100">{name}</span>
-          {isPulse && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-slate-500/20 text-slate-400">💨 脉冲线</span>}
+          {isPulse && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-slate-500/20 text-slate-400">💨 脉冲/孤峰</span>}
+          {weakEffect && ztCount > 0 && !isPulse && (
+            <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300">板块效应弱</span>
+          )}
           {llm && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-violet-500/20 text-violet-300">LLM</span>}
         </div>
         <div className="flex gap-1.5 text-[10px] text-slate-400">
@@ -160,7 +172,7 @@ function ETFBlock({ etfs }: { etfs: ETFScoreResult[] }) {
 export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   if (!data) return null;
 
-  const { gate, candidates, llmRanked, marketStyle, etfs, candidateThemes } = data;
+  const { gate, candidates, llmRanked, marketStyle, etfs, candidateThemes, classifyOverview } = data;
   const isEmpty = candidates.length === 0;
 
   // LLM 精排结果 vs 规则机候选 合并展示
@@ -180,14 +192,14 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   } else {
     for (const c of candidates) {
       display.push({
-        board: c.board, ztCount: c.ztCount, height: c.height, mainNet: c.mainNet,
+        board: c.mainline, ztCount: c.ztCount, height: c.height, mainNet: c.mainNet,
         leaders: c.leaders,
       });
     }
   }
 
-  // 补齐 ztCount/height/mainNet（从 candidates 按 board 匹配）
-  const candMap = new Map(candidates.map(c => [c.board, c]));
+  // 补齐 ztCount/height/mainNet（从 candidates 按 mainline 匹配）
+  const candMap = new Map(candidates.map(c => [c.mainline, c]));
   for (const d of display) {
     const c = candMap.get(d.board);
     if (c) { d.ztCount = c.ztCount; d.height = c.height; d.mainNet = c.mainNet; }
@@ -221,6 +233,14 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
       {gate.mode === "low" && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
           ⚠️ <b>低闸门模式（闸门×{gate.factor?.toFixed(1)}）</b> —— 建议仓位 ≤ {gate.positionLimit}%，以下主线仅作观察，不可重仓追高。
+        </div>
+      )}
+
+      {/* v9.17 LLM 归类总览 */}
+      {classifyOverview && classifyOverview.mainlineCount > 0 && (
+        <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-1.5 text-[11px] text-violet-200">
+          🤖 <b>LLM 归类</b>：{classifyOverview.totalStocks}只涨停 → {classifyOverview.mainlineCount}条主线（{classifyOverview.trueMainlineCount}条真主线）
+          {classifyOverview.logic && <span className="text-violet-300/80 ml-1">· {classifyOverview.logic.slice(0, 80)}</span>}
         </div>
       )}
 

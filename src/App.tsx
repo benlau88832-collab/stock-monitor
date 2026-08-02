@@ -21,8 +21,9 @@ import { saveZTSnapshot, loadPrevZTSnapshot } from "./lib/ztSnapshot";
 import { computeGate } from "./lib/regimeGate";
 import { computeThemeScores, type NewsItem as ThemeNewsItem } from "./lib/themeScore";
 import { computeETFScores, ETF_POOL, type ETFQuote } from "./lib/etfScore";
-import { buildMainlineCandidates, detectMarketStyle } from "./lib/mainline";
+import { detectMarketStyle } from "./lib/mainline";
 import { rankMainlinesWithLLM } from "./lib/mainlineLLM";
+import { classifyStocksToMainlines, type MainlineGroup } from "./lib/stockToMainline";
 import { getAllSince } from "./lib/dataStore";
 
 import StatusBar from "./components/StatusBar";
@@ -604,8 +605,17 @@ export default function App() {
           ? computeThemeScores(allScoringBoards, rawPool, newsItems, hlPulseNew)
           : [];
 
-        // ---- ① 涨停潮检测 + 龙头判定（规则机） ----
-        const candidates = buildMainlineCandidates(rawPool, allScoringBoards, newsItems);
+        // ---- ① LLM 涨停主线归类（v9.17 核心：取代 hybk 硬分类） ----
+        // 一次 LLM 调用把涨停池按"软语义"重新归类到主线（AI应用/云计算/机器人等）
+        // 失败降级回 hybk 硬分类（stockToMainline.fallbackByHybk）
+        const llmClassify = await classifyStocksToMainlines({
+          rawPool,
+          boards: allScoringBoards as unknown as Array<{ name: string; pct: number; mainNet: number; mainNet5d?: number; mainNet5dPct?: number }>,
+          newsItems,
+        });
+        // 把 LLM 归类结果适配到 candidates（BattlePlan.tsx 期望的形状）
+        const candidates: MainlineGroup[] = llmClassify.groups;
+        const classifyOverview = llmClassify.overview;
 
         // ---- ② 市场风格感知（进攻/轮动/防守） ----
         const marketStyle = detectMarketStyle({
@@ -649,19 +659,19 @@ export default function App() {
         } catch { /* commodities 可能未定义 */ }
 
         // ---- ③ ETF 评分（风格感知 + 主线直出） ----
-        const etfResults = computeETFScores(etfQuotes, themeScoreMap, commodityPcts, marketStyle, candidates.map(c => ({ board: c.board })));
+        const etfResults = computeETFScores(etfQuotes, themeScoreMap, commodityPcts, marketStyle, candidates.map(c => ({ board: c.mainline })));
         const topETFs = etfResults.slice(0, 4); // 多只 ETF 排序
 
         // 候选观察池（板块4-8名）
         const candidateThemes = themeResults.slice(3, 8).map(t => ({ board: t.board, total: t.total, tier: t.tier }));
 
         // ---- 先用规则分渲染作战卡（渐进式：先规则后LLM） ----
-        setBattlePlan({ gate, candidates, llmRanked: null, marketStyle, etfs: topETFs, candidateThemes });
+        setBattlePlan({ gate, candidates, llmRanked: null, marketStyle, etfs: topETFs, candidateThemes, classifyOverview });
 
         // ?debug=1 诊断模式（Fix4：可观测性）
         if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
-          console.log("=== 主线引擎 ===", { 情绪: sentiment, 涨停数: rawPool.length, 风格: marketStyle.label, 风险偏好: marketStyle.riskAppetite, 闸门: gate.factor });
-          console.table(candidates.slice(0, 8).map(c => ({ 主线: c.board, 涨停: c.ztCount, 高度: c.height, 资金: (c.mainNet / 1e8).toFixed(0) + "亿", 强度: c.score, 龙一: c.leaders[0]?.name ?? "—", 龙二: c.leaders[1]?.name ?? "—" })));
+          console.log("=== 主线引擎（LLM 归类）===", { 情绪: sentiment, 涨停数: rawPool.length, 风格: marketStyle.label, 风险偏好: marketStyle.riskAppetite, 闸门: gate.factor, 归类概览: classifyOverview });
+          console.table(candidates.slice(0, 8).map(c => ({ 主线: c.mainline, 涨停: c.ztCount, 高度: c.height, 资金: (c.mainNet / 1e8).toFixed(0) + "亿", 强度: c.score, 脉冲: c.isPulse ? "是" : "否", 龙一: c.leaders[0]?.name ?? "—", 龙二: c.leaders[1]?.name ?? "—" })));
           console.table(etfResults.map(e => ({ 代码: e.code, 名称: e.name, 总分: e.total, 置信: e.tier, 资金: e.factors.fundTrend, 联动: e.factors.boardLink, 风格: e.factors.styleFit, 主线: e.factors.mainlineLink, 宏观: e.factors.macro, 直出: e.fromMainline ? e.matchedMainline : "" })));
         }
 
@@ -669,9 +679,9 @@ export default function App() {
         const recDate = localDateStr();
         const recGateFactor = gate.factor ?? 0;
         for (const c of candidates.slice(0, 5)) {
-          recordRecommendation({ date: recDate, type: "theme", code: c.board, board: c.board, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+          recordRecommendation({ date: recDate, type: "theme", code: c.mainline, board: c.mainline, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
           for (const l of c.leaders) {
-            recordRecommendation({ date: recDate, type: "stock", code: l.code, board: c.board, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+            recordRecommendation({ date: recDate, type: "stock", code: l.code, board: c.mainline, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
           }
         }
         for (const e of topETFs) {
@@ -978,7 +988,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.16 · build 08-02 16:50 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.17 · build 08-02 17:10 · 数据源：东方财富</div>
       </footer>
     </div>
   );

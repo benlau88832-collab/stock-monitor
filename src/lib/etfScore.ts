@@ -44,6 +44,16 @@ export const ETF_POOL: ETFSpec[] = [
   { code: "159801", name: "半导体芯片ETF", boardKeywords: ["芯片", "半导体", "集成电路"], macroType: null, macroDir: 1, styleTilt: "growth" },
   { code: "516010", name: "游戏动漫ETF", boardKeywords: ["游戏", "传媒", "动漫", "AI应用"], macroType: null, macroDir: 1, styleTilt: "growth" },
   { code: "159825", name: "新能源车ETF", boardKeywords: ["新能源车", "锂电", "汽车"], macroType: null, macroDir: 1, styleTilt: "growth" },
+  // v9.17 扩充：补全用户反馈的主线 ETF
+  { code: "159739", name: "云计算ETF", boardKeywords: ["云计算", "云", "IDC", "算力", "服务器", "光模块", "CPO"], macroType: null, macroDir: 1, styleTilt: "growth" },
+  { code: "159725", name: "线上消费ETF", boardKeywords: ["线上消费", "电商", "网购", "新零售", "消费互联网", "短视频", "直播带货"], macroType: null, macroDir: 1, styleTilt: "growth" },
+  { code: "159899", name: "软件ETF(创业板)", boardKeywords: ["软件", "信创", "国产软件", "AI应用", "互联网", "计算机"], macroType: null, macroDir: 1, styleTilt: "growth" },
+  { code: "517050", name: "互联网ETF", boardKeywords: ["互联网", "AI应用", "传媒", "短视频", "游戏"], macroType: null, macroDir: 1, styleTilt: "growth" },
+  { code: "562010", name: "游戏ETF", boardKeywords: ["游戏", "AI应用", "传媒", "动漫", "短视频"], macroType: null, macroDir: 1, styleTilt: "growth" },
+  { code: "159996", name: "家电ETF", boardKeywords: ["家电", "白色家电", "智能家居"], macroType: null, macroDir: 1, styleTilt: "neutral" },
+  { code: "512120", name: "化工ETF", boardKeywords: ["化工", "化学", "化纤", "锂电材料", "磷化工"], macroType: null, macroDir: 1, styleTilt: "neutral" },
+  { code: "159870", name: "化工ETF(新材料)", boardKeywords: ["新材料", "化工", "锂电材料", "光伏材料"], macroType: null, macroDir: 1, styleTilt: "growth" },
+  { code: "162412", name: "医疗ETF", boardKeywords: ["医疗", "创新药", "医药", "器械"], macroType: null, macroDir: 1, styleTilt: "defensive" },
   // 军工/周期
   { code: "512660", name: "军工ETF", boardKeywords: ["军工", "国防", "航空"], macroType: null, macroDir: 1, styleTilt: "neutral" },
   { code: "512880", name: "证券ETF", boardKeywords: ["证券", "券商", "非银"], macroType: null, macroDir: 1, styleTilt: "neutral" },

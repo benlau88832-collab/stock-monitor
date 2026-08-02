@@ -6,8 +6,8 @@
 // ⑤ temperature 0.1、不流式、不开 thinking
 
 import { callAI, parseAIJSON, type AIResult } from "./ai";
-import type { MainlineCandidate } from "./mainline";
 import type { MarketStyleInfo } from "./mainline";
+import type { MainlineGroup } from "./stockToMainline";
 
 // ============== 输出结构 ==============
 export interface MainlineLLMLeader {
@@ -35,14 +35,14 @@ export interface MainlineLLMResult {
  * @param style      市场风格（供 LLM 参考）
  */
 export async function rankMainlinesWithLLM(
-  candidates: MainlineCandidate[],
+  candidates: MainlineGroup[],
   style: MarketStyleInfo,
 ): Promise<MainlineLLMResult[]> {
   if (candidates.length === 0) return [];
 
   // payload：只放稳定内容
   const payload = candidates.slice(0, 6).map(c => ({
-    board: c.board,
+    board: c.mainline,
     zt: c.ztCount,
     height: c.height,
     leader: c.leaders[0]?.name ?? "",
@@ -73,7 +73,7 @@ ${JSON.stringify(payload)}
   // 降级：LLM 失败 → 规则机排名（不标记 fromLLM）
   if (result.degraded) {
     return candidates.map((c, i) => ({
-      board: c.board,
+      board: c.mainline,
       rank: i + 1,
       isPulse: c.score < 45,
       confidence: c.score,
@@ -88,7 +88,7 @@ ${JSON.stringify(payload)}
 }
 
 // ============== 容错解析 ==============
-function parseLLMMainlineResult(raw: string, candidates: MainlineCandidate[]): MainlineLLMResult[] {
+function parseLLMMainlineResult(raw: string, candidates: MainlineGroup[]): MainlineLLMResult[] {
   const arr = parseAIJSON<Array<Record<string, unknown>>>(raw, ["board", "rank"]);
   if (!arr || !Array.isArray(arr)) return degradeToRules(candidates);
 
@@ -98,7 +98,7 @@ function parseLLMMainlineResult(raw: string, candidates: MainlineCandidate[]): M
     if (!board) continue;
     const rank = Math.max(1, Math.min(10, Number(item.rank) || 1));
     const leadersRaw = Array.isArray(item.leaders) ? item.leaders : [];
-    const leaders: MainlineLLMLeader[] = leadersRaw.slice(0, 3).map((l: any) => ({
+    const leaders: MainlineLLMLeader[] = leadersRaw.slice(0, 3).map((l: Record<string, unknown>) => ({
       code: String(l.code ?? ""),
       name: String(l.name ?? ""),
       role: String(l.role ?? ""),
@@ -119,12 +119,12 @@ function parseLLMMainlineResult(raw: string, candidates: MainlineCandidate[]): M
   // 补齐候选（LLM 可能漏掉），按 rank 升序
   const merged: MainlineLLMResult[] = [];
   for (const c of candidates) {
-    const llm = resultMap.get(c.board);
+    const llm = resultMap.get(c.mainline);
     if (llm) {
       merged.push(llm);
     } else {
       merged.push({
-        board: c.board,
+        board: c.mainline,
         rank: candidates.indexOf(c) + 1,
         isPulse: c.score < 45,
         confidence: c.score,
@@ -140,9 +140,9 @@ function parseLLMMainlineResult(raw: string, candidates: MainlineCandidate[]): M
 }
 
 /** 规则降级 */
-function degradeToRules(candidates: MainlineCandidate[]): MainlineLLMResult[] {
+function degradeToRules(candidates: MainlineGroup[]): MainlineLLMResult[] {
   return candidates.map((c, i) => ({
-    board: c.board,
+    board: c.mainline,
     rank: i + 1,
     isPulse: c.score < 45,
     confidence: c.score,
