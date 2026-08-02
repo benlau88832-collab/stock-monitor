@@ -4,6 +4,34 @@
 
 ---
 
+## v9.19 — 仓位纪律 + 复盘日志 + 竞价台（审查报告第2层） (2026-08-02)
+
+### F6-F8 仓位纪律面板
+- `lib/discipline.ts`（新）：DisciplineState（总资金/持仓/单票上限/新开仓次数/连续亏损）
+  - computeDisciplineViolations：单票超限/总仓位超限/新开仓超限/连续亏损冷静期
+  - computeStopLoss：基于波动率的止损参考计算器（默认4%，ATR×1.2封顶10%）
+  - recordTradeResult：记录盈亏 → 更新连续亏损计数
+- `components/DisciplinePanel.tsx`（新）：持仓录入表单 + 违规提醒 + 止损参考 + 仓位百分比
+
+### F9-F11 每日复盘日志
+- `lib/dailyReview.ts`（新）：DailyReview（日期/主线/龙头/个股/盈亏/反思）
+  - upsertReview / computeLossStreak / searchReviews / statByMainline（题材盈亏统计）
+- `components/ReviewPanel.tsx`（新）：收盘后引导填写 + 题材盈亏徽标 + 按题材检索 + 连续亏损冷静期徽标
+
+### F1-F3 竞价台
+- 探测结论：东财无集合竞价量字段 → 采用"今开涨幅 + 首封时间"近似方案
+- `lib/auction.ts`（新）：fetchAuctionBoard() 批量拉 f46今开/f60昨收 + 涨停池首封
+  - 早盘强度分：竞价涨幅 + 首封时间加成 + 连板加成
+  - 标记：竞价即涨停（≥9.8%）/ 大幅低开（<-3%）
+- `components/AuctionBoard.tsx`（新）：竞价强度排行 + 高亮标记 + 30s 自动刷新
+- Dashboard 接入：盘前/竞价布局展示（isPre 块），附时效标签
+
+### 其他
+- `index.html` title v9.18 → v9.19
+- `App.tsx` footer v9.19 · build 08-02 20:25
+
+---
+
 ## v9.18 — 合规收敛 + 数据时效标签 + 情绪周期雷达（审查报告第1层） (2026-08-02)
 
 ### T1-T4 合规话术收敛（弱化荐股指令）

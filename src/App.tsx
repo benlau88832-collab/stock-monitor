@@ -934,7 +934,9 @@ export default function App() {
         {active === "dashboard" && (
           <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
             battlePlan={battlePlan} loading={loading} phase={currentPhase} watchStocks={watchStocks}
-            onSwitchTab={(tab) => setActive(tab as TabKey)} />
+            onSwitchTab={(tab) => setActive(tab as TabKey)}
+            ztPool={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined}
+            yesterdayZt={yesterdayZTPool?.map(z => ({ code: String(z.c), name: String(z.n) }))} />
         )}
 
         {/* ====== 资金主线（深潜：完整资金结构+明暗盘+全球信号+产业链） ====== */}
@@ -1011,7 +1013,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.18 · build 08-02 17:50 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.19 · build 08-02 20:25 · 数据源：东方财富</div>
       </footer>
     </div>
   );

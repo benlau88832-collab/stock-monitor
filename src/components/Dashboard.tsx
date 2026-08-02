@@ -1,6 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import MarketOverview from "./MarketOverview";
 import EmotionCycleCard from "./EmotionCycleCard";
+import DisciplinePanel from "./DisciplinePanel";
+import ReviewPanel from "./ReviewPanel";
+import AuctionBoard from "./AuctionBoard";
 import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
 import InstitutionFund from "./InstitutionFund";
@@ -330,12 +333,18 @@ interface DashboardProps {
   phase?: SessionPhase;
   watchStocks?: WatchStockBrief[];
   onSwitchTab?: (tab: string) => void;
+  /** v9.19-F2：今日涨停池（竞价台用） */
+  ztPool?: Array<{ c: string; n: string; fbt: number; lbc: number }>;
+  /** v9.19-F2：昨日涨停股（竞价台用） */
+  yesterdayZt?: Array<{ code: string; name: string }>;
 }
 
 export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
-  phase = "post", watchStocks = [], onSwitchTab,
+  phase: phaseProp = "post", watchStocks = [], onSwitchTab, ztPool, yesterdayZt,
 }: DashboardProps) {
+  // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
+  const phase: SessionPhase = phaseProp;
   // 修复：原代码只在组件首次挂载时算一次 phase，phase 改变时不会重新打开 AI 复盘
   const [showAI, setShowAI] = useState(phase === "post");
   const [showSignal, setShowSignal] = useState(false);
@@ -382,6 +391,10 @@ export default function Dashboard({
           </div>
           {/* 右 1/3 */}
           <div className="space-y-2">
+            {/* v9.19-F7：仓位与纪律面板 */}
+            <DisciplinePanel />
+            {/* v9.19-F10：每日复盘 */}
+            <ReviewPanel />
             <GateGauge overview={overview} gate={gate} />
             <ImportantFeed />
             <AlertFeed />
@@ -394,10 +407,15 @@ export default function Dashboard({
       {isPre && (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
           <div className="space-y-2">
+            {/* v9.19-F2：竞价台（盘前/竞价场景核心） */}
+            <AuctionBoard yesterdayZt={yesterdayZt} todayZt={ztPool} autoRefresh={false} />
             <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
               blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />
             {globalData && <GlobalSignals data={globalData} loading={loading} />}
             <BattlePlan data={battlePlan ?? null} />
+            {/* v9.19-F7/F10：纪律+复盘（全天可用） */}
+            <DisciplinePanel />
+            <ReviewPanel />
           </div>
           <div className="space-y-2">
             <GateGauge overview={overview} gate={gate} />
