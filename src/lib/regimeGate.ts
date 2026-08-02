@@ -81,7 +81,7 @@ export function computeGate(overview: OverviewData): GateResult {
   }
 
   // v9.15：计算推荐模式 + 仓位上限 + 风险等级
-  const { mode, positionLimit, riskLevel } = deriveGateMode(factor, reason.length > 0, s);
+  const { mode, positionLimit, riskLevel } = deriveGateMode(factor, reason.length > 0);
   return { factor, label, reason, mode, positionLimit, riskLevel };
 }
 
@@ -89,17 +89,16 @@ export function computeGate(overview: OverviewData): GateResult {
 function deriveGateMode(
   factor: number,
   hasFuse: boolean,
-  sentiment: number,
 ): { mode: GateMode; positionLimit: number; riskLevel: "low" | "mid" | "high" | "none" } {
   if (factor == null) return { mode: "empty", positionLimit: 0, riskLevel: "none" };
 
-  // 闸门分层
-  if (factor < 0.3) {
-    // 极度贪婪（情绪≥80）或 极度恐慌（情绪<25） 或 熔断后衰减到 <0.3
+  // 闸门分层（修复 v9.15 边界 bug：0.3 应该是 low 模式而非 cautious）
+  if (factor <= 0.3) {
+    // 极度贪婪（情绪≥80）或 极度恐慌（情绪<25） 或 熔断后衰减到 ≤0.3
     return {
       mode: "low",
       positionLimit: 30,  // 上限 30% 仓
-      riskLevel: sentiment >= 80 ? "high" : "high",  // 极端情绪都是高风险
+      riskLevel: "high",  // 极端情绪都是高风险
     };
   }
   if (factor < 0.7 || hasFuse) {
@@ -107,10 +106,10 @@ function deriveGateMode(
     return {
       mode: "cautious",
       positionLimit: 50,  // 上限 50% 仓
-      riskLevel: hasFuse ? "mid" : "mid",
+      riskLevel: "mid",
     };
   }
-  // factor >= 0.7
+  // factor > 0.7
   return {
     mode: "full",
     positionLimit: Math.round(factor * 100),  // 100% × 闸门（如 0.8 → 80%）

@@ -680,10 +680,32 @@ export default function App() {
         const topETFs = etfResults.slice(0, 2); // 排名制 Top2
 
         const ruleThemes = topThemes.slice(0, 3);
-        const ruleStocks = gate.factor <= 0.3 ? [] : topStocks;
-        // 候选观察池（板块4-8名、个股6-10名）
+        // v9.15-fix：低闸门模式（gate.factor <= 0.3）放宽个股 tier 限制
+        // 原因：极端情绪下 stockScore 容易全 C 档（B 档以上几乎无票），
+        //       但用户要求"强中选强"——低闸门时按"最强"（不卡 tier）展示 2 只
+        const isLowMode = gate.factor != null && gate.factor <= 0.3;
+        // v9.15-fix2：低闸门模式 + topStocks 为空时，从涨停板中选资金最强 2 只
+        // 原因：topThemes 里的成分股可能被 buildVetoList 全否决（板块资金净额转负），
+        //       但涨停股本身资金已确认（封板），低闸门可作为"低仓试探"精选
+        if (isLowMode && topStocks.length === 0 && rawPool.length > 0) {
+          topStocks = [...rawPool]
+            .sort((a: any, b: any) => (Number(b.fund) || 0) - (Number(a.fund) || 0))
+            .slice(0, 2)
+            .map((z: any): import("./lib/stockScore").StockScoreResult => ({
+              code: String(z.c ?? ""), name: String(z.n ?? ""),
+              price: Number(z.p) || 0, pct: Number(z.zdp) || 0,
+              total: 60,  // 低闸门精选固定 60 分
+              factors: { fund: 60, liquidity: 60, ladder: 60, news: 50, seat: 50 },
+              vetoed: false, vetoReasons: [],
+              newsSource: "规则版",
+              invalidation: "低闸门精选：涨停板资金最强",
+              tier: "B",
+            }));
+        }
+        const ruleStocks = isLowMode ? topStocks.slice(0, 2) : topStocks;
+        // 候选观察池（板块4-8名、个股6-10名）—— 低闸门模式禁用候选
         const candidateThemes = themeResults.slice(3, 8);
-        const candidateStocks = gate.factor <= 0.3 ? [] : (computeStockScores(allStockInputs).filter(s => !s.vetoed).slice(5, 10));
+        const candidateStocks = isLowMode ? [] : (computeStockScores(allStockInputs).filter(s => !s.vetoed).slice(5, 10));
 
         // 先用规则分渲染作战卡（渐进式：先规则后LLM）
         setBattlePlan({ gate, themes: ruleThemes, stocks: ruleStocks, etfs: topETFs, candidateThemes, candidateStocks });
@@ -1040,7 +1062,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.15 · build 08-02 13:30 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.15.1 · build 08-02 13:50 · 数据源：东方财富</div>
       </footer>
     </div>
   );

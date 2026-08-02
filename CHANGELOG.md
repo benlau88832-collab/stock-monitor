@@ -4,6 +4,24 @@
 
 ---
 
+## v9.15.1 — 今日推荐 bug 修复（v9.15 hotfix） (2026-08-02)
+
+### Bug 1：闸门 × 0.3 错判为"谨慎模式"
+- 原因：`deriveGateMode` 用 `factor < 0.3`（严格小于），0.3 不满足，被错分到 cautious（0.3-0.7）
+- 修复：`factor <= 0.3` → low 模式（v9.15 边界 bug）
+
+### Bug 2：低闸门模式个股推荐为空
+- 原因：极端情绪下 topThemes 板块的成分股被 `buildVetoList` 全否决（mainNet<0 + smallNet>0），topStocks 为空
+- 修复：低闸门模式 + topStocks 为空时，从涨停板 rawPool 中选资金最强 2 只作为"低闸门精选"
+  - 绕过 stockScore 因子计算（涨停板已确认封板）
+  - 标 tier="B" + invalidation="低闸门精选：涨停板资金最强"
+
+### 其他
+- `index.html` title v9.15 → v9.15.1
+- `App.tsx` footer v9.15.1 · build 08-02 13:50
+
+---
+
 ## v9.15 — 今日推荐 3 模式分层（机构纪律+游资选股 融合） (2026-08-02)
 
 ### 问题
