@@ -4,6 +4,32 @@
 
 ---
 
+## v9.17.1 — LLM 归类修复 + 龙二龙三补齐 + 人气榜对照 (2026-08-02)
+
+### Bug 修复：LLM 主线归类一直降级
+- 根因：`classifyStocksToMainlines` 用 stockJudge 任务槽（thinking=true + maxTokens 8000），
+  50 只涨停 payload + 长 prompt → 超时降级 → 一直"按申万行业 hybk 分组"
+- 修复：
+  - `aiPrompts.ts` 新增 `mainlineClassify` 任务槽：thinking=false + maxTokens 4000 + temperature 0.1
+  - `stockToMainline.ts` 改用 mainlineClassify + payload 50→30 只
+  - LLM 调用更快更稳，归类成功率大幅提升
+
+### 龙二龙三补齐
+- 根因：LLM 精排（rankMainlinesWithLLM）返回的 leaders 可能只有龙一 → 覆盖规则机的龙二龙三
+- 修复：BattlePlan.tsx 合并逻辑——LLM leaders <3 时，用规则机 candidates.leaders 补齐，
+  保证每个主线显示完整龙一龙二龙三
+
+### 人气榜对照（用户要求）
+- App.tsx：fetchPopularityRank(50) 拉人气榜，按 code 匹配注入各主线 leaders.popularRank
+- BattlePlan.tsx：龙一龙二龙三旁边显示 "🔥人气#N" 徽标（Top3 红色高亮，其他琥珀）
+- 人气榜不可用时静默降级（不影响主线展示）
+
+### 其他
+- `index.html` title v9.17 → v9.17.1
+- `App.tsx` footer v9.17.1 · build 08-02 17:20
+
+---
+
 ## v9.17 — LLM 涨停主线归类 + 主线阈值修复（核心改进） (2026-08-02)
 
 ### 问题反馈

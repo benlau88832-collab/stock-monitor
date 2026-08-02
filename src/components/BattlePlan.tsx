@@ -58,7 +58,7 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
   ztCount: number;
   height: number;
   mainNet: number;
-  leaders: Array<{ code: string; name: string; role: string; reason: string }>;
+  leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number }>;
   logic?: string;
   isPulse?: boolean;
   caution?: string;
@@ -90,7 +90,7 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
         </div>
       </div>
 
-      {/* 龙一龙二龙三 */}
+      {/* 龙一龙二龙三（v9.17-fix：人气榜对照徽标） */}
       <div className="mt-1.5 space-y-1">
         {leaders.length === 0 && <div className="text-[11px] text-slate-500">涨停梯队数据积累中</div>}
         {leaders.map((l, i) => (
@@ -104,6 +104,12 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
               {l.name}
             </a>
             <span className="text-slate-500">{l.code}</span>
+            {/* 人气榜徽标：人气 Top10 高亮 */}
+            {l.popularRank != null && l.popularRank > 0 && (
+              <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${
+                l.popularRank <= 3 ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/15 text-amber-300"
+              }`}>🔥人气#{l.popularRank}</span>
+            )}
             <span className="text-slate-500 truncate">{l.reason}</span>
           </div>
         ))}
@@ -178,7 +184,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   // LLM 精排结果 vs 规则机候选 合并展示
   const display: Array<{
     board: string; ztCount: number; height: number; mainNet: number;
-    leaders: Array<{ code: string; name: string; role: string; reason: string }>;
+    leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number }>;
     logic?: string; isPulse?: boolean; caution?: string; llm?: boolean;
   }> = [];
   if (llmRanked && llmRanked.length > 0) {
@@ -200,9 +206,34 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
 
   // 补齐 ztCount/height/mainNet（从 candidates 按 mainline 匹配）
   const candMap = new Map(candidates.map(c => [c.mainline, c]));
+  // v9.17-fix: LLM 精排 leaders 可能只有龙一（LLM 只返回1个）→ 用规则机候选补齐龙二龙三
   for (const d of display) {
     const c = candMap.get(d.board);
-    if (c) { d.ztCount = c.ztCount; d.height = c.height; d.mainNet = c.mainNet; }
+    if (c) {
+      d.ztCount = c.ztCount; d.height = c.height; d.mainNet = c.mainNet;
+      // 补齐缺失的龙二龙三（LLM 没返回时用规则机排序）
+      if (d.leaders.length < 3 && c.leaders.length > d.leaders.length) {
+        const llmCodes = new Set(d.leaders.map(l => l.code));
+        for (const cl of c.leaders) {
+          if (d.leaders.length >= 3) break;
+          if (!llmCodes.has(cl.code)) {
+            d.leaders.push({ code: cl.code, name: cl.name, role: cl.role, reason: cl.reason, popularRank: cl.popularRank });
+          }
+        }
+        // 角色排序保证 龙一/龙二/龙三 顺序
+        d.leaders.sort((a, b) => {
+          const order = (r: string) => r.includes("龙一") ? 0 : r.includes("龙二") ? 1 : 2;
+          return order(a.role) - order(b.role);
+        });
+      }
+      // 人气榜 rank 从候选复制（LLM 只给龙一时）
+      for (const dl of d.leaders) {
+        if (dl.popularRank == null) {
+          const cl = c.leaders.find(x => x.code === dl.code);
+          if (cl) dl.popularRank = cl.popularRank;
+        }
+      }
+    }
   }
 
   return (

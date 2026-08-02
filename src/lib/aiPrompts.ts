@@ -11,7 +11,8 @@ export function getSystemPrefix(): string { return SYSTEM_PREFIX; }
 // ============== 任务枚举 ==============
 export type AITask =
   | "preopenPlan" | "closeReview" | "annRank" | "ladderScan"
-  | "newsDigest" | "weeklyCoach" | "stockJudge" | "policyDiff" | "supervisor";
+  | "newsDigest" | "weeklyCoach" | "stockJudge" | "policyDiff" | "supervisor"
+  | "mainlineClassify";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -23,6 +24,7 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   newsDigest:  { temperature: 0.3, maxTokens: 400, thinking: false },
   weeklyCoach: { temperature: 0.4, maxTokens: 1500, thinking: true },
   stockJudge:  { temperature: 0.3, maxTokens: 8000, thinking: true },
+  mainlineClassify: { temperature: 0.1, maxTokens: 4000, thinking: false },
   supervisor:  { temperature: 0.4, maxTokens: 4000, thinking: false },
   policyDiff:  { temperature: 0.2, maxTokens: 1500, thinking: true },
 };
@@ -56,6 +58,7 @@ export interface AITaskPayload {
     hitRateContext?: string; // 推荐归因命中率上下文（由 recTracker 注入）
   };
   stockJudge: { prompt: string };
+  mainlineClassify: { prompt: string };
   supervisor: { system: string; user: string };
   policyDiff: { policyText: string };
 }
@@ -138,6 +141,8 @@ ${p.hitRateContext ? `\n推荐归因统计：${p.hitRateContext}` : ""}
 【下周动作】恰好2条可执行项` }),
 
   stockJudge: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
+  // 主线归类专用：thinking=false（快+稳），temperature 0.1（确定性优先）
+  mainlineClassify: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
 
   // 督导室专用：system/user 由 IntelligenceDrawer 构建，此处透传
   supervisor: (p) => ({ system: p.system, user: p.user }),
@@ -201,6 +206,7 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
     return `【纪律执行率】${rate}%（${executed}/${total}天执行预案）\n【重复错误模式】规则版无法分析\n【下周动作】1.坚持盘前写预案 2.控制单票仓位`;
   },
   stockJudge: (p) => `个股研判规则版：\n${p.prompt.slice(0, 150)}...\n数据不足或限速，请先在个股雷达添加/刷新个股后再问。`,
+  mainlineClassify: (p) => `主线归类规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n按申万行业 hybk 分组。`,
   supervisor: (p) => `AI督导暂不可用，请稍后重试。\n\n提问：${p.user.slice(-100)}`,
   policyDiff: (p) => `政策摘要：\n${p.policyText.slice(0, 200)}...\n规则版无法深度对比。`,
 };

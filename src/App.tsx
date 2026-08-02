@@ -25,6 +25,7 @@ import { detectMarketStyle } from "./lib/mainline";
 import { rankMainlinesWithLLM } from "./lib/mainlineLLM";
 import { classifyStocksToMainlines, type MainlineGroup } from "./lib/stockToMainline";
 import { getAllSince } from "./lib/dataStore";
+import { fetchPopularityRank } from "./lib/api";
 
 import StatusBar from "./components/StatusBar";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
@@ -617,6 +618,28 @@ export default function App() {
         const candidates: MainlineGroup[] = llmClassify.groups;
         const classifyOverview = llmClassify.overview;
 
+        // ---- ①.5 人气榜对照（v9.17-fix）：给各主线龙头打人气排名 ----
+        // 用户要求对照人气榜单 + 资金进攻强度（如蓝色光标人气第一）
+        // 失败静默（不影响主线展示）
+        try {
+          const popularityList = await fetchPopularityRank(50);
+          const popRank = new Map<string, number>();
+          popularityList.forEach((item, idx) => {
+            if (item.code) popRank.set(item.code, idx + 1);
+          });
+          for (const c of candidates) {
+            for (const l of c.leaders) {
+              const rank = popRank.get(l.code);
+              if (rank != null) l.popularRank = rank;
+            }
+            // 龙一未入榜但组内涨停人气最高 → 用组内最高的人气
+            if (c.leaders.length > 0 && c.leaders[0].popularRank < 0) {
+              let bestRank = -1;
+              for (const l of c.leaders) if (l.popularRank > 0) bestRank = Math.min(bestRank < 0 ? l.popularRank : bestRank, l.popularRank);
+            }
+          }
+        } catch { /* 人气榜不可用不阻塞 */ }
+
         // ---- ② 市场风格感知（进攻/轮动/防守） ----
         const marketStyle = detectMarketStyle({
           sentiment,
@@ -988,7 +1011,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.17 · build 08-02 17:10 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.17.1 · build 08-02 17:20 · 数据源：东方财富</div>
       </footer>
     </div>
   );

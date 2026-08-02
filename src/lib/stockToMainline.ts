@@ -55,6 +55,8 @@ export interface MainlineLeader {
   amount: number;
   pct: number;
   reason: string;
+  /** v9.17-fix：人气榜排名（1=人气最高），-1=未入榜 */
+  popularRank: number;
 }
 
 // ============== 入口 ==============
@@ -91,8 +93,8 @@ export async function classifyStocksToMainlines(input: ClassifyInput): Promise<C
     return { stockMap: new Map(), groups: [], overview: { totalStocks: 0, mainlineCount: 0, trueMainlineCount: 0, logic: "无涨停数据" }, fromLLM: false };
   }
 
-  // 限 payload 50 只（涨停池常见 20-50 只，太多会超 LLM token 上限）
-  const pool = input.rawPool.slice(0, 50).map(p => ({
+  // 限 payload 30 只（v9.17-fix：50只+thinking=true 超时降级；改 30只+thinking=false 专用任务槽）
+  const pool = input.rawPool.slice(0, 30).map(p => ({
     code: String(p.c ?? ""),
     name: String(p.n ?? ""),
     hybk: String(p.hybk ?? "其他"),
@@ -101,7 +103,7 @@ export async function classifyStocksToMainlines(input: ClassifyInput): Promise<C
   })).filter(p => p.code);
 
   // payload：只放稳定内容
-  const result: AIResult = await callAI("stockJudge", {
+  const result: AIResult = await callAI("mainlineClassify", {
     prompt: `你是A股十年经验的概念主线归类分析师，只输出JSON，不输出任何其他文字或markdown标记。
 
 任务：把以下涨停股按"软语义主线"重新归类（不要按申万行业名），例如：
@@ -312,6 +314,7 @@ function pickLeaders(rawPool: ZTPoolItem[], stockCodes: string[]): MainlineLeade
     amount: top.amount ?? 0,
     pct: top.zdp ?? 0,
     reason: `${top.lbc ?? 1}板·首封${fmtFbt(top.fbt ?? 0)}·封单${((top.fund ?? 0) / 1e8).toFixed(1)}亿`,
+    popularRank: -1,
   });
   // 龙二：同板次封 或 次高板
   const rest = sorted.filter(s => String(s.c) !== String(top.c));
@@ -326,6 +329,7 @@ function pickLeaders(rawPool: ZTPoolItem[], stockCodes: string[]): MainlineLeade
       amount: dragon2.amount ?? 0,
       pct: dragon2.zdp ?? 0,
       reason: `${dragon2.lbc ?? 1}板·封单${((dragon2.fund ?? 0) / 1e8).toFixed(1)}亿`,
+    popularRank: -1,
     });
   }
   // 龙三：成交额大（中军）
@@ -342,6 +346,7 @@ function pickLeaders(rawPool: ZTPoolItem[], stockCodes: string[]): MainlineLeade
       amount: dragon3.amount ?? 0,
       pct: dragon3.zdp ?? 0,
       reason: `成交额${((dragon3.amount ?? 0) / 1e8).toFixed(1)}亿·中军`,
+    popularRank: -1,
     });
   }
   return leaders;
