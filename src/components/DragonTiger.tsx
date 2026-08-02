@@ -182,9 +182,9 @@ function SeatProfileCard({ profiles, behaviors }: { profiles: SeatProfile[]; beh
         <span className="ml-2 rounded border border-amber-500/30 px-1.5 py-0.5 bg-amber-500/10 text-amber-300">波段派</span>
         <span className="text-slate-600">= 适合跟踪波段</span>
         <span className="ml-2 rounded border border-slate-500/30 px-1.5 py-0.5 bg-slate-500/10 text-slate-300">砸盘派</span>
-        <span className="text-slate-600">= 务必警惕</span>
+        <span className="text-slate-600">= 历史统计 T+1 回吐概率高</span>
         <span className="ml-2 rounded border border-violet-500/30 px-1.5 py-0.5 bg-violet-500/10 text-violet-300">接力派</span>
-        <span className="text-slate-600">= 高频高胜可长线跟</span>
+        <span className="text-slate-600">= 历史统计胜率偏高</span>
       </div>
     </div>
   );
@@ -208,7 +208,7 @@ function SignalBanner({ signals }: { signals: StockSeatSignal[] }) {
 }
 
 // ============== v9.14：买卖主导派分析 + 5 维评分（多重信号交叉验证） ==============
-// 综合买入/卖出前五席位的 5 维评分，给出主导派 + 操作建议
+// 综合买入/卖出前五席位的 5 维评分，给出主导派信号研判
 // 评分维度（加权）：行为模式(35%) + 集中度(25%) + 历史T+1(20%) + 席位类别(10%) + 新面孔比例(10%)
 function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
   buyers: DragonTigerSeat[]; sellers: DragonTigerSeat[]; behaviorMap: Map<string, SeatBehavior>;

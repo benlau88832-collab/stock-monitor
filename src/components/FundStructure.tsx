@@ -5,6 +5,7 @@ import type { FundStructureData } from "../App";
 import { fetchMarginHistory, type MarginHistoryRow } from "../lib/margin";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, LineChart, Line } from "recharts";
 import BoardRankPanel from "./BoardRankPanel";
+import FreshnessTag from "./FreshnessTag";
 
 // ============== 分级预警 ==============
 interface AlertLevel { label: string; border: string; bg: string; text: string; flash?: boolean }
@@ -158,7 +159,7 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
 
       {/* 资金分档 */}
       <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-3">
-        <div className="text-sm font-bold text-slate-200">今日资金结构分档</div>
+        <div className="text-sm font-bold text-slate-200">今日资金结构分档 <FreshnessTag type="realtime" /></div>
         <FundBar label="超大单" value={t.extraLargeNet} max={max} />
         <FundBar label="大单" value={t.largeNet} max={max} />
         <FundBar label="中单(游资)" value={t.mediumNet} max={max} />

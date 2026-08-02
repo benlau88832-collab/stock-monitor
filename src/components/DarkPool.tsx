@@ -2,6 +2,7 @@ import { useState, Fragment } from "react";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { boardRealUrl, stockRealUrl } from "../lib/realLinks";
 import type { DarkPoolData } from "../App";
+import FreshnessTag from "./FreshnessTag";
 
 function FlowBadge({ type }: { type: string }) {
   // 四象限标签颜色（已删除旧的洗盘/诱多/拉升做T等不可达分支）
@@ -39,6 +40,7 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
     <section className="space-y-4">
       <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 px-4 py-2 text-xs text-amber-300/90">
         明暗盘资金流向监控（概念板块级别） — 明盘=超大单+大单（公开大资金） · 暗盘=中单+小单（含主力拆单隐蔽资金）
+        <FreshnessTag type="near_realtime" />
       </div>
 
       {data.marketFlowType && (
