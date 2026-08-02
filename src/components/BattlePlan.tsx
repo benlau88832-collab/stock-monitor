@@ -263,7 +263,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
       {/* 低闸门警示 */}
       {gate.mode === "low" && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
-          ⚠️ <b>低闸门模式（闸门×{gate.factor?.toFixed(1)}）</b> —— 建议仓位 ≤ {gate.positionLimit}%，以下主线仅作观察，不可重仓追高。
+          ⚠️ <b>低闸门模式（闸门×{gate.factor?.toFixed(1)}）</b> —— 历史统计中该环境下主线成功率偏低，以下内容仅作观察，请谨慎。
         </div>
       )}
 

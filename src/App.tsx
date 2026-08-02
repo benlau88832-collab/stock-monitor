@@ -406,7 +406,7 @@ export default function App() {
         if (mainOutRetailIn && persistentOutflow) {
           vetoTriggered = true; verdict = "danger";
           reasons.push("今日主力资金净流出且散户净流入，同时近5日、近10日主力资金均为净流出");
-          actionHint = "当前结构不适合加仓，存量仓位应考虑控制风险。";
+          actionHint = "当前结构资金承压，历史统计中该类结构后续风险偏高。";
         } else if (mainOutRetailIn) {
           verdict = "warning";
           reasons.push("今日出现「主力净流出 + 散户净流入」结构，需警惕分歧加大");
@@ -814,7 +814,7 @@ export default function App() {
     // 极度贪婪
     const sent = overview.sentiment;
     if (sent != null && sent >= 80) {
-      if (!lastSignalActive["overbought"]) { lastSignalActive["overbought"] = true; emitAlert({ severity: "warning", id: "sentiment_high", message: `情绪${sent}分（极度贪婪），追高风险` }); }
+      if (!lastSignalActive["overbought"]) { lastSignalActive["overbought"] = true; emitAlert({ severity: "warning", id: "sentiment_high", message: `情绪${sent}分（极度贪婪），历史统计中追高风险偏高` }); }
     } else lastSignalActive["overbought"] = false;
 
     // 极度恐慌：sentiment≤0 不报（数据异常），null 也不报
@@ -888,10 +888,10 @@ export default function App() {
   // 构建三级警报列表
   const alerts: AlertItem[] = [];
   if (vetoActive) {
-    alerts.push({ id: "veto_main", level: "critical", message: "重度背离：主力持续流出+散户接盘，不建议加仓" });
+    alerts.push({ id: "veto_main", level: "critical", message: "重度背离：主力持续流出+散户接盘（历史统计风险偏高）" });
   }
   if (overview && overview.sentiment != null && overview.sentiment >= 80) {
-    alerts.push({ id: "sentiment_high", level: "warning", message: `情绪温度计${overview.sentiment}分（极度贪婪），注意追高风险` });
+    alerts.push({ id: "sentiment_high", level: "warning", message: `情绪温度计${overview.sentiment}分（极度贪婪），历史统计中后续风险偏高` });
   }
   if (overview && overview.sentiment != null && overview.sentiment <= 25) {
     alerts.push({ id: "sentiment_low", level: "warning", message: `情绪温度计${overview.sentiment}分（极度恐慌），关注超跌机会` });
@@ -1011,7 +1011,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.17.1 · build 08-02 17:20 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.18 · build 08-02 17:50 · 数据源：东方财富</div>
       </footer>
     </div>
   );

@@ -175,7 +175,7 @@ export interface GroupAnalysis {
   };
   /** 信号徽标（多枚） */
   signals: { kind: string; label: string; tone: "good" | "warn" | "bad" | "info" }[];
-  /** 一句话操作建议 */
+  /** 信号解读（中性表述） */
   suggestion: string;
   /** 信号强度（强/中/弱） */
   confidence: "强" | "中" | "弱";
@@ -335,30 +335,30 @@ export function analyzeSeatsGroup(
   if (scores.historicalT1 >= 75) signals.push({ kind: "强势T1", label: `📈 买方历史 T+1 均 ${avgBuyerT1?.toFixed(1)}%`, tone: "good" });
   else if (scores.historicalT1 <= 35 && avgBuyerT1 != null) signals.push({ kind: "弱势T1", label: `📉 买方历史 T+1 均 ${avgBuyerT1?.toFixed(1)}%`, tone: "bad" });
 
-  // ============== 操作建议（基于 5 维评分） ==============
+  // ============== 信号解读（基于 5 维评分，中性表述） ==============
   const confidence: GroupAnalysis["confidence"] = scores.total >= 70 ? "强" : scores.total >= 40 ? "中" : "弱";
   let suggestion = "";
   const warnings: string[] = [];
   if (bTag === "格局派" && (sTag === "砸盘派" || sTag === "一日游") && confidence !== "弱") {
-    suggestion = "✅ **格局派主买 + 砸盘派主卖** —— 主力派发中，由长期持有的格局派接盘。**洗盘嫌疑大，可作中线跟踪**。";
+    suggestion = "✅ **格局派主买 + 砸盘派主卖** —— 历史统计中此类组合次日/中期走强概率较高（样本：长期席位画像），仅供参考。";
   } else if (bTag === "格局派" && sTag === "格局派") {
-    suggestion = "✅ **格局派对倒** —— 多空均为长期持有者，属于股东内部调仓，**信号中性**。";
+    suggestion = "✅ **格局派对倒** —— 多空均为长期持有者，历史统计信号偏中性（股东内部调仓特征）。";
   } else if (bTag === "砸盘派" || bTag === "一日游") {
-    suggestion = "⚠️ **砸盘派主买** —— 上榜后股价常回吐，**务必警惕**（可能是新庄家接货/左手倒右手）。";
+    suggestion = "⚠️ **砸盘派主买** —— 历史统计中该派系上榜后 T+1 回吐概率较高（见席位画像），需注意风险。";
     warnings.push("买方主导为砸盘派/一日游，历史胜率<35%");
   } else if (bTag === "波段派" || bTag === "接力派") {
     suggestion = `🟡 **${bTag}主买** —— ${bTag === "接力派" ? "高频高胜，可作长线跟" : "适合做波段"}。建议分批，不一次性重仓。`;
   } else if (bTag === "新面孔" || bTag === "数据不足" || bTag === "未识别") {
-    suggestion = "❔ 买方多为新面孔或数据不足，**信号不明确，建议观望**。";
-    warnings.push("买方已识别派系席位占比<40%");
+    suggestion = "❔ 买方多为新面孔或数据不足，历史统计参考价值有限，请谨慎。";
+    warnings.push("买方已识别派系席位占比<40%，统计样本不足");
   } else {
     suggestion = "🟡 买方派系不明显，结合其他信号判断。";
   }
   if (sTag === "格局派" && bTag !== "砸盘派" && confidence !== "弱") {
-    suggestion += "（卖方为格局派，可能是有序减仓）";
+    suggestion += "（卖方为格局派，历史统计中有序减仓特征）";
   }
   if (scores.concentration < 30) {
-    warnings.push("买盘高度集中（独食），信号可靠度低");
+    warnings.push("买盘高度集中（独食），历史统计信号可靠度偏低");
   }
   if (scores.historicalT1 < 40 && avgBuyerT1 != null) {
     warnings.push(`买方历史 T+1 平均 ${avgBuyerT1.toFixed(2)}%，偏弱`);

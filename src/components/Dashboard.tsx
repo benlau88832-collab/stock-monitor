@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import MarketOverview from "./MarketOverview";
+import EmotionCycleCard from "./EmotionCycleCard";
 import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
 import InstitutionFund from "./InstitutionFund";
@@ -104,7 +105,7 @@ function PositionMatchStrip({ stocks, boards }: {
   // 警示条：有异动/逆风/弱势时显示
   const warnings: string[] = [];
   if (sum.concept_breakout > 0) warnings.push(`🔥 ${sum.concept_breakout}只强势异动（不在主线，谨慎追高）`);
-  if (sum.headwind > 0) warnings.push(`⚠ ${sum.headwind}只逆风减仓`);
+  if (sum.headwind > 0) warnings.push(`⚠ ${sum.headwind}只逆风（所在板块退潮，历史统计偏弱）`);
   if (sum.isolated_bear > 0) warnings.push(`⚠ ${sum.isolated_bear}只弱势孤立`);
   return (
     <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3 space-y-1.5">
@@ -133,7 +134,7 @@ function PositionMatchStrip({ stocks, boards }: {
           </span>
         ))}
       </div>
-      <div className="text-[10px] text-slate-600">顺风=主线行业/概念共振 / 🔥异动=涨幅 ≥5% 但偏离主线（谨慎追高）/ 逆风=主线退潮减仓 / 孤立=与今日主线无关</div>
+      <div className="text-[10px] text-slate-600">顺风=主线行业/概念共振 / 🔥异动=涨幅 ≥5% 但偏离主线（历史统计追高风险高）/ 逆风=主线退潮 / 孤立=与今日主线无关</div>
     </div>
   );
 }
@@ -359,6 +360,20 @@ export default function Dashboard({
           {/* 左 2/3 */}
           <div className="space-y-2">
             <BattlePlan data={battlePlan ?? null} />
+            {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
+            {overview && (
+              <EmotionCycleCard input={{
+                sentiment: overview.sentiment,
+                ztCount: overview.limitPool?.limitUpCount ?? 0,
+                ztCountYesterday: null, // 昨日涨停数暂未在 overview 中回传（可扩展）
+                maxBoardHeight: overview.limitPool?.boardCounts ? Math.max(0, ...Object.keys(overview.limitPool.boardCounts).map(Number)) : null,
+                maxBoardYesterday: null,
+                blastedRate: overview.limitPool?.blastedRate ?? null,
+                blastedRatePrev: null,
+                premiumAvg: overview.premiumAvg ?? null,
+                promotionRate: overview.promotionRate ?? null,
+              }} />
+            )}
             <WatchlistStrip stocks={watchStocks} />
             <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
             <LimitTempBar overview={overview} />

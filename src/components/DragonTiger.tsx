@@ -8,6 +8,7 @@ import {
   type SeatRecord, type SeatProfile, type StockSeatSignal, type SeatRepeatAction,
 } from "../lib/seatLedger";
 import { buildSeatBehaviors, analyzeSeatsGroup, type SeatBehavior } from "../lib/seatBehavior";
+import FreshnessTag from "./FreshnessTag";
 
 // ============== 上榜原因标签颜色 ==============
 function reasonColor(explanation: string): string {
@@ -278,7 +279,7 @@ function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
     <div className="mt-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2.5">
       {/* 头部：主导派 + 总分 + 信号强度 */}
       <div className="flex items-center gap-2 text-[11px] flex-wrap">
-        <span className="font-bold text-violet-300">🎯 主导派与操作建议</span>
+        <span className="font-bold text-violet-300">🎯 主导派信号研判</span>
         <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${dominantColor(analysis.buyerDominant)}`}>
           买方: {analysis.buyerDominant}
         </span>
@@ -310,7 +311,7 @@ function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
         </div>
       )}
 
-      {/* 一句话操作建议 */}
+      {/* 信号解读 */}
       <div className="text-[11px] text-slate-200 leading-relaxed border-l-2 border-violet-500/30 pl-2 whitespace-pre-wrap">
         {analysis.suggestion}
       </div>
@@ -653,6 +654,7 @@ export default function DragonTiger() {
     <section className="space-y-4">
       <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 px-4 py-2 text-xs text-amber-300/90">
         龙虎榜与游资席位追踪 — 数据来源：东方财富数据中心 · 席位台账逐日积累，T+1/T+5 自动回填
+        <FreshnessTag type="t_plus_1" />
       </div>
 
       {/* 合力/独食信号 */}
@@ -743,7 +745,7 @@ export default function DragonTiger() {
                                     <SeatTable seats={seatData.sell} type="sell" behaviorMap={behaviorByDept} />
                                   </div>
                                 </div>
-                                {/* v9.13：综合分析 + 操作建议 */}
+                                {/* v9.13：综合分析 + 信号研判 */}
                                 <BuySellAnalysisPanel buyers={seatData.buy} sellers={seatData.sell} behaviorMap={behaviorByDept} />
                               </div>
                             ) : (
