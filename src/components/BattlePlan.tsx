@@ -64,7 +64,7 @@ function FactorRow({ label, score, weight }: { label: string; score: number; wei
 }
 
 // ============== 板块卡 ==============
-function ThemeCard({ t }: { t: ThemeScoreResult }) {
+function ThemeCard({ t, showPositionCap, positionCap }: { t: ThemeScoreResult; showPositionCap?: boolean; positionCap?: number }) {
   const [open, setOpen] = useState(false);
   // P1：历史命中率徽标（纯读 localStorage，非 hook）
   const hitBadge = getBoardHitBadge(t.board);
@@ -83,6 +83,12 @@ function ThemeCard({ t }: { t: ThemeScoreResult }) {
             </span>
           )}
           <HitBadge badge={hitBadge} />
+          {/* v9.15：低闸门模式显示仓位上限角标 */}
+          {showPositionCap && positionCap != null && (
+            <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30" title="低闸门模式，建议仓位上限">
+              💰 上限 {positionCap}% 仓
+            </span>
+          )}
         </div>
         <span className={`text-lg font-black ${scoreColor(t.total)}`}>{t.total}</span>
       </div>
@@ -101,7 +107,7 @@ function ThemeCard({ t }: { t: ThemeScoreResult }) {
 }
 
 // ============== 个股卡 ==============
-function StockCard({ s }: { s: StockScoreResult }) {
+function StockCard({ s, showPositionCap, positionCap }: { s: StockScoreResult; showPositionCap?: boolean; positionCap?: number }) {
   const [open, setOpen] = useState(false);
   // P1：历史命中率徽标
   const hitBadge = getStockHitBadge(s.code);
@@ -114,6 +120,12 @@ function StockCard({ s }: { s: StockScoreResult }) {
           <span className="text-[11px] text-slate-500 ml-1">{s.code}</span>
           <TierBadge tier={s.tier} />
           <HitBadge badge={hitBadge} />
+          {/* v9.15：低闸门模式显示仓位上限角标 */}
+          {showPositionCap && positionCap != null && (
+            <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30" title="低闸门模式，建议仓位上限">
+              💰 {positionCap}%
+            </span>
+          )}
         </div>
         <span className={`text-lg font-black ${scoreColor(s.total)}`}>{s.total}</span>
       </div>
@@ -144,14 +156,20 @@ function StockCard({ s }: { s: StockScoreResult }) {
 }
 
 // ============== ETF 卡 ==============
-function ETFCard({ e }: { e: ETFScoreResult }) {
+function ETFCard({ e, showPositionCap, positionCap }: { e: ETFScoreResult; showPositionCap?: boolean; positionCap?: number }) {
   const [open, setOpen] = useState(false);
   return (
     <div className={`rounded-lg border p-2 ${scoreBg(e.total)}`}>
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(v => !v)}>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap">
           <span className="text-xs font-bold text-slate-200">{e.name}</span>
           <TierBadge tier={e.tier} />
+          {/* v9.15：低闸门模式显示仓位上限角标 */}
+          {showPositionCap && positionCap != null && (
+            <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30" title="低闸门模式，建议仓位上限">
+              💰 {positionCap}%
+            </span>
+          )}
         </div>
         <span className={`text-lg font-black ${scoreColor(e.total)}`}>{e.total}</span>
       </div>
@@ -207,8 +225,21 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
 
   const { gate, themes, stocks, etfs } = data;
   // "今日无推荐"仅在三种情况出现：闸门≤0.3 / 硬熔断且全C档 / 数据管道失败
-  const allCTier = [...themes, ...stocks].every(x => x.tier === "C") && etfs.every(x => x.tier === "C");
-  const showNoRec = (gate.factor != null && gate.factor <= 0.3) || (gate.reason.length > 0 && allCTier && themes.length + stocks.length + etfs.length > 0) || (themes.length === 0 && stocks.length === 0 && etfs.length === 0);
+  // v9.15：模式化（full / cautious / low / empty）—— 不再"一票否决"
+  // 即使闸门低（情绪≥80 极度贪婪/情绪<25 极度恐慌），也按"低仓试探"展示最强主线
+  const mode = gate.mode ?? "empty";
+  const isCautious = mode === "cautious";
+  const isLow = mode === "low";
+  const isEmpty = mode === "empty"
+    || (themes.length === 0 && stocks.length === 0 && etfs.length === 0);
+
+  // 各模式下展示的推荐数量
+  //   full:    全部
+  //   cautious: 主题前 3 + 个股前 5 + ETF 全部
+  //   low:     主题前 1 + 个股前 2 + ETF 前 1（最强主线）
+  const topThemes = isLow ? themes.slice(0, 1) : isCautious ? themes.slice(0, 3) : themes;
+  const topStocks = isLow ? stocks.slice(0, 2) : isCautious ? stocks.slice(0, 5) : stocks;
+  const topEtfs = isLow ? etfs.slice(0, 1) : etfs;
 
   return (
     <div className="rounded-xl border border-amber-500/20 bg-amber-950/10 p-4 space-y-3">
@@ -223,6 +254,22 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
           }`}>
             闸门×{gate.factor != null ? gate.factor.toFixed(1) : "—"} {gate.label}
           </span>
+          {/* v9.15：模式徽标 */}
+          {mode === "cautious" && (
+            <span className="rounded px-2 py-0.5 text-[11px] font-bold bg-amber-500/20 text-amber-300">
+              ⚠️ 谨慎模式 · 仓位 ≤ {gate.positionLimit}%
+            </span>
+          )}
+          {mode === "low" && (
+            <span className="rounded px-2 py-0.5 text-[11px] font-bold bg-rose-500/20 text-rose-300">
+              🔻 低闸门模式 · 仓位 ≤ {gate.positionLimit}%
+            </span>
+          )}
+          {mode === "full" && (
+            <span className="rounded px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-300">
+              🟢 全档模式 · 仓位 {gate.positionLimit}%
+            </span>
+          )}
         </div>
         {gate.reason.length > 0 && (
           <div className="flex flex-wrap gap-1">
@@ -233,20 +280,28 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
         )}
       </div>
 
-      {!showNoRec ? (
+      {/* v9.15：低闸门模式警示横幅 */}
+      {isLow && gate.riskLevel === "high" && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
+          ⚠️ <b>市场极端情绪（闸门×{gate.factor?.toFixed(1)}）</b>—— 但最强主线仍有资金接力，列出 <b>1 条主题 + 2 只个股 + 1 只 ETF</b>，每张卡角标"低仓试探 {gate.positionLimit}%"。
+          建议小仓试错，及时止盈止损，<b>不可重仓追高</b>。
+        </div>
+      )}
+
+      {!isEmpty ? (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
           {/* 板块列 */}
           <div className="space-y-2">
-            <div className="text-[11px] font-bold text-slate-400">板块推荐</div>
-            {themes.length > 0 ? themes.map(t => <ThemeCard key={t.board} t={t} />) : (
+            <div className="text-[11px] font-bold text-slate-400">板块推荐 {isLow && "(最强主线)"}</div>
+            {topThemes.length > 0 ? topThemes.map(t => <ThemeCard key={t.board} t={t} showPositionCap={isLow} positionCap={gate.positionLimit} />) : (
               <div className="text-[11px] text-slate-500">无符合条件板块</div>
             )}
           </div>
 
           {/* 个股列 */}
           <div className="space-y-2">
-            <div className="text-[11px] font-bold text-slate-400">个股推荐</div>
-            {stocks.length > 0 ? stocks.map(s => <StockCard key={s.code} s={s} />) : (
+            <div className="text-[11px] font-bold text-slate-400">个股推荐 {isLow && "(精选)"}</div>
+            {topStocks.length > 0 ? topStocks.map(s => <StockCard key={s.code} s={s} showPositionCap={isLow} positionCap={gate.positionLimit} />) : (
               <div className="text-[11px] text-slate-500">
                 {gate.factor != null && gate.factor <= 0.3 ? "低闸门期仅推荐ETF" : "无符合条件个股"}
               </div>
@@ -255,20 +310,20 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
 
           {/* ETF 列 */}
           <div className="space-y-2">
-            <div className="text-[11px] font-bold text-slate-400">ETF推荐</div>
-            {etfs.length > 0 ? etfs.map(e => <ETFCard key={e.code} e={e} />) : (
+            <div className="text-[11px] font-bold text-slate-400">ETF推荐 {isLow && "(最强主题)"}</div>
+            {topEtfs.length > 0 ? topEtfs.map(e => <ETFCard key={e.code} e={e} showPositionCap={isLow} positionCap={gate.positionLimit} />) : (
               <div className="text-[11px] text-slate-500">无符合条件ETF</div>
             )}
           </div>
         </div>
       ) : (
         <div className="text-center py-4 text-sm text-slate-400">
-          今日无推荐，空仓也是答案
+          今日无推荐（数据缺失或全档低于阈值）
         </div>
       )}
 
-      {/* 候选观察池（Fix5） */}
-      {(data.candidateThemes?.length || data.candidateStocks?.length) ? (
+      {/* 候选观察池（Fix5）—— cautious / low 模式不显示 */}
+      {!isCautious && !isLow && (data.candidateThemes?.length || data.candidateStocks?.length) ? (
         <CandidatePool themes={data.candidateThemes ?? []} stocks={data.candidateStocks ?? []} />
       ) : null}
 

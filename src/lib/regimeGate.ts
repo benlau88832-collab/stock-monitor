@@ -1,5 +1,6 @@
-// 市场闸门：根据情绪分+熔断条件输出仓位系数
+// 市场闸门：根据情绪分+熔断条件输出仓位系数 + 推荐模式
 // 纯函数，不碰 DOM/localStorage/网络
+// v9.15：3 模式（full/cautious/low/empty）—— 机构纪律+游资选股 融合
 
 import type { OverviewData } from "../App";
 
@@ -22,17 +23,31 @@ const FUSE_BLASTED_RATE = 40;
 /** 晋级率熔断阈值（可调）：昨日首板今日继续封板比例 < 10% 时触发熔断 */
 const FUSE_PROMOTION_RATE = 0.10;
 
+// ============== 推荐模式（v9.15 新增） ==============
+// 4 种状态：
+//   full    - 正常模式：闸门≥0.7，显示所有 A/B 档推荐
+//   cautious - 谨慎模式：0.3≤闸门<0.7 或熔断，显示 A 档 + 精选 B 档 + 风险警示
+//   low     - 低闸门模式：闸门<0.3，显示最强主线 1-2 个 + 仓位角标 + 风险警示
+//   empty   - 数据缺失：闸门=null 或无推荐
+export type GateMode = "full" | "cautious" | "low" | "empty";
+
 export interface GateResult {
   factor: number | null;   // null = 数据不足，不给出系数
   label: string;
   reason: string[];  // 熔断原因列表
+  /** v9.15：推荐模式 */
+  mode: GateMode;
+  /** v9.15：建议仓位上限 %（基于 mode + factor） */
+  positionLimit: number;
+  /** v9.15：风险提示级别（"low" | "mid" | "high" | "none"） */
+  riskLevel: "low" | "mid" | "high" | "none";
 }
 
 export function computeGate(overview: OverviewData): GateResult {
   const s = overview.sentiment;
   // 数据缺失护栏：sentiment 无效(0/null/NaN)时，绝不下"极度恐慌"结论
   if (s == null || !Number.isFinite(s) || s <= 0) {
-    return { factor: null, label: "数据不足·暂不给出系数", reason: [] };
+    return { factor: null, label: "数据不足·暂不给出系数", reason: [], mode: "empty", positionLimit: 0, riskLevel: "none" };
   }
 
   // 基础映射
@@ -65,5 +80,40 @@ export function computeGate(overview: OverviewData): GateResult {
     factor = Math.max(FUSE_FLOOR, factor * FUSE_MULTIPLIER);
   }
 
-  return { factor, label, reason };
+  // v9.15：计算推荐模式 + 仓位上限 + 风险等级
+  const { mode, positionLimit, riskLevel } = deriveGateMode(factor, reason.length > 0, s);
+  return { factor, label, reason, mode, positionLimit, riskLevel };
+}
+
+/** 闸门 → 推荐模式（纯函数，方便单测） */
+function deriveGateMode(
+  factor: number,
+  hasFuse: boolean,
+  sentiment: number,
+): { mode: GateMode; positionLimit: number; riskLevel: "low" | "mid" | "high" | "none" } {
+  if (factor == null) return { mode: "empty", positionLimit: 0, riskLevel: "none" };
+
+  // 闸门分层
+  if (factor < 0.3) {
+    // 极度贪婪（情绪≥80）或 极度恐慌（情绪<25） 或 熔断后衰减到 <0.3
+    return {
+      mode: "low",
+      positionLimit: 30,  // 上限 30% 仓
+      riskLevel: sentiment >= 80 ? "high" : "high",  // 极端情绪都是高风险
+    };
+  }
+  if (factor < 0.7 || hasFuse) {
+    // 半仓区 或 熔断
+    return {
+      mode: "cautious",
+      positionLimit: 50,  // 上限 50% 仓
+      riskLevel: hasFuse ? "mid" : "mid",
+    };
+  }
+  // factor >= 0.7
+  return {
+    mode: "full",
+    positionLimit: Math.round(factor * 100),  // 100% × 闸门（如 0.8 → 80%）
+    riskLevel: "low",
+  };
 }
