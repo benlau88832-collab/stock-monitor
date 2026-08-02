@@ -1,220 +1,157 @@
+// 今日主线作战卡（v9.16 打破重建）
+// 核心变化：
+//   1. 从"板块/个股/ETF 三列" → "主线排序（≥3条）"
+//   2. 每个主线内嵌 龙一/龙二/龙三（涨停梯队直出）
+//   3. ETF 按主线直出 + 风格感知排序
+//   4. 顶部市场风格标签（进攻/轮动/防守）+ 风险偏好
+//   5. LLM 精排逻辑 + 真主线 vs 脉冲判定
+
 import { useState } from "react";
-import { fmtPct, pctColor } from "../lib/format";
+import { fmtMoney } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
-import { getHitRateText, getBoardHitBadge, getStockHitBadge } from "../lib/recTracker";
+import { getHitRateText } from "../lib/recTracker";
 import type { GateResult } from "../lib/regimeGate";
-import type { ThemeScoreResult } from "../lib/themeScore";
-import type { StockScoreResult } from "../lib/stockScore";
+import type { MainlineCandidate } from "../lib/mainline";
+import type { MarketStyleInfo } from "../lib/mainline";
+import type { MainlineLLMResult } from "../lib/mainlineLLM";
 import type { ETFScoreResult } from "../lib/etfScore";
 
 // ============== Props ==============
 export interface BattlePlanData {
   gate: GateResult;
-  themes: ThemeScoreResult[];
-  stocks: StockScoreResult[];
+  /** 规则机候选主线（已排序，≥3条） */
+  candidates: MainlineCandidate[];
+  /** LLM 精排结果（可能为 null=未调用或降级） */
+  llmRanked: MainlineLLMResult[] | null;
+  /** 市场风格 */
+  marketStyle: MarketStyleInfo;
+  /** ETF 排序（含主线直出标记） */
   etfs: ETFScoreResult[];
   /** 候选观察池：第4-8名板块 */
-  candidateThemes?: ThemeScoreResult[];
-  /** 候选观察池：第6-10名个股 */
-  candidateStocks?: StockScoreResult[];
+  candidateThemes?: Array<{ board: string; total: number; tier: "A" | "B" | "C" }>;
 }
 
-function scoreColor(s: number): string {
-  if (s >= 80) return "text-rose-400";
-  if (s >= 60) return "text-amber-300";
-  return "text-slate-400";
-}
-
-function TierBadge({ tier }: { tier: "A" | "B" | "C" }) {
-  const cls = tier === "A" ? "bg-emerald-500/20 text-emerald-300" : tier === "B" ? "bg-amber-500/20 text-amber-300" : "bg-slate-500/20 text-slate-400";
-  const label = tier === "A" ? "A档" : tier === "B" ? "B档" : "C档·弱信号";
-  return <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${cls}`}>{label}</span>;
-}
-
-// ============== P1：历史命中率徽标（信号验证闭环回灌） ==============
-// 用历史推荐记录给"今日推荐"打命中率角标：让用户知道这个信号以前准不准。
-// 样本>=3 才显示；胜率>=60%绿 / >=40%黄 / <40%红（与信号账本健康度口径一致）
-function HitBadge({ badge }: { badge: { label: string; hitRate: number | null; color: "good" | "mid" | "bad" | "none" } }) {
-  if (badge.hitRate == null) return null;
-  const cls = badge.color === "good" ? "bg-emerald-500/20 text-emerald-300"
-    : badge.color === "mid" ? "bg-amber-500/20 text-amber-300"
-    : "bg-rose-500/20 text-rose-300";
-  const title = badge.color === "bad" ? "历史胜率<40%，该信号可信度存疑" : `历史推荐命中率 ${badge.hitRate}%`;
+// ============== 风格徽标 ==============
+function StyleBadge({ style }: { style: MarketStyleInfo }) {
+  const cls = style.style === "attack" ? "bg-rose-500/20 text-rose-300"
+    : style.style === "defense" ? "bg-sky-500/20 text-sky-300"
+    : "bg-amber-500/20 text-amber-300";
+  const icon = style.style === "attack" ? "🔥" : style.style === "defense" ? "🛡️" : "🔁";
   return (
-    <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${cls}`} title={title}>
-      🎯 {badge.label}
+    <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${cls}`}>
+      {icon} {style.label} · 风险偏好{style.riskAppetite}
     </span>
   );
 }
 
-function scoreBg(s: number): string {
-  if (s >= 80) return "border-rose-500/30 bg-rose-500/5";
-  if (s >= 60) return "border-amber-500/30 bg-amber-500/5";
-  return "border-slate-500/30 bg-slate-500/5";
-}
-
-// ============== 因子分解展开 ==============
-function FactorRow({ label, score, weight }: { label: string; score: number; weight: string }) {
+// ============== 主线区块（含龙一龙二龙三） ==============
+function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm }: {
+  rank: number;
+  name: string;
+  ztCount: number;
+  height: number;
+  mainNet: number;
+  leaders: Array<{ code: string; name: string; role: string; reason: string }>;
+  logic?: string;
+  isPulse?: boolean;
+  caution?: string;
+  llm?: boolean;
+}) {
+  const rankColor = rank === 1 ? "border-rose-500/40 bg-rose-500/5" : rank === 2 ? "border-amber-500/30 bg-amber-500/5" : "border-slate-500/20 bg-white/5";
+  const rankLabel = rank === 1 ? "🏆 第一主线" : rank === 2 ? "🥈 第二主线" : "🥉 第三主线";
+  const rankText = rank === 1 ? "text-rose-300" : rank === 2 ? "text-amber-300" : "text-slate-300";
   return (
-    <div className="flex items-center justify-between text-[11px]">
-      <span className="text-slate-500">{label}({weight})</span>
-      <span className={scoreColor(score)}>{score}</span>
-    </div>
-  );
-}
-
-// ============== 板块卡 ==============
-function ThemeCard({ t, showPositionCap, positionCap }: { t: ThemeScoreResult; showPositionCap?: boolean; positionCap?: number }) {
-  const [open, setOpen] = useState(false);
-  // P1：历史命中率徽标（纯读 localStorage，非 hook）
-  const hitBadge = getBoardHitBadge(t.board);
-  return (
-    <div className={`rounded-lg border p-2 ${scoreBg(t.total)}`}>
-      <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(v => !v)}>
-        <div className="flex items-center gap-1 flex-wrap">
-          <span className="text-xs font-bold text-slate-200">{t.board}</span>
-          <span className={`rounded px-1 py-0.5 text-[9px] ${t.kind === "industry" ? "bg-slate-500/20 text-slate-400" : "bg-amber-500/20 text-amber-300"}`}>
-            {t.kind === "industry" ? "行业" : "题材"}
+    <div className={`rounded-lg border p-2.5 ${rankColor}`}>
+      <div className="flex items-center justify-between flex-wrap gap-1">
+        <div className="flex items-center gap-2">
+          <span className={`text-xs font-black ${rankText}`}>{rankLabel}</span>
+          <span className="text-sm font-bold text-slate-100">{name}</span>
+          {isPulse && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-slate-500/20 text-slate-400">💨 脉冲线</span>}
+          {llm && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-violet-500/20 text-violet-300">LLM</span>}
+        </div>
+        <div className="flex gap-1.5 text-[10px] text-slate-400">
+          <span className="rounded bg-black/30 px-1.5 py-0.5">涨停 <b className="text-rose-300">{ztCount}</b></span>
+          <span className="rounded bg-black/30 px-1.5 py-0.5">{height}板</span>
+          <span className={`rounded bg-black/30 px-1.5 py-0.5 ${mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}`}>
+            资金 {fmtMoney(mainNet)}
           </span>
-          <TierBadge tier={t.tier} />
-          {t.newsSource && (
-            <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${t.newsSource === "LLM" ? "bg-violet-500/20 text-violet-300" : "bg-slate-500/20 text-slate-500"}`}>
-              {t.newsSource}
-            </span>
-          )}
-          <HitBadge badge={hitBadge} />
-          {/* v9.15：低闸门模式显示仓位上限角标 */}
-          {showPositionCap && positionCap != null && (
-            <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30" title="低闸门模式，建议仓位上限">
-              💰 上限 {positionCap}% 仓
-            </span>
-          )}
         </div>
-        <span className={`text-lg font-black ${scoreColor(t.total)}`}>{t.total}</span>
       </div>
-      <div className="text-[11px] text-slate-400 mt-1">阶段: {t.role}</div>
-      <div className="text-[11px] text-rose-400/80 mt-0.5">❌ 板块主力净额转负→失效</div>
-      {open && (
-        <div className="mt-1 border-t border-white/10 pt-1 space-y-0.5">
-          <FactorRow label="资金" score={t.factors.fund} weight="35%" />
-          <FactorRow label="梯队" score={t.factors.ladder} weight="25%" />
-          <FactorRow label="阶段" score={t.factors.stage} weight="20%" />
-          <FactorRow label="消息" score={t.factors.news} weight="20%" />
+
+      {/* 龙一龙二龙三 */}
+      <div className="mt-1.5 space-y-1">
+        {leaders.length === 0 && <div className="text-[11px] text-slate-500">涨停梯队数据积累中</div>}
+        {leaders.map((l, i) => (
+          <div key={i} className="flex items-center gap-2 text-[11px]">
+            <span className={`w-8 shrink-0 rounded px-1 py-0.5 text-center text-[10px] font-bold ${
+              l.role === "龙一" ? "bg-rose-500/20 text-rose-300"
+              : l.role === "龙二" ? "bg-amber-500/20 text-amber-300"
+              : "bg-slate-500/20 text-slate-300"
+            }`}>{l.role}</span>
+            <a href={stockRealUrl(l.code)} target="_blank" rel="noopener noreferrer" className="font-semibold text-slate-100 hover:text-amber-300">
+              {l.name}
+            </a>
+            <span className="text-slate-500">{l.code}</span>
+            <span className="text-slate-500 truncate">{l.reason}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* LLM 逻辑 */}
+      {logic && (
+        <div className="mt-1.5 rounded bg-black/20 px-2 py-1 text-[10px] text-slate-400 leading-relaxed">
+          📌 {logic}
+          {caution && <span className="ml-1 text-amber-400">⚠️ {caution}</span>}
         </div>
       )}
     </div>
   );
 }
 
-// ============== 个股卡 ==============
-function StockCard({ s, showPositionCap, positionCap }: { s: StockScoreResult; showPositionCap?: boolean; positionCap?: number }) {
+// ============== 个股候选池（非涨停，资金共振） ==============
+function CandidatePool({ themes }: { themes: BattlePlanData["candidateThemes"] }) {
   const [open, setOpen] = useState(false);
-  // P1：历史命中率徽标
-  const hitBadge = getStockHitBadge(s.code);
-  return (
-    <div className={`rounded-lg border p-2 ${scoreBg(s.total)}`}>
-      <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(v => !v)}>
-        <div className="flex items-center gap-1 flex-wrap">
-          <a href={stockRealUrl(s.code)} target="_blank" rel="noopener noreferrer"
-            className="text-xs font-bold text-slate-200 hover:text-amber-300">{s.name}</a>
-          <span className="text-[11px] text-slate-500 ml-1">{s.code}</span>
-          <TierBadge tier={s.tier} />
-          <HitBadge badge={hitBadge} />
-          {/* v9.15：低闸门模式显示仓位上限角标 */}
-          {showPositionCap && positionCap != null && (
-            <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30" title="低闸门模式，建议仓位上限">
-              💰 {positionCap}%
-            </span>
-          )}
-        </div>
-        <span className={`text-lg font-black ${scoreColor(s.total)}`}>{s.total}</span>
-      </div>
-      <div className="flex items-center gap-2 text-[11px] mt-0.5">
-        <span className={pctColor(s.pct)}>{fmtPct(s.pct)}</span>
-        <span className="text-slate-400">¥{s.price.toFixed(2)}</span>
-      </div>
-      <div className="text-[11px] text-rose-400/80 mt-0.5">
-        ❌ 断板→失效 | 跌出板块资金Top10→失效
-        {s.invalidation && <span className="ml-1">| {s.invalidation}→失效</span>}
-      </div>
-      <div className="flex items-center gap-1 mt-0.5">
-        <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${s.newsSource === "LLM" ? "bg-violet-500/20 text-violet-300" : "bg-slate-500/20 text-slate-500"}`}>
-          消息:{s.newsSource}
-        </span>
-      </div>
-      {open && (
-        <div className="mt-1 border-t border-white/10 pt-1 space-y-0.5">
-          <FactorRow label="资金" score={s.factors.fund} weight="30%" />
-          <FactorRow label="流动性" score={s.factors.liquidity} weight="25%" />
-          <FactorRow label="梯队" score={s.factors.ladder} weight="20%" />
-          <FactorRow label="消息" score={s.factors.news} weight="15%" />
-          <FactorRow label="席位" score={s.factors.seat} weight="10%" />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============== ETF 卡 ==============
-function ETFCard({ e, showPositionCap, positionCap }: { e: ETFScoreResult; showPositionCap?: boolean; positionCap?: number }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className={`rounded-lg border p-2 ${scoreBg(e.total)}`}>
-      <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(v => !v)}>
-        <div className="flex items-center gap-1 flex-wrap">
-          <span className="text-xs font-bold text-slate-200">{e.name}</span>
-          <TierBadge tier={e.tier} />
-          {/* v9.15：低闸门模式显示仓位上限角标 */}
-          {showPositionCap && positionCap != null && (
-            <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30" title="低闸门模式，建议仓位上限">
-              💰 {positionCap}%
-            </span>
-          )}
-        </div>
-        <span className={`text-lg font-black ${scoreColor(e.total)}`}>{e.total}</span>
-      </div>
-      {open && (
-        <div className="mt-1 border-t border-white/10 pt-1 space-y-0.5">
-          <FactorRow label="资金趋势" score={e.factors.fundTrend} weight="40%" />
-          <FactorRow label="板块联动" score={e.factors.boardLink} weight="35%" />
-          <FactorRow label="宏观" score={e.factors.macro} weight="25%" />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============== 候选观察池 ==============
-function CandidatePool({ themes, stocks }: { themes: ThemeScoreResult[]; stocks: StockScoreResult[] }) {
-  const [open, setOpen] = useState(false);
-  if (themes.length === 0 && stocks.length === 0) return null;
+  if (!themes || themes.length === 0) return null;
   return (
     <div>
       <button onClick={() => setOpen(v => !v)} className="text-[11px] text-slate-500 hover:text-slate-400">
-        {open ? "▲ 收起候选池" : "▼ 候选观察池"}
+        {open ? "▲ 收起候选观察池" : "▼ 候选观察池（轮动备选）"}
       </button>
       {open && (
-        <div className="mt-1 grid grid-cols-2 gap-2 text-[11px]">
-          <div>
-            <div className="text-slate-500 mb-0.5">板块候选(第4-8名)</div>
-            {themes.map(t => (
-              <div key={t.board} className="flex justify-between py-0.5">
-                <span className="text-slate-400">{t.board}</span>
-                <span className={scoreColor(t.total)}>{t.total} <TierBadge tier={t.tier} /></span>
-              </div>
-            ))}
-          </div>
-          <div>
-            <div className="text-slate-500 mb-0.5">个股候选(第6-10名)</div>
-            {stocks.map(s => (
-              <div key={s.code} className="flex justify-between py-0.5">
-                <span className="text-slate-400">{s.name}</span>
-                <span className={scoreColor(s.total)}>{s.total} <TierBadge tier={s.tier} /></span>
-              </div>
-            ))}
-          </div>
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {themes.map(t => (
+            <span key={t.board} className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300">
+              {t.board} <b className="text-slate-400">{t.total}</b>
+            </span>
+          ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============== ETF 排序区 ==============
+function ETFBlock({ etfs }: { etfs: ETFScoreResult[] }) {
+  if (etfs.length === 0) return null;
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+      <div className="text-[11px] font-bold text-emerald-300 mb-1.5">💰 ETF 排序（风格感知 + 主线直出）</div>
+      <div className="space-y-1">
+        {etfs.slice(0, 4).map((e, i) => (
+          <div key={e.code} className="flex items-center gap-2 text-[11px]">
+            <span className={`w-5 text-center font-black ${i === 0 ? "text-emerald-300" : "text-slate-500"}`}>{i + 1}</span>
+            <span className="font-semibold text-slate-100">{e.name}</span>
+            {e.fromMainline && e.matchedMainline && (
+              <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-300">主线直出</span>
+            )}
+            <span className="ml-auto text-slate-500 text-[10px]">{e.code}</span>
+            <span className={`font-black ${e.total >= 70 ? "text-emerald-300" : e.total >= 55 ? "text-amber-300" : "text-slate-400"}`}>{e.total}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 text-[10px] text-slate-600">
+        评分 = 资金趋势30% + 板块联动25% + 风格适配20% + 主线直出15% + 宏观10%
+      </div>
     </div>
   );
 }
@@ -223,30 +160,45 @@ function CandidatePool({ themes, stocks }: { themes: ThemeScoreResult[]; stocks:
 export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   if (!data) return null;
 
-  const { gate, themes, stocks, etfs } = data;
-  // "今日无推荐"仅在三种情况出现：闸门≤0.3 / 硬熔断且全C档 / 数据管道失败
-  // v9.15：模式化（full / cautious / low / empty）—— 不再"一票否决"
-  // 即使闸门低（情绪≥80 极度贪婪/情绪<25 极度恐慌），也按"低仓试探"展示最强主线
-  const mode = gate.mode ?? "empty";
-  const isCautious = mode === "cautious";
-  const isLow = mode === "low";
-  const isEmpty = mode === "empty"
-    || (themes.length === 0 && stocks.length === 0 && etfs.length === 0);
+  const { gate, candidates, llmRanked, marketStyle, etfs, candidateThemes } = data;
+  const isEmpty = candidates.length === 0;
 
-  // 各模式下展示的推荐数量
-  //   full:    全部
-  //   cautious: 主题前 3 + 个股前 5 + ETF 全部
-  //   low:     主题前 1 + 个股前 2 + ETF 前 1（最强主线）
-  const topThemes = isLow ? themes.slice(0, 1) : isCautious ? themes.slice(0, 3) : themes;
-  const topStocks = isLow ? stocks.slice(0, 2) : isCautious ? stocks.slice(0, 5) : stocks;
-  const topEtfs = isLow ? etfs.slice(0, 1) : etfs;
+  // LLM 精排结果 vs 规则机候选 合并展示
+  const display: Array<{
+    board: string; ztCount: number; height: number; mainNet: number;
+    leaders: Array<{ code: string; name: string; role: string; reason: string }>;
+    logic?: string; isPulse?: boolean; caution?: string; llm?: boolean;
+  }> = [];
+  if (llmRanked && llmRanked.length > 0) {
+    for (const r of llmRanked) {
+      display.push({
+        board: r.board, ztCount: 0, height: 0, mainNet: 0,
+        leaders: r.leaders,
+        logic: r.logic, isPulse: r.isPulse, caution: r.caution, llm: r.fromLLM,
+      });
+    }
+  } else {
+    for (const c of candidates) {
+      display.push({
+        board: c.board, ztCount: c.ztCount, height: c.height, mainNet: c.mainNet,
+        leaders: c.leaders,
+      });
+    }
+  }
+
+  // 补齐 ztCount/height/mainNet（从 candidates 按 board 匹配）
+  const candMap = new Map(candidates.map(c => [c.board, c]));
+  for (const d of display) {
+    const c = candMap.get(d.board);
+    if (c) { d.ztCount = c.ztCount; d.height = c.height; d.mainNet = c.mainNet; }
+  }
 
   return (
     <div className="rounded-xl border border-amber-500/20 bg-amber-950/10 p-4 space-y-3">
-      {/* 闸门状态条 */}
+      {/* 头部：闸门 + 风格 + 模式 */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-amber-200">⚔️ 今日作战卡</span>
+          <span className="text-sm font-bold text-amber-200">⚔️ 今日主线作战卡</span>
           <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${
             gate.factor != null && gate.factor >= 0.8 ? "bg-emerald-500/20 text-emerald-300" :
             gate.factor != null && gate.factor >= 0.5 ? "bg-amber-500/20 text-amber-300" :
@@ -254,22 +206,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
           }`}>
             闸门×{gate.factor != null ? gate.factor.toFixed(1) : "—"} {gate.label}
           </span>
-          {/* v9.15：模式徽标 */}
-          {mode === "cautious" && (
-            <span className="rounded px-2 py-0.5 text-[11px] font-bold bg-amber-500/20 text-amber-300">
-              ⚠️ 谨慎模式 · 仓位 ≤ {gate.positionLimit}%
-            </span>
-          )}
-          {mode === "low" && (
-            <span className="rounded px-2 py-0.5 text-[11px] font-bold bg-rose-500/20 text-rose-300">
-              🔻 低闸门模式 · 仓位 ≤ {gate.positionLimit}%
-            </span>
-          )}
-          {mode === "full" && (
-            <span className="rounded px-2 py-0.5 text-[11px] font-bold bg-emerald-500/20 text-emerald-300">
-              🟢 全档模式 · 仓位 {gate.positionLimit}%
-            </span>
-          )}
+          <StyleBadge style={marketStyle} />
         </div>
         {gate.reason.length > 0 && (
           <div className="flex flex-wrap gap-1">
@@ -280,52 +217,48 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
         )}
       </div>
 
-      {/* v9.15：低闸门模式警示横幅 */}
-      {isLow && gate.riskLevel === "high" && (
+      {/* 低闸门警示 */}
+      {gate.mode === "low" && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
-          ⚠️ <b>市场极端情绪（闸门×{gate.factor?.toFixed(1)}）</b>—— 但最强主线仍有资金接力，列出 <b>1 条主题 + 2 只个股 + 1 只 ETF</b>，每张卡角标"低仓试探 {gate.positionLimit}%"。
-          建议小仓试错，及时止盈止损，<b>不可重仓追高</b>。
+          ⚠️ <b>低闸门模式（闸门×{gate.factor?.toFixed(1)}）</b> —— 建议仓位 ≤ {gate.positionLimit}%，以下主线仅作观察，不可重仓追高。
         </div>
       )}
 
+      {/* 主线区块（≥3条） */}
       {!isEmpty ? (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          {/* 板块列 */}
-          <div className="space-y-2">
-            <div className="text-[11px] font-bold text-slate-400">板块推荐 {isLow && "(最强主线)"}</div>
-            {topThemes.length > 0 ? topThemes.map(t => <ThemeCard key={t.board} t={t} showPositionCap={isLow} positionCap={gate.positionLimit} />) : (
-              <div className="text-[11px] text-slate-500">无符合条件板块</div>
-            )}
-          </div>
-
-          {/* 个股列 */}
-          <div className="space-y-2">
-            <div className="text-[11px] font-bold text-slate-400">个股推荐 {isLow && "(精选)"}</div>
-            {topStocks.length > 0 ? topStocks.map(s => <StockCard key={s.code} s={s} showPositionCap={isLow} positionCap={gate.positionLimit} />) : (
-              <div className="text-[11px] text-slate-500">
-                {gate.factor != null && gate.factor <= 0.3 ? "低闸门期仅推荐ETF" : "无符合条件个股"}
-              </div>
-            )}
-          </div>
-
-          {/* ETF 列 */}
-          <div className="space-y-2">
-            <div className="text-[11px] font-bold text-slate-400">ETF推荐 {isLow && "(最强主题)"}</div>
-            {topEtfs.length > 0 ? topEtfs.map(e => <ETFCard key={e.code} e={e} showPositionCap={isLow} positionCap={gate.positionLimit} />) : (
-              <div className="text-[11px] text-slate-500">无符合条件ETF</div>
-            )}
-          </div>
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {display.slice(0, 4).map((d, i) => (
+            <MainlineBlock
+              key={d.board + i}
+              rank={i + 1}
+              name={d.board}
+              ztCount={d.ztCount}
+              height={d.height}
+              mainNet={d.mainNet}
+              leaders={d.leaders}
+              logic={d.logic}
+              isPulse={d.isPulse}
+              caution={d.caution}
+              llm={d.llm}
+            />
+          ))}
+          {display.length < 3 && (
+            <div className="rounded-lg border border-dashed border-white/10 p-3 text-center text-[11px] text-slate-500">
+              主线不足 3 条，市场缺乏清晰主线
+            </div>
+          )}
         </div>
       ) : (
         <div className="text-center py-4 text-sm text-slate-400">
-          今日无推荐（数据缺失或全档低于阈值）
+          今日无涨停潮（涨停家数不足或数据缺失）
         </div>
       )}
 
-      {/* 候选观察池（Fix5）—— cautious / low 模式不显示 */}
-      {!isCautious && !isLow && (data.candidateThemes?.length || data.candidateStocks?.length) ? (
-        <CandidatePool themes={data.candidateThemes ?? []} stocks={data.candidateStocks ?? []} />
-      ) : null}
+      {/* ETF 排序 */}
+      <ETFBlock etfs={etfs} />
+
+      {/* 候选观察池 */}
+      <CandidatePool themes={candidateThemes} />
 
       {/* 归因命中率 */}
       <div className="border-t border-white/10 pt-1.5 text-[11px] text-slate-500 text-center">

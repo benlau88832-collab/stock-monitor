@@ -4,6 +4,47 @@
 
 ---
 
+## v9.16 — 今日主线作战卡（打破重建：涨停潮→风格感知→主线排序→ETF直出） (2026-08-02)
+
+### 打破重建背景
+- 旧"今日推荐"三列结构（板块/个股/ETF）杂乱：个股用板块成分股而非涨停梯队、
+  news 维度写死空数组、LLM 只做新闻打分、ETF 无风格感知（7-31 进攻 AI 却推红利）
+- 用户要求：≥3 主线 + 多主线个股排序 + 多只 ETF 排序 + 随情绪/资金/大盘实时切换
+
+### 新引擎（三层）
+- **`lib/mainline.ts`（新）**：
+  - `buildMainlineCandidates(rawPool, boards, news)`：涨停潮检测（涨停≥2/高度≥2）
+    + 龙一龙二龙三判定（最高板+最早封板=龙一 / 次高板+封单=龙二 / 成交额大=龙三）
+    + 主线强度分（资金35% + 涨停潮35% + 梯队20% + 涨幅10%）
+  - `detectMarketStyle()`：进攻日/轮动日/防守日 + 风险偏好 0-100（情绪40%+涨停30%+涨家30%，
+    炸板率/闸门惩罚）
+- **`lib/mainlineLLM.ts`（新）**：`rankMainlinesWithLLM()` 精排主线（真主线vs脉冲 + rank + 龙头确认
+  + 逻辑/风险），复用 callAI 中枢，失败降级回规则
+- **`lib/etfScore.ts`（重构）**：五维权重 fundTrend30/boardLink25/styleFit20/mainlineLink15/macro10
+  - ETF_POOL 扩充：5G通信/AI/软件/游戏/新能源车/医药 等主线品种
+  - 修复红利 boardKeywords 空 bug + 进攻日红利减分
+  - `styleFit`：进攻日成长加分、防守日避险加分
+  - `mainlineLink`：主线→ETF 直出匹配（如主线=AI → 人工智能ETF/科创50）
+
+### App.tsx 数据流
+- `newsItems` 修复：从 dataStore `getAllSince(近2日)` 读真实新闻（原来空数组）
+- battlePlan 结构：`{ gate, candidates, llmRanked, marketStyle, etfs, candidateThemes }`
+- 推荐落盘：主线（含龙一龙二龙三）+ ETF
+- LLM 精排：规则渲染后异步 1 次，失败降级
+
+### BattlePlan.tsx（重建为"主线作战卡"）
+- 风格徽标（🔥进攻/🔁轮动/🛡️防守 + 风险偏好）
+- ≥3 主线区块：第一/第二/第三 + 脉冲线标记（LLM判定）
+- 每线：龙一龙二龙三（角色徽标 + 理由）+ LLM 逻辑 + 风险提示
+- ETF 排序区块：4 只（含主线直出标记）
+- 候选观察池（板块4-8名）
+
+### 其他
+- `index.html` title v9.15.1 → v9.16
+- `App.tsx` footer v9.16 · build 08-02 16:50
+
+---
+
 ## v9.15.1 — 今日推荐 bug 修复（v9.15 hotfix） (2026-08-02)
 
 ### Bug 1：闸门 × 0.3 错判为"谨慎模式"

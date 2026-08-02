@@ -20,11 +20,10 @@ import { ensureBoardMap } from "./lib/boardMap";
 import { saveZTSnapshot, loadPrevZTSnapshot } from "./lib/ztSnapshot";
 import { computeGate } from "./lib/regimeGate";
 import { computeThemeScores, type NewsItem as ThemeNewsItem } from "./lib/themeScore";
-import { computeStockScores, type StockInput } from "./lib/stockScore";
 import { computeETFScores, ETF_POOL, type ETFQuote } from "./lib/etfScore";
-import { buildSeatProfiles } from "./lib/seatLedger";
-import { scoreThemeNews, scoreStockNews, type StockNewsLLMResult } from "./lib/llmSignals";
-import type { LLMCatalystOverride } from "./lib/themeScore";
+import { buildMainlineCandidates, detectMarketStyle } from "./lib/mainline";
+import { rankMainlinesWithLLM } from "./lib/mainlineLLM";
+import { getAllSince } from "./lib/dataStore";
 
 import StatusBar from "./components/StatusBar";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
@@ -33,7 +32,7 @@ import { runSignalBackfill, isBackfilledToday, markBackfilledToday } from "./lib
 import { recordRecommendation, runAttribution } from "./lib/recTracker";
 import { getCurrentSession, type SessionPhase } from "./lib/tradingSession";
 import { emit as emitAlert } from "./lib/alertBus";
-import { localDateStr } from "./lib/format";
+import { localDateStr, localDateStrOffset } from "./lib/format";
 
 // 告警跃迁护栏：只在 false→true 时报一次，避免每分钟刷屏
 const lastSignalActive: Record<string, boolean> = {};
@@ -572,10 +571,13 @@ export default function App() {
         };
         const gate = computeGate(overviewForGate);
 
-        // 双轨候选池：行业(t:2) + 题材(t:3)，地域移出
+        // ============== 主线作战引擎（v9.16 打破重建） ==============
+        // 三层：涨停潮检测 → 风格感知 → 主线排序 + ETF 直出
         const mlBoards = mainlineBoards;
         const rawPool = limitPool?.rawZTPool ?? [];
-        const newsItems: ThemeNewsItem[] = [];
+        // v9.16 修复：newsItems 原来写死空数组 → 接 dataStore 真实新闻（近2日）
+        const { news: storeNews } = getAllSince(localDateStrOffset(2));
+        const newsItems: ThemeNewsItem[] = storeNews.map(n => ({ title: n.title, stars: n.stars ?? 0 }));
         const hlPulseNew: string[] = [];
 
         // 行业频道新增一次拉取（零浪费：30只足够覆盖Top行业）
@@ -602,49 +604,20 @@ export default function App() {
           ? computeThemeScores(allScoringBoards, rawPool, newsItems, hlPulseNew)
           : [];
 
-        // 排名制 Top N（闸门仅压缩数量，不乘入总分）
-        const topThemeCount = gate.factor <= 0.5 ? 3 : 8;
-        const topThemes = themeResults.slice(0, topThemeCount);
+        // ---- ① 涨停潮检测 + 龙头判定（规则机） ----
+        const candidates = buildMainlineCandidates(rawPool, allScoringBoards, newsItems);
 
-        // 个股分（factor≤0.3 时只出 ETF，跳过个股）
-        let topStocks: import("./lib/stockScore").StockScoreResult[] = [];
-        const allStockInputs: StockInput[] = []; // hoisted for candidate pool
-        if (gate.factor > 0.3 && themeResults.length > 0) {
-          // 对入选板块拉成分股（复用现有 JSONP 队列）
-          const seatProfiles = buildSeatProfiles();
-          const highPremiumSeats = new Set(seatProfiles.filter(p => p.premiumLevel === "high").map(p => p.deptName));
+        // ---- ② 市场风格感知（进攻/轮动/防守） ----
+        const marketStyle = detectMarketStyle({
+          sentiment,
+          gateFactor: gate.factor,
+          ztCount: rawPool.length,
+          blastedRate: limitPool?.blastedRate ?? null,
+          maxBoardHeight: maxBoardHeight ?? 0,
+          upRatio: brData && brData.total > 0 ? brData.up / brData.total : null,
+        });
 
-          for (const theme of topThemes.slice(0, 3)) {
-            // 找板块代码（从 mlBoards 匹配）
-            const boardInfo = [...mlBoards, ...industryBoards].find(b => b.name === theme.board);
-            if (!boardInfo) continue;
-            try {
-              const constStocks = await fetchBoardConstituents(boardInfo.code, 15);
-              for (const cs of constStocks) {
-                if (allStockInputs.some(s => s.code === cs.code)) continue;
-                allStockInputs.push({
-                  code: cs.code, name: cs.name, price: cs.price, pct: cs.pct,
-                  mainNet: cs.mainNet, mainNetPct: cs.mainNetPct, smallNet: cs.smallNet,
-                  mainNet5d: (cs as any).mainNet5d ?? 0, mainNet5dPct: (cs as any).mainNet5dPct ?? 0,
-                  extraLargeNet: cs.extraLargeNet ?? 0, largeNet: (cs as any).largeNet ?? 0,
-                  mediumNet: cs.mediumNet ?? 0,
-                  turnoverRate: cs.turnoverRate, volumeRatio: cs.volumeRatio,
-                  limitPct: stockLimitPct(cs.code),
-                  ladderRole: "跟风", // 简化：未做梯队角色精确匹配
-                  inZTPool: rawPool.some((z: any) => String(z.c) === cs.code),
-                  sealFundRatio: null,
-                  seatPremiumHigh: highPremiumSeats.size > 0, // 简化
-                  inPopularityTop10: false,
-                });
-              }
-            } catch { /* 成分股获取失败跳过 */ }
-          }
-
-          const scored = computeStockScores(allStockInputs);
-          topStocks = scored.filter(s => !s.vetoed).slice(0, 5);
-        }
-
-        // ETF 分：一次批量行情查询（fields 含 f164=5日主力净额）
+        // ETF 行情：一次批量查询（fields 含 f164=5日主力净额）
         const etfQuotes = new Map<string, ETFQuote>();
         try {
           const etfSecids = ETF_POOL.map(s => `${/^(60|68|5)/.test(s.code) ? "1" : "0"}.${s.code}`).join(",");
@@ -666,7 +639,6 @@ export default function App() {
         for (const t of themeResults) themeScoreMap.set(t.board, t.total);
 
         // 商品涨跌幅映射
-        // 商品涨跌幅映射（复用 refreshAll 内已拉取的 commodities 局部变量）
         const commodityPcts: Record<string, number> = {};
         try {
           for (const c of commodities) {
@@ -676,103 +648,47 @@ export default function App() {
           }
         } catch { /* commodities 可能未定义 */ }
 
-        const etfResults = computeETFScores(etfQuotes, themeScoreMap, commodityPcts);
-        const topETFs = etfResults.slice(0, 2); // 排名制 Top2
+        // ---- ③ ETF 评分（风格感知 + 主线直出） ----
+        const etfResults = computeETFScores(etfQuotes, themeScoreMap, commodityPcts, marketStyle, candidates.map(c => ({ board: c.board })));
+        const topETFs = etfResults.slice(0, 4); // 多只 ETF 排序
 
-        const ruleThemes = topThemes.slice(0, 3);
-        // v9.15-fix：低闸门模式（gate.factor <= 0.3）放宽个股 tier 限制
-        // 原因：极端情绪下 stockScore 容易全 C 档（B 档以上几乎无票），
-        //       但用户要求"强中选强"——低闸门时按"最强"（不卡 tier）展示 2 只
-        const isLowMode = gate.factor != null && gate.factor <= 0.3;
-        // v9.15-fix2：低闸门模式 + topStocks 为空时，从涨停板中选资金最强 2 只
-        // 原因：topThemes 里的成分股可能被 buildVetoList 全否决（板块资金净额转负），
-        //       但涨停股本身资金已确认（封板），低闸门可作为"低仓试探"精选
-        if (isLowMode && topStocks.length === 0 && rawPool.length > 0) {
-          topStocks = [...rawPool]
-            .sort((a: any, b: any) => (Number(b.fund) || 0) - (Number(a.fund) || 0))
-            .slice(0, 2)
-            .map((z: any): import("./lib/stockScore").StockScoreResult => ({
-              code: String(z.c ?? ""), name: String(z.n ?? ""),
-              price: Number(z.p) || 0, pct: Number(z.zdp) || 0,
-              total: 60,  // 低闸门精选固定 60 分
-              factors: { fund: 60, liquidity: 60, ladder: 60, news: 50, seat: 50 },
-              vetoed: false, vetoReasons: [],
-              newsSource: "规则版",
-              invalidation: "低闸门精选：涨停板资金最强",
-              tier: "B",
-            }));
-        }
-        const ruleStocks = isLowMode ? topStocks.slice(0, 2) : topStocks;
-        // 候选观察池（板块4-8名、个股6-10名）—— 低闸门模式禁用候选
-        const candidateThemes = themeResults.slice(3, 8);
-        const candidateStocks = isLowMode ? [] : (computeStockScores(allStockInputs).filter(s => !s.vetoed).slice(5, 10));
+        // 候选观察池（板块4-8名）
+        const candidateThemes = themeResults.slice(3, 8).map(t => ({ board: t.board, total: t.total, tier: t.tier }));
 
-        // 先用规则分渲染作战卡（渐进式：先规则后LLM）
-        setBattlePlan({ gate, themes: ruleThemes, stocks: ruleStocks, etfs: topETFs, candidateThemes, candidateStocks });
+        // ---- 先用规则分渲染作战卡（渐进式：先规则后LLM） ----
+        setBattlePlan({ gate, candidates, llmRanked: null, marketStyle, etfs: topETFs, candidateThemes });
 
         // ?debug=1 诊断模式（Fix4：可观测性）
         if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
-          console.log("=== 闸门输入 ===", { 情绪: sentiment, 炸板率: limitPool?.blastedRate, 溢价: premiumAvg, 晋级率: promotionRate, 系数: gate.factor, 标签: gate.label, 熔断: gate.reason });
-          console.table(themeResults.slice(0, 10).map(t => ({ 板块: t.board, 总分: t.total, 置信: t.tier, 资金: t.factors.fund, 梯队: t.factors.ladder, 阶段: t.factors.stage, 消息: t.factors.news, 来源: t.newsSource, 角色: t.role })));
-          const allScored = topStocks;
-          console.table(allScored.slice(0, 15).map(s => ({ 代码: s.code, 名称: s.name, 总分: s.total, 置信: s.tier, 否决: s.vetoed ? s.vetoReasons.join("/") : "否", 资金: s.factors.fund, 流动: s.factors.liquidity, 梯队: s.factors.ladder, 消息: s.factors.news, 席位: s.factors.seat })));
-          console.table(etfResults.map(e => ({ 代码: e.code, 名称: e.name, 总分: e.total, 置信: e.tier, 资金趋势: e.factors.fundTrend, 板块联动: e.factors.boardLink, 宏观: e.factors.macro })));
+          console.log("=== 主线引擎 ===", { 情绪: sentiment, 涨停数: rawPool.length, 风格: marketStyle.label, 风险偏好: marketStyle.riskAppetite, 闸门: gate.factor });
+          console.table(candidates.slice(0, 8).map(c => ({ 主线: c.board, 涨停: c.ztCount, 高度: c.height, 资金: (c.mainNet / 1e8).toFixed(0) + "亿", 强度: c.score, 龙一: c.leaders[0]?.name ?? "—", 龙二: c.leaders[1]?.name ?? "—" })));
+          console.table(etfResults.map(e => ({ 代码: e.code, 名称: e.name, 总分: e.total, 置信: e.tier, 资金: e.factors.fundTrend, 联动: e.factors.boardLink, 风格: e.factors.styleFit, 主线: e.factors.mainlineLink, 宏观: e.factors.macro, 直出: e.fromMainline ? e.matchedMainline : "" })));
         }
 
         // 推荐落盘（每日首次，同日同code不重复）
         const recDate = localDateStr();
-        for (const t of ruleThemes) {
-          recordRecommendation({ date: recDate, type: "theme", code: t.board, board: t.board, priceAtRec: 0, totalScore: t.total, gateFactor: gate.factor });
-        }
-        for (const s of ruleStocks) {
-          recordRecommendation({ date: recDate, type: "stock", code: s.code, board: "", priceAtRec: s.price, totalScore: s.total, gateFactor: gate.factor });
+        const recGateFactor = gate.factor ?? 0;
+        for (const c of candidates.slice(0, 5)) {
+          recordRecommendation({ date: recDate, type: "theme", code: c.board, board: c.board, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+          for (const l of c.leaders) {
+            recordRecommendation({ date: recDate, type: "stock", code: l.code, board: c.board, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+          }
         }
         for (const e of topETFs) {
-          recordRecommendation({ date: recDate, type: "etf", code: e.code, board: "", priceAtRec: 0, totalScore: e.total, gateFactor: gate.factor });
+          recordRecommendation({ date: recDate, type: "etf", code: e.code, board: e.matchedMainline ?? "", priceAtRec: 0, totalScore: e.total, gateFactor: recGateFactor });
         }
 
-        // LLM 消息维度异步补位（不阻塞首次渲染）
-        // 盘前1轮 + 盘中每30分钟(payload哈希变化) + 盘后1轮
-        (async () => {
-          try {
-            // 题材消息 LLM
-            const themeLLMInput = ruleThemes.map(t => ({
-              board: t.board, stage: t.role,
-              news: newsItems.map(n => n.title).slice(0, 6),
-            }));
-            const themeLLMResults = await scoreThemeNews(themeLLMInput);
-            const llmOverrides: LLMCatalystOverride[] = themeLLMResults.map(r => ({
-              board: r.board, catalyst: r.catalyst, fromLLM: r.fromLLM,
-            }));
-
-            // 用 LLM 结果重新计算板块分
-            if (llmOverrides.some(o => o.fromLLM)) {
-              const updatedThemes = computeThemeScores(
-                allScoringBoards,
-                rawPool, newsItems, hlPulseNew, llmOverrides,
-              ).slice(0, topThemeCount).slice(0, 3);
-
-              // 个股消息 LLM
-              const stockLLMInput = ruleStocks.slice(0, 10).map(s => ({
-                code: s.code, name: s.name, news: [] as string[],
-              }));
-              const stockLLMResults = await scoreStockNews(stockLLMInput);
-              const stockLLMMap = new Map<string, StockNewsLLMResult>();
-              for (const r of stockLLMResults) stockLLMMap.set(r.code, r);
-
-              // 覆盖个股 newsSource 和 invalidation
-              const updatedStocks = ruleStocks.map(s => {
-                const llm = stockLLMMap.get(s.code);
-                if (llm && llm.fromLLM) {
-                  return { ...s, newsSource: "LLM" as const, invalidation: llm.invalidation };
-                }
-                return s;
-              });
-
-              setBattlePlan({ gate, themes: updatedThemes, stocks: gate.factor <= 0.3 ? [] : updatedStocks, etfs: topETFs });
-            }
-          } catch { /* LLM 补位失败 → 保持规则版 */ }
-        })();
+        // ---- LLM 主线精排（异步补位，不阻塞首次渲染） ----
+        // 调用频率：规则渲染后 1 次 + 每 20-30 分钟（payload 变化时，由调用方节流）；
+        // 失败自动降级回规则排序（rankMainlinesWithLLM 内部处理）
+        if (candidates.length > 0) {
+          (async () => {
+            try {
+              const llmRanked = await rankMainlinesWithLLM(candidates.slice(0, 6), marketStyle);
+              setBattlePlan(prev => prev ? { ...prev, llmRanked } : prev);
+            } catch { /* LLM 精排失败 → 保持规则排序 */ }
+          })();
+        }
 
       } catch {
         setBattlePlan(null);
@@ -1062,7 +978,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.15.1 · build 08-02 13:50 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.16 · build 08-02 16:50 · 数据源：东方财富</div>
       </footer>
     </div>
   );
