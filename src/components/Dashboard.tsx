@@ -16,7 +16,6 @@ import BattlePlan, { type BattlePlanData } from "./BattlePlan";
 import GlobalSignals from "./GlobalSignals";
 import { fmtMoney, fmtPct, pctColor, localDateStrOffset } from "../lib/format";
 import { loadIntradaySeries, computeMomentum, suggestPosition } from "../lib/sentimentStore";
-import { stockRealUrl } from "../lib/realLinks";
 import { buildThemeLadder, type ZTPoolItem } from "../lib/themeLadder";
 import { getFeed, type AlertEvent } from "../lib/alertBus";
 import { getAllSince } from "../lib/dataStore";
@@ -24,11 +23,16 @@ import { matchStocksToMainline, summarizeMatches } from "../lib/positionMatch";
 import type { OverviewData, FundStructureData, GlobalData, MainlineData } from "../App";
 import type { SessionPhase } from "../lib/tradingSession";
 import type { GateResult } from "../lib/regimeGate";
+// v9.24-P1-4：异动捕捉引擎（S/A/B 分级 + 事件流）
+import { useRef } from "react";
+import { classifyAnomaly, emitAnomaly, subscribeAnomaly, getAnomalies, type AnomalyEvent } from "../lib/anomalyTier";
 
 // ============== 自选股异动项 ==============
 export interface WatchStockBrief {
   code: string; name: string; price: number; pct: number;
   turnoverRate: number; alert: boolean; alertTag: string;
+  /** v9.24-P1-4：量比（异动分级用） */
+  volumeRatio?: number;
 }
 
 // ============== 指数光带（极薄通栏） ==============
@@ -143,24 +147,102 @@ function PositionMatchStrip({ stocks, boards }: {
   );
 }
 
-// ============== 自选股异动带 ==============
-function WatchlistStrip({ stocks }: { stocks: WatchStockBrief[] }) {
+// ============== 自选股异动带（v9.24-P1-4 升级为异动捕捉引擎 S/A/B 分级） ==============
+// PRD 5.6/A5：自选异动模块升级——分级色条 + 触发原因 + 呼应主线 + AI研判 + 建议动作
+const LEVEL_META: Record<string, { label: string; bar: string; badge: string; ring: string }> = {
+  S: { label: "S", bar: "bg-rose-500", badge: "bg-rose-500 text-white", ring: "ring-rose-500/40" },
+  A: { label: "A", bar: "bg-amber-500", badge: "bg-amber-500/20 text-amber-300", ring: "ring-amber-500/30" },
+  B: { label: "B", bar: "bg-slate-500", badge: "bg-slate-500/20 text-slate-300", ring: "" },
+};
+
+function minsAgo(ts: number): string {
+  const m = Math.floor((Date.now() - ts) / 60000);
+  if (m <= 0) return "刚刚";
+  return `${m}分钟前`;
+}
+
+function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; mainlines?: string[] }) {
+  const [events, setEvents] = useState<AnomalyEvent[]>(() => getAnomalies());
+  const tickRef = useRef(0);
+  // 订阅事件流（S 级提醒触发时刷新）
+  useEffect(() => {
+    const refresh = () => setEvents([...getAnomalies()]);
+    refresh();
+    return subscribeAnomaly(refresh);
+  }, []);
+  // 每 30s 刷新"距首次触发"时间显示
+  useEffect(() => {
+    const t = setInterval(() => { tickRef.current++; setEvents([...getAnomalies()]); }, 30000);
+    return () => clearInterval(t);
+  }, []);
+
   if (stocks.length === 0) return null;
+
+  // 实时计算每只自选股的分级（S/A/B），S/A 级 emit 到事件流（冷却去重防刷屏）
+  const verdicts = stocks.map(s => ({
+    stock: s,
+    verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate }, mainlines),
+  })).filter((x): x is { stock: WatchStockBrief; verdict: NonNullable<ReturnType<typeof classifyAnomaly>> } => x.verdict != null);
+
+  useEffect(() => {
+    for (const { stock, verdict } of verdicts) {
+      if (verdict.level === "S" || verdict.level === "A") {
+        emitAnomaly(verdict, { code: stock.code, name: stock.name, pct: stock.pct, volumeRatio: stock.volumeRatio ?? null, turnoverRate: stock.turnoverRate });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stocks]);
+
+  // S 级事件（用于红色闪烁角标）
+  const sCount = events.filter(e => e.level === "S").length;
+
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 p-2">
-      <div className="text-[11px] text-slate-500 mb-1">自选异动</div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {stocks.map(s => (
-          <a key={s.code} href={stockRealUrl(s.code)} target="_blank" rel="noopener noreferrer"
-            className={`shrink-0 rounded-lg px-2 py-1 text-[11px] border ${s.alert ? "border-amber-500/30 bg-amber-500/5" : "border-white/10 bg-black/20"} hover:bg-white/5`}>
-            <div className="font-bold text-slate-200">{s.name}</div>
-            <div className="flex gap-1">
-              <span className={`font-semibold ${pctColor(s.pct)}`}>{fmtPct(s.pct)}</span>
-              {s.alert && <span className="text-amber-400 text-[9px]">{s.alertTag}</span>}
-            </div>
-          </a>
-        ))}
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[11px] text-slate-500">异动捕捉引擎</span>
+        <span className="flex items-center gap-1 text-[10px]">
+          {sCount > 0 && <span className="animate-pulse rounded bg-rose-500/20 px-1.5 py-0.5 font-bold text-rose-300">S×{sCount} 紧急</span>}
+          <span className="text-slate-600">S级红闪 · A级高亮 · B级关注</span>
+        </span>
       </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {verdicts.map(({ stock, verdict }) => {
+          const meta = LEVEL_META[verdict.level];
+          return (
+            <div key={stock.code}
+              className={`relative shrink-0 rounded-lg pl-3 pr-2 py-1 text-[11px] border bg-black/20 ${verdict.level === "S" ? "animate-pulse border-rose-500/40" : verdict.level === "A" ? "border-amber-500/30" : "border-white/10"}`}
+              title={`${verdict.reason}｜${verdict.aiComment}｜建议：${verdict.action}`}>
+              {/* 等级色条 */}
+              <span className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${meta.bar}`} />
+              <div className="flex items-center gap-1">
+                <span className={`rounded px-1 text-[10px] font-black ${meta.badge}`}>{meta.label}</span>
+                <span className="font-bold text-slate-200">{stock.name}</span>
+                <span className={`font-semibold ${pctColor(stock.pct)}`}>{fmtPct(stock.pct)}</span>
+              </div>
+              <div className="text-[10px] text-slate-500 leading-tight mt-0.5">
+                {verdict.reason}
+                {verdict.mainlineHit && <span className="ml-1 text-amber-300">⚡呼应主线</span>}
+              </div>
+              <div className="text-[10px] text-slate-400 leading-tight">
+                {verdict.aiComment} · <span className="text-violet-300">{verdict.action}</span>
+              </div>
+            </div>
+          );
+        })}
+        {verdicts.length === 0 && (
+          <div className="text-[11px] text-slate-600 py-1">暂无显著异动（S/A/B 均未触发）</div>
+        )}
+      </div>
+      {/* 事件流摘要（S/A 级历史） */}
+      {events.length > 0 && (
+        <div className="mt-1 border-t border-white/5 pt-1 text-[10px] text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
+          {events.slice(0, 5).map(e => (
+            <span key={e.id} className={e.level === "S" ? "text-rose-400" : e.level === "A" ? "text-amber-300/80" : "text-slate-500"}>
+              {minsAgo(e.ts)} [{e.level}] {e.name} {e.action}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -333,6 +415,8 @@ interface DashboardProps {
   loading: boolean;
   phase?: SessionPhase;
   watchStocks?: WatchStockBrief[];
+  /** v9.24-P1-4：今日主线名（异动分级"呼应主线"判断用） */
+  mainlines?: string[];
   onSwitchTab?: (tab: string) => void;
   /** v9.19-F2：今日涨停池（竞价台用） */
   ztPool?: Array<{ c: string; n: string; fbt: number; lbc: number }>;
@@ -342,7 +426,7 @@ interface DashboardProps {
 
 export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
-  phase: phaseProp = "post", watchStocks = [], onSwitchTab, ztPool, yesterdayZt,
+  phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, ztPool, yesterdayZt,
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
   const phase: SessionPhase = phaseProp;
@@ -386,7 +470,7 @@ export default function Dashboard({
                 promotionRate: overview.promotionRate ?? null,
               }} />
             )}
-            <WatchlistStrip stocks={watchStocks} />
+            <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
             <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
             <LimitTempBar overview={overview} />
             <MarketOverview data={overview} loading={loading} />
@@ -448,7 +532,7 @@ export default function Dashboard({
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
             <div className="space-y-2">
               <BattlePlan data={battlePlan ?? null} />
-              <WatchlistStrip stocks={watchStocks} />
+              <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
               <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
               <MarketOverview data={overview} loading={loading} />
               <PopularityRadar />

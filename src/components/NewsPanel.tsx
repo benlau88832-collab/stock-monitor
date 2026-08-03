@@ -36,9 +36,33 @@ interface EnrichedNews extends FastNewsItem {
   sentiment: "positive" | "negative" | "neutral";
   stars: number;
   isOverseas: boolean;
+  /** v9.24-P1-3：命中的今日主线名（PRD E1 关联主线） */
+  mainlineHit: string | null;
+  /** v9.24-P1-3：定价状态（尚未反应/已部分反应/已充分反应，按命中主线涨停家数近似） */
+  pricing: string | null;
 }
 
-function enrichNews(item: FastNewsItem): EnrichedNews {
+// v9.24-P1-3：消息 ↔ 主线关键词匹配（PRD E1）
+// 主线名拆子词匹配（"机器人/减速器" → "机器人"/"减速器"），子词长度≥2 防误命中
+export function matchMainlineByText(text: string, mainlines: Array<{ name: string; ztCount: number }>): { hit: string | null; ztCount: number } {
+  for (const m of mainlines) {
+    const subs = m.name.split(/[/·、,，\s]+/).filter(s => s.length >= 2);
+    for (const sub of subs) {
+      if (text.includes(sub)) return { hit: m.name, ztCount: m.ztCount };
+    }
+  }
+  return { hit: null, ztCount: 0 };
+}
+
+// 定价状态：命中主线已涨停 N 只 → 板块已反应程度（PRD E1 近似规则）
+function pricingOf(ztCount: number): string {
+  if (ztCount >= 10) return "已充分反应";
+  if (ztCount >= 5) return "已部分反应";
+  if (ztCount >= 1) return "反应中";
+  return "尚未反应";
+}
+
+function enrichNews(item: FastNewsItem, mainlines: Array<{ name: string; ztCount: number }>): EnrichedNews {
   const text = item.title + item.summary;
   const boards = matchBoardsByText(text);
   const isNeg = /下跌|利空|暴雷|退市|亏损|减持|违规|处罚|风险|预警|暴跌|崩盘|反倾销|调查|关税|诉讼|制裁|违约|爆仓|踩雷|破产|清仓|被罚|终止|叫停|停牌核查/.test(text);
@@ -48,7 +72,8 @@ function enrichNews(item: FastNewsItem): EnrichedNews {
   if (STAR3_KEYWORDS.some(kw => text.includes(kw))) stars = 3;
   else if (STAR2_KEYWORDS.some(kw => text.includes(kw))) stars = 2;
   const isOverseas = FOREIGN_KEYWORDS.some(kw => text.includes(kw));
-  return { ...item, boards, sentiment, stars, isOverseas };
+  const { hit, ztCount } = matchMainlineByText(text, mainlines);
+  return { ...item, boards, sentiment, stars, isOverseas, mainlineHit: hit, pricing: hit ? pricingOf(ztCount) : null };
 }
 
 function SentimentDot({ s }: { s: "positive" | "negative" | "neutral" }) {
@@ -75,6 +100,15 @@ function NewsCard({ item, highlight }: { item: EnrichedNews; highlight: boolean 
               {item.boards.map(b => (
                 <span key={b} className="rounded px-1 py-0.5 text-[11px] font-bold bg-slate-500/20 text-slate-300">{b}</span>
               ))}
+            </div>
+          )}
+          {/* v9.24-P1-3：命中主线 + 定价状态（PRD E1） */}
+          {item.mainlineHit && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              <span className="rounded px-1 py-0.5 text-[11px] font-bold bg-amber-500/20 text-amber-300">⚡命中主线：{item.mainlineHit}</span>
+              {item.pricing && (
+                <span className="rounded px-1 py-0.5 text-[11px] font-bold bg-sky-500/20 text-sky-300">定价：{item.pricing}</span>
+              )}
             </div>
           )}
         </div>
@@ -160,9 +194,11 @@ interface NewsPanelProps {
   autoRefresh?: boolean;
   strongBoards?: string[];
   marketSnapshot?: MarketSnapshotForNews | null;
+  /** v9.24-P1-3：今日主线列表（名称+涨停家数），用于消息-主线联动 */
+  mainlines?: Array<{ name: string; ztCount: number }>;
 }
 
-export default function NewsPanel({ autoRefresh = true, strongBoards = [], marketSnapshot }: NewsPanelProps) {
+export default function NewsPanel({ autoRefresh = true, strongBoards = [], marketSnapshot, mainlines = [] }: NewsPanelProps) {
   const [allNews, setAllNews] = useState<EnrichedNews[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -214,7 +250,7 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
     try {
       const list = await fetchFastNews(60);
       if (list.length > 0) {
-        const enriched = list.map(enrichNews);
+        const enriched = list.map(n => enrichNews(n, mainlines));
         setAllNews(enriched);
         setError(null);
         // 写入全局存储（dataStore 去重+30天滚动）

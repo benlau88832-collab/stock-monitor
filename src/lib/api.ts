@@ -1012,13 +1012,15 @@ export interface StockBrief {
   pct: number;
   amount: number; // 成交额(元)
   turnoverRate: number; // 换手率
+  volumeRatio?: number; // 量比（f10，v9.24-P1-4 异动分级用）
 }
 
 export async function fetchStockBriefBatch(codes: string[]): Promise<Map<string, StockBrief>> {
   if (codes.length === 0) return new Map();
   // push2 的 ulist.np 支持批量 secids（逗号分隔），一次最多约100只
+  // v9.24-P1-4：fields 加 f10（量比）供异动分级使用
   const secids = codes.map(c => toSecid(c)).join(",");
-  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f6,f8,f12,f14&secids=${secids}`;
+  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f6,f8,f10,f12,f14&secids=${secids}`;
   try {
     const json = await trackedJsonp<any>("人气榜行情", url, 10000);
     const diff = normalizeDiff(json?.data?.diff);
@@ -1033,6 +1035,7 @@ export async function fetchStockBriefBatch(codes: string[]): Promise<Map<string,
           pct: num(d.f3),
           amount: num(d.f6),
           turnoverRate: num(d.f8),
+          volumeRatio: num(d.f10),
         });
       }
     }

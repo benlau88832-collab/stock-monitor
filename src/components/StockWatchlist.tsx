@@ -6,6 +6,7 @@ import { stockRealUrl } from "../lib/realLinks";
 
 // ============== LLM 配置（引用 AI 中枢的统一常量） ==============
 import { callAI, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
+import StockDecisionCard from "./StockDecisionCard";
 
 // ============== 数据结构 ==============
 interface WatchStock {
@@ -19,6 +20,7 @@ interface WatchStock {
   healthTip: string; // 一句话提示
   llmDegraded?: boolean; // AI降级标识
 }
+export type { WatchStock };
 
 interface InfoItem {
   type: "news" | "announcement" | "fund";
@@ -140,6 +142,7 @@ function countAlerts(s: WatchStock): number {
 
 // ============== 否决条件引擎 ==============
 interface VetoItem { reason: string; color: string }
+export type { VetoItem };
 
 const VETO_PATTERNS: Array<{ re: RegExp; reason: string }> = [
   // 股东减持
@@ -285,7 +288,7 @@ function healthColor(score: number | null): string {
 }
 
 // ============== 主组件 ==============
-export default function StockWatchlist() {
+export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[] }) {
   const [codes, setCodes] = useState<string[]>(loadWatchlist);
   const [stocks, setStocks] = useState<Record<string, WatchStock>>({});
   const [selected, setSelected] = useState<string | null>(null);
@@ -609,6 +612,11 @@ export default function StockWatchlist() {
                 <span key={i} className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${v.color}`}>⛔ {v.reason}</span>
               ))}
             </div>
+          )}
+
+          {/* v9.24-P1-2：个股决策卡（PRD C1，融资融券之上，先给结论再给数据） */}
+          {selected && stocks[selected] && (
+            <StockDecisionCard stock={stocks[selected]} vetoList={vetoList} mainlines={mainlines} />
           )}
 
           {/* 融资融券信号卡（融资客动向） */}

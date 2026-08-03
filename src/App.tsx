@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
 import { saveTodaySentiment, loadPrevTradingDaySentiment, recordIntradaySentiment } from "./lib/sentimentStore";
 import TopNav, { type TabKey } from "./components/TopNav";
+import MainlineRanking from "./components/MainlineRanking";
 import FundStructure from "./components/FundStructure";
 import DarkPool from "./components/DarkPool";
 import GlobalSignals from "./components/GlobalSignals";
@@ -861,7 +862,8 @@ export default function App() {
         for (const [code, b] of map) {
           const alert = Math.abs(b.pct) >= 5 || b.turnoverRate > 10;
           const alertTag = Math.abs(b.pct) >= 5 ? `${b.pct > 0 ? "↑" : "↓"}${Math.abs(b.pct).toFixed(1)}%` : b.turnoverRate > 10 ? `换手${b.turnoverRate.toFixed(0)}%` : "";
-          items.push({ code, name: b.name, price: b.price, pct: b.pct, turnoverRate: b.turnoverRate, alert, alertTag });
+          // v9.24-P1-4：量比注入（异动分级 S/A/B 用）
+          items.push({ code, name: b.name, price: b.price, pct: b.pct, turnoverRate: b.turnoverRate, alert, alertTag, volumeRatio: b.volumeRatio });
         }
         items.sort((a, b) => Number(b.alert) - Number(a.alert) || Math.abs(b.pct) - Math.abs(a.pct));
         setWatchStocks(items);
@@ -1005,6 +1007,7 @@ export default function App() {
         {active === "dashboard" && (
           <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
             battlePlan={battlePlan} loading={loading} phase={currentPhase} watchStocks={watchStocks}
+            mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
             onSwitchTab={(tab) => setActive(tab as TabKey)}
             ztPool={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined}
             yesterdayZt={yesterdayZTPool?.map(z => ({ code: String(z.c), name: String(z.n) }))} />
@@ -1013,6 +1016,8 @@ export default function App() {
         {/* ====== 资金主线（深潜：完整资金结构+明暗盘+全球信号+产业链） ====== */}
         {active === "fundline" && (
           <>
+            {/* v9.24-P1-1：主线强度排行榜（PRD B1，页面首屏） */}
+            <MainlineRanking battlePlan={battlePlan} loading={loading} />
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构详情</h3>
               <FundStructure data={fundStructure} loading={loading} />
@@ -1053,7 +1058,8 @@ export default function App() {
         {/* ====== 个股雷达（lazy） ====== */}
         {active === "radar" && (
           <Suspense fallback={<div className="text-slate-400 p-6">加载个股雷达…</div>}>
-            <StockWatchlist />
+            {/* v9.24-P1-2：传入今日主线名，供个股决策卡做主线归属判断 */}
+            <StockWatchlist mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []} />
           </Suspense>
         )}
 
@@ -1068,6 +1074,7 @@ export default function App() {
                   ?? fundStructure?.boardRank?.inflow.slice(0, 5).map(b => b.name)
                   ?? []
                 }
+                mainlines={battlePlan?.candidates.map(c => ({ name: c.mainline, ztCount: c.ztCount })) ?? []}
                 marketSnapshot={overview ? {
                   // tsc-fix: OverviewData.sentiment 为 number|null，快照接口要求 number → 兜底 0
                   sentiment: overview.sentiment ?? 0,
@@ -1085,7 +1092,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.23.1 · build 08-03 15:40 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.24 · build 08-03 16:00 · 数据源：东方财富</div>
       </footer>
     </div>
   );
