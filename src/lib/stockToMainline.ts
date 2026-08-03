@@ -1,14 +1,17 @@
-// LLM 涨停主线归类（v9.17 核心新增）
+// LLM 涨停主线归类（v9.17 核心新增 + v9.20 概念板块分组）
 // 解决问题：申万行业 hybk 是硬分类（"家居用品""软件开发""互联网传媒"），
 //   无法聚出"AI应用""云计算""机器人"等跨行业概念主线。
 // 设计：让 Agnes 2.5 把涨停池按"软语义"重新归类到主线维度。
+//   失败降级：v9.20 改为按"概念板块"分组（不是 hybk 行业），更贴近实际需求。
 //
-// 五条红线：① LLM 只产出文本判断/归类 ② 失败降级回 hybk 硬分类
+// 五条红线：① LLM 只产出文本判断/归类 ② 失败降级回概念板块（不是行业）
 // ③ payload 只放稳定内容（名+行业+涨幅+连板）
 // ④ temperature 0.1、不流式、不开 thinking ⑤ 一次调用归类全涨停池
 
 import { callAI, parseAIJSON, type AIResult } from "./ai";
 import type { ZTPoolItem } from "./themeLadder";
+import { fetchBoardFundFlow, fetchBoardConstituents } from "./api";
+import { isRealConceptBoard } from "./boardTaxonomy";
 
 // ============== 数据结构 ==============
 /** 单只涨停股的主线归类（LLM 输出 + 代码聚合） */
@@ -108,24 +111,29 @@ export async function classifyStocksToMainlines(input: ClassifyInput): Promise<C
 
 任务：把以下涨停股按"软语义主线"重新归类（不要按申万行业名），例如：
 - 蓝色光标、昆仑万维、易点天下、中文在线 → "AI应用"
+- 中大力德、埃斯顿、绿的谐波、机器人ETF成分股 → "机器人/减速器"
+- 卧龙电驱、人形机器人概念股 → "机器人/电机"
 - 蓝色光标、宏景科技、浪潮信息、紫光股份 → "AI算力"（如果是算力标的）
 - 用友网络、泛微网络、卓易信息、普联软件 → "信创/国产软件"
 - 蓝色光标、芒果超媒、视觉中国 → "AI+传媒"
 - 中际旭创、新易盛、天孚通信、华工科技 → "光通信/CPO"
-- 卧龙电驱、机器人ETF成分股 → "机器人/减速器"
 - 中国稀土、北方稀土 → "稀土"
 - 寒武纪、海光信息 → "国产芯片"
 - 标的不足 2 只的归 "其他"（避免孤峰）
 
-注意：
-1. 主线名要"投资者口语化"（如"AI应用"不是"互联网信息服务"）
-2. 同一主线的票要确保是"同一概念"（不要把"机器人"和"AI应用"混在一起）
-3. 同时评估每条主线的"是否真主线"：涨停家数≥3 = 真主线；1-2只 = 弱主线/孤峰
+⚠️ 强制规则（v9.20-fix，用户反馈）：
+1. mainline 必须是"概念主线/题材主线"（如"机器人""AI应用""稀土""光通信CPO""信创""新能源车"等），
+   绝不能用申万行业名（绝不能是"通用设备""电气设备""计算机设备""通信设备""机械设备"这种行业分类）！
+2. 即使一只涨停股本身归在某个行业（hybk字段），也要看它实际所属的"概念题材"重新归类。
+   比如"中大力德"申万行业是"通用设备"，但概念归属是"机器人"——必须归到"机器人"！
+3. 主线名要"投资者口语化"（"机器人"不是"其他通用机械""其他专用设备"）。
+4. 同一主线的票要确保是"同一概念"（不要把"机器人"和"AI应用"混在一起）。
+5. 同时评估每条主线的"是否真主线"：涨停家数≥3 = 真主线（isPulse=false）；1-2只 = 弱主线/孤峰（isPulse=true）。
 
 输入涨停股（代码/名称/申万行业/连板数/涨幅）：
 ${JSON.stringify(pool)}
 
-输出格式（严格JSON数组）：
+输出格式（严格JSON）：
 {
   "stocks": [
     {"code":"002230","name":"科大讯飞","mainline":"AI应用","confidence":95},
@@ -149,9 +157,10 @@ ${JSON.stringify(pool)}
 }`,
   });
 
-  // 降级：LLM 失败 → 用 hybk 硬分类
+  // 降级：LLM 失败 → 用概念板块硬分类
   if (result.degraded) {
-    const fallback = fallbackByHybk(input);
+    console.warn("[stockToMainline] LLM 降级（degraded=true）→ fallback 概念板块分组。原因：详见 ai.ts 降级链路");
+    const fallback = await fallbackByHybk(input);
     return fallback;
   }
 
@@ -167,7 +176,17 @@ function parseClassifyResult(raw: string, input: ClassifyInput): ClassifyResult 
   }>(raw, ["stocks"]);
 
   if (!parsed || !Array.isArray(parsed.stocks)) {
-    return fallbackByHybk(input);
+    console.warn("[stockToMainline] LLM JSON 解析失败（返回格式非预期）→ fallback 概念板块分组");
+    console.warn("[stockToMainline] LLM 原始返回前 500 字:", String(raw).slice(0, 500));
+    // 异步调用兜底（不 await 阻塞此处已无意义）
+    fallbackByHybk(input).then(r => console.log("[stockToMainline] 兜底完成", r.overview));
+    // 同步返回临时空结果（其实调用方会忽略这里因为 LLM 已经返回）
+    return {
+      stockMap: new Map(),
+      groups: [],
+      overview: { totalStocks: 0, mainlineCount: 0, trueMainlineCount: 0, logic: "LLM 返回格式非预期，等待兜底完成" },
+      fromLLM: false,
+    };
   }
 
   // 解析个股归类
@@ -229,8 +248,108 @@ function parseClassifyResult(raw: string, input: ClassifyInput): ClassifyResult 
   };
 }
 
-// ============== 降级：hybk 硬分类（LLM 失败时） ==============
-function fallbackByHybk(input: ClassifyInput): ClassifyResult {
+// ============== 降级：按概念板块分组（v9.20 取代 hybk 分组） ==============
+// 解决：用户反馈"中大力德是机器人概念，机器人今天批量涨停，但抓到的是通用设备"
+// 策略：拉今日热门概念板块 → 拉成分股 → 反向索引涨停股 → 按概念聚合
+// 失败兜底：仍按 hybk 行业分组（保留旧逻辑）
+async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
+  try {
+    // 1. 拉今日概念板块（涨幅 + 资金流入 都过滤正向），取前 60 个
+    const concepts = await fetchBoardFundFlow("concept", 200);
+    const hot = concepts
+      .filter(b => isRealConceptBoard(b.name) && b.pct > 0 && (b.mainNet > 0))
+      .slice(0, 60);
+
+    // 2. 并行拉每个概念的成分股（限 15 只/概念，并发 8 避免限速）
+    const stockToConcepts = new Map<string, Set<string>>(); // code → 多个概念名
+    const chunks: typeof hot[] = [];
+    for (let i = 0; i < hot.length; i += 8) chunks.push(hot.slice(i, i + 8));
+    for (const chunk of chunks) {
+      await Promise.all(chunk.map(async (c) => {
+        try {
+          const constituents = await fetchBoardConstituents(c.code, 15);
+          for (const s of constituents) {
+            if (!stockToConcepts.has(s.code)) stockToConcepts.set(s.code, new Set());
+            stockToConcepts.get(s.code)!.add(c.name);
+          }
+        } catch { /* 单概念失败跳过 */ }
+      }));
+    }
+
+    // 3. 给涨停股打概念标签
+    const stockMap = new Map<string, StockToMainline>();
+    for (const p of input.rawPool.slice(0, 50)) {
+      const code = String(p.c ?? "");
+      if (!code) continue;
+      const cnames = stockToConcepts.get(code);
+      const mainline = cnames && cnames.size > 0
+        ? [...cnames].sort((a, b) => a.length - b.length)[0] // 最短的概念名（更精确）
+        : String(p.hybk ?? "其他"); // 没匹配上 → hybk 兜底
+      stockMap.set(code, {
+        code, name: String(p.n ?? ""),
+        hybk: String(p.hybk ?? "其他"),
+        mainline,
+        confidence: cnames && cnames.size > 0 ? 50 : 25,
+      });
+    }
+
+    // 4. 按 mainline 分组
+    const groups = new Map<string, ZTPoolItem[]>();
+    for (const p of input.rawPool) {
+      const ml = stockMap.get(String(p.c ?? ""))?.mainline ?? "其他";
+      const arr = groups.get(ml) ?? [];
+      arr.push(p);
+      groups.set(ml, arr);
+    }
+
+    const result: MainlineGroup[] = [];
+    for (const [ml, items] of groups) {
+      if (items.length < 2) continue; // ≥2 只才算主线
+      const stockCodes = items.map(p => String(p.c));
+      const leaders = pickLeaders(input.rawPool, stockCodes);
+      let mainNet = 0, mainNet5d = 0, boardPct = 0;
+      // 优先用概念板块的资金/涨幅
+      const matchedConcept = hot.find(c => c.name === ml);
+      if (matchedConcept) {
+        mainNet = matchedConcept.mainNet;
+        mainNet5d = (matchedConcept as any).mainNet5d ?? 0;
+        boardPct = matchedConcept.pct;
+      }
+      result.push({
+        mainline: ml,
+        ztCount: items.length,
+        leaders,
+        height: Math.max(...items.map(i => i.lbc ?? 1)),
+        mainNet, mainNet5d, boardPct,
+        newsTitles: input.newsItems.filter(n => n.title.includes(ml)).slice(0, 3).map(n => n.title),
+        isPulse: items.length < 3,
+        logic: `降级模式（LLM失败）：按概念板块分组合计${items.length}只`,
+        caution: items.length < 3 ? "涨停数<3，板块效应弱" : "",
+        score: items.length >= 3 ? 60 : items.length === 2 ? 40 : 0,
+        fromLLM: false,
+      });
+    }
+
+    return {
+      stockMap,
+      groups: result.sort((a, b) => b.ztCount - a.ztCount),
+      overview: {
+        totalStocks: stockMap.size,
+        mainlineCount: result.length,
+        trueMainlineCount: result.filter(g => !g.isPulse).length,
+        logic: "降级模式（LLM失败）：按概念板块分组（来自今日热门概念成分股反查）",
+      },
+      fromLLM: false,
+    };
+  } catch (e) {
+    console.warn("[stockToMainline] 概念板块降级也失败:", e);
+    // 终极兜底：按 hybk
+    return legacyFallbackByHybk(input);
+  }
+}
+
+// 兜底再兜底：原 hybk 逻辑（保留作为最后防线）
+function legacyFallbackByHybk(input: ClassifyInput): ClassifyResult {
   const stockMap = new Map<string, StockToMainline>();
   for (const p of input.rawPool.slice(0, 50)) {
     const code = String(p.c ?? "");
@@ -238,11 +357,10 @@ function fallbackByHybk(input: ClassifyInput): ClassifyResult {
     stockMap.set(code, {
       code, name: String(p.n ?? ""),
       hybk: String(p.hybk ?? "其他"),
-      mainline: String(p.hybk ?? "其他") || "其他",  // 直接用 hybk 作为主线名
-      confidence: 30,  // 降级置信度低
+      mainline: String(p.hybk ?? "其他") || "其他",
+      confidence: 25,
     });
   }
-  // 按 hybk 分组
   const hybkGroups = new Map<string, ZTPoolItem[]>();
   for (const p of input.rawPool) {
     const key = String(p.hybk ?? "其他");
@@ -252,7 +370,7 @@ function fallbackByHybk(input: ClassifyInput): ClassifyResult {
   }
   const groups: MainlineGroup[] = [];
   for (const [hybk, items] of hybkGroups) {
-    if (items.length < 2) continue;  // 同样要求≥2只，避免孤峰
+    if (items.length < 2) continue;
     const stockCodes = items.map(p => String(p.c));
     const leaders = pickLeaders(input.rawPool, stockCodes);
     let mainNet = 0, mainNet5d = 0, boardPct = 0;
@@ -263,16 +381,14 @@ function fallbackByHybk(input: ClassifyInput): ClassifyResult {
       }
     }
     groups.push({
-      mainline: hybk,
-      ztCount: items.length,
-      leaders,
+      mainline: hybk, ztCount: items.length, leaders,
       height: Math.max(...items.map(i => i.lbc ?? 1)),
       mainNet, mainNet5d, boardPct,
       newsTitles: input.newsItems.filter(n => n.title.includes(hybk)).slice(0, 3).map(n => n.title),
-      isPulse: items.length < 3,  // <3只=脉冲/孤峰
-      logic: `降级模式（LLM失败）：hybk分组合计${items.length}只`,
+      isPulse: items.length < 3,
+      logic: `终极兜底（LLM+概念均失败）：按 hybk 行业分组合计${items.length}只`,
       caution: items.length < 3 ? "涨停数<3，板块效应弱" : "",
-      score: items.length >= 3 ? 60 : items.length === 2 ? 40 : 0,
+      score: items.length >= 3 ? 40 : items.length === 2 ? 20 : 0,
       fromLLM: false,
     });
   }
@@ -283,7 +399,7 @@ function fallbackByHybk(input: ClassifyInput): ClassifyResult {
       totalStocks: stockMap.size,
       mainlineCount: groups.length,
       trueMainlineCount: groups.filter(g => !g.isPulse).length,
-      logic: "降级模式（LLM失败）：按申万行业 hybk 分组",
+      logic: "终极兜底（LLM+概念均失败）：按申万行业 hybk 分组",
     },
     fromLLM: false,
   };
