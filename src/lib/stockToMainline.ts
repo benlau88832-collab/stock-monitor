@@ -164,11 +164,11 @@ ${JSON.stringify(pool)}
     return fallback;
   }
 
-  return parseClassifyResult(result.text, input);
+  return await parseClassifyResult(result.text, input);
 }
 
 // ============== 容错解析 ==============
-function parseClassifyResult(raw: string, input: ClassifyInput): ClassifyResult {
+async function parseClassifyResult(raw: string, input: ClassifyInput): Promise<ClassifyResult> {
   const parsed = parseAIJSON<{
     stocks?: Array<Record<string, unknown>>;
     groups?: Array<Record<string, unknown>>;
@@ -178,15 +178,7 @@ function parseClassifyResult(raw: string, input: ClassifyInput): ClassifyResult 
   if (!parsed || !Array.isArray(parsed.stocks)) {
     console.warn("[stockToMainline] LLM JSON 解析失败（返回格式非预期）→ fallback 概念板块分组");
     console.warn("[stockToMainline] LLM 原始返回前 500 字:", String(raw).slice(0, 500));
-    // 异步调用兜底（不 await 阻塞此处已无意义）
-    fallbackByHybk(input).then(r => console.log("[stockToMainline] 兜底完成", r.overview));
-    // 同步返回临时空结果（其实调用方会忽略这里因为 LLM 已经返回）
-    return {
-      stockMap: new Map(),
-      groups: [],
-      overview: { totalStocks: 0, mainlineCount: 0, trueMainlineCount: 0, logic: "LLM 返回格式非预期，等待兜底完成" },
-      fromLLM: false,
-    };
+    return await fallbackByHybk(input);
   }
 
   // 解析个股归类
