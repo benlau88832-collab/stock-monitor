@@ -82,6 +82,8 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
     strengthScore >= 80 ? "bg-rose-500/25 text-rose-300 border-rose-500/40" :
     strengthScore >= 60 ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
     "bg-slate-500/20 text-slate-400 border-slate-500/30";
+  // v9.23.1-fix：强度分 <60 主线卡片默认折叠（PRD A2）
+  const [collapsed, setCollapsed] = useState(strengthScore != null && strengthScore < 60);
   return (
     <div className={`rounded-lg border p-2.5 ${rankColor}`}>
       <div className="flex items-center justify-between flex-wrap gap-1">
@@ -104,6 +106,13 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
             <span className="rounded border border-rose-500/50 bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-black text-rose-300" title={exitSignalText}>
               ⚠ 退潮
             </span>
+          )}
+          {/* v9.23.1-fix：折叠按钮（<60 默认折叠，点击展开） */}
+          {strengthScore != null && strengthScore < 60 && (
+            <button onClick={() => setCollapsed(v => !v)}
+              className="rounded bg-slate-500/20 px-1.5 py-0.5 text-[9px] text-slate-400 hover:bg-slate-500/30">
+              {collapsed ? "▸ 展开" : "▾ 折叠"}
+            </button>
           )}
         </div>
         <div className="flex gap-1.5 text-[10px] text-slate-400">

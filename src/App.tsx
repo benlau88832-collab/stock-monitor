@@ -624,6 +624,31 @@ export default function App() {
         // 基于涨停家数占比/连板高度/资金连续性 计算，避免"资金流入金额大≠主线强"
         try {
           const totalZt = rawPool.length || 30;
+          // v9.23.1-fix：昨日涨停池按主线分组（用股票名匹配 candidates.mainline 或 hybk 近似）
+          // 由于没有"昨日主线归类"历史，用"今日主线名包含昨日股名/昨日股 hybk 匹配今日主线"近似
+          const yesterdayZtByMainline = new Map<string, { zt: number; height: number }>();
+          if (prevZTPool && prevZTPool.length > 0) {
+            for (const z of prevZTPool) {
+              const yHybk = String(z.hybk ?? "");
+              const yName = String(z.n ?? "");
+              // 尝试匹配到今日某个主线（按 hybk 或 名字模糊匹配）
+              for (const c of candidates) {
+                if (
+                  c.mainline.includes(yHybk) ||
+                  yHybk.includes(c.mainline) ||
+                  c.mainline.includes(yName.slice(0, 2)) ||
+                  c.leaders.some(l => l.name === yName)
+                ) {
+                  const cur = yesterdayZtByMainline.get(c.mainline) ?? { zt: 0, height: 0 };
+                  yesterdayZtByMainline.set(c.mainline, {
+                    zt: cur.zt + 1,
+                    height: Math.max(cur.height, z.lbc ?? 1),
+                  });
+                  break;
+                }
+              }
+            }
+          }
           for (const c of candidates) {
             const strength = calcMainlineStrength({
               ztCount: c.ztCount,
@@ -639,17 +664,18 @@ export default function App() {
             });
             c.strengthScore = strength.score;
             c.strengthFactors = strength.factors;
-            // 离场信号（缺少昨日数据时仅主信号判定）
+            // v9.23.1-fix：离场信号接入昨日数据（涨停数/高度环比）
+            const yesterday = yesterdayZtByMainline.get(c.mainline);
             const exit = checkExitSignal({
               mainline: c.mainline,
               ztCountToday: c.ztCount,
-              ztCountYesterday: null,
+              ztCountYesterday: yesterday?.zt ?? null,
               heightToday: c.height,
-              heightYesterday: null,
+              heightYesterday: yesterday?.height ?? null,
               blastedRateToday: limitPool?.blastedRate ?? null,
-              blastedRateYesterday: null,
+              blastedRateYesterday: null, // 昨日炸板率无快照，暂缺
               mainNetToday: c.mainNet,
-              mainNetYesterday: null,
+              mainNetYesterday: null, // 昨日资金无快照，暂缺
             });
             c.exitSignal = exit.triggered;
             c.exitSignalText = exit.text;
@@ -1043,7 +1069,8 @@ export default function App() {
                   ?? []
                 }
                 marketSnapshot={overview ? {
-                  sentiment: overview.sentiment,
+                  // tsc-fix: OverviewData.sentiment 为 number|null，快照接口要求 number → 兜底 0
+                  sentiment: overview.sentiment ?? 0,
                   indices: overview.indices.map(i => ({ name: i.name, pct: i.pct })),
                   mainNet: fundStructure?.structure?.today.mainNet ?? 0,
                   mainNet5d: fundStructure?.structure?.mainNet5d ?? 0,
@@ -1058,7 +1085,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.23 · build 08-03 15:10 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.23.1 · build 08-03 15:40 · 数据源：东方财富</div>
       </footer>
     </div>
   );

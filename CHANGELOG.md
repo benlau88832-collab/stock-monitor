@@ -4,6 +4,68 @@
 
 ---
 
+## v9.23.1 — 工作区完善项补提交 + tsc 清零 (2026-08-03)
+
+### 背景
+v9.23 提交后工作区遗留 21 文件未提交改动（v9.23 开发过程中的完善项），本次一并收尾提交部署。
+
+### 1. v9.23.1-fix：主线卡折叠（PRD A2）
+- BattlePlan：主线强度分 <60 的卡片默认折叠为一行摘要，点击展开（v9.23.1-fix）
+
+### 2. 其他 v9.23 配套完善（工作区遗留）
+- App.tsx：昨日涨停池按主线分组接入离场信号环比（v9.23.1-fix）
+- DragonTiger / MarginPanel / StockWatchlist / seatLedger / seatProfiles / sentimentStore / signalLedger / regimeGate / recTracker / etfScore 等配套改动
+
+### 3. tsc 类型错误清零（6 个）
+- App.tsx(1071)：`sentiment: number|null` → `?? 0`（MarketSnapshotForNews 要求 number）
+- MarketOverview.tsx(254)：SentimentGauge `value={sentiment ?? 0}`
+- Playbook.tsx(115/153)：payload `sentiment ?? 0`
+- api.ts(1070)：`jsonp<any>` 修复 `data` 属性访问
+- `npx tsc --noEmit` 全绿 ✅
+
+### 其他
+- `index.html` title v9.23 → v9.23.1
+- `App.tsx` footer v9.23.1 · build 08-03 15:40
+
+---
+
+## v9.23 — 游资决策大脑 P0（强度分 + 离场信号 + 五问条 + AI结构化诊断） (2026-08-03)
+
+### PRD《游资决策大脑升级方案》P0 落地（已确认 4 项全做）
+
+### 1. 主线强度分（PRD 6.1）
+- `lib/mainlineScore.ts`（新）：calcMainlineStrength() 六维加权公式
+  - 涨停家数占比 25% + 连板高度 20% + 晋级率 15% + 资金连续性 20% + 换手 10% + 催化剂 10%
+  - 输出 score/factors（证据链）/tier（gold≥80/silver 60-79/bronze<60）
+- App.tsx 注入 candidates：strengthScore + strengthFactors，并按强度分重新排序
+- BattlePlan 主线卡加强度分大字号徽章（红≥80/橙60-79/灰<60，带公式 tooltip）
+
+### 2. 主线级离场信号（PRD 6.4）
+- `lib/exitSignal.ts`（新）：checkExitSignal() 四规则
+  - 炸板率环比+15pp / 涨停家数环比-30% / 最高板下降 / 主力转流出
+- App.tsx 注入 candidates：exitSignal + exitSignalText
+- BattlePlan 主线卡显示"⚠ 退潮"红色徽标
+
+### 3. 游资五问条（PRD 5.1-A1）
+- `components/FiveQBar.tsx`（新）：驾驶舱顶部 5 卡片横排
+  - 1️⃣主线是什么（强度分徽章）2️⃣处于什么阶段 3️⃣谁是龙头 4️⃣能不能上车（四色操作徽章）5️⃣什么时候跑（离场状态）
+  - 60 秒自动刷新；操作徽章按强度分+离场信号动态算（可参与/谨慎参与/观望/应离场）
+  - 含 DisclaimerTag 合规标注
+
+### 4. AI 结构化主线诊断（PRD 7.2）
+- `lib/aiPrompts.ts`：新增 mainlineDiagnosis 任务槽（thinking=false + maxTokens 1500 + temp 0.2）
+- `components/MainlineDiagnosisCard.tsx`（新）：结构化 JSON 输出
+  - 真实 LLM 优先（strength_score/stage/sustain_forecast/leader core-follower-hype/action/risk/exit/confidence）
+  - 失败降级规则引擎（强度分+离场信号）
+  - 卡片化渲染（阶段/操作/置信度/核心跟风蹭热点/风险/离场状态）
+- BattlePlan 主线卡加"🎯 诊断"按钮，点击弹出诊断卡
+
+### 其他
+- `index.html` title v9.22 → v9.23
+- `App.tsx` footer v9.23 · build 08-03 15:10
+
+---
+
 ## v9.22 — ETF pctBoost + isThemeBoard 加强过滤 (2026-08-03)
 
 ### 用户反馈

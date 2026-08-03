@@ -251,7 +251,7 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
       </div>
 
       {/* 右侧：情绪温度计（升级版） */}
-      <SentimentGauge value={sentiment} label={sentimentLabel} factors={sentimentFactors} yesterday={sentimentYesterday} premiumAvg={premiumAvg} promotionRate={promotionRate} maxBoardHeight={maxBoardHeight} />
+      <SentimentGauge value={sentiment ?? 0} label={sentimentLabel} factors={sentimentFactors} yesterday={sentimentYesterday} premiumAvg={premiumAvg} promotionRate={promotionRate} maxBoardHeight={maxBoardHeight} />
     </section>
   );
 }
