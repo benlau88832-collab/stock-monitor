@@ -4,6 +4,28 @@
 
 ---
 
+## v9.24.1 — 修复 React #310（hooks 顺序违规导致整页崩溃） (2026-08-03)
+
+### Bug
+- 用户报告：点击任意 Tab 后驾驶舱页崩，显示 ErrorBoundary "页面模块异常 + Minified React error #310"
+- 表现：今日作战卡（BattlePlan）模块消失（实际是 Dashboard 整个崩了，连带 BattlePlan 不显示）
+
+### 根因
+- `components/Dashboard.tsx` 的 AnomalyStrip（v9.24-P1-4 新增）
+- 函数体内 hooks 顺序：`useState` → `useRef` → `useEffect`(订阅) → `useEffect`(定时) → **if(stocks.length === 0) return null** → `const verdicts` → `useEffect`(emit)
+- 当自选股数量从 0 变 N（或反向）时，渲染期间 hooks 调用次数从 4 变 5
+- 违反 React Rules of Hooks → React 抛错 #310 → ErrorBoundary 接住 → 整页显示错误页
+
+### 修复
+- 把 `if (stocks.length === 0) return null` 移到所有 hooks 之后
+- `verdicts` 用三元判断 `stocks.length === 0 ? [] : ...` 兜底（确保 useEffect(emit) 回调执行时安全）
+
+### 其他
+- `index.html` title v9.24 → v9.24.1
+- `App.tsx` footer v9.24.1 · build 08-03 19:10
+
+---
+
 ## v9.24 — 游资决策大脑 P1（主线强度排行榜 + 个股决策卡 + 消息主线联动 + 异动SAB分级） (2026-08-03)
 
 ### PRD《游资决策大脑升级方案》P1 落地（4 项全做）

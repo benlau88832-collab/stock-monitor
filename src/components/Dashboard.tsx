@@ -176,10 +176,9 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
     return () => clearInterval(t);
   }, []);
 
-  if (stocks.length === 0) return null;
-
   // 实时计算每只自选股的分级（S/A/B），S/A 级 emit 到事件流（冷却去重防刷屏）
-  const verdicts = stocks.map(s => ({
+  // 注意：verdicts 是普通计算，不调用 hook，可放在 conditional return 之前
+  const verdicts = stocks.length === 0 ? [] : stocks.map(s => ({
     stock: s,
     verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate }, mainlines),
   })).filter((x): x is { stock: WatchStockBrief; verdict: NonNullable<ReturnType<typeof classifyAnomaly>> } => x.verdict != null);
@@ -192,6 +191,10 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stocks]);
+
+  // v9.24.1-fix：早返回必须放在所有 hooks 之后（防止 stocks 长度从 0 变 N 时 hooks 数量变化，
+  // 违反 React Rules of Hooks 触发 error #310 整页崩溃）
+  if (stocks.length === 0) return null;
 
   // S 级事件（用于红色闪烁角标）
   const sCount = events.filter(e => e.level === "S").length;
