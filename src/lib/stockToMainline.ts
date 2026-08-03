@@ -45,6 +45,13 @@ export interface MainlineGroup {
   caution: string;
   /** 规则机兜底分（保留 LLM 失败时的依据） */
   score: number;
+  /** v9.23-1：主线强度分（0-100，PRD 6.1 公式），由 App.tsx 注入 */
+  strengthScore?: number;
+  /** v9.23-1：强度因子明细（UI 证据链） */
+  strengthFactors?: { ztRatio: number; height: number; promotion: number; fund: number; turnover: number; catalyst: number };
+  /** v9.23-2：主线级离场信号（触发则 true，由 App.tsx 注入） */
+  exitSignal?: boolean;
+  exitSignalText?: string;
   /** 来自 LLM（true）/ 降级规则机（false） */
   fromLLM: boolean;
 }

@@ -12,6 +12,7 @@ import { stockRealUrl } from "../lib/realLinks";
 import { getHitRateText } from "../lib/recTracker";
 import type { GateResult } from "../lib/regimeGate";
 import type { MarketStyleInfo } from "../lib/mainline";
+import MainlineDiagnosisCard from "./MainlineDiagnosisCard";
 import type { MainlineLLMResult } from "../lib/mainlineLLM";
 import type { ETFScoreResult } from "../lib/etfScore";
 import type { MainlineGroup } from "../lib/stockToMainline";
@@ -51,8 +52,8 @@ function StyleBadge({ style }: { style: MarketStyleInfo }) {
   );
 }
 
-// ============== 主线区块（含龙一龙二龙三） ==============
-function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm }: {
+// ============== 主线区块（含龙一龙二龙三 + v9.23 强度分/离场/诊断） ==============
+function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose }: {
   rank: number;
   name: string;
   ztCount: number;
@@ -63,12 +64,24 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
   isPulse?: boolean;
   caution?: string;
   llm?: boolean;
+  /** v9.23-1：主线强度分 0-100 */
+  strengthScore?: number;
+  /** v9.23-2：离场信号 */
+  exitSignal?: boolean;
+  exitSignalText?: string;
+  /** v9.23-4：点击生成 AI 结构化诊断 */
+  onDiagnose?: () => void;
 }) {
   const rankColor = rank === 1 ? "border-rose-500/40 bg-rose-500/5" : rank === 2 ? "border-amber-500/30 bg-amber-500/5" : "border-slate-500/20 bg-white/5";
   const rankLabel = rank === 1 ? "🏆 第一主线" : rank === 2 ? "🥈 第二主线" : "🥉 第三主线";
   const rankText = rank === 1 ? "text-rose-300" : rank === 2 ? "text-amber-300" : "text-slate-300";
   // v9.17 强化：板块效应弱时（小涨停数）显示警示
   const weakEffect = ztCount < 3;
+  // v9.23-1：强度分配色
+  const strengthCls = strengthScore == null ? "" :
+    strengthScore >= 80 ? "bg-rose-500/25 text-rose-300 border-rose-500/40" :
+    strengthScore >= 60 ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
+    "bg-slate-500/20 text-slate-400 border-slate-500/30";
   return (
     <div className={`rounded-lg border p-2.5 ${rankColor}`}>
       <div className="flex items-center justify-between flex-wrap gap-1">
@@ -80,6 +93,18 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
             <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300">板块效应弱</span>
           )}
           {llm && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-violet-500/20 text-violet-300">LLM</span>}
+          {/* v9.23-1：强度分大字号徽章 */}
+          {strengthScore != null && (
+            <span className={`rounded border px-1.5 py-0.5 text-[12px] font-black ${strengthCls}`} title="主线强度分（PRD 6.1：涨停占比25+连板20+晋级率15+资金20+换手10+催化10）">
+              {strengthScore}分
+            </span>
+          )}
+          {/* v9.23-2：离场信号 */}
+          {exitSignal && (
+            <span className="rounded border border-rose-500/50 bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-black text-rose-300" title={exitSignalText}>
+              ⚠ 退潮
+            </span>
+          )}
         </div>
         <div className="flex gap-1.5 text-[10px] text-slate-400">
           {/* v9.21-C：开盘啦式热度条 */}
@@ -95,6 +120,13 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
           <span className={`rounded bg-black/30 px-1.5 py-0.5 ${mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}`} title="板块主力净流入">
             资金 {fmtMoney(mainNet)}
           </span>
+          {/* v9.23-4：AI 结构化诊断按钮 */}
+          {onDiagnose && (
+            <button onClick={onDiagnose}
+              className="rounded bg-violet-500/20 px-1.5 py-0.5 text-violet-200 hover:bg-violet-500/30" title="生成该主线的 AI 结构化诊断卡">
+              🎯 诊断
+            </button>
+          )}
         </div>
       </div>
 
@@ -188,12 +220,15 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
 
   const { gate, candidates, llmRanked, marketStyle, etfs, candidateThemes, classifyOverview } = data;
   const isEmpty = candidates.length === 0;
+  // v9.23-4：当前诊断的主线（点击"诊断"按钮时设置）
+  const [diagMainline, setDiagMainline] = useState<string | null>(null);
 
   // LLM 精排结果 vs 规则机候选 合并展示
   const display: Array<{
     board: string; ztCount: number; height: number; mainNet: number;
     leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number }>;
     logic?: string; isPulse?: boolean; caution?: string; llm?: boolean;
+    strengthScore?: number; exitSignal?: boolean; exitSignalText?: string;
   }> = [];
   if (llmRanked && llmRanked.length > 0) {
     for (const r of llmRanked) {
@@ -208,6 +243,9 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
       display.push({
         board: c.mainline, ztCount: c.ztCount, height: c.height, mainNet: c.mainNet,
         leaders: c.leaders,
+        strengthScore: c.strengthScore,
+        exitSignal: c.exitSignal,
+        exitSignalText: c.exitSignalText,
       });
     }
   }
@@ -219,6 +257,10 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
     const c = candMap.get(d.board);
     if (c) {
       d.ztCount = c.ztCount; d.height = c.height; d.mainNet = c.mainNet;
+      // v9.23：强度分/离场信号从候选复制（LLM 精排不返回这些字段）
+      if (d.strengthScore == null) d.strengthScore = c.strengthScore;
+      if (d.exitSignal == null) d.exitSignal = c.exitSignal;
+      if (d.exitSignalText == null) d.exitSignalText = c.exitSignalText;
       // 补齐缺失的龙二龙三（LLM 没返回时用规则机排序）
       if (d.leaders.length < 3 && c.leaders.length > d.leaders.length) {
         const llmCodes = new Set(d.leaders.map(l => l.code));
@@ -299,6 +341,10 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
               isPulse={d.isPulse}
               caution={d.caution}
               llm={d.llm}
+              strengthScore={d.strengthScore}
+              exitSignal={d.exitSignal}
+              exitSignalText={d.exitSignalText}
+              onDiagnose={() => setDiagMainline(d.board)}
             />
           ))}
           {display.length < 3 && (
@@ -315,6 +361,15 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
 
       {/* ETF 排序 */}
       <ETFBlock etfs={etfs} />
+
+      {/* v9.23-4：AI 主线诊断卡（点击"诊断"按钮后显示） */}
+      {diagMainline && (() => {
+        const c = candMap.get(diagMainline);
+        if (!c) return null;
+        return (
+          <MainlineDiagnosisCard mainline={c} onClose={() => setDiagMainline(null)} />
+        );
+      })()}
 
       {/* 候选观察池 */}
       <CandidatePool themes={candidateThemes} />

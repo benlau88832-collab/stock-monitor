@@ -12,7 +12,7 @@ export function getSystemPrefix(): string { return SYSTEM_PREFIX; }
 export type AITask =
   | "preopenPlan" | "closeReview" | "annRank" | "ladderScan"
   | "newsDigest" | "weeklyCoach" | "stockJudge" | "policyDiff" | "supervisor"
-  | "mainlineClassify";
+  | "mainlineClassify" | "mainlineDiagnosis";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -25,6 +25,7 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   weeklyCoach: { temperature: 0.4, maxTokens: 1500, thinking: true },
   stockJudge:  { temperature: 0.3, maxTokens: 8000, thinking: true },
   mainlineClassify: { temperature: 0.1, maxTokens: 4000, thinking: false },
+  mainlineDiagnosis: { temperature: 0.2, maxTokens: 1500, thinking: false },
   supervisor:  { temperature: 0.4, maxTokens: 4000, thinking: false },
   policyDiff:  { temperature: 0.2, maxTokens: 1500, thinking: true },
 };
@@ -59,6 +60,7 @@ export interface AITaskPayload {
   };
   stockJudge: { prompt: string };
   mainlineClassify: { prompt: string };
+  mainlineDiagnosis: { prompt: string };
   supervisor: { system: string; user: string };
   policyDiff: { policyText: string };
 }
@@ -143,6 +145,8 @@ ${p.hitRateContext ? `\n推荐归因统计：${p.hitRateContext}` : ""}
   stockJudge: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
   // 主线归类专用：thinking=false（快+稳），temperature 0.1（确定性优先）
   mainlineClassify: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
+  // v9.23-4 主线诊断专用：结构化 JSON 输出（PRD 7.2 mainline_diagnosis schema）
+  mainlineDiagnosis: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
 
   // 督导室专用：system/user 由 IntelligenceDrawer 构建，此处透传
   supervisor: (p) => ({ system: p.system, user: p.user }),
@@ -206,6 +210,7 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
     return `【纪律执行率】${rate}%（${executed}/${total}天执行预案）\n【重复错误模式】规则版无法分析\n【下周动作】1.坚持盘前写预案 2.控制单票仓位`;
   },
   stockJudge: (p) => `个股研判规则版：\n${p.prompt.slice(0, 150)}...\n数据不足或限速，请先在个股雷达添加/刷新个股后再问。`,
+  mainlineDiagnosis: (p) => `主线诊断规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n请参考主线强度分与离场信号规则引擎输出。`,
   mainlineClassify: (p) => `主线归类规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n按申万行业 hybk 分组。`,
   supervisor: (p) => `AI督导暂不可用，请稍后重试。\n\n提问：${p.user.slice(-100)}`,
   policyDiff: (p) => `政策摘要：\n${p.policyText.slice(0, 200)}...\n规则版无法深度对比。`,

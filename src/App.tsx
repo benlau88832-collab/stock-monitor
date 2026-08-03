@@ -24,6 +24,8 @@ import { computeETFScores, ETF_POOL, type ETFQuote } from "./lib/etfScore";
 import { detectMarketStyle } from "./lib/mainline";
 import { rankMainlinesWithLLM } from "./lib/mainlineLLM";
 import { classifyStocksToMainlines, type MainlineGroup } from "./lib/stockToMainline";
+import { calcMainlineStrength } from "./lib/mainlineScore";
+import { checkExitSignal } from "./lib/exitSignal";
 import { getAllSince } from "./lib/dataStore";
 import { fetchPopularityRank } from "./lib/api";
 
@@ -618,6 +620,44 @@ export default function App() {
         const candidates: MainlineGroup[] = llmClassify.groups;
         const classifyOverview = llmClassify.overview;
 
+        // ---- v9.23-1/2：主线强度分 + 离场信号注入（PRD 6.1/6.4） ----
+        // 基于涨停家数占比/连板高度/资金连续性 计算，避免"资金流入金额大≠主线强"
+        try {
+          const totalZt = rawPool.length || 30;
+          for (const c of candidates) {
+            const strength = calcMainlineStrength({
+              ztCount: c.ztCount,
+              totalZtCount: totalZt,
+              height: c.height,
+              totalMaxHeight: Math.max(...candidates.map(x => x.height), 2),
+              promotionRate: null, // 晋级率暂无逐主线数据，中性
+              mainNet5d: c.mainNet5d,
+              mainNet10d: null,
+              boardPct: c.boardPct,
+              turnoverRate: null,
+              catalystStrength: c.newsTitles.length > 0 ? 60 : 50, // 有新闻催化 → 略加分
+            });
+            c.strengthScore = strength.score;
+            c.strengthFactors = strength.factors;
+            // 离场信号（缺少昨日数据时仅主信号判定）
+            const exit = checkExitSignal({
+              mainline: c.mainline,
+              ztCountToday: c.ztCount,
+              ztCountYesterday: null,
+              heightToday: c.height,
+              heightYesterday: null,
+              blastedRateToday: limitPool?.blastedRate ?? null,
+              blastedRateYesterday: null,
+              mainNetToday: c.mainNet,
+              mainNetYesterday: null,
+            });
+            c.exitSignal = exit.triggered;
+            c.exitSignalText = exit.text;
+          }
+          // 按强度分重新排序（最强主线在前）
+          candidates.sort((a, b) => (b.strengthScore ?? 0) - (a.strengthScore ?? 0));
+        } catch { /* 强度分计算失败不影响主流程 */ }
+
         // ---- ①.5 人气榜对照（v9.17-fix）：给各主线龙头打人气排名 ----
         // 用户要求对照人气榜单 + 资金进攻强度（如蓝色光标人气第一）
         // 失败静默（不影响主线展示）
@@ -1018,7 +1058,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.22 · build 08-03 12:45 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.23 · build 08-03 15:10 · 数据源：东方财富</div>
       </footer>
     </div>
   );

@@ -4,6 +4,7 @@ import EmotionCycleCard from "./EmotionCycleCard";
 import DisciplinePanel from "./DisciplinePanel";
 import ReviewPanel from "./ReviewPanel";
 import AuctionBoard from "./AuctionBoard";
+import FiveQBar from "./FiveQBar";
 import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
 import InstitutionFund from "./InstitutionFund";
@@ -368,6 +369,8 @@ export default function Dashboard({
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_300px]">
           {/* 左 2/3 */}
           <div className="space-y-2">
+            {/* v9.23-3：游资五问条（驾驶舱顶部常驻） */}
+            <FiveQBar battlePlan={battlePlan ?? null} />
             <BattlePlan data={battlePlan ?? null} />
             {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
             {overview && (
