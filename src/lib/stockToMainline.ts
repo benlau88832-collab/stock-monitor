@@ -12,6 +12,7 @@ import { callAI, parseAIJSON, type AIResult } from "./ai";
 import type { ZTPoolItem } from "./themeLadder";
 import { fetchBoardFundFlow, fetchBoardConstituents } from "./api";
 import { isRealConceptBoard } from "./boardTaxonomy";
+import { fetchStocksBoards } from "./stockBoards";
 
 // ============== 数据结构 ==============
 /** 单只涨停股的主线归类（LLM 输出 + 代码聚合） */
@@ -242,24 +243,103 @@ async function parseClassifyResult(raw: string, input: ClassifyInput): Promise<C
 
 // ============== 降级：按概念板块分组（v9.20 取代 hybk 分组） ==============
 // 解决：用户反馈"中大力德是机器人概念，机器人今天批量涨停，但抓到的是通用设备"
-// 策略：拉今日热门概念板块 → 拉成分股 → 反向索引涨停股 → 按概念聚合
-// 失败兜底：仍按 hybk 行业分组（保留旧逻辑）
+// 策略：v9.21-B 优先用"个股所属概念"（datacenter 接口，同花顺式）→ 失败再用成分股反查 → 再失败 hybk
+// v9.21-A：① 成分股反查 15→50 只（涨停股常在成分股 16-30 位，之前被漏）
+//         ② 过滤"新股/次新股"等非题材板块分类
+//         ③ 多概念归属时按"今日涨停数最多"择优（数据驱动，不按名字长度）
 async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
   try {
-    // 1. 拉今日概念板块（涨幅 + 资金流入 都过滤正向），取前 60 个
-    const concepts = await fetchBoardFundFlow("concept", 200);
-    const hot = concepts
-      .filter(b => isRealConceptBoard(b.name) && b.pct > 0 && (b.mainNet > 0))
-      .slice(0, 60);
+    // ===== v9.21-B：优先用"个股所属概念"（datacenter 接口，准确度最高） =====
+    const ztCodes = input.rawPool.slice(0, 50).map(p => String(p.c ?? "")).filter(Boolean);
+    const boardsMap = await fetchStocksBoards(ztCodes);
+    if (boardsMap.size > 0) {
+      // 统计每个概念的今日涨停数
+      const conceptZtCount = new Map<string, number>();
+      for (const sb of boardsMap.values()) {
+        for (const t of sb.themes) {
+          conceptZtCount.set(t, (conceptZtCount.get(t) ?? 0) + 1);
+        }
+      }
+      // 给每只涨停股打"当日最热概念"标签
+      const stockMap = new Map<string, StockToMainline>();
+      for (const p of input.rawPool.slice(0, 50)) {
+        const code = String(p.c ?? "");
+        if (!code) continue;
+        const sb = boardsMap.get(code);
+        let mainline: string;
+        if (sb && sb.themes.length > 0) {
+          // 多概念择优：按今日涨停数降序 → 概念名长度升序（短名更精确）
+          mainline = [...sb.themes].sort((a, b) =>
+            (conceptZtCount.get(b) ?? 0) - (conceptZtCount.get(a) ?? 0) ||
+            a.length - b.length
+          )[0];
+        } else {
+          mainline = String(p.hybk ?? "其他"); // 无概念数据 → hybk 兜底
+        }
+        stockMap.set(code, {
+          code, name: String(p.n ?? ""),
+          hybk: String(p.hybk ?? "其他"),
+          mainline,
+          confidence: sb && sb.themes.length > 0 ? 60 : 25,
+        });
+      }
+      // 按 mainline 聚合
+      const groups = new Map<string, ZTPoolItem[]>();
+      for (const p of input.rawPool) {
+        const ml = stockMap.get(String(p.c ?? ""))?.mainline ?? "其他";
+        const arr = groups.get(ml) ?? [];
+        arr.push(p);
+        groups.set(ml, arr);
+      }
+      const result: MainlineGroup[] = [];
+      for (const [ml, items] of groups) {
+        if (items.length < 2) continue;
+        const stockCodes = items.map(p => String(p.c));
+        const leaders = pickLeaders(input.rawPool, stockCodes);
+        result.push({
+          mainline: ml,
+          ztCount: items.length,
+          leaders,
+          height: Math.max(...items.map(i => i.lbc ?? 1)),
+          mainNet: 0, mainNet5d: 0, boardPct: 0,
+          newsTitles: input.newsItems.filter(n => n.title.includes(ml)).slice(0, 3).map(n => n.title),
+          isPulse: items.length < 3,
+          logic: `降级模式（LLM失败）：个股所属概念聚合（同花顺式，${items.length}只）`,
+          caution: items.length < 3 ? "涨停数<3，板块效应弱" : "",
+          score: items.length >= 3 ? 65 : items.length === 2 ? 45 : 0,
+          fromLLM: false,
+        });
+      }
+      return {
+        stockMap,
+        groups: result.sort((a, b) => b.ztCount - a.ztCount),
+        overview: {
+          totalStocks: stockMap.size,
+          mainlineCount: result.length,
+          trueMainlineCount: result.filter(g => !g.isPulse).length,
+          logic: "降级模式（LLM失败）：按个股所属概念聚合（datacenter，同花顺式）",
+        },
+        fromLLM: false,
+      };
+    }
 
-    // 2. 并行拉每个概念的成分股（限 15 只/概念，并发 8 避免限速）
+    // ===== 兜底 A：成分股反查（v9.20 逻辑，增强版） =====
+    // 1. 拉今日概念板块（涨幅 + 资金流入 都过滤正向），取前 80 个
+    const concepts = await fetchBoardFundFlow("concept", 300);
+    // 过滤：非真实题材 + "新股/次新股/最近强势/活跃小盘" 等板块分类（非题材主线）
+    const NON_THEME = /新股|次新|最近|强势|活跃|破净|转股|高送转|填权|st|ST|预增|预亏|含权|含H|含B|AH|AB|CDR|B股|H股|百元|低价|微盘|大盘|小盘|中盘|融资|融券|深股通|沪股通|MSCI|富时|标普|QFII|社保|证金|汇金|基金重仓|券商重仓|保险重仓|信托重仓|QFII重仓/;
+    const hot = concepts
+      .filter(b => isRealConceptBoard(b.name) && !NON_THEME.test(b.name) && b.pct > 0 && (b.mainNet > 0))
+      .slice(0, 80);
+
+    // 2. 并行拉每个概念的成分股（v9.21-A：50 只/概念，并发 6 避免限速）
     const stockToConcepts = new Map<string, Set<string>>(); // code → 多个概念名
     const chunks: typeof hot[] = [];
-    for (let i = 0; i < hot.length; i += 8) chunks.push(hot.slice(i, i + 8));
+    for (let i = 0; i < hot.length; i += 6) chunks.push(hot.slice(i, i + 6));
     for (const chunk of chunks) {
       await Promise.all(chunk.map(async (c) => {
         try {
-          const constituents = await fetchBoardConstituents(c.code, 15);
+          const constituents = await fetchBoardConstituents(c.code, 50);
           for (const s of constituents) {
             if (!stockToConcepts.has(s.code)) stockToConcepts.set(s.code, new Set());
             stockToConcepts.get(s.code)!.add(c.name);
@@ -268,24 +348,42 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
       }));
     }
 
-    // 3. 给涨停股打概念标签
+    // 3. 统计每个概念的今日涨停数（用于多概念择优）
+    const conceptZtCount = new Map<string, number>();
+    for (const [code, cnames] of stockToConcepts) {
+      const isZT = input.rawPool.some(p => String(p.c) === code);
+      if (isZT) {
+        for (const cn of cnames) {
+          conceptZtCount.set(cn, (conceptZtCount.get(cn) ?? 0) + 1);
+        }
+      }
+    }
+
+    // 4. 给涨停股打概念标签（v9.21-A：多概念时选今日涨停数最多的概念）
     const stockMap = new Map<string, StockToMainline>();
     for (const p of input.rawPool.slice(0, 50)) {
       const code = String(p.c ?? "");
       if (!code) continue;
       const cnames = stockToConcepts.get(code);
-      const mainline = cnames && cnames.size > 0
-        ? [...cnames].sort((a, b) => a.length - b.length)[0] // 最短的概念名（更精确）
-        : String(p.hybk ?? "其他"); // 没匹配上 → hybk 兜底
+      let mainline: string;
+      if (cnames && cnames.size > 0) {
+        // 多概念择优：先按今日涨停数降序，再按名字长度（短的更精确）
+        mainline = [...cnames].sort((a, b) =>
+          (conceptZtCount.get(b) ?? 0) - (conceptZtCount.get(a) ?? 0) ||
+          a.length - b.length
+        )[0];
+      } else {
+        mainline = String(p.hybk ?? "其他"); // 没匹配上 → hybk 兜底
+      }
       stockMap.set(code, {
         code, name: String(p.n ?? ""),
         hybk: String(p.hybk ?? "其他"),
         mainline,
-        confidence: cnames && cnames.size > 0 ? 50 : 25,
+        confidence: cnames && cnames.size > 0 ? 55 : 25,
       });
     }
 
-    // 4. 按 mainline 分组
+    // 5. 按 mainline 分组
     const groups = new Map<string, ZTPoolItem[]>();
     for (const p of input.rawPool) {
       const ml = stockMap.get(String(p.c ?? ""))?.mainline ?? "其他";

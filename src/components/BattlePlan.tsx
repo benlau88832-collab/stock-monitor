@@ -82,9 +82,17 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
           {llm && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-violet-500/20 text-violet-300">LLM</span>}
         </div>
         <div className="flex gap-1.5 text-[10px] text-slate-400">
-          <span className="rounded bg-black/30 px-1.5 py-0.5">涨停 <b className="text-rose-300">{ztCount}</b></span>
-          <span className="rounded bg-black/30 px-1.5 py-0.5">{height}板</span>
-          <span className={`rounded bg-black/30 px-1.5 py-0.5 ${mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}`}>
+          {/* v9.21-C：开盘啦式热度条 */}
+          <span className="rounded bg-black/30 px-1.5 py-0.5" title="该主线今日涨停家数">
+            🔥 <b className="text-rose-300">{ztCount}</b> 涨停
+          </span>
+          <span className="rounded bg-black/30 px-1.5 py-0.5" title="最高连板">
+            <b className="text-amber-300">{height}</b>板
+          </span>
+          <span className="rounded bg-black/30 px-1.5 py-0.5" title="涨停数-龙头数=跟风数（跟风越少说明梯队越紧凑）">
+            跟风 <b className="text-slate-300">{Math.max(0, ztCount - (leaders.length > 0 ? 1 : 0))}</b>
+          </span>
+          <span className={`rounded bg-black/30 px-1.5 py-0.5 ${mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}`} title="板块主力净流入">
             资金 {fmtMoney(mainNet)}
           </span>
         </div>
