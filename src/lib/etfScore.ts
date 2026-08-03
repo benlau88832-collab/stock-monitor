@@ -1,17 +1,20 @@
 // ETF 评分（v9.16 重构）：五维权重 fundTrend(30)/boardLink(25)/styleFit(20)/mainlineLink(15)/macro(10)
 // 打破重建：加入市场风格感知 + 主线直出映射
+// v9.22-fix：新增 pctBoost(20) ETF 自身今日涨跌幅维度——跌的 ETF 不该被推为主推
+//   重新分配权重：fundTrend 20 / pctBoost 20 / boardLink 20 / styleFit 15 / mainline 15 / macro 10 = 100
 // 修复 v9.15 的三个 bug：
 //   ① 红利 ETF boardKeywords 为空 → 永远中性分（已补关键词）
 //   ② 无风格感知 → 进攻日推红利（已加 styleFit 维度）
 //   ③ ETF_POOL 缺主线品种（已扩充：AI/计算机/算力/通信/机器人等）
 // 纯函数，不碰 DOM/localStorage/网络
 
-// ============== 权重（可调） ==============
-const W_FUND_TREND = 0.30;   // 5日主力净额
-const W_BOARD_LINK = 0.25;   // 与主线板块联动
-const W_STYLE_FIT = 0.20;    // 市场风格适配（进攻/防守/轮动）
-const W_MAINLINE = 0.15;     // 主线直出匹配
-const W_MACRO = 0.10;        // 商品/宏观
+// ============== 权重（可调，v9.22 重新分配：加 pctBoost） ==============
+const W_FUND_TREND = 0.20;   // 5日主力净额（v9.22: 30→20）
+const W_PCT_BOOST  = 0.20;   // ETF 自身今日涨跌幅（v9.22 新增：跌的 ETF 降权）
+const W_BOARD_LINK = 0.20;   // 与主线板块联动（v9.22: 25→20）
+const W_STYLE_FIT = 0.15;    // 市场风格适配（v9.22: 20→15）
+const W_MAINLINE = 0.15;     // 主线直出匹配（不变）
+const W_MACRO = 0.10;        // 商品/宏观（不变）
 
 function clamp(v: number, lo = 0, hi = 100): number {
   return Math.max(lo, Math.min(hi, v));
@@ -69,6 +72,8 @@ export const ETF_POOL: ETFSpec[] = [
 export interface ETFQuote {
   code: string;
   mainNet5d: number;
+  /** ETF 自身今日涨跌幅 %（v9.22-fix：跌的 ETF 不该被推为主推） */
+  pct: number;
   valid: boolean;
 }
 
@@ -76,11 +81,13 @@ export interface ETFScoreResult {
   code: string;
   name: string;
   total: number;
-  factors: { fundTrend: number; boardLink: number; styleFit: number; mainlineLink: number; macro: number };
+  factors: { fundTrend: number; pctBoost: number; boardLink: number; styleFit: number; mainlineLink: number; macro: number };
   tier: "A" | "B" | "C";
   /** 是否主线直出匹配（来自涨停潮主线） */
   fromMainline: boolean;
   matchedMainline?: string;
+  /** v9.22-fix：ETF 自身今日涨跌幅 %（用于 UI 显示 + 排序降权） */
+  pct: number;
 }
 
 /** 风格信息（来自 mainline.detectMarketStyle） */
@@ -102,10 +109,17 @@ export function computeETFScores(
     const quote = etfQuotes.get(spec.code);
     if (!quote || !quote.valid) continue;
 
-    // -- fundTrend 30%: f164 真实5日净额 --
+    // -- fundTrend 20%: f164 真实5日净额 --
     const fundTrend = clamp(50 + quote.mainNet5d / 1e8);
 
-    // -- boardLink 25%: 板块联动（主线板块得分高 → ETF 高）--
+    // -- v9.22-fix：pctBoost 20% ETF 自身今日涨跌幅（跌的 ETF 不该被推为主推） --
+    // 涨 ≥1% = +30 分，涨 0~1% = +10~30 分
+    // 跌 0~1% = -10~-30 分，跌 ≥1% = -40 分 + 直接降级
+    let pctBoost = 50 + quote.pct * 25;
+    if (quote.pct < -1.0) pctBoost -= 20;  // 大跌加重惩罚
+    pctBoost = clamp(pctBoost, 0, 100);
+
+    // -- boardLink 20%: 板块联动（主线板块得分高 → ETF 高）--
     let boardLink = 50;
     if (spec.boardKeywords.length > 0) {
       let maxScore = 0;
@@ -166,6 +180,7 @@ export function computeETFScores(
 
     const total = Math.round(
       W_FUND_TREND * fundTrend +
+      W_PCT_BOOST * pctBoost +
       W_BOARD_LINK * boardLink +
       W_STYLE_FIT * styleFit +
       W_MAINLINE * mainlineLink +
@@ -179,6 +194,7 @@ export function computeETFScores(
       total: finalTotal,
       factors: {
         fundTrend: Math.round(fundTrend),
+        pctBoost: Math.round(pctBoost),
         boardLink: Math.round(boardLink),
         styleFit: Math.round(styleFit),
         mainlineLink: Math.round(mainlineLink),
@@ -187,10 +203,18 @@ export function computeETFScores(
       tier: finalTotal >= 70 ? "A" : finalTotal >= 55 ? "B" : "C",
       fromMainline,
       matchedMainline,
+      pct: quote.pct,  // v9.22-fix: 暴露 pct 用于 UI 显示
     });
   }
 
   // 排序：主线直出优先 → 总分降序
+  // v9.22-fix：跌的 ETF 强制降级为 C，避免"主线直出 90 分"盖过跌幅信号
+  for (const r of results) {
+    if (r.pct < -0.3) {
+      r.tier = "C";
+      r.total = Math.min(r.total, 55);
+    }
+  }
   results.sort((a, b) => Number(b.fromMainline) - Number(a.fromMainline) || b.total - a.total);
   return results;
 }

@@ -654,14 +654,19 @@ export default function App() {
         const etfQuotes = new Map<string, ETFQuote>();
         try {
           const etfSecids = ETF_POOL.map(s => `${/^(60|68|5)/.test(s.code) ? "1" : "0"}.${s.code}`).join(",");
-          const etfUrl = `https://push2.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f12,f14,f62,f164&secids=${etfSecids}`;
+          const etfUrl = `https://push2.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f3,f12,f14,f62,f164&secids=${etfSecids}`;
           const etfJson = await (await import("./lib/jsonpQueue")).queuedJsonp<any>(etfUrl, 8000, "cb", 1);
           const etfDiffRaw = etfJson?.data?.diff;
           const etfDiff: any[] = Array.isArray(etfDiffRaw) ? etfDiffRaw : (etfDiffRaw && typeof etfDiffRaw === "object" ? Object.values(etfDiffRaw) : []);
           for (const d of etfDiff) {
             const code = String(d.f12 ?? "");
             if (code) {
-              etfQuotes.set(code, { code, mainNet5d: Number(d.f164) || 0, valid: true });
+              etfQuotes.set(code, {
+                code,
+                mainNet5d: Number(d.f164) || 0,
+                pct: Number(d.f3) || 0,  // v9.22-fix: ETF 自身今日涨跌幅
+                valid: true,
+              });
             }
           }
         } catch {
@@ -1013,7 +1018,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.21 · build 08-03 11:30 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.22 · build 08-03 12:45 · 数据源：东方财富</div>
       </footer>
     </div>
   );
