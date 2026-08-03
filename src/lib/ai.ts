@@ -6,9 +6,9 @@ import { loadSettings, saveSettings } from "./aiSettings";
 import { localDateStr } from "./format";
 
 // ============== Agnes 备用域名（仅 provider=agnes 时作 fallback） ==============
+// v9.24.2：实测 .com 端点已挂（curl exit 23/连接失败），移除避免浪费时间；只保留 .cn
 export const AGNES_ENDPOINTS = [
   "https://apihub.agnes-ai.cn/v1/chat/completions",
-  "https://apihub.agnes-ai.com/v1/chat/completions",
 ] as const;
 
 export const AGNES_MODEL = "agnes-2.5-flash";
@@ -244,10 +244,12 @@ async function executeAI<T extends AITask>(
 
     const start = Date.now();
 
-    // 构建端点列表：settings.baseUrl 为主；agnes 厂商额外加备用域名
+    // 构建端点列表：settings.baseUrl 为主；agnes 厂商额外加备用域名（v9.24.2 已移除 .com 失效端点）
     const endpoints = [settings.baseUrl];
-    if (settings.provider === "agnes" && !endpoints.includes(AGNES_ENDPOINTS[1])) {
-      endpoints.push(AGNES_ENDPOINTS[1]);
+    if (settings.provider === "agnes") {
+      for (const ep of AGNES_ENDPOINTS) {
+        if (ep !== settings.baseUrl) endpoints.push(ep);
+      }
     }
 
     // 遍历端点 × thinking 模式，任一成功即返回

@@ -1,10 +1,10 @@
-// 两融观察面板：全市场融资融券总览（券商风格 v9.11 重做）
-// 4 顶部指标卡 + 主图（两融余额走势）+ 副图（融资资金流）+ 3M/6M/1Y/3Y 切换
-// 数据：RPTA_RZRQ_LSHJ（沪深合计，T+1 更新）
+// 两融观察面板（v9.24.2 重做图表）：全市场融资融券总览
+// 4 顶部指标卡 + 主图（融资余额 vs 融券余额双折线 · 双 Y 轴自动 scale）+ 副图（融资资金流 · 净买入红涨绿跌）
+// 数据：RPTA_RZRQ_LSHJ（沪深合计，T+1 披露，东财最新数据日期通常滞后 1~3 个交易日）
 // 业务含义：融资余额上升 = 融资客加杠杆看多；净买入为正 = 当日融资客净增仓
 
 import { useEffect, useState, useMemo } from "react";
-import { ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from "recharts";
+import { ComposedChart, Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend, Cell } from "recharts";
 import { fetchMarginHistory, type MarginHistoryRow } from "../lib/margin";
 
 // 顶部卡切换区间（用户截图里的 3M/6M/1Y/3Y 风格）
@@ -72,10 +72,10 @@ export default function MarginPanel() {
       date: r.date.slice(5), // MM-DD
       ts: new Date(r.date).getTime(),
       rzBalance: Math.round(r.rzBalance / 1e8),  // 融资余额（亿）
-      rqBalance: Math.round(r.rqBalance / 1e8),  // 融券余量（亿）
+      rqBalance: Math.round(r.rqBalance / 1e8),  // 融券余额（亿）
       rzBuy: Math.round(r.rzBuy / 1e8),          // 融资买入额（亿）
       rzNet: Math.round(r.rzNet / 1e8),          // 融资净买入（亿）
-      netColor: r.rzNet >= 0 ? "ef444488" : "10b98188", // recharts Bar fill 用字符串
+      netColor: r.rzNet >= 0 ? "#ef4444cc" : "#10b981cc",
       netDisplay: r.rzNet >= 0 ? "净买入" : "净偿还",
     }));
   }, [history, chartRange]);
@@ -172,10 +172,10 @@ export default function MarginPanel() {
         </div>
       )}
 
-      {/* 主图：两融余额走势（融资余额折线 + 融券余量柱状，双 Y 轴） */}
+      {/* 主图：融资 vs 融券 双折线对比（双 Y 轴自动 scale） */}
       <div className="rounded-lg border border-white/10 bg-black/20 p-3">
         <div className="flex items-center justify-between mb-2">
-          <div className="text-[11px] font-bold text-slate-300">两融余额走势 <span className="text-slate-500">（融资余额左轴 · 融券余量右轴）</span></div>
+          <div className="text-[11px] font-bold text-slate-300">两融余额走势 <span className="text-slate-500">（橙=融资余额左轴 · 蓝=融券余额右轴）</span></div>
           <div className="flex gap-1">
             {CHART_RANGES.map(r => (
               <button key={r.key} onClick={() => setChartRange(r.key)}
@@ -195,26 +195,29 @@ export default function MarginPanel() {
               <ComposedChart data={trend} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                 <CartesianGrid stroke="#ffffff10" vertical={false} />
                 <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={30} />
-                <YAxis yAxisId="left" tick={{ fill: "#64748b", fontSize: 10 }} tickLine={false} axisLine={false} width={50} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fill: "#475569", fontSize: 10 }} tickLine={false} axisLine={false} width={45} />
+                {/* 左轴：融资余额（亿），量级 25000+ */}
+                <YAxis yAxisId="left" tick={{ fill: "#f97316", fontSize: 10 }} tickLine={false} axisLine={false} width={50} />
+                {/* 右轴：融券余额（亿），量级 200+，recharts 自动独立缩放 */}
+                <YAxis yAxisId="right" orientation="right" tick={{ fill: "#38bdf8", fontSize: 10 }} tickLine={false} axisLine={false} width={45} />
                 <Tooltip
                   contentStyle={{ background: "#0b0f1a", border: "1px solid #ffffff20", borderRadius: 8, fontSize: 12 }}
                   labelStyle={{ color: "#94a3b8" }}
                   formatter={(value: any) => fmtYi(Number(value) * 1e8)}
                 />
                 <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-                <ReferenceLine yAxisId="left" y={0} stroke="#ffffff15" />
-                <Bar yAxisId="right" dataKey="rqBalance" name="融券余量" fill="#38bdf855" barSize={chartRange > 365 ? 1 : 3} />
-                <Line yAxisId="left" type="monotone" dataKey="rzBalance" name="融资余额" stroke="#f43f5e" strokeWidth={1.8} dot={false} />
+                {/* 融资余额：橙线 + 浅橙面积（更醒目） */}
+                <Area yAxisId="left" type="monotone" dataKey="rzBalance" name="融资余额" stroke="#f97316" strokeWidth={2} fill="#f97316" fillOpacity={0.08} dot={false} />
+                {/* 融券余额：蓝色虚线（量级小，虚线视觉区分） */}
+                <Line yAxisId="right" type="monotone" dataKey="rqBalance" name="融券余额" stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
               </ComposedChart>
             </ResponsiveContainer>
           )}
         </div>
       </div>
 
-      {/* 副图：融资资金流（融资买入额柱+融资偿还额柱+净买入柱） */}
+      {/* 副图：融资资金流（融资买入额柱 + 净买入红涨绿跌柱） */}
       <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-        <div className="text-[11px] font-bold text-slate-300 mb-2">融资资金流 <span className="text-slate-500">（净买入=买入-偿还，红涨绿跌）</span></div>
+        <div className="text-[11px] font-bold text-slate-300 mb-2">融资资金流 <span className="text-slate-500">（粉柱=买入 · 红/绿柱=净买入/净偿还）</span></div>
         <div className="h-44">
           {loading ? (
             <div className="flex h-full items-center justify-center text-xs text-slate-500">加载中…</div>
@@ -232,18 +235,24 @@ export default function MarginPanel() {
                   formatter={(value: any) => fmtYi(Number(value) * 1e8)}
                 />
                 <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
-                <ReferenceLine yAxisId="left" y={0} stroke="#ffffff15" />
-                {/* 净买入柱：红/绿叠加（用 Bar 背景 + 条件颜色） */}
-                <Bar yAxisId="left" dataKey="rzBuy" name="融资买入额" fill="#f43f5e66" barSize={chartRange > 365 ? 1 : 3} />
-                <Bar yAxisId="left" dataKey="rzNet" name="融资净买入" fill="ef444488" shape={(props: any) => {
-                  // recharts shape prop 自定义柱颜色（净买入红/净偿还绿）
-                  const fill = props.netColor || "#ef444488";
-                  return <rect {...props} fill={fill} />;
-                }} barSize={chartRange > 365 ? 1 : 2} />
+                <ReferenceLine yAxisId="left" y={0} stroke="#ffffff20" />
+                {/* 融资买入额：浅粉柱（背景） */}
+                <Bar yAxisId="left" dataKey="rzBuy" name="融资买入额" fill="#f43f5e44" barSize={chartRange > 365 ? 1 : 3} />
+                {/* 融资净买入：红涨/绿跌（recharts Cell 按条件染色） */}
+                <Bar yAxisId="left" dataKey="rzNet" name="融资净买入" barSize={chartRange > 365 ? 1 : 2}>
+                  {trend.map((d, i) => (
+                    <Cell key={i} fill={d.netColor} />
+                  ))}
+                </Bar>
               </ComposedChart>
             </ResponsiveContainer>
           )}
         </div>
+      </div>
+
+      {/* 数据时效说明 */}
+      <div className="text-[10px] text-slate-600 px-1">
+        数据来源：东方财富 RPTA_RZRQ_LSHJ（沪深合计，T+1 披露）。最新交易日数据一般在收盘后次日 16:00 后更新。东财 API 近期有数据滞后现象，以页面显示日期为准。
       </div>
 
       {/* 解读 */}
