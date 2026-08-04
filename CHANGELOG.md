@@ -4,6 +4,18 @@
 
 ---
 
+## v9.26.8 — 全栈情报分析直读 PostgreSQL（突破 localStorage 5MB）+ 存储文案纠正 (2026-08-04)
+
+- 背景：数据已存 PG，但分析仍走 localStorage（5MB 上限），且文案还提示"请接入 PostgreSQL"
+- 修复：
+  - dataStore.ts 新增 `fetchAnalysisDataFromCloud()`：本地部署直接从 PG 拉近 30 天全量 news/ann（绕过 localStorage）
+  - IntelligenceDashboard 分析取数统一入口 `getAnalysisData()`：本地优先 PG 全量（含指定日期/近N天/自动窗口过滤），线上回退 localStorage
+  - 产业链追溯（板块链）本地部署同样用 PG 数据
+  - 状态条本地显示「📀 数据已存本地 PostgreSQL · 可回溯至 X」；"网页存储容量有限"提示仅线上显示
+- 验证：tsc 通过
+
+---
+
 ## v9.26.7 — 修复"已配 Key 但全栈情报分析/每日复盘提示不可用" (2026-08-04)
 
 - 根因：DailySummary 和 IntelligenceDashboard 组件用 `getApiKey()` 仅检查**浏览器 Key**。

@@ -111,6 +111,47 @@ export async function syncNewsFromCloud(days = 3): Promise<void> {
   } catch { /* 网络失败静默，下次再试 */ }
 }
 
+// ============== v9.26.8：分析数据直接读 PostgreSQL（本地部署，突破 localStorage 5MB） ==============
+/** 返回类型：全量快讯/公告 + 统计（供全栈情报分析等直接使用） */
+export interface CloudAnalysisData {
+  news: NewsItem[];
+  ann: AnnItem[];
+  newsCount: number;
+  annCount: number;
+  totalCount: number;
+  oldestDate: string | null;
+  fromCloud: boolean;
+}
+
+/**
+ * 本地部署时直接从 PG 拉取分析数据（绕过 localStorage，无 5MB 上限）。
+ * 线上 GitHub Pages 返回 null（组件回退 localStorage 数据源）。
+ */
+export async function fetchAnalysisDataFromCloud(sinceDays = 30): Promise<CloudAnalysisData | null> {
+  if (!isLocalServer()) return null;
+  try {
+    const since = localDateStrOffset(sinceDays);
+    const [cloudNews, cloudAnns] = await Promise.all([
+      fetchNewsCloud(since),
+      fetchAnnsCloud(since),
+    ]);
+    const news = Array.isArray(cloudNews) ? (cloudNews as NewsItem[]) : [];
+    const ann = Array.isArray(cloudAnns) ? (cloudAnns as AnnItem[]) : [];
+    const allTimes = [...news.map(n => n.time), ...ann.map(a => a.time)].filter(Boolean).sort();
+    return {
+      news,
+      ann,
+      newsCount: news.length,
+      annCount: ann.length,
+      totalCount: news.length + ann.length,
+      oldestDate: allTimes.length > 0 ? allTimes[0].slice(0, 10) : null,
+      fromCloud: true,
+    };
+  } catch {
+    return null; // 网络失败 → 回退 localStorage
+  }
+}
+
 /** 按板块查新闻（板块名模糊匹配 boards 数组） */
 export function getNewsByBoard(board: string, days = 7): NewsItem[] {
   try {
