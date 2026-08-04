@@ -4,6 +4,30 @@
 
 ---
 
+## v9.26.9 — 全面审查修复（AI 可用性误判 x3 + 限速双计数 + 缓存漏写 + 竞态护栏） (2026-08-04)
+
+### 全面排查结论：同类 bug 修复
+1. **AI 可用性误判（getApiKey 只查浏览器 Key，服务端中转被误拦）** —— 共修复 3 处同 v9.26.7 的 bug：
+   - IntelligenceDrawer（督导输入框被禁用、提示"请配置Key"）
+   - StockWatchlist（个股 AI 研判/追问/批量扫描按钮被禁用）
+   - llmNewsIntelligence（**全栈情报分析核心引擎**直接 return null → "分析中…"卡住）
+   - 统一改用 hasAvailableAI()/hasAIOptimistic()
+
+2. **服务端中转成功分支漏写缓存+统计**（ai.ts）：latencyMs 错误、缓存永不写入、今日调用数恒 0 → 补 recordCall/recordSuccess/setCache
+
+3. **限速双计数 + 释放错位**（ai.ts）：reserveSlot 占位 + recordCall 重复 push = 双计数；pop 释放他人槽位；4xx 不释放 → 统一为按时间戳精确释放
+
+4. **cron 覆盖 AI 星级**：ON CONFLICT 不再覆盖 sentiment/stars（保留前端 AI 分析值）
+
+5. **竞态护栏**：LLM 主线精排（llmRankSeq）、自选股异动带（cancelled）防慢响应覆盖新结果
+
+6. **杂项**：429 文案动态显示限速值；快讯 time 缺失用北京时间兜底；cron 主键兜底去 Math.random 改时间戳+序号；文案纠正（"请配置Key"→准确原因）
+
+### 审查确认无问题
+- 前后端 13 个任务白名单完全一致；SQL 全参数化无注入；恐慌阈值三处一致（25）
+
+---
+
 ## v9.26.8 — 全栈情报分析直读 PostgreSQL（突破 localStorage 5MB）+ 存储文案纠正 (2026-08-04)
 
 - 背景：数据已存 PG，但分析仍走 localStorage（5MB 上限），且文案还提示"请接入 PostgreSQL"

@@ -100,26 +100,33 @@ async function fetchZTPool(date = bjDate()) {
 async function fetchFastNews() {
   const url = `https://np-weblist.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=80&req_trace=${Date.now()}`;
   const json = await httpsGet(url);
-  return (json?.data?.fastNewsList ?? []).map(n => ({
-    code: String(n.code ?? `${n.date}_${n.time}_${Math.random().toString(36).slice(2, 8)}`),
-    title: n.title ?? "",
-    summary: n.summary ?? "",
-    sentiment: "neutral",
-    stars: 1,
-    isOverseas: /纳斯达克|道琼斯|恒生|港股|美股|比特币/.test((n.title || "") + (n.summary || "")),
-    time: `${n.date} ${n.time}`,
-    url: n.url ?? "",
-    boards: [],
-  }));
+  return (json?.data?.fastNewsList ?? []).map(n => {
+    // v9.26.9：东财快讯 date/time 偶发缺失 → 产生 "undefined undefined"；用当前北京时间兜底
+    const t = `${n.date ?? ""} ${n.time ?? ""}`.trim();
+    const finalTime = t.length > 10 ? t : new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
+    return {
+      code: String(n.code ?? `news_${Date.now()}_${annSeq++}`),
+      title: n.title ?? "",
+      summary: n.summary ?? "",
+      sentiment: "neutral",
+      stars: 1,
+      isOverseas: /纳斯达克|道琼斯|恒生|港股|美股|比特币/.test((n.title || "") + (n.summary || "")),
+      time: finalTime,
+      url: n.url ?? "",
+      boards: [],
+    };
+  });
 }
 
 // ---------- 3. 抓公告 → announcements ----------
+// v9.26.9：主键兜底用时间戳+自增序号（原 Math.random 20 分钟重复会生成重复行）
+let annSeq = 0;
 async function fetchAnnouncements() {
   const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=80&page_index=1&ann_type=A&client_source=web&stock_list=`;
   const json = await httpsGet(url);
   const list = json?.data?.list ?? [];
   return list.map(a => ({
-    artCode: String(a.art_code ?? `${a.code}_${a.notice_date}_${Math.random().toString(36).slice(2, 8)}`),
+    artCode: String(a.art_code ?? `${a.code}_${a.notice_date}_${Date.now()}_${annSeq++}`),
     // codes/columns 是数组结构（东财 2026 新格式）
     stockCode: String(a.codes?.[0]?.stock_code ?? ""),
     stockName: String(a.codes?.[0]?.short_name ?? ""),
@@ -215,7 +222,7 @@ function startCron({ pool }) {
             await client.query(
               `INSERT INTO news(code,title,summary,boards,sentiment,stars,is_overseas,time,url)
                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-               ON CONFLICT(code) DO UPDATE SET title=$2,summary=$3,sentiment=$5,stars=$6,time=$8`,
+               ON CONFLICT(code) DO UPDATE SET title=$2,summary=$3,time=$8,url=$9`,
               [n.code, n.title, n.summary ?? "", "[]", n.sentiment, n.stars, n.isOverseas, n.time, n.url],
             );
           }

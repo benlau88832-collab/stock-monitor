@@ -209,6 +209,8 @@ export default function App() {
   const [watchStocks, setWatchStocks] = useState<WatchStockBrief[]>([]);
   const [currentPhase, setCurrentPhase] = useState<SessionPhase>(() => getCurrentSession().phase);
   const inFlight = useRef(false);
+  // v9.26.9：LLM 主线精排竞态护栏（慢响应不覆盖新一轮结果）
+  const llmRankSeq = useRef(0);
   // F-02 修复：refreshAll 空依赖，闭包需读最新 state → 用 ref 镜像（避免陈旧闭包）
   const overviewRef = useRef(overview);
   useEffect(() => { overviewRef.current = overview; }, [overview]);
@@ -806,8 +808,11 @@ export default function App() {
           const catalystsMap = buildMainlineCatalysts(candidates.map(c => c.mainline), catNews, catAnn);
           (async () => {
             try {
+              const seq = ++llmRankSeq.current; // v9.26.9：竞态护栏——只应用最新一轮结果
               const llmRanked = await rankMainlinesWithLLM(candidates.slice(0, 6), marketStyle, catalystsMap);
-              setBattlePlan(prev => prev ? { ...prev, llmRanked } : prev);
+              if (seq === llmRankSeq.current) {
+                setBattlePlan(prev => prev ? { ...prev, llmRanked } : prev);
+              }
             } catch { /* LLM 精排失败 → 保持规则排序 */ }
           })();
         }
@@ -875,12 +880,14 @@ export default function App() {
   // 自选股异动带：每次刷新后用 fetchStockBriefBatch 批量拉取
   useEffect(() => {
     if (!overview) return;
+    let cancelled = false; // v9.26.9：慢响应不再覆盖新响应
     (async () => {
       try {
         const raw = localStorage.getItem("stock_watchlist");
         const codes: string[] = raw ? JSON.parse(raw) : [];
-        if (codes.length === 0) { setWatchStocks([]); return; }
+        if (codes.length === 0) { if (!cancelled) setWatchStocks([]); return; }
         const map = await fetchStockBriefBatch(codes.slice(0, 30));
+        if (cancelled) return;
         const items: WatchStockBrief[] = [];
         for (const [code, b] of map) {
           const alert = Math.abs(b.pct) >= 5 || b.turnoverRate > 10;
@@ -889,9 +896,10 @@ export default function App() {
           items.push({ code, name: b.name, price: b.price, pct: b.pct, turnoverRate: b.turnoverRate, alert, alertTag, volumeRatio: b.volumeRatio });
         }
         items.sort((a, b) => Number(b.alert) - Number(a.alert) || Math.abs(b.pct) - Math.abs(a.pct));
-        setWatchStocks(items);
-      } catch { setWatchStocks([]); }
+        if (!cancelled) setWatchStocks(items);
+      } catch { if (!cancelled) setWatchStocks([]); }
     })();
+    return () => { cancelled = true; };
   }, [overview]);
 
   // 将三级警报发送到 alertBus（跃迁护栏：只在 false→true 时报一次）
@@ -1121,7 +1129,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.26 · build 08-04 13:00 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.26.9 · build 08-04 16:10 · 数据源：东方财富</div>
       </footer>
     </div>
   );

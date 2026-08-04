@@ -5,7 +5,7 @@ import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 
 // ============== LLM 配置（引用 AI 中枢的统一常量） ==============
-import { callAI, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
+import { callAI, hasAvailableAI, hasAIOptimistic, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
 import StockDecisionCard from "./StockDecisionCard";
 
 // ============== 数据结构 ==============
@@ -304,6 +304,9 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   const [llmResult, setLlmResult] = useState<string | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
+  // v9.26.9：AI 可用性（浏览器 Key 或服务端中转均可）——功能门槛不再只看 apiKey
+  const [aiOk, setAiOk] = useState<boolean>(() => hasAIOptimistic());
+  useEffect(() => { hasAvailableAI().then(setAiOk); }, []);
   // 追问
   const [chatHistory, setChatHistory] = useState<ChatMsg[]>([]);
   const [followUp, setFollowUp] = useState("");
@@ -422,7 +425,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
 
   // ---- 详细研判 ----
   const runDetailLLM = useCallback(async () => {
-    if (!apiKey || !selected) return;
+    if (!aiOk || !selected) return;
     const stock = stocks[selected];
     if (!stock) return;
     setLlmLoading(true); setLlmResult(null); setChatHistory([]);
@@ -440,11 +443,11 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
     } catch (err) {
       setLlmResult(`❌ ${err instanceof Error ? err.message : String(err)}`);
     } finally { setLlmLoading(false); }
-  }, [apiKey, selected, stocks, infoItems]);
+  }, [aiOk, selected, stocks, infoItems]);
 
   // ---- 追问 ----
   const handleFollowUp = useCallback(async () => {
-    if (!apiKey || !followUp.trim() || !selected) return;
+    if (!aiOk || !followUp.trim() || !selected) return;
     const stock = stocks[selected];
     if (!stock) return;
     setFollowUpLoading(true);
@@ -462,11 +465,11 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
     } catch (err) {
       setChatHistory([...newHistory, { role: "assistant", content: `❌ ${err instanceof Error ? err.message : String(err)}` }]);
     } finally { setFollowUpLoading(false); }
-  }, [apiKey, followUp, selected, stocks, chatHistory]);
+  }, [aiOk, followUp, selected, stocks, chatHistory]);
 
   // ---- 批量扫描 ----
   const runBatchScan = useCallback(async () => {
-    if (!apiKey) return;
+    if (!aiOk) return;
     setScanLoading(true);
     const newStocks = { ...stocks };
     for (const code of codes) {
@@ -484,7 +487,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
     }
     setStocks(newStocks);
     setScanLoading(false);
-  }, [apiKey, codes, stocks]);
+  }, [aiOk, codes, stocks]);
 
   // ---- 添加/删除 ----
   const addStock = () => {
@@ -507,7 +510,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
         <h3 className="text-sm font-bold text-slate-200">📊 个股监控 · 实时信息流 + AI研判</h3>
         <div className="flex items-center gap-2">
-          {apiKey && (
+          {aiOk && (
             <button onClick={runBatchScan} disabled={scanLoading}
               className="rounded px-2 py-1 text-[11px] bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 disabled:opacity-40">
               {scanLoading ? "扫描中…" : "🤖 AI批量扫描"}
@@ -598,7 +601,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                 className="text-sm font-bold text-amber-300 hover:underline">
                 {stocks[selected].name}({selected}) →
               </a>
-              <button onClick={runDetailLLM} disabled={llmLoading || !apiKey}
+              <button onClick={runDetailLLM} disabled={llmLoading || !aiOk}
                 className="rounded px-3 py-1 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 disabled:opacity-40">
                 {llmLoading ? "分析中…" : "🤖 AI详细研判"}
               </button>
@@ -651,7 +654,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
           )}
 
           {/* 追问输入框 */}
-          {llmResult && apiKey && (
+          {llmResult && aiOk && (
             <div className="flex gap-2">
               <input value={followUp} onChange={e => setFollowUp(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && !followUpLoading && handleFollowUp()}

@@ -108,7 +108,7 @@ module.exports = function aiRoutes(app) {
         return res.status(403).json({ error: "task not allowed: " + task });
       }
       if (!takeToken()) {
-        return res.status(429).json({ error: "server rate limited (10/min)" });
+        return res.status(429).json({ error: `server rate limited (${RATE}/min)` });
       }
       if (!process.env.AI_API_KEY) {
         return res.status(400).json({ error: "server AI key not configured (.env AI_API_KEY)" });

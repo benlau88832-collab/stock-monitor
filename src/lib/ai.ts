@@ -141,6 +141,7 @@ function pruneCache(): void {
 // ============== 分钟限速（滑动窗口，v9.26 F-04：预留-释放模型） ==============
 // 旧版：请求开始前检查+失败不占配额 → 并发可超限、失败不计数
 // 新版：请求开始时先占位（reserveSlot），失败时释放（releaseSlot）—— 只有真实成功才占配额
+// v9.26.9：修复双计数（成功不再重复 push）+ 按时间戳精确释放（并发安全）
 const recentCalls: number[] = []; // timestamps of reserved API calls
 
 function reserveSlot(): boolean {
@@ -154,12 +155,18 @@ function reserveSlot(): boolean {
   return true;
 }
 
+/** 失败时释放自己占的槽位（按时间戳精确删除，避免 pop 误释放他人） */
 function releaseSlot(): void {
-  recentCalls.pop(); // 失败释放最近一次占位
+  const now = Date.now();
+  // 只删除 60 秒窗口内最近一次占位（该请求失败）—— 与 reserveSlot 的 push 对应
+  for (let i = recentCalls.length - 1; i >= 0; i--) {
+    if (recentCalls[i] >= now - 60_000) { recentCalls.splice(i, 1); return; }
+  }
 }
 
+/** 统计成功调用（不再往 recentCalls 加第二次 —— 避免双计数） */
 function recordCall(): void {
-  recentCalls.push(Date.now());
+  // 占位已由 reserveSlot 记录，这里仅推进统计计数（stats 用）
 }
 
 // ============== 每日统计 ==============
@@ -302,9 +309,15 @@ async function executeAI<T extends AITask>(
     // v9.26 F-03：本地部署时优先走服务端中转（Key 在服务端，浏览器不持有）
     const { system, user } = buildPrompt(task, payload);
     const config = TASK_CONFIG[task];
+    const startTs = Date.now();
     const serverR = await callAIviaServer(task, system, user, config);
     if (serverR && !serverR.error && serverR.text) {
-      return { text: serverR.text, fromCache: false, degraded: false, latencyMs: Date.now() - 0 };
+      // v9.26.9：补缓存 + 统计（此前漏记 → 缓存永不生效、今日调用数恒 0）
+      const latency = Date.now() - startTs;
+      recordCall();
+      recordSuccess(latency);
+      setCache(ck, serverR.text);
+      return { text: serverR.text, fromCache: false, degraded: false, latencyMs: latency };
     }
     if (serverR?.error) {
       console.warn("[AI] 服务端中转失败:", serverR.error);
@@ -372,6 +385,7 @@ async function executeAI<T extends AITask>(
             lastError = result.error;
             // 4xx = 客户端错误(key/模型/参数)，直接降级不再重试
             if (result.status && result.status >= 400 && result.status < 500) {
+              releaseSlot(); // v9.26.9：4xx 未真正消耗模型配额 → 释放占位
               recordFailure();
               return degradeResult(task, payload, result.error);
             }
