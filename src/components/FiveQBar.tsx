@@ -23,7 +23,6 @@ export default function FiveQBar({ battlePlan }: Props) {
   const candidates = battlePlan?.candidates ?? [];
   const top = candidates.length > 0 ? candidates[0] : null;
   const topMainline = top?.mainline ?? "—";
-  const topZt = top?.ztCount ?? 0;
   const topScore = top?.strengthScore ?? 0;
   const topStage = battlePlan?.marketStyle?.label ?? "—";
 
@@ -49,16 +48,35 @@ export default function FiveQBar({ battlePlan }: Props) {
 
   const strengthMeta = STRENGTH_META[topScore >= 80 ? "gold" : topScore >= 60 ? "silver" : "bronze"];
 
+  // v9.26 A.3：三态输出（唯一可交易 / 多主线轮动 / 无可交易）—— 避免"无论如何给第一名"
+  // 规则：Top1 强度≥60 且 与 Top2 分差≥10 → 唯一可交易；分差<10 → 轮动；无合格 → 无可交易
+  const top2Score = candidates[1]?.strengthScore ?? candidates[1]?.score ?? 0;
+  const gapOk = top && (topScore - top2Score) >= 10;
+  const qualified = top && topScore >= 60 && (top?.strengthCompleteness ?? 1) >= 0.5;
+  let mainlineState: { label: string; cls: string; desc: string };
+  if (!top || !qualified) {
+    mainlineState = { label: "无可交易主线", cls: "text-slate-500", desc: "强度不足或数据缺失，只观察" };
+  } else if (gapOk) {
+    mainlineState = { label: `唯一可交易：${topMainline}`, cls: "text-rose-300", desc: `Top2 ${top2Score}分，分差${Math.round(topScore - top2Score)}分` };
+  } else {
+    mainlineState = { label: "多主线轮动", cls: "text-amber-300", desc: `Top1 ${topScore} / Top2 ${top2Score}，分差<10` };
+  }
+
   return (
     <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-5">
-      {/* 1. 主线是什么 */}
+      {/* 1. 主线是什么（v9.26 A.3 三态：唯一可交易/多主线轮动/无可交易） */}
       <div className="rounded-lg border border-white/10 bg-white/5 p-2">
         <div className="text-[9px] text-slate-500">1️⃣ 主线是什么</div>
-        <div className="mt-0.5 text-xs font-bold text-slate-100 truncate" title={topMainline}>
-          {topMainline}
+        <div className={`mt-0.5 text-xs font-bold truncate ${mainlineState.cls}`} title={mainlineState.desc}>
+          {mainlineState.label}
           {top && <span className={`ml-1 rounded px-1 py-0.5 text-[9px] font-black ${strengthMeta.color}`}>{topScore}分</span>}
         </div>
-        <div className="text-[9px] text-slate-500">涨停 {topZt} 家</div>
+        <div className="text-[9px] text-slate-500" title={mainlineState.desc}>
+          {mainlineState.desc}
+          {top && top.strengthMissing && top.strengthMissing.length > 0 && (
+            <span className="text-amber-400/80"> 缺:{top.strengthMissing.join("/")}</span>
+          )}
+        </div>
       </div>
 
       {/* 2. 处于什么阶段 */}

@@ -40,6 +40,9 @@ require("./routes/db")(app);
 // ---------- 东财代理路由 ----------
 require("./routes/proxy")(app);
 
+// ---------- AI 中转路由（v9.26 F-03：模型 Key 只存服务端 .env） ----------
+require("./routes/ai")(app);
+
 // ---------- 定时任务（收盘抓取 + LLM 分析） ----------
 require("./cron")({ pool });
 

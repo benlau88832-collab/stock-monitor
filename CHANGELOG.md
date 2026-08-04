@@ -4,6 +4,43 @@
 
 ---
 
+## v9.26 — 审查报告 V2 三波落地（刷新修复 + AI 安全 + 决策三态 + 事件驱动） (2026-08-04)
+
+### 依据
+Arena agent 对 v9.25 的全面审查《方案优化V2.txt》，按用户确认的三波清单执行。
+
+### 第一波：P0 修复（5 项）
+- **F-01+F-02**：App.tsx 刷新 orchestrator 重写
+  - 定时刷新改为单一 interval + ref 计数（不再依赖 countdown state 重建 interval，刷新真正会触发）
+  - refreshAll 空依赖闭包修复：overview/darkPool 改 ref 镜像，失败保留旧值真正生效
+- **F-08**：allScoringBoards 补回 mainNet/mainNet5d（去掉 as unknown as 强断言，资金不再显示 undefined/NaN）
+- **F-09**：runSignalBackfill 改为 await 成功后才 markBackfilledToday（失败 30 分钟重试生效）
+- **F-10**：vite ^7.3.6 + esbuild ^0.28.1，npm audit 0 漏洞
+- **F-06**：ai.ts 不再把 reasoning_content（思维链）当 content；content 为空=协议错误，上层重试 thinking=false
+
+### 第二波：AI 安全与透明化（4 项）
+- **F-05**：新增 mainlineRank 专用任务（thinking=false, temp 0.1, 1500 tokens），主线精排不再复用 stockJudge(thinking=true)
+- **F-03**：服务端 AI 中转 server/routes/ai.js（/api/ai/call + /api/ai/config）
+  - 模型 Key 只存服务端 .env（AI_API_KEY），浏览器不再持有；前端 isLocalServer 时优先走中转
+  - 任务白名单 + 10次/分钟令牌桶；线上 GitHub Pages 自动回退本地 Key
+- **F-07**：mainlineLLM 候选白名单校验——board 必须来自输入候选、code 必须属于该候选龙头池、rank 唯一；幻觉板块/股票 100% 拦截
+- **F-12**：主线强度分加 dataCompleteness/missingFields（晋级率/10日资金/换手/催化 任一缺失即下调置信度）
+  - MainlineRanking 表格新增"完整度"列 + 公式版本说明；五问条显示缺失字段
+
+### 第三波：产品方向（4 项）
+- **A.3**：五问条三态输出——唯一可交易主线（Top1≥60 且分差≥10）/ 多主线轮动（分差<10 禁止强行选唯一）/ 无可交易（强度或完整度不足）
+- **A.4 简化**：MainlineGroup 加 observedAt 快照时间（可回放审计）
+- **A.6 简化**：AnomalyTier S/A 级事件驱动 LLM 解释——新增 eventExplain 任务（thinking=false, 300 tokens），异步补一句归因+建议（每 eventId 一次，降级标 aiLLMDegraded）
+- **F-04**：前端限速改"预留-释放"模型（reserveSlot/releaseSlot），失败不占配额
+
+### 其他
+- `index.html` title v9.25 → v9.26
+- `App.tsx` footer v9.26 · build 08-04 13:00
+- 本地部署：server/routes/ai.js 新增；.env 增加 AI_API_KEY 配置（留空=回退本地 Key）
+
+
+---
+
 ## v9.25 — 主线深度催化注入 LLM（业绩/收入指引识别） (2026-08-04)
 
 ### 问题

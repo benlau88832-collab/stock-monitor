@@ -4,6 +4,7 @@
 import { type AITask, type AITaskPayload, FALLBACKS, buildPrompt, TASK_CONFIG } from "./aiPrompts";
 import { loadSettings, saveSettings } from "./aiSettings";
 import { localDateStr } from "./format";
+import { isLocalServer } from "./cloudStore";
 
 // ============== Agnes 备用域名（仅 provider=agnes 时作 fallback） ==============
 // v9.24.2：实测 .com 端点已挂（curl exit 23/连接失败），移除避免浪费时间；只保留 .cn
@@ -104,16 +105,24 @@ function pruneCache(): void {
   } catch { /* 静默 */ }
 }
 
-// ============== 分钟限速（滑动窗口） ==============
-const recentCalls: number[] = []; // timestamps of real API calls
+// ============== 分钟限速（滑动窗口，v9.26 F-04：预留-释放模型） ==============
+// 旧版：请求开始前检查+失败不占配额 → 并发可超限、失败不计数
+// 新版：请求开始时先占位（reserveSlot），失败时释放（releaseSlot）—— 只有真实成功才占配额
+const recentCalls: number[] = []; // timestamps of reserved API calls
 
-function isRateLimited(): boolean {
+function reserveSlot(): boolean {
   const now = Date.now();
   // 清除 1 分钟前的记录
   while (recentCalls.length > 0 && recentCalls[0] < now - 60_000) {
     recentCalls.shift();
   }
-  return recentCalls.length >= AI_RATE_PER_MIN;
+  if (recentCalls.length >= AI_RATE_PER_MIN) return false;
+  recentCalls.push(now);
+  return true;
+}
+
+function releaseSlot(): void {
+  recentCalls.pop(); // 失败释放最近一次占位
 }
 
 function recordCall(): void {
@@ -202,25 +211,67 @@ export function callAI<T extends AITask>(
   return promise;
 }
 
+// ============== v9.26 F-03：服务端 AI 中转（本地部署时 Key 只存服务端 .env） ==============
+async function callAIviaServer(
+  task: AITask,
+  system: string,
+  user: string,
+  config: { temperature: number; maxTokens: number; thinking: boolean },
+): Promise<{ text: string; error?: string } | null> {
+  if (!isLocalServer()) return null;
+  try {
+    const resp = await fetch("/api/ai/call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task,
+        system,
+        user,
+        temperature: config.temperature,
+        maxTokens: config.maxTokens,
+        thinking: config.thinking,
+      }),
+    });
+    if (!resp.ok) return null; // 429/403 → 回退本地
+    const j = await resp.json();
+    if (j.error) return { text: "", error: j.error };
+    return { text: j.text ?? "" };
+  } catch {
+    return null;
+  }
+}
+
 async function executeAI<T extends AITask>(
   task: T,
   payload: AITaskPayload[T],
   ck: string,
 ): Promise<AIResult> {
   try {
-    // 限速检查
-    if (isRateLimited()) {
+    // v9.26 F-04：请求预留限速（失败路径 releaseSlot 释放配额）
+    if (!reserveSlot()) {
       return degradeResult(task, payload, "每分钟限速");
     }
 
     const settings = loadSettings();
-    const apiKey = settings.apiKey;
-    if (!apiKey) {
-      return degradeResult(task, payload, "未配置API Key");
-    }
 
+    // v9.26 F-03：本地部署时优先走服务端中转（Key 在服务端，浏览器不持有）
     const { system, user } = buildPrompt(task, payload);
     const config = TASK_CONFIG[task];
+    const serverR = await callAIviaServer(task, system, user, config);
+    if (serverR && !serverR.error && serverR.text) {
+      return { text: serverR.text, fromCache: false, degraded: false, latencyMs: Date.now() - 0 };
+    }
+    if (serverR?.error) {
+      console.warn("[AI] 服务端中转失败:", serverR.error);
+    }
+
+    const apiKey = settings.apiKey;
+    if (!apiKey) {
+      releaseSlot(); // 未真正调用模型 → 释放配额
+      return degradeResult(task, payload,
+        isLocalServer() && serverR?.error ? `服务端AI未配置Key(${serverR.error})` : "未配置API Key");
+    }
+
     const effectiveMaxTokens = settings.maxTokens > 0 ? Math.min(settings.maxTokens, config.maxTokens) : config.maxTokens;
 
     // 构建请求 body（用设置中的模型名）
@@ -302,8 +353,9 @@ async function executeAI<T extends AITask>(
       }
     }
 
-    // 所有端点+模式都失败
+    // 所有端点+模式都失败（v9.26 F-04：失败释放配额）
     recordFailure();
+    releaseSlot();
     return degradeResult(task, payload, lastError);
   } finally {
     inflightMap.delete(ck);
@@ -340,9 +392,14 @@ async function fetchWithTimeout(
       return { text: "", error: json.error.message || "API错误", status: resp.status };
     }
     const msg = json.choices?.[0]?.message ?? {};
-    // 思考模式下 agnes 把答案放 reasoning_content，content 为空；需 fallback 读取
-    const text = msg.content || msg.reasoning_content || "";
-    if (!msg.content) console.warn("[AI] content空 finish_reason=", json.choices?.[0]?.finish_reason, "raw=", json);
+    // F-06 修复：reasoning_content（思维链）不是业务答案，绝不能当 content 用
+    //（JSON 任务拿推理文本解析必失败）。content 为空 = 未生成最终答案 → 协议错误，
+    // 上层会重试 thinking=false 或跳到下一端点。
+    if (!msg.content) {
+      console.warn("[AI] content为空 finish_reason=", json.choices?.[0]?.finish_reason);
+      return { text: "", error: "empty content (reasoning only)", status: resp.status };
+    }
+    const text = msg.content;
     return { text, status: resp.status };
   } catch (err) {
     clearTimeout(timer);

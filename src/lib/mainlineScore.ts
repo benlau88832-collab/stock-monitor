@@ -41,6 +41,10 @@ export interface MainlineStrengthResult {
   };
   /** 强度评级：gold(≥80 最强主线)/silver(60-79)/bronze(<60) */
   tier: "gold" | "silver" | "bronze";
+  /** v9.26 F-12：数据完整度 0~1（缺失字段越多分越低，避免"缺数据还高置信"） */
+  dataCompleteness: number;
+  /** v9.26 F-12：缺失字段名（UI 展示"数据缺失"） */
+  missingFields: string[];
 }
 
 function clamp(v: number, lo = 0, hi = 100): number {
@@ -92,6 +96,15 @@ export function calcMainlineStrength(input: MainlineStrengthInput): MainlineStre
     catalyst * 0.10,
   );
 
+  // v9.26 F-12：数据完整度（缺失字段不计分，避免"数据缺失当 0 分"或"缺数据高置信"）
+  // 可缺失字段：晋级率 / 10日资金 / 换手率 / 催化剂强度；基础字段（涨停/高度/5日资金）视为必填
+  const missingFields: string[] = [];
+  if (input.promotionRate == null) missingFields.push("晋级率");
+  if (input.mainNet10d == null) missingFields.push("10日资金");
+  if (input.turnoverRate == null) missingFields.push("换手率");
+  if (input.catalystStrength == null) missingFields.push("催化剂");
+  const dataCompleteness = Math.max(0, 1 - missingFields.length / 4);
+
   return {
     score: clamp(score),
     factors: {
@@ -103,6 +116,8 @@ export function calcMainlineStrength(input: MainlineStrengthInput): MainlineStre
       catalyst: Math.round(catalyst),
     },
     tier: score >= 80 ? "gold" : score >= 60 ? "silver" : "bronze",
+    dataCompleteness,
+    missingFields,
   };
 }
 

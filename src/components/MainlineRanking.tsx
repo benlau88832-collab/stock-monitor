@@ -80,6 +80,7 @@ export default function MainlineRanking({ battlePlan, loading }: {
               <th className="py-2 pr-2 text-right">资金净流入(今/5日)</th>
               <th className="py-2 pr-2">龙头</th>
               <th className="py-2 pr-2">AI 诊断</th>
+              <th className="py-2 pr-2 text-right" title="非缺失因子占比；缺失越多置信度越低">完整度</th>
               <th className="py-2">操作参考</th>
             </tr>
           </thead>
@@ -124,6 +125,15 @@ export default function MainlineRanking({ battlePlan, loading }: {
                     ) : "—"}
                   </td>
                   <td className="py-2 pr-2 max-w-[220px] text-slate-400" title={c.logic}>{c.logic || c.caution || "—"}</td>
+                  {/* v9.26 F-12：数据完整度（缺失字段 → 置信度下调提示） */}
+                  <td className="py-2 pr-2 text-right">
+                    {c.strengthCompleteness != null ? (
+                      <span className={c.strengthCompleteness >= 0.75 ? "text-emerald-300" : c.strengthCompleteness >= 0.5 ? "text-amber-300" : "text-rose-300"}
+                        title={`缺失字段：${c.strengthMissing?.join("、") || "无"}`}>
+                        {Math.round(c.strengthCompleteness * 100)}%
+                      </span>
+                    ) : "—"}
+                  </td>
                   <td className="py-2">
                     <span className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${badge.cls}`}>{badge.label}</span>
                   </td>
@@ -134,7 +144,10 @@ export default function MainlineRanking({ battlePlan, loading }: {
         </table>
       </div>
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-[10px] text-slate-600">强度分由六维因子实时计算（PRD 6.1）；晋级率/换手为因子得分，非百分比口径</span>
+        <span className="text-[10px] text-slate-600">
+          强度分 = 涨停占比25% + 连板20% + 晋级15% + 资金20% + 换手10% + 催化10%（版本 v1，PRD 6.1）
+          · 完整度 = 非缺失因子占比（晋级率/10日资金/换手/催化剂 任一缺失即下调）
+        </span>
         <DisclaimerTag />
       </div>
     </div>

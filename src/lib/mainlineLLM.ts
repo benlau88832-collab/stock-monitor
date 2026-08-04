@@ -63,7 +63,8 @@ export async function rankMainlinesWithLLM(
     }
   }
 
-  const result: AIResult = await callAI("stockJudge", {
+  // v9.26 F-05：使用专用 mainlineRank 任务（thinking=false, temp 0.1）——不再复用 stockJudge(thinking=true 会拉长延迟)
+  const result: AIResult = await callAI("mainlineRank", {
     prompt: `你是A股十年经验的龙头战法分析师（游资+机构双视角），只输出JSON，不输出任何其他文字或markdown标记。
 
 任务：对候选主线排序，识别真主线 vs 一日游脉冲，确认龙头，给逻辑。
@@ -103,23 +104,45 @@ ${JSON.stringify(payload)}
   return parseLLMMainlineResult(result.text, candidates);
 }
 
-// ============== 容错解析 ==============
+// ============== 容错解析（v9.26 F-07：候选白名单校验） ==============
 function parseLLMMainlineResult(raw: string, candidates: MainlineGroup[]): MainlineLLMResult[] {
   const arr = parseAIJSON<Array<Record<string, unknown>>>(raw, ["board", "rank"]);
   if (!arr || !Array.isArray(arr)) return degradeToRules(candidates);
 
+  // F-07：构建白名单 —— board 必须来自输入候选；code 必须属于该候选的龙头池
+  const boardSet = new Set(candidates.map(c => c.mainline));
+  const codeByBoard = new Map<string, Set<string>>();
+  for (const c of candidates) {
+    codeByBoard.set(c.mainline, new Set(c.leaders.map(l => l.code).filter(Boolean)));
+  }
+
   const resultMap = new Map<string, MainlineLLMResult>();
+  const usedRanks = new Set<number>();
   for (const item of arr) {
     const board = String(item.board ?? "");
-    if (!board) continue;
-    const rank = Math.max(1, Math.min(10, Number(item.rank) || 1));
+    // 白名单 1：board 必须存在于输入候选集（幻觉板块直接丢弃）
+    if (!board || !boardSet.has(board)) continue;
+    // 白名单 2：rank 唯一（1..N）
+    const rank = Math.max(1, Math.min(candidates.length, Number(item.rank) || 1));
+    if (usedRanks.has(rank)) continue;
+    usedRanks.add(rank);
+
     const leadersRaw = Array.isArray(item.leaders) ? item.leaders : [];
-    const leaders: MainlineLLMLeader[] = leadersRaw.slice(0, 3).map((l: Record<string, unknown>) => ({
-      code: String(l.code ?? ""),
-      name: String(l.name ?? ""),
-      role: String(l.role ?? ""),
-      reason: String(l.reason ?? "").slice(0, 20),
-    }));
+    const allowedCodes = codeByBoard.get(board) ?? new Set<string>();
+    const leaders: MainlineLLMLeader[] = [];
+    for (const l of leadersRaw.slice(0, 3)) {
+      const lr = l as Record<string, unknown>;
+      const code = String(lr.code ?? "");
+      // 白名单 3：code 必须属于该候选的龙头池（模型不可凭空造股票）
+      if (!allowedCodes.has(code)) continue;
+      leaders.push({
+        code,
+        name: String(lr.name ?? ""),
+        role: String(lr.role ?? ""),
+        reason: String(lr.reason ?? "").slice(0, 20),
+      });
+    }
+
     resultMap.set(board, {
       board,
       rank,
@@ -132,8 +155,9 @@ function parseLLMMainlineResult(raw: string, candidates: MainlineGroup[]): Mainl
     });
   }
 
-  // 补齐候选（LLM 可能漏掉），按 rank 升序
+  // 补齐候选（LLM 可能漏掉），按 rank 升序；漏掉的用规则机排序补位
   const merged: MainlineLLMResult[] = [];
+  let nextRank = 1;
   for (const c of candidates) {
     const llm = resultMap.get(c.mainline);
     if (llm) {
@@ -141,7 +165,7 @@ function parseLLMMainlineResult(raw: string, candidates: MainlineGroup[]): Mainl
     } else {
       merged.push({
         board: c.mainline,
-        rank: candidates.indexOf(c) + 1,
+        rank: nextRank,
         isPulse: c.score < 45,
         confidence: c.score,
         leaders: c.leaders.map(l => ({ code: l.code, name: l.name, role: l.role, reason: l.reason })),
@@ -150,6 +174,7 @@ function parseLLMMainlineResult(raw: string, candidates: MainlineGroup[]): Mainl
         fromLLM: false,
       });
     }
+    nextRank += 1;
   }
   merged.sort((a, b) => a.rank - b.rank);
   return merged;

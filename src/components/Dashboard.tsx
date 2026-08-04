@@ -25,7 +25,7 @@ import type { SessionPhase } from "../lib/tradingSession";
 import type { GateResult } from "../lib/regimeGate";
 // v9.24-P1-4：异动捕捉引擎（S/A/B 分级 + 事件流）
 import { useRef } from "react";
-import { classifyAnomaly, emitAnomaly, subscribeAnomaly, getAnomalies, type AnomalyEvent } from "../lib/anomalyTier";
+import { classifyAnomaly, emitAnomaly, subscribeAnomaly, getAnomalies, updateAnomaly, type AnomalyEvent } from "../lib/anomalyTier";
 
 // ============== 自选股异动项 ==============
 export interface WatchStockBrief {
@@ -192,6 +192,34 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stocks]);
 
+  // v9.26 A.6：事件驱动 LLM 解释 —— 只对 S/A 级且未解释过的事件异步补一句归因（每 eventId 一次）
+  useEffect(() => {
+    const pending = getAnomalies().filter(e =>
+      (e.level === "S" || e.level === "A") && !e.aiCommentLLM && !e.aiLLMDegraded,
+    );
+    if (pending.length === 0) return;
+    for (const e of pending.slice(0, 3)) {
+      (async () => {
+        try {
+          const prompt = `股票${e.name}(${e.code}) 触发${e.level}级异动：${e.reason}${e.mainlineHit ? `，呼应当前主线(${e.mainlineName})` : "，未在今日主线"}。
+用不超过40字解释该异动可能的含义，并给一句行动建议。格式：归因（40字内）｜建议：动作`;
+          const { callAI } = await import("../lib/ai");
+          const r = await callAI("eventExplain", { prompt });
+          const text = r.text.trim().replace(/^[\s\S]*?规则版[：:]\s*/, "").slice(0, 120);
+          if (r.degraded) {
+            updateAnomaly(e.id, { aiLLMDegraded: true });
+          } else if (text && !text.startsWith("异动解释规则版")) {
+            updateAnomaly(e.id, { aiCommentLLM: text });
+          } else {
+            updateAnomaly(e.id, { aiLLMDegraded: true });
+          }
+        } catch {
+          updateAnomaly(e.id, { aiLLMDegraded: true });
+        }
+      })();
+    }
+  }, [events]);
+
   // v9.24.1-fix：早返回必须放在所有 hooks 之后（防止 stocks 长度从 0 变 N 时 hooks 数量变化，
   // 违反 React Rules of Hooks 触发 error #310 整页崩溃）
   if (stocks.length === 0) return null;
@@ -236,13 +264,21 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
           <div className="text-[11px] text-slate-600 py-1">暂无显著异动（S/A/B 均未触发）</div>
         )}
       </div>
-      {/* 事件流摘要（S/A 级历史） */}
+      {/* 事件流摘要（S/A 级历史 + v9.26 A.6 LLM 异步解释） */}
       {events.length > 0 && (
-        <div className="mt-1 border-t border-white/5 pt-1 text-[10px] text-slate-500 flex flex-wrap gap-x-3 gap-y-0.5">
+        <div className="mt-1 border-t border-white/5 pt-1 text-[10px] space-y-1">
           {events.slice(0, 5).map(e => (
-            <span key={e.id} className={e.level === "S" ? "text-rose-400" : e.level === "A" ? "text-amber-300/80" : "text-slate-500"}>
-              {minsAgo(e.ts)} [{e.level}] {e.name} {e.action}
-            </span>
+            <div key={e.id} className="flex flex-wrap gap-x-3 gap-y-0.5">
+              <span className={e.level === "S" ? "text-rose-400" : e.level === "A" ? "text-amber-300/80" : "text-slate-500"}>
+                {minsAgo(e.ts)} [{e.level}] {e.name} {e.action}
+              </span>
+              {e.aiCommentLLM && (
+                <span className="text-violet-300/90">🤖 {e.aiCommentLLM}</span>
+              )}
+              {!e.aiCommentLLM && !e.aiLLMDegraded && e.level !== "B" && (
+                <span className="text-slate-600 animate-pulse">🤖 AI解释生成中…</span>
+              )}
+            </div>
           ))}
         </div>
       )}

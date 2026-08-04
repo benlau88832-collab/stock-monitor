@@ -23,6 +23,10 @@ export interface AnomalyEvent {
   mainlineName: string | null;
   /** AI 一句话研判（规则引擎生成） */
   aiComment: string;
+  /** v9.26 A.6：LLM 异步解释（事件驱动，S/A 级触发后补写；空=未生成） */
+  aiCommentLLM?: string;
+  /** v9.26 A.6：LLM 解释是否降级 */
+  aiLLMDegraded?: boolean;
   /** 建议动作：观察/可小仓试错/无需操作 */
   action: string;
   pct: number;
@@ -45,6 +49,12 @@ export function subscribeAnomaly(fn: () => void): () => void {
 }
 
 export function getAnomalies(): AnomalyEvent[] { return events; }
+
+/** v9.26 A.6：更新某事件（LLM 解释补写），触发订阅刷新 */
+export function updateAnomaly(id: string, patch: Partial<AnomalyEvent>): void {
+  events = events.map(e => (e.id === id ? { ...e, ...patch } : e));
+  notify();
+}
 
 // ============== 分级判定（PRD 5.6 规则引擎，纯实时数据） ==============
 export interface AnomalyInput {

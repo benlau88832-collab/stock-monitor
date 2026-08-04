@@ -209,12 +209,17 @@ export default function App() {
   const [watchStocks, setWatchStocks] = useState<WatchStockBrief[]>([]);
   const [currentPhase, setCurrentPhase] = useState<SessionPhase>(() => getCurrentSession().phase);
   const inFlight = useRef(false);
+  // F-02 修复：refreshAll 空依赖，闭包需读最新 state → 用 ref 镜像（避免陈旧闭包）
+  const overviewRef = useRef(overview);
+  useEffect(() => { overviewRef.current = overview; }, [overview]);
+  const darkPoolRef = useRef(darkPool);
+  useEffect(() => { darkPoolRef.current = darkPool; }, [darkPool]);
 
   const refreshAll = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
     // 静默刷新：仅首次加载显示 loading 骨架，后续刷新数据原位更新不闪烁
-    const isFirstLoad = overview === null;
+    const isFirstLoad = overviewRef.current === null;
     if (isFirstLoad) setLoading(true);
     try {
       // Parallel fetches
@@ -512,7 +517,7 @@ export default function App() {
       } catch {
         // 失败时保留上一次有效数据（比清空显示"获取失败"更好）
         // 首次即失败才显示null→"数据不可用"
-        if (!darkPool) setDarkPool(null);
+        if (!darkPoolRef.current) setDarkPool(null);
       }
 
       // === Mainline ===
@@ -597,13 +602,14 @@ export default function App() {
         } catch { /* 行业频道拉取失败不影响题材推荐 */ }
 
         // 合并：mlBoards(concept已过滤style) + industryBoards，带kind字段
+        // F-08 修复：保留 mainNet/mainNet5d（旧版 map 丢弃后 as unknown as 强断言，导致资金显示 undefined/NaN）
         const allScoringBoards = [
           ...mlBoards
             .filter(b => { const k = classifyBoard(b.name, "concept"); return k === "theme"; })
-            .map(b => ({ code: b.code, name: b.name, pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct, stage: b.stage, kind: "theme" as const })),
+            .map(b => ({ code: b.code, name: b.name, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct, stage: b.stage, kind: "theme" as const })),
           ...industryBoards
             .filter(b => classifyBoard(b.name, "industry") === "industry")
-            .map(b => ({ code: b.code, name: b.name, pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct, stage: b.stage, kind: "industry" as const })),
+            .map(b => ({ code: b.code, name: b.name, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct, stage: b.stage, kind: "industry" as const })),
         ];
 
         const themeResults = rawPool.length > 0 && allScoringBoards.length > 0
@@ -615,7 +621,8 @@ export default function App() {
         // 失败降级回 hybk 硬分类（stockToMainline.fallbackByHybk）
         const llmClassify = await classifyStocksToMainlines({
           rawPool,
-          boards: allScoringBoards as unknown as Array<{ name: string; pct: number; mainNet: number; mainNet5d?: number; mainNet5dPct?: number }>,
+          // F-08 修复：字段已补全，无需 as unknown as 强断言
+          boards: allScoringBoards,
           newsItems,
         });
         // 把 LLM 归类结果适配到 candidates（BattlePlan.tsx 期望的形状）
@@ -652,6 +659,8 @@ export default function App() {
             }
           }
           for (const c of candidates) {
+            // v9.26 A.4：快照抓取时间（每条候选打同一时间戳，可回放审计）
+            c.observedAt = new Date().toISOString();
             const strength = calcMainlineStrength({
               ztCount: c.ztCount,
               totalZtCount: totalZt,
@@ -666,6 +675,9 @@ export default function App() {
             });
             c.strengthScore = strength.score;
             c.strengthFactors = strength.factors;
+            // v9.26 F-12：数据完整度 + 缺失字段（UI 显示"数据缺失"与置信度下调）
+            c.strengthCompleteness = strength.dataCompleteness;
+            c.strengthMissing = strength.missingFields;
             // v9.23.1-fix：离场信号接入昨日数据（涨停数/高度环比）
             const yesterday = yesterdayZtByMainline.get(c.mainline);
             const exit = checkExitSignal({
@@ -823,30 +835,36 @@ export default function App() {
   // 每日构建板块映射表（数据驱动，零硬编码）
   useEffect(() => { ensureBoardMap().catch(e => console.warn("[boardMap] 首次构建失败:", e)); }, []);
   // 交易时段状态机驱动刷新：盘中60s、集合竞价30s、盘后300s、休市不刷
-  // 修复：把 refreshAll() 从 setState updater 内移到 setInterval 回调（updater 应该是纯函数，
-  // 副作用在 StrictMode 下双调会绕过 inFlight 护栏）
+  // v9.26 F-01 修复：倒计时只用于显示（ref 计数），interval 只依赖 autoRefresh/refreshAll，
+  // 不再依赖 countdown state（旧版每 setCountdown 一次就销毁重建 interval，countdown 永远到不了 0）
   useEffect(() => {
     if (!autoRefresh) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
     const computeIntervalSec = (): number => {
       const s = getCurrentSession();
       return Math.ceil((s.refreshIntervalMs || 60000) / 1000);
     };
-    setCountdown(computeIntervalSec());
-    const timer = setInterval(() => {
+    const schedule = () => {
       if (cancelled) return;
-      setCountdown(prev => (prev <= 1 ? 0 : prev - 1));
-    }, 1000);
-    // 单独的刷新 watchdog：等 countdown 归零后触发，再重置
-    const refreshTimer = setInterval(() => {
-      if (cancelled) return;
-      if (countdown === 0) {
-        refreshAll();
-        setCountdown(computeIntervalSec());
-      }
-    }, 1000);
-    return () => { cancelled = true; clearInterval(timer); clearInterval(refreshTimer); };
-  }, [autoRefresh, refreshAll, countdown]);
+      if (timer) clearInterval(timer);
+      const intervalSec = computeIntervalSec();
+      let remain = intervalSec;
+      setCountdown(intervalSec);
+      timer = setInterval(() => {
+        if (cancelled) return;
+        remain -= 1;
+        if (remain <= 0) {
+          // 到点刷新（inFlight 护栏防重叠），并重置倒计时
+          remain = computeIntervalSec();
+          refreshAll();
+        }
+        setCountdown(remain);
+      }, 1000);
+    };
+    schedule();
+    return () => { cancelled = true; if (timer) clearInterval(timer); };
+  }, [autoRefresh, refreshAll]);
 
   // 每分钟更新时段
   useEffect(() => {
@@ -919,11 +937,17 @@ export default function App() {
   // 3) 手动按钮：SignalPanel 提供"补全回填"
   // 幂等：signalLedger 按天记录 isBackfilledToday / recTracker 按天 markAttributedToday
   useEffect(() => {
-    const tryBackfill = () => {
+    const tryBackfill = async () => {
       // 信号账本回填（T+1/T+5）
+      // F-09 修复：必须 await 成功后才标记完成（旧版未 await → 失败也标记，30 分钟重试被跳过）
       if (!isBackfilledToday()) {
-        runSignalBackfill().catch(() => {});
-        markBackfilledToday();
+        try {
+          await runSignalBackfill();
+          markBackfilledToday();
+        } catch (e) {
+          console.warn("[backfill] 信号回填失败，30 分钟后重试:", e);
+          // 不标记 → 下轮定时重试
+        }
       }
       // 推荐归因回填（T+1/T+3）
       runAttribution(localDateStr()).catch(() => { /* 回填失败不阻塞 */ });
@@ -1097,7 +1121,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.25 · build 08-04 11:10 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.26 · build 08-04 13:00 · 数据源：东方财富</div>
       </footer>
     </div>
   );

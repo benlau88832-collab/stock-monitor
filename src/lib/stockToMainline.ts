@@ -49,6 +49,12 @@ export interface MainlineGroup {
   strengthScore?: number;
   /** v9.23-1：强度因子明细（UI 证据链） */
   strengthFactors?: { ztRatio: number; height: number; promotion: number; fund: number; turnover: number; catalyst: number };
+  /** v9.26 F-12：数据完整度 0~1（缺失字段越多越低） */
+  strengthCompleteness?: number;
+  /** v9.26 F-12：缺失字段名 */
+  strengthMissing?: string[];
+  /** v9.26 A.4：快照抓取时间（可回放审计） */
+  observedAt?: string;
   /** v9.23-2：主线级离场信号（触发则 true，由 App.tsx 注入） */
   exitSignal?: boolean;
   exitSignalText?: string;

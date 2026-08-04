@@ -12,7 +12,7 @@ export function getSystemPrefix(): string { return SYSTEM_PREFIX; }
 export type AITask =
   | "preopenPlan" | "closeReview" | "annRank" | "ladderScan"
   | "newsDigest" | "weeklyCoach" | "stockJudge" | "policyDiff" | "supervisor"
-  | "mainlineClassify" | "mainlineDiagnosis";
+  | "mainlineClassify" | "mainlineDiagnosis" | "mainlineRank" | "eventExplain";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -26,6 +26,10 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   stockJudge:  { temperature: 0.3, maxTokens: 8000, thinking: true },
   mainlineClassify: { temperature: 0.1, maxTokens: 4000, thinking: false },
   mainlineDiagnosis: { temperature: 0.2, maxTokens: 1500, thinking: false },
+  // v9.26 F-05：主线精排专用任务 —— 低延迟确定性优先（thinking=false、低温、小输出）
+  mainlineRank: { temperature: 0.1, maxTokens: 1500, thinking: false },
+  // v9.26 A.6：异动事件一句话解释（事件驱动，每 eventId 一次，小 schema）
+  eventExplain: { temperature: 0.2, maxTokens: 300, thinking: false },
   supervisor:  { temperature: 0.4, maxTokens: 4000, thinking: false },
   policyDiff:  { temperature: 0.2, maxTokens: 1500, thinking: true },
 };
@@ -61,6 +65,8 @@ export interface AITaskPayload {
   stockJudge: { prompt: string };
   mainlineClassify: { prompt: string };
   mainlineDiagnosis: { prompt: string };
+  mainlineRank: { prompt: string };
+  eventExplain: { prompt: string };
   supervisor: { system: string; user: string };
   policyDiff: { policyText: string };
 }
@@ -147,6 +153,10 @@ ${p.hitRateContext ? `\n推荐归因统计：${p.hitRateContext}` : ""}
   mainlineClassify: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
   // v9.23-4 主线诊断专用：结构化 JSON 输出（PRD 7.2 mainline_diagnosis schema）
   mainlineDiagnosis: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
+  // v9.26 F-05 主线精排专用：thinking=false（快+稳），temperature 0.1（确定性优先）
+  mainlineRank: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
+  // v9.26 A.6 异动事件解释：一句<=40字归因 + 建议动作
+  eventExplain: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
 
   // 督导室专用：system/user 由 IntelligenceDrawer 构建，此处透传
   supervisor: (p) => ({ system: p.system, user: p.user }),
@@ -212,6 +222,8 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   stockJudge: (p) => `个股研判规则版：\n${p.prompt.slice(0, 150)}...\n数据不足或限速，请先在个股雷达添加/刷新个股后再问。`,
   mainlineDiagnosis: (p) => `主线诊断规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n请参考主线强度分与离场信号规则引擎输出。`,
   mainlineClassify: (p) => `主线归类规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n按申万行业 hybk 分组。`,
+  mainlineRank: (p) => `主线精排规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n按规则引擎分数排序。`,
+  eventExplain: (p) => `异动解释规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n请以规则卡原因为准。`,
   supervisor: (p) => `AI督导暂不可用，请稍后重试。\n\n提问：${p.user.slice(-100)}`,
   policyDiff: (p) => `政策摘要：\n${p.policyText.slice(0, 200)}...\n规则版无法深度对比。`,
 };
