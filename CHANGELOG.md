@@ -4,6 +4,23 @@
 
 ---
 
+## v9.26.7 — 修复"已配 Key 但全栈情报分析/每日复盘提示不可用" (2026-08-04)
+
+- 根因：DailySummary 和 IntelligenceDashboard 组件用 `getApiKey()` 仅检查**浏览器 Key**。
+  本地部署模式下浏览器 Key 故意留空（v9.26.3 F-03 设计：Key 只存服务端 .env），
+  但这两个组件**没考虑服务端中转可用** → 误判"未配置 Key" → 禁用按钮、显示警告。
+  而 AI 督导（IntelligenceDrawer）走的是标准 `callAI("supervisor")` → 自动走服务端中转 → 正常工作。
+
+- 修复：
+  - ai.ts 新增 `hasAvailableAI()` 异步检测：浏览器有 Key ✓ 或 服务端 /api/ai/config enabled=true ✓ 任一可用
+  - `hasAIOptimistic()` 同步乐观判断（初始渲染 + 本地部署默认 true）
+  - DailySummary / IntelligenceDashboard 改用 `noAI = !hasAvailableAI()` 替代 `noKey = !getApiKey()`
+  - 警告文案改准确："浏览器未填 Key 且服务端未启用 → 检查 ① 设置 ② server/.env"
+
+- 验证：tsc 通过，AI 督导 + 全栈情报分析 + 每日复盘 都走服务端中转
+
+---
+
 ## v9.26.6 — 席位画像历史拉回 + 全局字号放大 (2026-08-04)
 
 ### 席位画像历史数据恢复

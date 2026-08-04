@@ -18,6 +18,38 @@ export const AGNES_MODEL = "agnes-2.5-flash";
 // ============== API Key 读写（兼容旧调用方签名） ==============
 export const APIKEY_STORAGE_KEY = "llm_api_key";
 
+// ============== v9.26.7：可用 AI 检测（浏览器 Key 或服务端中转均可） ==============
+let serverAICached: { ok: boolean; ts: number } | null = null;
+const SERVER_CHECK_TTL = 30_000; // 30 秒缓存，避免每次渲染都 fetch
+/**
+ * 是否存在可用的 AI 通道：
+ *   ① 浏览器 localStorage 有 apiKey（浏览器直连模式）
+ *   ② 本地服务端已配置 AI_API_KEY（服务端中转模式）
+ * 用于前端组件判断"立即分析"按钮是否可点、是否显示"请配置 Key"提示
+ */
+export async function hasAvailableAI(): Promise<boolean> {
+  // 浏览器有 Key 直接可用
+  if (loadSettings().apiKey) return true;
+  // 服务端模式：fetch /api/ai/config 看是否 enabled
+  if (!isLocalServer()) return false;
+  if (serverAICached && Date.now() - serverAICached.ts < SERVER_CHECK_TTL) return serverAICached.ok;
+  try {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 5000);
+    const resp = await fetch("/api/ai/config", { signal: ctrl.signal });
+    clearTimeout(t);
+    const j = await resp.json();
+    serverAICached = { ok: Boolean(j?.enabled), ts: Date.now() };
+    return serverAICached.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 同步估算（用于初始渲染占位，不阻塞）：有浏览器 Key 立即 true，否则假定服务端可用给乐观状态 */
+export function hasAIOptimistic(): boolean {
+  return Boolean(loadSettings().apiKey) || isLocalServer();
+}
+
 export function getApiKey(): string { return loadSettings().apiKey; }
 export function setApiKey(key: string): void {
   const s = loadSettings(); s.apiKey = key; saveSettings(s);

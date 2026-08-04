@@ -3,7 +3,7 @@ import { generateDailyIntelligence, type NewsItem, type AnnItem } from "../lib/l
 import { getRecentMemos, loadDailyMemo, getSegmentMemos, type DailyNewsMemo, type IntelSlot } from "../lib/newsMemoStore";
 import { getAllSince, getAllOnDate, getChainItems, getStats } from "../lib/dataStore";
 import { getAllBoards } from "../lib/boardMap";
-import { getApiKey } from "../lib/ai";
+import { hasAvailableAI, hasAIOptimistic } from "../lib/ai";
 import { getCurrentSession } from "../lib/tradingSession";
 import { fetchLimitPoolSummary } from "../lib/api";
 import type { MarketSnapshotForNews } from "./NewsPanel";
@@ -169,7 +169,10 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
 
   const historyMemos = showHistory ? getRecentMemos(5) : [];
   const segments = showTimeline ? getSegmentMemos(today) : [];
-  const noKey = !getApiKey();
+  // v9.26.7：AI 可用性（浏览器 Key 或服务端中转均可），不再误判"未配置 Key"
+  const [aiAvailable, setAiAvailable] = useState<boolean>(hasAIOptimistic());
+  useEffect(() => { hasAvailableAI().then(setAiAvailable); }, []);
+  const noAI = !aiAvailable;
   const stageClass = memo ? (STAGE_COLORS[memo.cycleStage] ?? STAGE_COLORS["分歧期"]) : "";
   const stats = getStats();
 
@@ -195,7 +198,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
               <option value={7}>近7天</option>
               <option value={30}>近30天(全库)</option>
             </select>
-            <button onClick={() => runIntelligence("manual", scopeDays)} disabled={loading || noKey}
+            <button onClick={() => runIntelligence("manual", scopeDays)} disabled={loading || noAI}
               className="rounded bg-sky-600 px-3 py-1.5 text-xs hover:bg-sky-500 disabled:opacity-50">
               {loading ? "分析中…" : "🤖 立即分析"}
             </button>
@@ -230,9 +233,9 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
         网页存储容量有限，仅保留近期数据；完整月级追溯请在本地部署后接入 PostgreSQL（存储抽象层已就绪）。
       </div>
 
-      {noKey && !memo && (
+      {noAI && !memo && (
         <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-[11px] text-amber-300">
-          请点击右上角 ⚙️ 设置配置 API Key（推荐 Agnes 2.5 Flash）后使用全栈情报分析
+          ⚠️ AI 暂不可用：浏览器未填 API Key 且本地服务端 AI 中转未启用。请检查：① 右上角 ⚙️ 设置（推荐 Agnes 2.5 Flash） ② 服务端 server/.env 是否配置 AI_API_KEY
         </div>
       )}
 
