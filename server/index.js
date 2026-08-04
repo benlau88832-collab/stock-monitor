@@ -12,6 +12,9 @@ const path = require("path");
 const os = require("os");
 const { initDb, pool } = require("./db");
 
+// v9.26.5：显式加载 .env（保证任意启动方式都读到 AI_API_KEY / DATABASE_URL）
+require("dotenv").config();
+
 const app = express();
 const PORT = process.env.PORT || 8080;
 

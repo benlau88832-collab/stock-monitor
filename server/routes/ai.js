@@ -19,8 +19,9 @@ const TASK_ALLOW = new Set([
   "mainlineClassify", "mainlineDiagnosis", "mainlineRank", "eventExplain",
 ]);
 
-// ---------- 简单令牌桶：10 次/分钟 ----------
-const RATE = 10;
+// ---------- 简单令牌桶：60 次/分钟 ----------
+// v9.26.5：10 → 60（页面一次刷新会并发触发 10+ 个 AI 任务，10/min 必然被打爆 → 429 降级）
+const RATE = 60;
 const PERIOD_MS = 60000;
 let tokens = RATE;
 let lastRefill = Date.now();
@@ -41,28 +42,50 @@ function postJSON(url, body, timeoutMs = 30000) {
     const u = new URL(url);
     const lib = u.protocol === "https:" ? https : http;
     const data = JSON.stringify(body);
-    const req = lib.request(u, {
+    const opts = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(data),
         "Authorization": "Bearer " + (process.env.AI_API_KEY || ""),
       },
-      // v9.26.1：显式挂代理（本机 Clash 127.0.0.1:7897）
-      agent: new HttpsProxyAgent(PROXY_URL),
-    }, r => {
-      const chunks = [];
-      r.on("data", c => chunks.push(c));
-      r.on("end", () => {
-        const raw = Buffer.concat(chunks).toString("utf8");
-        try { resolve(JSON.parse(raw)); }
-        catch { reject(new Error("bad json from model")); }
+    };
+    // v9.26.5：.cn 端点直连最稳（Clash 会把 .cn 域名绕到国外节点反而超时/不稳）。
+    // 策略：先直连（timeoutMs*0.4），失败再走代理重试一次（timeoutMs*0.6）。
+    const tryDirect = () => new Promise((res2, rej2) => {
+      const req = lib.request(u, opts, r => {
+        const chunks = [];
+        r.on("data", c => chunks.push(c));
+        r.on("end", () => {
+          const raw = Buffer.concat(chunks).toString("utf8");
+          try { res2(JSON.parse(raw)); }
+          catch { rej2(new Error("bad json from model")); }
+        });
       });
+      req.on("error", rej2);
+      req.setTimeout(timeoutMs, () => { req.destroy(new Error("model timeout")); });
+      req.write(data);
+      req.end();
     });
-    req.on("error", reject);
-    req.setTimeout(timeoutMs, () => { req.destroy(new Error("model timeout")); });
-    req.write(data);
-    req.end();
+    const tryProxy = () => new Promise((res2, rej2) => {
+      const req = lib.request(u, { ...opts, agent: new HttpsProxyAgent(PROXY_URL) }, r => {
+        const chunks = [];
+        r.on("data", c => chunks.push(c));
+        r.on("end", () => {
+          const raw = Buffer.concat(chunks).toString("utf8");
+          try { res2(JSON.parse(raw)); }
+          catch { rej2(new Error("bad json from model")); }
+        });
+      });
+      req.on("error", rej2);
+      req.setTimeout(timeoutMs, () => { req.destroy(new Error("model timeout")); });
+      req.write(data);
+      req.end();
+    });
+    tryDirect().then(resolve, () => {
+      // 直连失败（超时/网络错）→ 走代理重试
+      tryProxy().then(resolve, reject);
+    });
   });
 }
 
@@ -115,6 +138,7 @@ module.exports = function aiRoutes(app) {
       }
       res.json({ text: msg.content });
     } catch (e) {
+      console.error("[ai] call failed:", e && e.message, "| proxy:", PROXY_URL);
       res.status(502).json({ error: (e && e.message) || "model call failed" });
     }
   });

@@ -220,6 +220,9 @@ async function callAIviaServer(
   config: { temperature: number; maxTokens: number; thinking: boolean },
 ): Promise<{ text: string; error?: string } | null> {
   if (!isLocalServer()) return null;
+  // v9.26.5：加 35s 超时（服务端 postJSON 30s 超时兜底；避免 fetch 无限等待拖垮页面）
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 35_000);
   try {
     const resp = await fetch("/api/ai/call", {
       method: "POST",
@@ -232,13 +235,22 @@ async function callAIviaServer(
         maxTokens: config.maxTokens,
         thinking: config.thinking,
       }),
+      signal: ctrl.signal,
     });
-    if (!resp.ok) return null; // 429/403 → 回退本地
+    clearTimeout(timer);
+    if (!resp.ok) {
+      // v9.26.5：429/403 等错误透传给上层（不再静默 return null 导致误判"服务端不可用"去走本地Key降级）
+      let errMsg = `服务端拒绝(HTTP ${resp.status})`;
+      try { const j = await resp.json(); if (j?.error) errMsg = j.error; } catch { /* keep */ }
+      return { text: "", error: errMsg };
+    }
     const j = await resp.json();
     if (j.error) return { text: "", error: j.error };
     return { text: j.text ?? "" };
-  } catch {
-    return null;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e instanceof DOMException && e.name === "AbortError") return { text: "", error: "服务端超时(35s)" };
+    return null; // 网络错误 → 回退本地
   }
 }
 
@@ -269,8 +281,11 @@ async function executeAI<T extends AITask>(
     const apiKey = settings.apiKey;
     if (!apiKey) {
       releaseSlot(); // 未真正调用模型 → 释放配额
-      return degradeResult(task, payload,
-        isLocalServer() && serverR?.error ? `服务端AI未配置Key(${serverR.error})` : "未配置API Key");
+      // v9.26.5：服务端有明确错误（限速/超时/任务拒绝）时如实展示，不再误导为"未配置Key"
+      const reason = serverR?.error
+        ? `服务端AI失败(${serverR.error})`
+        : "未配置API Key（浏览器直连模式需在设置面板填写）";
+      return degradeResult(task, payload, reason);
     }
 
     const effectiveMaxTokens = settings.maxTokens > 0 ? Math.min(settings.maxTokens, config.maxTokens) : config.maxTokens;

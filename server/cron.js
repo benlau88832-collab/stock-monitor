@@ -7,6 +7,8 @@
 // ============================================================
 const https = require("https");
 const cron = require("node-cron");
+// v9.26.5：显式加载 .env（独立调用/测试时也能读到 AI 配置）
+require("dotenv").config();
 
 const EM_UT = "7eea3edcaed734bea9cbfc24409ed989";
 
@@ -27,8 +29,56 @@ function httpsGet(url, timeout = 15000) {
   });
 }
 
-function bjDate(offset = 0) {
-  const d = new Date(Date.now() + 8 * 3600 * 1000 + offset * 86400000);
+// ---------- v9.26.5：自动 LLM 分析调用（.cn 直连优先，失败走代理） ----------
+const { HttpsProxyAgent } = require("https-proxy-agent");
+const AI_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://127.0.0.1:7897";
+function callLLM(payloadText) {
+  return new Promise((resolve, reject) => {
+    const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
+    const model = process.env.AI_MODEL || "agnes-2.5-flash";
+    const body = {
+      model,
+      messages: [
+        { role: "system", content: "你是A股资深盘面分析师。基于今日快讯与公告数据，输出当日市场速览（≤150字）：1) 主线方向 2) 强催化公告要点 3) 风险提示。直接输出正文，不要markdown。" },
+        { role: "user", content: payloadText },
+      ],
+      max_tokens: 600,
+      temperature: 0.2,
+      stream: false,
+      chat_template_kwargs: { enable_thinking: false },
+    };
+    const data = JSON.stringify(body);
+    const u = new URL(baseUrl);
+    const lib = u.protocol === "https:" ? https : require("http");
+    const commonHeaders = {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(data),
+      "Authorization": "Bearer " + (process.env.AI_API_KEY || ""),
+    };
+    const attempt = (agent) => new Promise((res2, rej2) => {
+      const req = lib.request(u, { method: "POST", headers: commonHeaders, ...(agent ? { agent } : {}) }, r => {
+        const chunks = [];
+        r.on("data", c => chunks.push(c));
+        r.on("end", () => {
+          try {
+            const j = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            const content = (j.choices?.[0]?.message?.content || "").trim();
+            if (!content) return rej2(new Error("empty content"));
+            res2(content);
+          } catch (e) { rej2(e); }
+        });
+      });
+      req.on("error", rej2);
+      req.setTimeout(40000, () => { req.destroy(new Error("llm timeout")); });
+      req.write(data);
+      req.end();
+    });
+    // .cn 直连优先；失败走代理重试
+    attempt(null).then(resolve, () => attempt(new HttpsProxyAgent(AI_PROXY_URL)).then(resolve, reject));
+  });
+}
+
+function bjDate(offset = 0) {  const d = new Date(Date.now() + 8 * 3600 * 1000 + offset * 86400000);
   return d.toISOString().slice(0, 10).replace(/-/g, "");
 }
 
@@ -87,6 +137,7 @@ async function fetchAnnouncements() {
 
 // ---------- 自动 LLM 分析（可选：配了 key 才调用；无 key 走规则版标注） ----------
 // 分析结果写入 kv_store: llm_analysis:YYYY-MM-DD
+// v9.26.5：接入真实 LLM（AI_API_KEY 配置在 server/.env 时自动启用）
 async function analyzeDaily({ pool }) {
   try {
     const date = bjDate();
@@ -99,12 +150,28 @@ async function analyzeDaily({ pool }) {
       .filter(a => /业绩|中标|增持|回购|重组|突破|获批/.test(a.title || ""))
       .slice(0, 15).map(a => `${a.stock_name}:${a.title}`);
 
+    // v9.26.5：配了服务端 Key → 真实调用 LLM 生成当日市场分析；否则规则版标注
+    let llmText = "规则版（未配置服务端 LLM Key，前端 AI 功能可正常使用配置的 Key）";
+    if (process.env.AI_API_KEY) {
+      try {
+        llmText = await callLLM(JSON.stringify({
+          strongNews,
+          strongAnn,
+          newsTotal: newsR.rows.length,
+          annTotal: annR.rows.length,
+        }));
+      } catch (e) {
+        llmText = `LLM调用失败(${e.message})，本次为规则版快照`;
+        console.error("[cron] analyze LLM failed:", e.message);
+      }
+    }
+
     const analysis = {
       date: dateStr,
       summary: `今日自动快照：涨停快照已存库 · 快讯${newsR.rows.length}条 · 公告${annR.rows.length}条 · 强催化公告${strongAnn.length}条`,
       strongAnn,
       strongNews,
-      llm: "规则版（未配置服务端 LLM Key，前端 AI 功能可正常使用配置的 Key）",
+      llm: llmText,
       createdAt: new Date().toISOString(),
     };
     await pool.query(
