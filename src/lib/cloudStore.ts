@@ -111,15 +111,38 @@ export async function syncLocalWithCloud(): Promise<void> {
     // 1. 本地 → 云端（全量迁移，幂等 upsert）
     const uploaded = await migrateLocalStorageToCloud();
     // 2. 云端 → 本地（拉回 k/v，填充本机缺失或更新的数据）
-    //    只拉取关键 key（news/ann 单独处理）
-    const keys = ["stock_watchlist", "daily_reviews_v1", "discipline_state_v1", "ai_settings_v1"];
-    for (const key of keys) {
-      try {
-        const v = await kvGet(key);
-        if (v != null && localStorage.getItem(key) == null) {
-          localStorage.setItem(key, typeof v === "string" ? v : JSON.stringify(v));
+    // v9.26.6：全量拉回 PG 历史 key（seats/playbook/rec_tracker/sentiment/ai缓存等），
+    //          只填本机缺失的 key，不覆盖本地已有数据（避免覆盖新写入）
+    try {
+      const kr = await api("GET", "/api/db/kv/keys");
+      if (kr && Array.isArray(kr.keys) && kr.keys.length > 0) {
+        const localKeys = new Set<string>();
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k) localKeys.add(k);
         }
-      } catch { /* skip */ }
+        const missing = kr.keys.filter((k: string) => !localKeys.has(k));
+        // 分批拉取（每批 50 个 key），避免单次响应过大
+        for (let i = 0; i < missing.length; i += 50) {
+          const batch = missing.slice(i, i + 50);
+          const br = await api("GET", `/api/db/kv/bulk?keys=${encodeURIComponent(batch.join(","))}`);
+          if (br && Array.isArray(br.items)) {
+            for (const item of br.items) {
+              try {
+                const val = item.value;
+                if (val && typeof val === "object" && "__raw" in val) {
+                  localStorage.setItem(item.key, String(val.__raw));
+                } else if (val != null) {
+                  localStorage.setItem(item.key, JSON.stringify(val));
+                }
+              } catch { /* localStorage 满 → 跳过 */ }
+            }
+          }
+        }
+        console.log(`[cloud] pull-back: 缺失 ${missing.length} 个 key 已从 PG 拉回`);
+      }
+    } catch (e) {
+      console.warn("[cloud] pull-back failed:", e);
     }
     console.log(`[cloud] sync done: uploaded=${uploaded} keys`);
   } catch (e) {

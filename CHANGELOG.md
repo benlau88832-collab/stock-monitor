@@ -4,6 +4,24 @@
 
 ---
 
+## v9.26.6 — 席位画像历史拉回 + 全局字号放大 (2026-08-04)
+
+### 席位画像历史数据恢复
+- 背景：历史 seats/playbook/rec_tracker 等 410 个 key 已导入 PG，但 syncLocalWithCloud 只拉回 4 个固定 key，
+  本地页面 localStorage 空 → 席位画像(读 localStorage seats:*) 看不到历史
+- 修复：
+  - server/routes/db.js 新增 GET /api/db/kv/keys（列出全部 key）+ GET /api/db/kv/bulk（批量拉取）
+  - cloudStore.syncLocalWithCloud 全量拉回 PG 缺失 key（只填本机缺失，不覆盖本地新数据，分批 50/key）
+- 验证：seats:07-28~08-03 共 5 天 2134 条席位记录、playbook:07-28~08-04 全部在 PG
+
+### 全局字号放大（阅读舒适度）
+- html font-size 16→17px（基准微放大）
+- 覆盖超小字号类：text-[9px]→11px、text-[10px]→12px、text-[11px]→13px、text-xs→14px、text-sm→15px
+- 驾驶舱等 600+ 处小字同步提升，大数字(text-2xl/3xl)保持醒目
+- 方案：CSS 高优先级规则覆盖，无需逐组件改动
+
+---
+
 ## v9.26.5 — 修复"降级模式（LLM失败）" + 自动 LLM 分析接通 (2026-08-04)
 
 ### 根因：页面每次刷新触发 10+ AI 任务并发 → 服务端令牌桶仅 10 次/分钟 → 秒级 429 → 前端误降级

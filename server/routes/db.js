@@ -25,6 +25,25 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // v9.26.6：列出全部 key（供前端启动时批量拉回历史数据：seats/playbook/rec_tracker 等）
+  app.get("/api/db/kv/keys", async (req, res) => {
+    try {
+      const r = await pool.query("SELECT key, updated_at FROM kv_store ORDER BY key");
+      res.json({ keys: r.rows.map(x => x.key) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // v9.26.6：批量拉取多个 key（limit 防止过大响应；前端分批）
+  app.get("/api/db/kv/bulk", async (req, res) => {
+    try {
+      const keysRaw = String(req.query.keys || "");
+      const keys = keysRaw.split(",").map(s => s.trim()).filter(Boolean);
+      if (keys.length === 0) return res.json({ items: [] });
+      const r = await pool.query("SELECT key, value FROM kv_store WHERE key = ANY($1::text[])", [keys]);
+      res.json({ items: r.rows.map(x => ({ key: x.key, value: x.value })) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.put("/api/db/kv", async (req, res) => {
     try {
       const { key, value } = req.body || {};
