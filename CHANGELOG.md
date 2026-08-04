@@ -4,6 +4,19 @@
 
 ---
 
+## v9.26.4 — 历史数据恢复（Chrome localStorage → PostgreSQL 全量迁移） (2026-08-04)
+
+- 背景：本地部署前历史数据只存在线上 github.io 域名的浏览器 localStorage（按域名隔离），本地 PG 看不到
+- 恢复：从 Chrome leveldb 导出 github.io 域名 localStorage（399 key / 140 万字符）→ 导入 PG
+  - `ds_news` 1082 条快讯 → news 表（历史 7/30~8/4）
+  - `ds_ann` 1776 条公告 → announcements 表（历史 7/29~8/4）
+  - 龙虎榜台账 seats:07-28~08-03、复盘 playbook:07-28~08-04、rec_tracker 200 条、
+    情绪 sentiment、快照 ann/ztpool/popularity 等 397 key → kv_store
+- 启动拉取窗口 3→10 天（main.tsx syncNewsFromCloud(10)），覆盖全部历史
+- 数据源：Chrome `AppData/Local/Google/Chrome/User Data/Default/Local Storage/leveldb`
+
+---
+
 ## v9.26.3 — AI 设置面板服务端中转模式 UI（方案A） (2026-08-04)
 
 - 设置面板自动检测本地服务端 `/api/ai/config`：
