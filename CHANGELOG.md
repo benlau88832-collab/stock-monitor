@@ -4,6 +4,17 @@
 
 ---
 
+## v9.26.3 — AI 设置面板服务端中转模式 UI（方案A） (2026-08-04)
+
+- 设置面板自动检测本地服务端 `/api/ai/config`：
+  - 服务端已启用 → 顶部绿色横幅「✅ 服务端AI中转已启用·Key在server/.env」
+  - Key/BaseURL/模型/厂商/思考模式 全部禁用（🔒），浏览器不再持有 Key（F-03 安全要求）
+  - 「测试连接」按钮改为「测试服务端」（走 /api/ai/call 真实调用）
+- 线上 GitHub Pages / 服务端未配 Key → 保持原有浏览器直连模式 + 黄/琥珀色提示
+- 涉及：src/components/SettingsModal.tsx、src/lib/aiSettings.ts（新增 fetchServerAIConfig/testServerAI）
+
+---
+
 ## v9.26.2 — Agnes 按官方公告改回 .cn 端点 + flash 模型 (2026-08-04)
 
 - 官方公告：国际站用户改 Endpoint 为 `https://apihub.agnes-ai.cn/v1` 即可继续用原 API Key
