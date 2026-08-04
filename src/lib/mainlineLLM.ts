@@ -33,14 +33,16 @@ export interface MainlineLLMResult {
  * 批量精排主线（每轮 ≤1 次调用）
  * @param candidates 规则机候选（已排序，取前 6 个）
  * @param style      市场风格（供 LLM 参考）
+ * @param catalysts  深度催化信息（业绩/收入指引/政策/中标等），key=主线名 → 摘要列表
  */
 export async function rankMainlinesWithLLM(
   candidates: MainlineGroup[],
   style: MarketStyleInfo,
+  catalysts?: Map<string, string[]>,
 ): Promise<MainlineLLMResult[]> {
   if (candidates.length === 0) return [];
 
-  // payload：只放稳定内容
+  // payload：涨停梯队 + 深度催化
   const payload = candidates.slice(0, 6).map(c => ({
     board: c.mainline,
     zt: c.ztCount,
@@ -48,7 +50,18 @@ export async function rankMainlinesWithLLM(
     leader: c.leaders[0]?.name ?? "",
     fund: Math.round(c.mainNet / 1e8),  // 亿
     news: c.newsTitles.slice(0, 3),
+    // v9.25：注入深度催化（业绩/收入指引/中标等）— LLM 看到这条信息后会识别到"医药生物 - 药明康德业绩大增"类强催化
+    catalyst: catalysts?.get(c.mainline) ?? [],
   }));
+
+  // 提取强催化摘要作为顶层提示（让 LLM 优先关注）
+  const catalystLines: string[] = [];
+  if (catalysts) {
+    for (const [k, v] of catalysts.entries()) {
+      const strong = v.filter(s => s.includes("【业绩") || s.includes("【快讯"));
+      if (strong.length > 0) catalystLines.push(`- ${k}: ${strong.slice(0, 2).join("；")}`);
+    }
+  }
 
   const result: AIResult = await callAI("stockJudge", {
     prompt: `你是A股十年经验的龙头战法分析师（游资+机构双视角），只输出JSON，不输出任何其他文字或markdown标记。
@@ -57,13 +70,16 @@ export async function rankMainlinesWithLLM(
 
 市场环境：${style.label}（风险偏好${style.riskAppetite}）
 
-候选主线（涨停数/最高板/龙一候选/主力净流入亿/相关新闻）：
+${catalystLines.length > 0 ? `【重要·近期深度催化】\n${catalystLines.join("\n")}\n` : ""}候选主线（涨停数/最高板/龙一候选/主力净流入亿/相关新闻/深度催化）：
 ${JSON.stringify(payload)}
 
-判断规则：
-- 涨停数多 + 高度高 + 有政策/事件催化 = 真主线，rank 靠前
-- 纯情绪脉冲无催化 = isPulse=true
-- 龙头确认：连板最高+封板最早通常为真龙；有板块中军（成交额大）加分
+判断规则（重要）：
+- 有强业绩催化（业绩大增/收入指引上调/中标大单）的主线 → rank 显著优先，confidence ≥80
+- 有强政策催化（行业重磅利好/新政策落地）的主线 → rank 优先
+- 涨停数多 + 高度高 + 有深度催化 = 真主线，最强主线
+- 纯情绪脉冲无深度催化 = isPulse=true，rank 靠后
+- 强负向催化（减持/暴雷/亏损/立案）→ rank 显著降低，confidence 折扣
+- 龙头确认：连板最高+封板最早通常为真龙；与深度催化方向一致更可信
 - confidence = 该主线可信度 0-100
 
 输出格式（严格JSON数组，按 rank 升序）：

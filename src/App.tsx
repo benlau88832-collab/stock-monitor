@@ -25,6 +25,7 @@ import { computeETFScores, ETF_POOL, type ETFQuote } from "./lib/etfScore";
 import { detectMarketStyle } from "./lib/mainline";
 import { rankMainlinesWithLLM } from "./lib/mainlineLLM";
 import { classifyStocksToMainlines, type MainlineGroup } from "./lib/stockToMainline";
+import { buildMainlineCatalysts } from "./lib/mainlineCatalyst";
 import { calcMainlineStrength } from "./lib/mainlineScore";
 import { checkExitSignal } from "./lib/exitSignal";
 import { getAllSince } from "./lib/dataStore";
@@ -786,10 +787,14 @@ export default function App() {
         // ---- LLM 主线精排（异步补位，不阻塞首次渲染） ----
         // 调用频率：规则渲染后 1 次 + 每 20-30 分钟（payload 变化时，由调用方节流）；
         // 失败自动降级回规则排序（rankMainlinesWithLLM 内部处理）
+        // v9.25：聚合深度催化（业绩/收入指引/政策/中标）注入 LLM payload，
+        //        让"医药生物 - 药明康德业绩大增"类强催化被识别到
         if (candidates.length > 0) {
+          const { news: catNews, ann: catAnn } = getAllSince(localDateStrOffset(3));
+          const catalystsMap = buildMainlineCatalysts(candidates.map(c => c.mainline), catNews, catAnn);
           (async () => {
             try {
-              const llmRanked = await rankMainlinesWithLLM(candidates.slice(0, 6), marketStyle);
+              const llmRanked = await rankMainlinesWithLLM(candidates.slice(0, 6), marketStyle, catalystsMap);
               setBattlePlan(prev => prev ? { ...prev, llmRanked } : prev);
             } catch { /* LLM 精排失败 → 保持规则排序 */ }
           })();
@@ -1092,7 +1097,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.24.2 · build 08-03 19:30 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.25 · build 08-04 11:10 · 数据源：东方财富</div>
       </footer>
     </div>
   );

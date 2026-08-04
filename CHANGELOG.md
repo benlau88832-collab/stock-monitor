@@ -4,6 +4,39 @@
 
 ---
 
+## v9.25 — 主线深度催化注入 LLM（业绩/收入指引识别） (2026-08-04)
+
+### 问题
+- 用户反馈："医药生物是有时间催化——药明康德业绩和利润大增+收入指引提高，如何让LLM精准识别到呢"
+- 当前 LLM 主线精排只看了"涨停梯队 + 简单新闻标题"，没把业绩/收入指引等深度催化纳入，医药生物被排到第三（53分），实际应该是最强主线候选
+
+### 根因
+- `lib/mainlineLLM.ts` 的 payload 只有 `news: c.newsTitles.slice(0, 3)` —— 这些是 stockToMainline 匹配到的简单快讯标题
+- 缺：dataStore 中**公告淘金**里的业绩/收入指引/中标等深度催化信息（这是"业绩大增"这种强催化的来源）
+
+### 修复
+- 新增 `lib/mainlineCatalyst.ts`：buildMainlineCatalysts(mainlines, news, anns)
+  - 子词匹配主线名（与 NewsPanel 一致）
+  - 提取强催化关键词（业绩大增/收入指引上调/中标/政策利好/重大利好等）
+  - 同时识别负向催化（减持/暴雷/亏损/立案等 → 标注【风险·xx】）
+  - 输出 Map<主线名, 催化摘要字符串[]>
+- `lib/mainlineLLM.ts`：
+  - 签名加 catalysts 参数
+  - payload 加 `catalyst: catalysts?.get(c.mainline) ?? []` 字段
+  - prompt 顶部增加【重要·近期深度催化】区块
+  - 判断规则明确：强业绩催化 → rank 显著优先、confidence ≥80；强负向催化 → rank 显著降低
+- `App.tsx`：在 rankMainlinesWithLLM 调用前从 getAllSince(3天) 拉取 news+ann，构建 catalystsMap 传入
+
+### 预期效果
+- "医药生物 + 药明康德业绩大增 + 收入指引上调"会作为强催化注入 LLM → LLM 倾向于把医药生物排到 rank 1、confidence 80+
+- 同时如有"减持/暴雷"类公告，rank 自动降低并打【风险】标签
+
+### 其他
+- `index.html` title v9.24.2 → v9.25
+- `App.tsx` footer v9.25 · build 08-04 11:10
+
+---
+
 ## v9.24.2 — 两融图表重构（双折线对比）+ 清理失效 AI 端点 (2026-08-03)
 
 ### 用户反馈
