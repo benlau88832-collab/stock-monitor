@@ -7,11 +7,12 @@ import { localDateStr } from "./format";
 import { isLocalServer } from "./cloudStore";
 
 // ============== Agnes 备用域名（仅 provider=agnes 时作 fallback） ==============
-// v9.24.2：实测 .com 端点已挂（curl exit 23/连接失败），移除避免浪费时间；只保留 .cn
+// v9.26.2：官方公告国际站用户改 Endpoint 为 .cn 继续用原 Key（apihub.agnes-ai.cn 是国际站镜像端点）
 export const AGNES_ENDPOINTS = [
   "https://apihub.agnes-ai.cn/v1/chat/completions",
 ] as const;
 
+// v9.26.2：按用户要求用回 agnes-2.5-flash（免费模型；agnes-2.5-pro 需付费）
 export const AGNES_MODEL = "agnes-2.5-flash";
 
 // ============== API Key 读写（兼容旧调用方签名） ==============
@@ -287,7 +288,10 @@ async function executeAI<T extends AITask>(
         stream: false,
       };
       // Thinking 开关：用户设置 ∧ 任务允许
-      if (thinking) {
+      // v9.26.1：agnes 系模型必须显式传 enable_thinking（false 也要传，否则默认思考 content 为空）
+      if (settings.provider === "agnes") {
+        body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
+      } else if (thinking) {
         body.chat_template_kwargs = { enable_thinking: true };
       }
       return body;

@@ -4,6 +4,16 @@
 
 ---
 
+## v9.26.2 — Agnes 按官方公告改回 .cn 端点 + flash 模型 (2026-08-04)
+
+- 官方公告：国际站用户改 Endpoint 为 `https://apihub.agnes-ai.cn/v1` 即可继续用原 API Key
+- Endpoint：`.com` → `apihub.agnes-ai.cn`（国际站镜像端点，实测 flash 模型可用）
+- 模型：`agnes-2.5-pro`（需付费）→ `agnes-2.5-flash`（免费）
+- 实测验证：`.cn + agnes-2.5-flash` 真实调用正常返回分析（S级异动解释成功）
+- 涉及：server/.env、server/routes/ai.js、src/lib/ai.ts、src/lib/aiSettings.ts
+
+---
+
 ## v9.26 — 审查报告 V2 三波落地（刷新修复 + AI 安全 + 决策三态 + 事件驱动） (2026-08-04)
 
 ### 依据

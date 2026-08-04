@@ -6,6 +6,11 @@
 // ============================================================
 const https = require("https");
 const http = require("http");
+const { HttpsProxyAgent } = require("https-proxy-agent");
+
+// 本机走代理（Clash 等 127.0.0.1:7897）：node 原生 https.request 不读 HTTP_PROXY 环境变量，
+// 而 curl/浏览器会走系统代理。ai.js 必须显式挂代理才能访问 apihub.agnes-ai.com（直连超时）。
+const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://127.0.0.1:7897";
 
 // 任务白名单（与前端 src/lib/aiPrompts.ts TASK_CONFIG 保持一致）
 const TASK_ALLOW = new Set([
@@ -43,6 +48,8 @@ function postJSON(url, body, timeoutMs = 30000) {
         "Content-Length": Buffer.byteLength(data),
         "Authorization": "Bearer " + (process.env.AI_API_KEY || ""),
       },
+      // v9.26.1：显式挂代理（本机 Clash 127.0.0.1:7897）
+      agent: new HttpsProxyAgent(PROXY_URL),
     }, r => {
       const chunks = [];
       r.on("data", c => chunks.push(c));
@@ -96,7 +103,10 @@ module.exports = function aiRoutes(app) {
         temperature: temperature != null ? Number(temperature) : 0.2,
         stream: false,
       };
-      if (thinking) body.chat_template_kwargs = { enable_thinking: true };
+      // 2026-08-04 公告后：Endpoint=.cn + agnes-2.5-flash（免费）；thinking 显式关闭才有 content。
+      // 必须显式传 enable_thinking:false 才返回 content（JSON 任务尤其需要）。
+      // 任务要求 thinking=true 时（复盘/周教练）才开启。
+      body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
 
       const json = await postJSON(baseUrl, body);
       const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
