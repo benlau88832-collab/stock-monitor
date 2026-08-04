@@ -10,6 +10,15 @@ import SignalPanel from "./SignalPanel";
 import InstitutionFund from "./InstitutionFund";
 import Playbook from "./Playbook";
 import PopularityRadar from "./PopularityRadar";
+
+// v9.26.11：建议动作颜色（轻仓/重仓参与=积极红；观察=黄；禁止/无需=灰）
+function actionColor(action: string): string {
+  if (action.includes("重仓参与")) return "text-rose-300 font-bold";
+  if (action.includes("轻仓参与")) return "text-amber-300 font-semibold";
+  if (action.includes("观察")) return "text-sky-300";
+  return "text-slate-500";
+}
+
 import LadderPulse from "./LadderPulse";
 import WeeklyCoach from "./WeeklyCoach";
 import BattlePlan, { type BattlePlanData } from "./BattlePlan";
@@ -257,7 +266,7 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
                 {verdict.mainlineHit && <span className="ml-1 text-amber-300">⚡呼应主线</span>}
               </div>
               <div className="text-[10px] text-slate-400 leading-tight">
-                {verdict.aiComment} · <span className="text-violet-300">{verdict.action}</span>
+                {verdict.aiComment} · <span className={actionColor(verdict.action)}>{verdict.action}</span>
               </div>
             </div>
           );
@@ -272,7 +281,7 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
           {events.slice(0, 5).map(e => (
             <div key={e.id} className="flex flex-wrap gap-x-3 gap-y-0.5">
               <span className={e.level === "S" ? "text-rose-400" : e.level === "A" ? "text-amber-300/80" : "text-slate-500"}>
-                {minsAgo(e.ts)} [{e.level}] {e.name} {e.action}
+                {minsAgo(e.ts)} [{e.level}] {e.name} <span className={actionColor(e.action)}>{e.action}</span>
               </span>
               {e.aiCommentLLM && (
                 <span className="text-violet-300/90">🤖 {e.aiCommentLLM}</span>

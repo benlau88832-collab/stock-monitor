@@ -96,12 +96,14 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
   const nearLimit = limitPct - 0.5;
 
   // S 级：近涨停 / 20cm 快速拉升 / 天量
+  // v9.26.11：仓位建议五档 —— 重仓参与（主线核心）> 轻仓参与 > 观察·暂不参与 > 禁止追高 > 无需操作
   if (pct >= nearLimit) {
     return {
       level: "S",
       reason: `涨幅${pct.toFixed(1)}% 接近涨停`,
       aiComment: hit ? "呼应当前主线，强势封板形态" : "孤立异动，谨慎追高",
-      action: hit ? "可小仓试错" : "观察为主",
+      // 主线 + 强势封板 → 重仓参与；主线 → 轻仓参与；非主线 → 禁止追高
+      action: hit ? (pct >= limitPct ? "重仓参与（主线核心）" : "轻仓参与（跟主线）") : "禁止追高",
       mainlineHit: hit, mainlineName: name,
     };
   }
@@ -110,18 +112,19 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       level: "S",
       reason: `${pct.toFixed(1)}% 快速拉升 + 量比${vr.toFixed(1)}`,
       aiComment: hit ? "主线内放量拉升，资金加速" : "放量急拉但不在主线，防诱多",
-      action: hit ? "可小仓试错" : "观察为主",
+      action: hit ? "轻仓参与（跟主线）" : "禁止追高",
       mainlineHit: hit, mainlineName: name,
     };
   }
 
   // A 级：量比>5 / 换手>15% / 拉升>7%
+  // v9.26.11：主线内可轻仓参与；非主线仅观察
   if (vr >= 5) {
     return {
       level: "A",
       reason: `量比${vr.toFixed(1)} 异常放量`,
       aiComment: hit ? "主线内异动放量，关注承接" : "异常放量，警惕出货",
-      action: "观察",
+      action: hit ? "轻仓参与（观察承接）" : "观察 · 暂不参与",
       mainlineHit: hit, mainlineName: name,
     };
   }
@@ -130,7 +133,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       level: "A",
       reason: `换手${turnoverRate.toFixed(0)}% 高换手`,
       aiComment: hit ? "主线内高换手，筹码活跃" : "高换手分歧，追高谨慎",
-      action: "观察",
+      action: hit ? "轻仓参与（筹码活跃）" : "观察 · 暂不参与",
       mainlineHit: hit, mainlineName: name,
     };
   }
@@ -139,7 +142,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       level: "A",
       reason: `涨幅${pct.toFixed(1)}%`,
       aiComment: hit ? "主线内走强" : "偏离主线强势，防脉冲",
-      action: "观察",
+      action: hit ? "轻仓参与（主线走强）" : "观察 · 暂不参与",
       mainlineHit: hit, mainlineName: name,
     };
   }

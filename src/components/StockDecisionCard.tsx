@@ -68,14 +68,19 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [] }: P
   const vetoed = vetoList.length > 0;
   const ref = stopRef(stock);
 
-  // 一句话结论（四色操作徽章，与主线口径一致）
+  // 一句话结论（五色操作徽章，与主线口径一致；v9.26.11：新增"重仓参与"档）
+  // 参与档位：重仓（强势+大资金+主线命中）> 轻仓（强势+大资金 或 主线内走强）> 谨慎 > 观望 > 不建议
+  const strongAndFund = pos.label === "强势上行" && fund.label.includes("进场");
+  const onMainline = own.label.startsWith("命中主线");
   const conclusion = vetoed
     ? { label: "不建议参与", color: "bg-rose-500/20 text-rose-300 border-rose-500/40" }
-    : pos.label === "高位放量"
-      ? { label: "谨慎参与", color: "bg-amber-500/20 text-amber-300 border-amber-500/40" }
-      : pos.label === "强势上行" && fund.label.includes("进场")
-        ? { label: "可轻仓试错", color: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" }
-        : { label: "观望", color: "bg-slate-500/20 text-slate-400 border-slate-500/40" };
+    : strongAndFund && onMainline
+      ? { label: "重仓参与（主线核心）", color: "bg-rose-500/25 text-rose-200 border-rose-500/50" }
+      : strongAndFund || (onMainline && pos.label !== "高位放量")
+        ? { label: "轻仓参与", color: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" }
+        : pos.label === "高位放量"
+          ? { label: "谨慎参与", color: "bg-amber-500/20 text-amber-300 border-amber-500/40" }
+          : { label: "观望", color: "bg-slate-500/20 text-slate-400 border-slate-500/40" };
 
   // 置信度：数据完整度近似（有否决=低置信，有量比/换手=高置信）
   const confidence = vetoed ? 40 : 65 + (stock.volumeRatio ? 10 : 0) + (stock.turnoverRate ? 5 : 0);
