@@ -110,8 +110,14 @@ export async function runAttribution(today: string): Promise<void> {
     }
   }
 
-  saveRecords(all);
-  markAttributedToday(today);
+  // v9.26.10：仅全部处理完才标记今日（>50 只时未处理 code 留待下次回填，原逻辑截断后无条件标记 → 永不回填）
+  if ([...codesToFetch].length <= 50) {
+    saveRecords(all);
+    markAttributedToday(today);
+  } else {
+    saveRecords(all); // 保存已回填部分，但不标记 → 下次继续
+  }
+  return;
 }
 
 // ============== 命中率统计 ==============

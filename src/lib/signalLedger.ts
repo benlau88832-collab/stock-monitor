@@ -54,7 +54,7 @@ export function getPendingBackfill(): SignalEntry[] {
   const now = Date.now();
   return entries.filter(e => {
     if (e.backfilled) return false;
-    const daysSince = Math.floor((now - new Date(e.date).getTime()) / 86400000);
+    const daysSince = Math.floor((now - new Date(e.date + "T00:00:00+08:00").getTime()) / 86400000);
     return daysSince >= 1 && daysSince <= 10;
   });
 }

@@ -142,26 +142,27 @@ function pruneCache(): void {
 // 旧版：请求开始前检查+失败不占配额 → 并发可超限、失败不计数
 // 新版：请求开始时先占位（reserveSlot），失败时释放（releaseSlot）—— 只有真实成功才占配额
 // v9.26.9：修复双计数（成功不再重复 push）+ 按时间戳精确释放（并发安全）
+// v9.26.10：token 模型 —— reserveSlot 返回唯一 token，releaseSlot(token) 精确释放自己（并发错配修复）
 const recentCalls: number[] = []; // timestamps of reserved API calls
 
-function reserveSlot(): boolean {
+/** 占位成功返回 token（时间戳+序号），失败返回 null */
+function reserveSlot(): number | null {
   const now = Date.now();
   // 清除 1 分钟前的记录
   while (recentCalls.length > 0 && recentCalls[0] < now - 60_000) {
     recentCalls.shift();
   }
-  if (recentCalls.length >= AI_RATE_PER_MIN) return false;
-  recentCalls.push(now);
-  return true;
+  if (recentCalls.length >= AI_RATE_PER_MIN) return null;
+  const token = now * 1000 + (recentCalls.length % 1000); // 时间戳+序号，保证唯一
+  recentCalls.push(token);
+  return token;
 }
 
-/** 失败时释放自己占的槽位（按时间戳精确删除，避免 pop 误释放他人） */
-function releaseSlot(): void {
-  const now = Date.now();
-  // 只删除 60 秒窗口内最近一次占位（该请求失败）—— 与 reserveSlot 的 push 对应
-  for (let i = recentCalls.length - 1; i >= 0; i--) {
-    if (recentCalls[i] >= now - 60_000) { recentCalls.splice(i, 1); return; }
-  }
+/** 失败时释放自己占的槽位（按 token 精确删除，并发安全） */
+function releaseSlot(token: number | null): void {
+  if (token == null) return;
+  const idx = recentCalls.indexOf(token);
+  if (idx >= 0) recentCalls.splice(idx, 1);
 }
 
 /** 统计成功调用（不再往 recentCalls 加第二次 —— 避免双计数） */
@@ -298,9 +299,11 @@ async function executeAI<T extends AITask>(
   payload: AITaskPayload[T],
   ck: string,
 ): Promise<AIResult> {
+  let slotToken: number | null = null; // v9.26.10：try 外声明，catch/finally 可访问
   try {
     // v9.26 F-04：请求预留限速（失败路径 releaseSlot 释放配额）
-    if (!reserveSlot()) {
+    slotToken = reserveSlot(); // v9.26.10：token 模型，失败精确释放自己
+    if (slotToken == null) {
       return degradeResult(task, payload, "每分钟限速");
     }
 
@@ -325,7 +328,7 @@ async function executeAI<T extends AITask>(
 
     const apiKey = settings.apiKey;
     if (!apiKey) {
-      releaseSlot(); // 未真正调用模型 → 释放配额
+      releaseSlot(slotToken); // 未真正调用模型 → 释放配额
       // v9.26.5：服务端有明确错误（限速/超时/任务拒绝）时如实展示，不再误导为"未配置Key"
       const reason = serverR?.error
         ? `服务端AI失败(${serverR.error})`
@@ -385,7 +388,7 @@ async function executeAI<T extends AITask>(
             lastError = result.error;
             // 4xx = 客户端错误(key/模型/参数)，直接降级不再重试
             if (result.status && result.status >= 400 && result.status < 500) {
-              releaseSlot(); // v9.26.9：4xx 未真正消耗模型配额 → 释放占位
+              releaseSlot(slotToken); // 4xx 未真正消耗模型配额 → 释放占位
               recordFailure();
               return degradeResult(task, payload, result.error);
             }
@@ -420,8 +423,13 @@ async function executeAI<T extends AITask>(
 
     // 所有端点+模式都失败（v9.26 F-04：失败释放配额）
     recordFailure();
-    releaseSlot();
+    releaseSlot(slotToken);
     return degradeResult(task, payload, lastError);
+  } catch (e) {
+    // v9.26.10：buildPrompt/内部异常 → 释放配额 + 降级（防 slot 泄漏 60s）
+    releaseSlot(slotToken);
+    const msg = e instanceof Error ? e.message : "未知错误";
+    return degradeResult(task, payload, msg);
   } finally {
     inflightMap.delete(ck);
   }

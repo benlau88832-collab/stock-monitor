@@ -6,7 +6,7 @@
 //   4. 顶部市场风格标签（进攻/轮动/防守）+ 风险偏好
 //   5. LLM 精排逻辑 + 真主线 vs 脉冲判定
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { fmtMoney } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 import { getHitRateText } from "../lib/recTracker";
@@ -83,7 +83,11 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
     strengthScore >= 60 ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
     "bg-slate-500/20 text-slate-400 border-slate-500/30";
   // v9.23.1-fix：强度分 <60 主线卡片默认折叠（PRD A2）
+  // v9.26.10：useState 初值仅挂载生效 → 强度分变化后不同步；改为随强度分同步（用户手动展开优先）
   const [collapsed, setCollapsed] = useState(strengthScore != null && strengthScore < 60);
+  useEffect(() => {
+    setCollapsed(strengthScore != null && strengthScore < 60);
+  }, [strengthScore != null && strengthScore < 60]);
   return (
     <div className={`rounded-lg border p-2.5 ${rankColor}`}>
       <div className="flex items-center justify-between flex-wrap gap-1">

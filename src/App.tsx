@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { saveTodaySentiment, loadPrevTradingDaySentiment, recordIntradaySentiment } from "./lib/sentimentStore";
 import TopNav, { type TabKey } from "./components/TopNav";
 import MainlineRanking from "./components/MainlineRanking";
@@ -199,7 +199,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [countdown, setCountdown] = useState(60);
+  const [countdown] = useState(60); // v9.26.10：仅作 TopNav 兜底初值（实际显示用 nextRefreshAt）
+  // v9.26.10：下次自动刷新时间戳（替代每秒 setCountdown，避免全树重渲染）
+  const [nextRefreshAt, setNextRefreshAt] = useState<number>(0);
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [fundStructure, setFundStructure] = useState<FundStructureData | null>(null);
   const [darkPool, setDarkPool] = useState<DarkPoolData | null>(null);
@@ -842,32 +844,29 @@ export default function App() {
   // 交易时段状态机驱动刷新：盘中60s、集合竞价30s、盘后300s、休市不刷
   // v9.26 F-01 修复：倒计时只用于显示（ref 计数），interval 只依赖 autoRefresh/refreshAll，
   // 不再依赖 countdown state（旧版每 setCountdown 一次就销毁重建 interval，countdown 永远到不了 0）
+  // v9.26.10：App 不再每秒 setCountdown（避免全树每秒重渲染）——只维护 nextRefreshAt 时间戳，
+  //           TopNav 内部每秒本地计算剩余秒数。
   useEffect(() => {
     if (!autoRefresh) return;
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
-    const computeIntervalSec = (): number => {
+    let nextAt = 0;
+    const computeIntervalMs = (): number => {
       const s = getCurrentSession();
-      return Math.ceil((s.refreshIntervalMs || 60000) / 1000);
+      return s.refreshIntervalMs || 60000;
     };
-    const schedule = () => {
+    const arm = () => {
+      nextAt = Date.now() + computeIntervalMs();
+      setNextRefreshAt(nextAt);
+    };
+    arm();
+    timer = setInterval(() => {
       if (cancelled) return;
-      if (timer) clearInterval(timer);
-      const intervalSec = computeIntervalSec();
-      let remain = intervalSec;
-      setCountdown(intervalSec);
-      timer = setInterval(() => {
-        if (cancelled) return;
-        remain -= 1;
-        if (remain <= 0) {
-          // 到点刷新（inFlight 护栏防重叠），并重置倒计时
-          remain = computeIntervalSec();
-          refreshAll();
-        }
-        setCountdown(remain);
-      }, 1000);
-    };
-    schedule();
+      if (Date.now() >= nextAt) {
+        arm(); // 先排下一次（防刷新耗时 > 周期时连刷）
+        refreshAll();
+      }
+    }, 1000);
     return () => { cancelled = true; if (timer) clearInterval(timer); };
   }, [autoRefresh, refreshAll]);
 
@@ -893,7 +892,7 @@ export default function App() {
           const alert = Math.abs(b.pct) >= 5 || b.turnoverRate > 10;
           const alertTag = Math.abs(b.pct) >= 5 ? `${b.pct > 0 ? "↑" : "↓"}${Math.abs(b.pct).toFixed(1)}%` : b.turnoverRate > 10 ? `换手${b.turnoverRate.toFixed(0)}%` : "";
           // v9.24-P1-4：量比注入（异动分级 S/A/B 用）
-          items.push({ code, name: b.name, price: b.price, pct: b.pct, turnoverRate: b.turnoverRate, alert, alertTag, volumeRatio: b.volumeRatio });
+          items.push({ code, name: b.name, price: b.price, pct: b.pct, turnoverRate: b.turnoverRate, alert, alertTag, volumeRatio: b.volumeRatio, limitPct: stockLimitPct(code) });
         }
         items.sort((a, b) => Number(b.alert) - Number(a.alert) || Math.abs(b.pct) - Math.abs(a.pct));
         if (!cancelled) setWatchStocks(items);
@@ -973,6 +972,11 @@ export default function App() {
 
   // 加载昨日 ZTPool 快照（用"找最近历史快照"替代本地日期推算，天然兼容法定节假日）
   const yesterdayZTPool = loadPrevZTSnapshot(overview?.limitPool?.qdate ?? null);
+  // v9.26.10：useMemo 缓存数组引用，避免每次渲染新数组 → AuctionBoard effect 每秒重建 → 每秒请求
+  const yesterdayZtBrief = useMemo(
+    () => yesterdayZTPool?.map(z => ({ code: String(z.c), name: String(z.n) })) ?? [],
+    [yesterdayZTPool],
+  );
 
   // 高低切检测：需要 mainline.boards 和 overview.limitPool.rawZTPool
   const hlSwitch = (() => {
@@ -1030,7 +1034,7 @@ export default function App() {
       <TopNav
         active={active} onChange={setActive} lastUpdated={lastUpdated} loading={loading}
         autoRefresh={autoRefresh} onToggleAutoRefresh={() => setAutoRefresh(v => !v)} onRefreshNow={refreshAll}
-        countdown={countdown}
+        countdown={countdown} nextRefreshAt={nextRefreshAt || undefined}
       />
 
       {/* 常驻状态条（所有Tab可见） */}
@@ -1047,7 +1051,7 @@ export default function App() {
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
             onSwitchTab={(tab) => setActive(tab as TabKey)}
             ztPool={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined}
-            yesterdayZt={yesterdayZTPool?.map(z => ({ code: String(z.c), name: String(z.n) }))} />
+            yesterdayZt={yesterdayZtBrief} />
         )}
 
         {/* ====== 资金主线（深潜：完整资金结构+明暗盘+全球信号+产业链） ====== */}
@@ -1129,7 +1133,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.26.9 · build 08-04 16:10 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.26.10 · build 08-04 17:20 · 数据源：东方财富</div>
       </footer>
     </div>
   );

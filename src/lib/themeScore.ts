@@ -156,7 +156,7 @@ export function computeThemeScores(
       const heightPart = lg.height * 18;
       const gapPenalty = lg.gapTiers.length * 15;
       const firstBonus = Math.min(lg.tiers.first * 5, 30);
-      const earlyPioneer = lg.pioneer && parseInt(lg.pioneer.firstBoardTime) < 100000 ? 10 : 0;
+      const earlyPioneer = lg.pioneer && lg.pioneer.firstBoardTime && String(lg.pioneer.firstBoardTime) < "10:00:00" ? 10 : 0;
       const bigBellwether = lg.bellwether && lg.bellwether.amount > 2e9 ? 10 : 0;
       ladderScore = clamp(heightPart - gapPenalty + firstBonus + earlyPioneer + bigBellwether);
     }

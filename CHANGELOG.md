@@ -4,6 +4,42 @@
 
 ---
 
+## v9.26.10 — 全栈逐文件审查修复（4 代理审查 + 20+ 项修复） (2026-08-04)
+
+### 服务端
+- proxy.js：502/504 双重发送修复（sent 标志）；缓存 key 剔除 req_trace 动态参数（缓存原本永不命中）
+- cron.js：内容哈希确定性主键（防重复入库）；fallbackSeq 提到模块顶（消 TDZ）；busy 互斥锁防重叠；20min 调度修正
+- ai.js：HttpsProxyAgent 单例（防 socket 泄漏）；超时按 0.4/0.6 比例分配；statusCode 非 2xx 不走代理重试（防重复计费）；takeToken 移到 Key 校验后
+- db.js：limit 下界校验（防 LIMIT -1 语法错误）
+
+### 前端核心
+- ai.ts：releaseSlot token 模型（并发精确释放）；executeAI 加 catch（防 slot 泄漏）
+- themeScore：先锋加分恒真修复（parseInt 改字符串比较）
+- llmSignals：0 分被 || 吞修复；JSON 任务改 mainlineRank 槽（thinking:false）
+- tradingSession：getUTC* 修复双重时区
+- regimeGate：情绪边界错位一档修复 + s≥101 兜底
+- seatProfiles：游资识别 token 级模糊匹配（"股份有限公司"插入词问题）
+- signalLedger：日期按 +08:00 解析（凌晨时区错位）
+- recTracker：>50 只时截断不再误标完成
+- seatLedger：停牌股 priceT1 null 不再标回填完成
+- boardMap：内存缓存 + in-flight 锁（重复 parse 500 项优化）
+- api：节假日涨停池空自动回退最近交易日；anomalyTier 按 10/20cm 区分近涨停
+
+### 组件
+- App：countdown 每秒 setState 改 nextRefreshAt 时间戳（消除全树每秒重渲染）；yesterdayZt useMemo（盘前每秒请求修复）；竞态护栏
+- TopNav：本地每秒计算倒计时
+- NewsPanel：mainlines 闭包旧值修复（"命中主线"标签）
+- MarginPanel：融资上涨红涨绿跌修复（原颠倒）
+- DarkPool：marketFlowType 匹配对齐实际文案（原死分支恒灰）
+- BattlePlan：collapsed 随强度分同步
+- StockWatchlist：loadInfo 竞态护栏
+- AnnouncementPanel：items ref 镜像（闭包旧值）
+
+### 确认无问题
+SQL 全参数化；SSRF allowlist 安全；前后端任务白名单一致
+
+---
+
 ## v9.26.9 — 全面审查修复（AI 可用性误判 x3 + 限速双计数 + 缓存漏写 + 竞态护栏） (2026-08-04)
 
 ### 全面排查结论：同类 bug 修复

@@ -263,7 +263,8 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
       else setError("快讯数据暂时无法获取");
     } catch { setError("快讯数据暂时无法获取"); }
     finally { setLoading(false); }
-  }, []);
+  // v9.26.10：mainlines 入依赖（此前闭包捕获首渲染空数组 → "命中主线"标签失效）
+  }, [mainlines]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (!autoRefresh) return; const t = setInterval(load, 30000); return () => clearInterval(t); }, [autoRefresh, load]);

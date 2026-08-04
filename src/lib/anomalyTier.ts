@@ -63,6 +63,8 @@ export interface AnomalyInput {
   pct: number;
   volumeRatio?: number | null;
   turnoverRate: number;
+  /** v9.26.10：涨跌幅限制（10/20），区分主板/创业板/科创板（原 9.5 阈值对 20cm 股误判） */
+  limitPct?: number;
 }
 
 export interface AnomalyVerdict {
@@ -89,9 +91,12 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
   const { pct, volumeRatio, turnoverRate } = s;
   const vr = volumeRatio ?? 0;
   const { hit, name } = hitMainline(s.name, mainlines);
+  // v9.26.10：按涨跌幅限制判定"近涨停"（20cm 股涨 10% 不算接近涨停）
+  const limitPct = s.limitPct ?? 10;
+  const nearLimit = limitPct - 0.5;
 
   // S 级：近涨停 / 20cm 快速拉升 / 天量
-  if (pct >= 9.5) {
+  if (pct >= nearLimit) {
     return {
       level: "S",
       reason: `涨幅${pct.toFixed(1)}% 接近涨停`,

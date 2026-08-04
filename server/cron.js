@@ -11,6 +11,14 @@ const cron = require("node-cron");
 require("dotenv").config();
 
 const EM_UT = "7eea3edcaed734bea9cbfc24409ed989";
+// v9.26.10：主键兜底序号（模块顶部声明避免 TDZ；内容哈希作确定性 key 防重复入库）
+let fallbackSeq = 0;
+/** 内容哈希：title+time 生成确定性主键（同一数据多次抓取 → 同 key → ON CONFLICT 幂等） */
+function contentKey(seed) {
+  let h = 5381;
+  for (let i = 0; i < seed.length; i++) h = ((h << 5) + h + seed.charCodeAt(i)) >>> 0;
+  return `fb_${h.toString(36)}_${fallbackSeq++}`;
+}
 
 // ---------- 通用 https GET ----------
 function httpsGet(url, timeout = 15000) {
@@ -105,7 +113,7 @@ async function fetchFastNews() {
     const t = `${n.date ?? ""} ${n.time ?? ""}`.trim();
     const finalTime = t.length > 10 ? t : new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
     return {
-      code: String(n.code ?? `news_${Date.now()}_${annSeq++}`),
+      code: String(n.code ?? contentKey(`news_${n.title ?? ""}_${n.date ?? ""}_${n.time ?? ""}`)),
       title: n.title ?? "",
       summary: n.summary ?? "",
       sentiment: "neutral",
@@ -119,14 +127,12 @@ async function fetchFastNews() {
 }
 
 // ---------- 3. 抓公告 → announcements ----------
-// v9.26.9：主键兜底用时间戳+自增序号（原 Math.random 20 分钟重复会生成重复行）
-let annSeq = 0;
 async function fetchAnnouncements() {
   const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=80&page_index=1&ann_type=A&client_source=web&stock_list=`;
   const json = await httpsGet(url);
   const list = json?.data?.list ?? [];
   return list.map(a => ({
-    artCode: String(a.art_code ?? `${a.code}_${a.notice_date}_${Date.now()}_${annSeq++}`),
+    artCode: String(a.art_code ?? contentKey(`ann_${a.code ?? ""}_${a.notice_date ?? ""}_${a.title ?? ""}`)),
     // codes/columns 是数组结构（东财 2026 新格式）
     stockCode: String(a.codes?.[0]?.stock_code ?? ""),
     stockName: String(a.codes?.[0]?.short_name ?? ""),
@@ -193,10 +199,13 @@ async function analyzeDaily({ pool }) {
 }
 
 // ---------- 启动定时任务 ----------
+let cronBusy = false; // v9.26.10：防重叠执行（20min 任务与启动抓取/15:40 并发）
 function startCron({ pool }) {
   // 交易日（周一到周五）15:40 收盘快照 + 分析
   cron.schedule("40 15 * * 1-5", async () => {
     console.log("[cron] 15:40 收盘快照 + 分析开始");
+    if (cronBusy) { console.log("[cron] busy, skip 15:40"); return; }
+    cronBusy = true;
     try {
       const snap = await fetchZTPool();
       const dateStr = snap.date;
@@ -207,11 +216,14 @@ function startCron({ pool }) {
       );
       console.log(`[cron] zt snapshot ${dateStr}: ${snap.count} 只涨停`);
     } catch (e) { console.error("[cron] zt snapshot failed:", e.message); }
-    await analyzeDaily({ pool });
+    try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] analyze failed:", e.message); }
+    cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
-  // 交易日每 20 分钟抓快讯+公告自动落库（9:00 - 16:30）
+  // 交易日每 20 分钟抓快讯+公告自动落库（9:00 - 16:40，v9.26.10 修正 */20 9-16 会在 16:40 触发却注释到 16:30）
   cron.schedule("*/20 9-16 * * 1-5", async () => {
+    if (cronBusy) { console.log("[cron] busy, skip 20min fetch"); return; }
+    cronBusy = true;
     try {
       const news = await fetchFastNews();
       if (news.length > 0) {
@@ -249,6 +261,7 @@ function startCron({ pool }) {
       }
       console.log(`[cron] 20min fetch: news=${news.length} ann=${anns.length}`);
     } catch (e) { console.error("[cron] fetch failed:", e.message); }
+    cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
   // 启动时立即抓取一次（验证 + 补数据：涨停快照 + 快讯 + 公告 全部入库）

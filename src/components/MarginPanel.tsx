@@ -97,7 +97,7 @@ export default function MarginPanel() {
         <div className={`mt-1 text-2xl font-black ${valColor}`}>{value != null ? fmtYi(value, 1) : "—"}</div>
         <div className="mt-0.5 text-[11px] font-semibold">
           {delta ? (
-            <span className={isUp ? "text-emerald-400" : isDown ? "text-rose-400" : "text-slate-400"}>
+            <span className={isUp ? "text-rose-400" : isDown ? "text-emerald-400" : "text-slate-400"}>
               {isUp ? "▲" : isDown ? "▼" : "—"} {delta.text}
             </span>
           ) : <span className="text-slate-500">—</span>}

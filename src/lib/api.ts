@@ -795,11 +795,31 @@ export interface LimitPoolSummary {
   rawZTPool: any[];
   /** 接口返回的真实交易日（形如"20260729"），优先用于快照 key（兼容法定节假日） */
   qdate: string | null;
+  /** v9.26.10：当日池总数（节假日回退判定用） */
+  totalCount: number;
+  /** v9.26.10：是否交易日（穷尽回退后仍空则 false） */
+  isTradingDay?: boolean;
 }
 
 // 获取涨停池统计摘要（供多个模块共享）
+// v9.26.10：节假日/非交易日空池时自动回退最近交易日（最多 10 天）
 export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSummary> {
-  const d = date || tradeDateStr();
+  let d = date || tradeDateStr();
+  let last: LimitPoolSummary | null = null;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const summary = await fetchZTPoolForDate(d);
+    if (summary.totalCount > 0 || attempt === 9) {
+      return summary; // 有数据或穷尽回退 → 返回
+    }
+    // 空池（节假日）→ 往前一天再试
+    const prev = new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`);
+    prev.setDate(prev.getDate() - 1);
+    d = `${prev.getFullYear()}${String(prev.getMonth()+1).padStart(2,"0")}${String(prev.getDate()).padStart(2,"0")}`;
+  }
+  return last ?? { limitUpCount: 0, limitDownCount: 0, blastedCount: 0, blastedRate: 0, boardCounts: {}, totalBoardStocks: 0, rawZTPool: [], qdate: null, totalCount: 0, isTradingDay: false };
+}
+
+async function fetchZTPoolForDate(d: string): Promise<LimitPoolSummary> {
   const ztUrl = `https://push2ex.eastmoney.com/getTopicZTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
   const zbUrl = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
   const dtUrl = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
@@ -832,7 +852,7 @@ export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSum
   const blastedRate = (limitUpCount + blastedCount) > 0 ? blastedCount / (limitUpCount + blastedCount) * 100 : 0;
   const totalBoardStocks = ztPool.filter((s: any) => (s.lbc ?? 1) >= 2).length;
 
-  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, qdate };
+  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, qdate, totalCount: ztPool.length + zbPool.length + dtPool.length };
 }
 
 // ============== 两市历史日成交额（用于量能对比）==============

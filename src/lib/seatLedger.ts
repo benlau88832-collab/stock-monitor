@@ -149,7 +149,8 @@ export async function backfillSeatDay(date: string): Promise<void> {
         if (priceT1 != null) r.pctT1 = Math.round((priceT1 / base - 1) * 10000) / 100;
         if (priceT5 != null) r.pctT5 = Math.round((priceT5 / base - 1) * 10000) / 100;
         // 只要尝试过就标记回填，即使部分为 null（T+5 可能还没到）
-        if (daysSince >= 7 || priceT1 != null) r.backfilled = true;
+        // v9.26.10：T+1 有值才算完成（停牌股 priceT1 为 null 时留待下次，不再永久缺失）
+        if (priceT1 != null && (daysSince >= 7 || priceT5 != null)) r.backfilled = true;
       }
     } catch { /* 单股回填失败跳过，不阻塞 */ }
   }

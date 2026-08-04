@@ -33,6 +33,8 @@ export interface WatchStockBrief {
   turnoverRate: number; alert: boolean; alertTag: string;
   /** v9.24-P1-4：量比（异动分级用） */
   volumeRatio?: number;
+  /** v9.26.10：涨跌幅限制（10/20），异动分级按板块区分 */
+  limitPct?: number;
 }
 
 // ============== 指数光带（极薄通栏） ==============
@@ -180,7 +182,7 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
   // 注意：verdicts 是普通计算，不调用 hook，可放在 conditional return 之前
   const verdicts = stocks.length === 0 ? [] : stocks.map(s => ({
     stock: s,
-    verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate }, mainlines),
+    verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate, limitPct: s.limitPct ?? 10 }, mainlines),
   })).filter((x): x is { stock: WatchStockBrief; verdict: NonNullable<ReturnType<typeof classifyAnomaly>> } => x.verdict != null);
 
   useEffect(() => {

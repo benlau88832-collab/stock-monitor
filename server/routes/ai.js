@@ -37,6 +37,9 @@ function takeToken() {
   return true;
 }
 
+// v9.26.10：单例 HttpsProxyAgent（每次 new 且不销毁 → 失败重试时 socket 泄漏堆积）
+const PROXY_AGENT = new HttpsProxyAgent(PROXY_URL);
+
 function postJSON(url, body, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -52,39 +55,29 @@ function postJSON(url, body, timeoutMs = 30000) {
     };
     // v9.26.5：.cn 端点直连最稳（Clash 会把 .cn 域名绕到国外节点反而超时/不稳）。
     // 策略：先直连（timeoutMs*0.4），失败再走代理重试一次（timeoutMs*0.6）。
-    const tryDirect = () => new Promise((res2, rej2) => {
-      const req = lib.request(u, opts, r => {
+    // v9.26.10：超时按比例分配 + 校验 statusCode（非 2xx 不再走代理重试，避免重复计费）
+    const attempt = (agent, timeout) => new Promise((res2, rej2) => {
+      const req = lib.request(u, { ...opts, ...(agent ? { agent } : {}) }, r => {
         const chunks = [];
         r.on("data", c => chunks.push(c));
         r.on("end", () => {
+          if (r.statusCode && (r.statusCode < 200 || r.statusCode >= 300)) {
+            const raw = Buffer.concat(chunks).toString("utf8").slice(0, 200);
+            return rej2(new Error(`model http ${r.statusCode}: ${raw}`));
+          }
           const raw = Buffer.concat(chunks).toString("utf8");
           try { res2(JSON.parse(raw)); }
           catch { rej2(new Error("bad json from model")); }
         });
       });
       req.on("error", rej2);
-      req.setTimeout(timeoutMs, () => { req.destroy(new Error("model timeout")); });
+      req.setTimeout(timeout, () => { req.destroy(new Error("model timeout")); });
       req.write(data);
       req.end();
     });
-    const tryProxy = () => new Promise((res2, rej2) => {
-      const req = lib.request(u, { ...opts, agent: new HttpsProxyAgent(PROXY_URL) }, r => {
-        const chunks = [];
-        r.on("data", c => chunks.push(c));
-        r.on("end", () => {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          try { res2(JSON.parse(raw)); }
-          catch { rej2(new Error("bad json from model")); }
-        });
-      });
-      req.on("error", rej2);
-      req.setTimeout(timeoutMs, () => { req.destroy(new Error("model timeout")); });
-      req.write(data);
-      req.end();
-    });
-    tryDirect().then(resolve, () => {
-      // 直连失败（超时/网络错）→ 走代理重试
-      tryProxy().then(resolve, reject);
+    // 直连失败（超时/网络错/非2xx）→ 走代理重试一次
+    attempt(null, Math.floor(timeoutMs * 0.4)).then(resolve, () => {
+      attempt(PROXY_AGENT, Math.floor(timeoutMs * 0.6)).then(resolve, reject);
     });
   });
 }
@@ -107,11 +100,12 @@ module.exports = function aiRoutes(app) {
       if (!task || !TASK_ALLOW.has(task)) {
         return res.status(403).json({ error: "task not allowed: " + task });
       }
-      if (!takeToken()) {
-        return res.status(429).json({ error: `server rate limited (${RATE}/min)` });
-      }
       if (!process.env.AI_API_KEY) {
         return res.status(400).json({ error: "server AI key not configured (.env AI_API_KEY)" });
+      }
+      // v9.26.10：Key 校验后才扣令牌（未配 Key 时白名单请求不消耗配额）
+      if (!takeToken()) {
+        return res.status(429).json({ error: `server rate limited (${RATE}/min)` });
       }
 
       const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";

@@ -180,7 +180,7 @@ type FF<T extends AITask> = (p: AITaskPayload[T]) => string;
 export const FALLBACKS: { [K in AITask]: FF<K> } = {
   preopenPlan: (p) => {
     const s = p.sentiment;
-    if (s >= 65) return `【今日主线假设】昨日情绪${s}分，涨停${p.limitUpCount}只，强势延续\n【出手条件】若主线竞价>3%半仓跟；溢价<0观望\n【风险红线】溢价<0减半仓；炸板率>${p.blastedRate.toFixed(0)}%清仓\n【备选剧本】高位核按钮→低位补涨`;
+    if (s >= 65) return `【今日主线假设】昨日情绪${s}分，涨停${p.limitUpCount}只，强势延续\n【出手条件】若主线竞价>3%半仓跟；溢价<0观望\n【风险红线】溢价<0减半仓；炸板率>35%清仓（当前${p.blastedRate.toFixed(0)}%）\n【备选剧本】高位核按钮→低位补涨`;
     if (s <= 35) return `【今日主线假设】昨日情绪${s}分，恐慌，超跌反弹\n【出手条件】放量反包试仓2成；新低空仓\n【风险红线】亏5%止损；不追板\n【备选剧本】继续杀跌→避险板块`;
     return `【今日主线假设】昨日情绪${s}分，涨停${p.limitUpCount}只，中性震荡\n【出手条件】放量突破跟进；缩量观望\n【风险红线】单票亏5%止损；仓位不超6成\n【备选剧本】主线走弱→${p.ladderTop3 ? "新晋方向" : "低位补涨"}`;
   },

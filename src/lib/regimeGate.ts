@@ -50,15 +50,24 @@ export function computeGate(overview: OverviewData): GateResult {
     return { factor: null, label: "数据不足·暂不给出系数", reason: [], mode: "empty", positionLimit: 0, riskLevel: "none" };
   }
 
-  // 基础映射
+  // 基础映射（v9.26.10：边界修正 —— 原 s < tier.max 使 s=25 误落"极度恐慌"一档；
+  //  现按区间 [prevMax, tier.max) 归属，与 MarketOverview 阈值一致：<25 极度恐慌、25-44 恐慌）
   let baseFactor = 1.0;
   let label = "中性·全额作战";
+  let prevMax = 0;
   for (const tier of BASE_MAP) {
-    if (s < tier.max) {
+    if (s >= prevMax && s < tier.max) {
       baseFactor = tier.factor;
       label = tier.label;
       break;
     }
+    prevMax = tier.max;
+  }
+  // v9.26.10：s ≥ 101（越界）兜底到"极度贪婪"档（原逻辑 baseFactor 恒 1.0）
+  if (s >= BASE_MAP[BASE_MAP.length - 1].max) {
+    const last = BASE_MAP[BASE_MAP.length - 1];
+    baseFactor = last.factor;
+    label = last.label;
   }
 
   // 硬熔断

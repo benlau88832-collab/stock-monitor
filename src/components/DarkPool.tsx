@@ -45,10 +45,11 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
 
       {data.marketFlowType && (
         <div className={`rounded-xl border p-4 ${
-          data.marketFlowType.includes("洗盘") ? "border-amber-500/30 bg-amber-500/10" :
-          data.marketFlowType.includes("出货") ? "border-rose-500/30 bg-rose-500/10" :
-          data.marketFlowType.includes("共振做多") ? "border-emerald-500/30 bg-emerald-500/10" :
-          data.marketFlowType.includes("共振做空") ? "border-rose-500/30 bg-rose-500/10" :
+          // v9.26.10：对齐 judgeFlowType 实际文案（共振流入/共振流出/主力承接/主力撤离）
+          data.marketFlowType.includes("共振流入") ? "border-emerald-500/30 bg-emerald-500/10" :
+          data.marketFlowType.includes("共振流出") ? "border-rose-500/30 bg-rose-500/10" :
+          data.marketFlowType.includes("主力承接") ? "border-amber-500/30 bg-amber-500/10" :
+          data.marketFlowType.includes("主力撤离") ? "border-rose-500/30 bg-rose-500/10" :
           "border-white/10 bg-white/5"
         }`}>
           <div className="text-sm font-bold text-slate-100">📊 全市场明暗盘判断</div>

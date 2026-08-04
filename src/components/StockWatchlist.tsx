@@ -420,8 +420,16 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   // ⚠️ 修复：effect 只依赖 selected（代码值），不再依赖 loadInfo 引用。
   // 之前依赖 loadInfo（内部依赖 stocks，每 60s 刷新会重建）→ 每 60s 重跑 loadInfo
   // → setLlmResult(null)/setChatHistory([]) 把 AI 研判和追问清空。改为仅切换个股时加载。
+  // v9.26.10：loadInfoSeq 竞态护栏（快速切股 A→B 时，A 的慢响应不再覆盖 B）
+  const loadInfoSeq = useRef(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selected) loadInfo(selected); }, [selected]);
+  useEffect(() => {
+    if (!selected) return;
+    const seq = ++loadInfoSeq.current;
+    loadInfo(selected).then(() => {
+      if (seq !== loadInfoSeq.current) return; // 已有更新的请求 → 丢弃本结果
+    });
+  }, [selected]);
 
   // ---- 详细研判 ----
   const runDetailLLM = useCallback(async () => {

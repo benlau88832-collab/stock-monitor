@@ -84,7 +84,7 @@ module.exports = function dbRoutes(app) {
   app.get("/api/db/news", async (req, res) => {
     try {
       const since = String(req.query.since || "");
-      const limit = Math.min(Number(req.query.limit) || 200, 1000);
+      const limit = Math.max(1, Math.min(Number(req.query.limit) || 200, 1000));
       const q = since
         ? "SELECT * FROM news WHERE time >= $1 ORDER BY time DESC LIMIT $2"
         : "SELECT * FROM news ORDER BY time DESC LIMIT $1";
@@ -123,7 +123,7 @@ module.exports = function dbRoutes(app) {
   app.get("/api/db/anns", async (req, res) => {
     try {
       const since = String(req.query.since || "");
-      const limit = Math.min(Number(req.query.limit) || 200, 1000);
+      const limit = Math.max(1, Math.min(Number(req.query.limit) || 200, 1000));
       const q = since
         ? "SELECT * FROM announcements WHERE time >= $1 ORDER BY time DESC LIMIT $2"
         : "SELECT * FROM announcements ORDER BY time DESC LIMIT $1";

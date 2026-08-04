@@ -35,8 +35,14 @@ module.exports = function proxyRoutes(app) {
       return res.status(403).json({ error: `host not allowed: ${u.hostname}` });
     }
 
-    // 缓存命中
-    const cacheKey = target;
+    // 缓存命中（v9.26.10：剔除 req_trace/时间戳类动态参数，否则缓存永不命中）
+    let cacheKey = target;
+    try {
+      const cu = new URL(target);
+      cu.searchParams.delete("req_trace");
+      cu.searchParams.delete("_");
+      cacheKey = cu.toString();
+    } catch { /* keep raw */ }
     const hit = cache.get(cacheKey);
     if (hit && Date.now() - hit.ts < TTL) {
       res.set("Content-Type", hit.type);
@@ -44,6 +50,8 @@ module.exports = function proxyRoutes(app) {
     }
 
     const lib = u.protocol === "https:" ? https : http;
+    let sent = false; // v9.26.10：防 502/504 双重发送（destroy 触发 error → 二次 res）
+    const done = (fn) => { if (!sent) { sent = true; fn(); } };
     const req2 = lib.get(u, r => {
       const chunks = [];
       r.on("data", c => chunks.push(c));
@@ -55,12 +63,14 @@ module.exports = function proxyRoutes(app) {
           const keys = [...cache.keys()].slice(0, 100);
           keys.forEach(k => cache.delete(k));
         }
-        res.set("Content-Type", type);
-        res.set("Access-Control-Allow-Origin", "*");
-        res.send(body);
+        done(() => {
+          res.set("Content-Type", type);
+          res.set("Access-Control-Allow-Origin", "*");
+          res.send(body);
+        });
       });
     });
-    req2.on("error", e => res.status(502).json({ error: e.message }));
-    req2.setTimeout(12000, () => { req2.destroy(); res.status(504).json({ error: "upstream timeout" }); });
+    req2.on("error", e => done(() => res.status(502).json({ error: e.message })));
+    req2.setTimeout(12000, () => { done(() => res.status(504).json({ error: "upstream timeout" })); req2.destroy(); });
   });
 };

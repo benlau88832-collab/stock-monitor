@@ -32,11 +32,11 @@ export interface SessionInfo {
 
 function getBJTime(): { hour: number; minute: number; day: number } {
   const now = new Date();
-  // 北京时间 = UTC+8
+  // 北京时间 = UTC+8（v9.26.10：用 getUTC* 读取避免本机非 UTC+8 时的二次偏移）
   const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
   const bjMs = utcMs + 8 * 3600000;
   const bj = new Date(bjMs);
-  return { hour: bj.getHours(), minute: bj.getMinutes(), day: bj.getDay() };
+  return { hour: bj.getUTCHours(), minute: bj.getUTCMinutes(), day: bj.getUTCDay() };
 }
 
 export function getCurrentSession(): SessionInfo {

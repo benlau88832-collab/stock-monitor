@@ -93,12 +93,39 @@ export const SEAT_PROFILES: SeatTag[] = [
   { keywords: ["海通证券上海", "海通证券南京"], label: "海通系", color: C.fund, category: "hotmoney" },
 ];
 
-/** 匹配席位标签（按优先级：顶级游资 > 知名游资 > 机构） */
+/** 匹配席位标签（按优先级：顶级游资 > 知名游资 > 机构）
+ *  v9.26.10：标准化去噪后匹配 —— 东财全称常含"证券/股份有限公司"等插入词，
+ *  如"中国银河证券绍兴解放大道"对关键词"中国银河绍兴"的连续 includes 失败。
+ *  策略：双方去除公司后缀词后，检查关键词所有 token 按序包含。 */
+function normalizeDept(s: string): string {
+  return s
+    .replace(/股份有限公司/g, "")
+    .replace(/有限责任公司/g, "")
+    .replace(/有限公司/g, "")
+    .replace(/证券营业部/g, "营业部")
+    .replace(/证券股份/g, "")
+    .replace(/证券/g, "");
+}
+
+/** 宽松匹配：关键词的每一段（按"营业部/解放大道/绍兴"等分隔符拆）都按序出现在去噪后的全称里 */
+function fuzzyMatch(deptNorm: string, kw: string): boolean {
+  if (deptNorm.includes(kw)) return true; // 常规连续匹配优先
+  // 拆关键词为 token（保留 2 字以上片段），逐个按序查找
+  const tokens = kw.split(/[·,，、/（）()\s]+/).filter(t => t.length >= 2);
+  if (tokens.length <= 1) return deptNorm.includes(kw);
+  let idx = 0;
+  for (const tok of tokens) {
+    const found = deptNorm.indexOf(tok, idx);
+    if (found < 0) return false;
+    idx = found + tok.length;
+  }
+  return true;
+}
+
 export function matchSeatTag(deptName: string): SeatTag | null {
-  // 先匹配顶级游资（hotmoney 里的 top color），再通用 hotmoney，再机构
-  // 因为 keywords 顺序就是优先级，无需特殊处理
+  const deptNorm = normalizeDept(deptName);
   for (const tag of SEAT_PROFILES) {
-    if (tag.keywords.some(kw => deptName.includes(kw))) return tag;
+    if (tag.keywords.some(kw => fuzzyMatch(deptNorm, normalizeDept(kw)))) return tag;
   }
   return null;
 }
