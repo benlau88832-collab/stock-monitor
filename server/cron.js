@@ -40,20 +40,21 @@ function httpsGet(url, timeout = 15000) {
 // ---------- v9.26.5：自动 LLM 分析调用（.cn 直连优先，失败走代理） ----------
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const AI_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://127.0.0.1:7897";
-function callLLM(payloadText) {
+function callLLM(payloadText, opts = {}) {
   return new Promise((resolve, reject) => {
     const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
     const model = process.env.AI_MODEL || "agnes-2.5-flash";
+    // v9.33（缺口2）：opts.system 可覆盖默认系统提示（盘后自动复盘用专用提示词）
     const body = {
       model,
       messages: [
-        { role: "system", content: "你是A股资深盘面分析师。基于今日快讯与公告数据，输出当日市场速览（≤150字）：1) 主线方向 2) 强催化公告要点 3) 风险提示。直接输出正文，不要markdown。" },
+        { role: "system", content: opts.system || "你是A股资深盘面分析师。基于今日快讯与公告数据，输出当日市场速览（≤150字）：1) 主线方向 2) 强催化公告要点 3) 风险提示。直接输出正文，不要markdown。" },
         { role: "user", content: payloadText },
       ],
-      max_tokens: 600,
-      temperature: 0.2,
+      max_tokens: opts.maxTokens || 600,
+      temperature: opts.temperature ?? 0.2,
       stream: false,
-      chat_template_kwargs: { enable_thinking: false },
+      chat_template_kwargs: { enable_thinking: opts.thinking ?? false },
     };
     const data = JSON.stringify(body);
     const u = new URL(baseUrl);
@@ -252,6 +253,111 @@ async function analyzeDaily({ pool }) {
   }
 }
 
+// ---------- v9.33（缺口2）：盘后自动复盘（15:40 后） ----------
+// 读当日 zt_snapshot + news + announcements + black_swan，LLM 生成复盘落 kv_store:review:YYYY-MM-DD
+async function generateDailyReview({ pool }) {
+  try {
+    const date = bjDate();
+    const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
+
+    // 1. 当日涨停池 → 主线分组（按 hybk 行业）
+    const snapR = await pool.query("SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1", [dateStr]);
+    const snap = snapR.rows[0]?.data ?? null;
+    const poolArr = Array.isArray(snap?.pool) ? snap.pool : [];
+    const themeMap = new Map();
+    for (const p of poolArr) {
+      const h = String(p.hybk || "未分类");
+      if (!themeMap.has(h)) themeMap.set(h, []);
+      themeMap.get(h).push(String(p.n || ""));
+    }
+    const themes = [...themeMap.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 6);
+    const mainlines = themes.map(([t, arr]) => `${t}(${arr.length}只)${arr.slice(0, 3).join("/")}`).join("；") || "无";
+
+    // 2. 强催化公告（读 analyze 已落库的结果）
+    let strongAnn = [];
+    try {
+      const annR = await pool.query("SELECT value FROM kv_store WHERE key = $1", [`llm_analysis:${dateStr}`]);
+      strongAnn = annR.rows[0]?.value?.strongAnn ?? [];
+    } catch { /* ignore */ }
+
+    // 3. 黑天鹅
+    let blackSwans = "";
+    try {
+      const bsR = await pool.query("SELECT value FROM kv_store WHERE key = $1", [`black_swan:${dateStr}`]);
+      const items = bsR.rows[0]?.value?.items ?? [];
+      blackSwans = items.slice(0, 5).map(i => i.title).join("；");
+    } catch { /* ignore */ }
+
+    // 4. LLM 或规则版
+    let reviewText = "";
+    const system = `你是10年经验的A股游资复盘分析师。基于今日收盘数据做盘后复盘。严格按以下四个标题输出，禁止增减标题，每段≤4行：【今日主线回顾】【错过与教训】【明日关注清单】【风险提示】。直接输出正文。`;
+    const userText = `日期：${dateStr}\n今日主线：${mainlines}\n涨停${poolArr.length}只\n强催化公告：${strongAnn.slice(0, 5).map(a => (a.stock_name || a.name || "") + ":" + (a.title || "")).join("；") || "无"}\n黑天鹅公告：${blackSwans || "无"}`;
+    if (process.env.AI_API_KEY) {
+      try { reviewText = await callLLM(userText, { system, maxTokens: 1000, temperature: 0.3 }); }
+      catch (e) { reviewText = `【今日主线回顾】${mainlines}\n【错过与教训】LLM调用失败(${e.message})\n【明日关注清单】请稍后重试\n【风险提示】炸板数据见情绪卡`; }
+    } else {
+      reviewText = `【今日主线回顾】规则版：${mainlines}\n【错过与教训】未配置服务端 LLM Key\n【明日关注清单】请配置 AI_API_KEY 后自动生成\n【风险提示】涨停${poolArr.length}只`;
+    }
+
+    const review = { date: dateStr, mainlines, text: reviewText, createdAt: new Date().toISOString() };
+    await pool.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      [`review:${dateStr}`, JSON.stringify(review)],
+    );
+    console.log(`[cron] review ${dateStr} saved`);
+  } catch (e) {
+    console.error("[cron] review failed:", e.message);
+  }
+}
+
+// ---------- v9.33（缺口6）：板块资金流落库（行业全量双请求，供前端连续性/切换分析） ----------
+// v9.30.2 教训：clist po=1 降序只拿到流入端，必须 po=1 + po=0 双请求合并
+// v9.33.1：push2 对 nodejs 直连 TLS ban（socket hang up）；push2delay（延迟15分钟行情）node 可直连 → 改用 push2delay
+const HOST_FUND = "https://push2delay.eastmoney.com";
+async function fetchBoardFundServer() {
+  const fs = encodeURIComponent("m:90+t:2");
+  const fields = "f12,f14,f62";
+  const urlOf = (po) => `${HOST_FUND}/api/qt/clist/get?ut=${EM_UT}&pn=1&pz=100&po=${po}&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
+  const norm = (j) => {
+    const d = j?.data?.diff;
+    if (Array.isArray(d)) return d;
+    if (d && typeof d === "object") return Object.values(d);
+    return [];
+  };
+  const merged = new Map();
+  // 串行拉取（并发会限流）；失败降级（只有一端也能用）
+  for (const po of [1, 0]) {
+    try {
+      const j = await httpsGet(urlOf(po));
+      for (const it of norm(j)) {
+        const code = String(it?.f12 ?? "");
+        if (code) merged.set(code, { code, name: String(it?.f14 ?? ""), mainNet: Number(it?.f62 ?? 0) });
+      }
+    } catch (e) { console.warn(`[cron] fund po=${po} failed:`, e.message); }
+  }
+  return [...merged.values()].sort((a, b) => b.mainNet - a.mainNet);
+}
+
+// ---------- v9.33（缺口8）：大宗交易折价异动采集（datacenter RPT_DATA_BLOCKTRADE） ----------
+// 折价大宗（折价 >8%）是股东减持强信号；T+1 数据（当日盘后次日才有完整数据）
+async function fetchBlockTrades() {
+  const url = `https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_DATA_BLOCKTRADE&columns=ALL&pageSize=200&source=WEB&client=WEB&sortColumns=TRADE_DATE&sortTypes=-1`;
+  const j = await httpsGet(url);
+  const rows = j?.result?.data ?? [];
+  return rows.map(r => ({
+    code: String(r.SECURITY_CODE ?? ""),
+    name: String(r.SECURITY_NAME_ABBR ?? ""),
+    price: Number(r.DEAL_PRICE ?? 0),
+    closePrice: Number(r.CLOSE_PRICE ?? 0),
+    premium: Number(r.PREMIUM_RATIO ?? 0) * 100,   // 折价率%（东财返回小数形式 0.097=9.7% 折价，负=折价）
+    amount: Number(r.DEAL_AMT ?? 0),          // 成交额（元）
+    volume: Number(r.DEAL_VOLUME ?? 0),
+    buyer: String(r.BUYER_NAME ?? ""),
+    seller: String(r.SELLER_NAME ?? ""),
+  }));
+}
+
 // ---------- 启动定时任务 ----------
 let cronBusy = false; // v9.26.10：防重叠执行（20min 任务与启动抓取/15:40 并发）
 function startCron({ pool }) {
@@ -271,6 +377,35 @@ function startCron({ pool }) {
       console.log(`[cron] zt snapshot ${dateStr}: ${snap.count} 只涨停`);
     } catch (e) { console.error("[cron] zt snapshot failed:", e.message); }
     try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] analyze failed:", e.message); }
+    // v9.33（缺口2/6）：盘后自动复盘 + 板块资金流落库（连续性/切换分析数据源）
+    try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] review failed:", e.message); }
+    try {
+      const funds = await fetchBoardFundServer();
+      if (funds.length > 0) {
+        const fDate = bjDate();
+        const fDateStr = `${fDate.slice(0, 4)}-${fDate.slice(4, 6)}-${fDate.slice(6, 8)}`;
+        await pool.query(
+          `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+          [`fund_streak:${fDateStr}`, JSON.stringify({ date: fDateStr, items: funds })],
+        );
+        console.log(`[cron] fund_streak ${fDateStr}: ${funds.length} 行业`);
+      }
+    } catch (e) { console.error("[cron] fund_streak failed:", e.message); }
+    // v9.33（缺口8）：大宗交易折价异动落库（盘后数据）
+    try {
+      const trades = await fetchBlockTrades();
+      if (trades.length > 0) {
+        const tDate = bjDate();
+        const tDateStr = `${tDate.slice(0, 4)}-${tDate.slice(4, 6)}-${tDate.slice(6, 8)}`;
+        await pool.query(
+          `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+          [`block_trade:${tDateStr}`, JSON.stringify({ date: tDateStr, items: trades })],
+        );
+        console.log(`[cron] block_trade ${tDateStr}: ${trades.length} 笔`);
+      }
+    } catch (e) { console.error("[cron] block_trade failed:", e.message); }
     cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
@@ -404,9 +539,37 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] 启动政策失败:", e.message); }
 
     await analyzeDaily({ pool });
+    // v9.33（缺口2/6/8）：启动即补 复盘 + 资金流 + 大宗交易（容错，任一失败不阻塞）
+    try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] 启动复盘失败:", e.message); }
+    try {
+      const funds = await fetchBoardFundServer();
+      if (funds.length > 0) {
+        const fDate = bjDate();
+        const fDateStr = `${fDate.slice(0, 4)}-${fDate.slice(4, 6)}-${fDate.slice(6, 8)}`;
+        await pool.query(
+          `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+          [`fund_streak:${fDateStr}`, JSON.stringify({ date: fDateStr, items: funds })],
+        );
+        console.log(`[cron] 启动资金流入库 ${fDateStr}: ${funds.length} 行业`);
+      }
+    } catch (e) { console.error("[cron] 启动资金流失败:", e.message); }
+    try {
+      const trades = await fetchBlockTrades();
+      if (trades.length > 0) {
+        const tDate = bjDate();
+        const tDateStr = `${tDate.slice(0, 4)}-${tDate.slice(4, 6)}-${tDate.slice(6, 8)}`;
+        await pool.query(
+          `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+          [`block_trade:${tDateStr}`, JSON.stringify({ date: tDateStr, items: trades })],
+        );
+        console.log(`[cron] 启动大宗交易入库 ${tDateStr}: ${trades.length} 笔`);
+      }
+    } catch (e) { console.error("[cron] 启动大宗交易失败:", e.message); }
   }, 3000);
 
-  console.log("[cron] scheduled: 15:40 快照+分析 · 每20分钟抓快讯/公告/政策 · Asia/Shanghai");
+  console.log("[cron] scheduled: 15:40 快照+分析+复盘 · 每20分钟抓快讯/公告/政策 · Asia/Shanghai");
 };
 
 // 导出抓取函数供验证/手动触发用
@@ -416,3 +579,6 @@ module.exports.fetchFastNews = fetchFastNews;
 module.exports.fetchAnnouncements = fetchAnnouncements;
 module.exports.fetchPolicyNews = fetchPolicyNews;
 module.exports.analyzeDaily = analyzeDaily;
+module.exports.generateDailyReview = generateDailyReview;
+module.exports.fetchBoardFundServer = fetchBoardFundServer;
+module.exports.fetchBlockTrades = fetchBlockTrades;

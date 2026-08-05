@@ -10,7 +10,10 @@
 //   待 push2his 稳定后再换为真实分时曲线。
 // ============================================================
 
-import { useMemo } from "react";
+import { useMemo, useEffect, useState } from "react";
+import { isLocalServer } from "../lib/cloudStore";
+// v9.33（缺口6）：资金连续性/切换信号徽标
+import { buildFundStreaks, type FundStreak } from "../lib/fundStreak";
 
 export interface IndustryFundItem {
   code: string;
@@ -35,6 +38,17 @@ const inflowColors = ["#f43f5e", "#fb7185", "#ef4444", "#f97316", "#fb923c", "#f
 const outflowColors = ["#10b981", "#34d399", "#22c55e", "#16a34a", "#059669", "#0d9488", "#0ea5e9", "#0284c7", "#6ee7b7", "#a7f3d0", "#67e8f9", "#7dd3fc"];
 
 export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refreshSec = 60 }: Props) {
+  // v9.33（缺口6）：资金连续性数据（本地服务端读 kv fund_streak）
+  const [streaks, setStreaks] = useState<Map<string, FundStreak>>(new Map());
+  useEffect(() => {
+    if (!isLocalServer()) return;
+    let alive = true;
+    buildFundStreaks().then((list) => {
+      if (alive && list) setStreaks(new Map(list.map((s) => [s.board, s])));
+    }).catch(() => { /* 非本地静默 */ });
+    return () => { alive = false; };
+  }, []);
+
   // 拆分流入/流出 + 排序
   const { inflow, outflow } = useMemo(() => {
     const ins = boards.filter(b => b.mainNet > 0).sort((a, b) => b.mainNet - a.mainNet);
@@ -170,6 +184,7 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
                 <span className="text-slate-300 truncate flex items-center gap-1">
                   <span className="inline-block w-1.5 h-1.5 rounded" style={{ background: inflowColors[i % inflowColors.length] }} />
                   {b.name}
+                  {streakBadge(streaks.get(b.name), "inflow")}
                 </span>
                 <span className="text-rose-400 font-mono">+{toYi(b.mainNet).toFixed(2)}亿</span>
               </div>
@@ -187,6 +202,7 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
                   <span className="text-slate-300 truncate flex items-center gap-1">
                     <span className="inline-block w-1.5 h-1.5 rounded" style={{ background: outflowColors[i % outflowColors.length] }} />
                     {b.name}
+                    {streakBadge(streaks.get(b.name), "outflow")}
                   </span>
                   <span className="text-emerald-400 font-mono">{toYi(b.mainNet).toFixed(2)}亿</span>
                 </div>
@@ -204,4 +220,21 @@ function minutesToLabel(m: number): string {
   const hh = Math.floor(totalMin / 60);
   const mm = totalMin % 60;
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+// v9.33（缺口6）：资金连续性/切换徽标
+function streakBadge(s: FundStreak | undefined, side: "inflow" | "outflow") {
+  if (!s) return null;
+  // 切换信号（无论方向，最值得注意）
+  if (side === "outflow" && s.switchedFromHere)
+    return <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300" title={`昨日流入→今日流出（切换信号）`}>⚠切换</span>;
+  if (side === "inflow" && s.switchedToHere)
+    return <span className="rounded bg-sky-500/20 px-1 text-[9px] font-bold text-sky-300" title={`昨日流出→今日流入（资金进场）`}>↗进场</span>;
+  // 连续流入≥3 天（机构建仓信号）
+  if (side === "inflow" && s.consecutiveInflowDays >= 3)
+    return <span className="rounded bg-rose-500/20 px-1 text-[9px] font-bold text-rose-300" title={`连续${s.consecutiveInflowDays}日主力净流入`}>🔥{s.consecutiveInflowDays}日</span>;
+  // 连续流出≥3 天
+  if (side === "outflow" && s.consecutiveInflowDays <= -3)
+    return <span className="rounded bg-emerald-500/20 px-1 text-[9px] font-bold text-emerald-300" title={`连续${-s.consecutiveInflowDays}日主力净流出`}>❄{-s.consecutiveInflowDays}日</span>;
+  return null;
 }

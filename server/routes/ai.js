@@ -14,11 +14,13 @@ const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://1
 
 // 任务白名单（与前端 src/lib/aiPrompts.ts TASK_CONFIG 保持一致）
 // v9.28（P1-9）：新增独立业务 task themeNewsScore/stockNewsScore/dailyIntel
+// v9.33（缺口2/3）：新增 dailyReviewAuto/nextDayScenarios/leaderPredict/riskRadar
 const TASK_ALLOW = new Set([
   "preopenPlan", "closeReview", "annRank", "ladderScan", "newsDigest",
   "weeklyCoach", "stockJudge", "policyDiff", "supervisor",
   "mainlineClassify", "mainlineDiagnosis", "mainlineRank", "eventExplain",
   "themeNewsScore", "stockNewsScore", "dailyIntel",
+  "dailyReviewAuto", "nextDayScenarios", "leaderPredict", "riskRadar",
 ]);
 
 // ---------- 简单令牌桶：60 次/分钟 ----------

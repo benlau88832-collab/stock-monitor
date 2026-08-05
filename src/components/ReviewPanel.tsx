@@ -1,10 +1,12 @@
 // 每日复盘卡片（v9.19-F10）
 // 收盘后引导填写：今日主线/龙头/参与个股/盈亏/一句话反思
 // 支持按题材检索 + 题材盈亏统计（沉淀打法体系）
-import { useState } from "react";
+// v9.33（缺口2）：新增服务端自动复盘展示 + 历史回放（本地部署 /api/db/kv + /api/db/zt）
+import { useState, useEffect } from "react";
 import { loadReviews, saveReviews, upsertReview, searchReviews, statByMainline, computeLossStreak, type DailyReview } from "../lib/dailyReview";
 import { localDateStr } from "../lib/format";
 import { getCurrentSession } from "../lib/tradingSession";
+import { isLocalServer } from "../lib/cloudStore";
 
 export default function ReviewPanel() {
   const [reviews, setReviews] = useState<DailyReview[]>(loadReviews);
@@ -15,6 +17,51 @@ export default function ReviewPanel() {
   const [pnl, setPnl] = useState("");
   const [reflection, setReflection] = useState("");
   const [showForm, setShowForm] = useState(false);
+  // v9.33（缺口2）：自动复盘 + 历史回放
+  const [autoReview, setAutoReview] = useState<{ date: string; text: string } | null>(null);
+  const [replayDate, setReplayDate] = useState<string>(localDateStr());
+  const [replayText, setReplayText] = useState<string | null>(null);
+
+  // 自动复盘（本地服务端 kv review:YYYY-MM-DD，回退最近3个自然日）
+  useEffect(() => {
+    if (!isLocalServer()) return;
+    let alive = true;
+    (async () => {
+      try {
+        for (let i = 0; i < 3; i++) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          const key = `review:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          const r = await fetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
+          if (!r.ok) continue;
+          const v = await r.json();
+          if (v?.value?.text) { if (alive) setAutoReview({ date: v.value.date ?? key, text: v.value.text }); return; }
+        }
+      } catch { /* 静默 */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // 历史回放：读 zt_snapshot 重建当日涨停池摘要
+  const replay = async (date: string) => {
+    if (!isLocalServer()) return;
+    try {
+      const r = await fetch(`/api/db/zt?date=${date}`);
+      if (!r.ok) return;
+      const v = await r.json();
+      const pool = v?.data?.pool ?? v?.pool;
+      if (!Array.isArray(pool) || pool.length === 0) { setReplayText("该日无涨停快照"); return; }
+      const themeMap = new Map<string, number>();
+      for (const p of pool) {
+        const h = String(p.hybk || "未分类");
+        themeMap.set(h, (themeMap.get(h) ?? 0) + 1);
+      }
+      const themes = [...themeMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+        .map(([t, n]) => `${t}(${n})`).join("、");
+      const maxH = Math.max(0, ...pool.map((p: any) => Number(p.lbc ?? 1)));
+      setReplayText(`${date} 涨停 ${pool.length} 只 · 最高 ${maxH} 板\n主线：${themes}`);
+    } catch { setReplayText("回放失败（数据缺失）"); }
+  };
 
   const today = localDateStr();
   const todayReview = reviews.find(r => r.date === today);
@@ -63,6 +110,33 @@ export default function ReviewPanel() {
           {showForm ? "收起" : todayReview ? "编辑今日" : "记录今日"}
         </button>
       </div>
+
+      {/* v9.33（缺口2）：服务端自动复盘展示 */}
+      {autoReview && (
+        <div className="rounded border border-violet-500/25 bg-violet-500/10 p-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-bold text-violet-300">🤖 自动复盘 {autoReview.date}（LLM/规则版）</span>
+            <span className="text-[9px] text-slate-500">服务端 cron 15:40 生成</span>
+          </div>
+          <pre className="whitespace-pre-wrap text-[10px] text-slate-300 leading-relaxed">{autoReview.text}</pre>
+        </div>
+      )}
+
+      {/* v9.33（缺口2）：历史主线回放 */}
+      {isLocalServer() && (
+        <div className="flex items-center gap-1.5">
+          <input type="date" value={replayDate} max={today}
+            onChange={e => setReplayDate(e.target.value)}
+            className="rounded bg-white/5 px-1.5 py-1 text-[10px] text-slate-300" />
+          <button onClick={() => replay(replayDate)}
+            className="rounded bg-white/10 px-1.5 py-1 text-[10px] text-slate-300 hover:bg-white/20">
+            🕘 回放当日涨停池
+          </button>
+        </div>
+      )}
+      {replayText && (
+        <pre className="whitespace-pre-wrap rounded bg-black/30 px-2 py-1.5 text-[10px] text-amber-200/80">{replayText}</pre>
+      )}
 
       {/* 录入表单 */}
       {showForm && (

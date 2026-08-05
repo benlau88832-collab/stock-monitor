@@ -496,11 +496,16 @@ interface DashboardProps {
   ztPool?: Array<{ c: string; n: string; fbt: number; lbc: number }>;
   /** v9.19-F2：昨日涨停股（竞价台用） */
   yesterdayZt?: Array<{ code: string; name: string }>;
+  /** v9.33（缺口3）：LLM 盘后三剧本 / 竞价龙头预判 / 风险雷达 */
+  nextScenarios?: Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null;
+  leaderPredict?: { predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null;
+  riskRadarText?: string | null;
 }
 
 export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
   phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, ztPool, yesterdayZt,
+  nextScenarios = null, leaderPredict = null, riskRadarText = null,
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
   const phase: SessionPhase = phaseProp;
@@ -556,6 +561,42 @@ export default function Dashboard({
           <div className="space-y-2">
             {/* v9.19-F7：仓位与纪律面板 */}
             <DisciplinePanel />
+            {/* v9.33（缺口3）：LLM 盘后三剧本 + 风险雷达（复盘区上方） */}
+            {(nextScenarios || riskRadarText) && (
+              <div className="space-y-2">
+                {riskRadarText && (
+                  <div className={`rounded-lg border px-3 py-2 text-xs ${
+                    riskRadarText.includes("[高]") ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+                    : riskRadarText.includes("[中]") ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                    : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
+                    🛡 {riskRadarText}
+                  </div>
+                )}
+                {nextScenarios && nextScenarios.length > 0 && (
+                  <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                    <div className="text-[11px] font-bold text-slate-200 mb-2">🎬 明日三剧本（LLM 盘后推演）</div>
+                    <div className="space-y-1.5">
+                      {nextScenarios.map((s, i) => (
+                        <div key={i} className="rounded border border-white/5 bg-black/20 px-2 py-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className={`text-[11px] font-bold ${i === 0 ? "text-amber-300" : i === 1 ? "text-slate-200" : "text-emerald-300"}`}>
+                              {i + 1}. {s.scenario}
+                            </span>
+                            <span className="text-[11px] font-mono text-slate-400">{s.probability}%</span>
+                          </div>
+                          {s.conditions.length > 0 && (
+                            <div className="mt-0.5 text-[10px] text-slate-500">触发：{s.conditions.join("；")}</div>
+                          )}
+                          {s.focus.length > 0 && (
+                            <div className="text-[10px] text-amber-200/70">关注：{s.focus.join("、")}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {/* v9.19-F10：每日复盘 */}
             <ReviewPanel />
             <GateGauge overview={overview} gate={gate} />
@@ -571,6 +612,16 @@ export default function Dashboard({
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
           <div className="space-y-2">
             {/* v9.19-F2：竞价台（盘前/竞价场景核心） */}
+            {leaderPredict && leaderPredict.predictLeader && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+                <div className="text-xs font-bold text-amber-200">
+                  🤖 AI 预判龙一：<span className="text-base">{leaderPredict.predictLeader.name}</span>
+                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
+                </div>
+                {leaderPredict.reason && <div className="mt-1 text-[11px] text-slate-300">理由：{leaderPredict.reason}</div>}
+                {leaderPredict.watch && <div className="text-[11px] text-rose-300/80">⚠ 盯防：{leaderPredict.watch}</div>}
+              </div>
+            )}
             <AuctionBoard yesterdayZt={yesterdayZt} todayZt={ztPool} autoRefresh={false} />
             <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
               blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />

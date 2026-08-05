@@ -4,6 +4,39 @@
 
 ---
 
+## v9.33 — 剩余8缺口全部闭环（2/3/5/6/8）（2026-08-06）
+
+承接《游资决策大脑-剩余8缺口修改指令.md》，完成最后 5 个缺口。至此 8 缺口全部落地（1/4/7 已在 v9.32.1 完成）。
+
+### 缺口2：盘后自动复盘 + 历史主线回放
+- `server/cron.js` 新增 `generateDailyReview`：15:40 后读 zt_snapshot + 强催化公告 + 黑天鹅 → LLM（dailyReviewAuto 专用 system）生成【今日主线回顾/错过与教训/明日关注清单/风险提示】→ 落 `kv_store:review:日期`
+- `aiPrompts.ts` 新增 task `dailyReviewAuto`（+ TASK_CONFIG/payload/B构建器/FALLBACKS），`ai.js` TASK_ALLOW 同步
+- `ReviewPanel`：自动复盘展示（回退近3日）+ 日期选择器 + "🕘回放当日涨停池"按钮（读 zt_snapshot 重建主线摘要）
+
+### 缺口3：LLM 次日三剧本 + 龙头预判 + 风险雷达
+- `aiPrompts.ts` 新增 task `nextDayScenarios` / `leaderPredict` / `riskRadar`（均 thinking=false）
+- `App.tsx`：盘后自动调 nextDayScenarios + riskRadar（护栏只触发一次）；竞价段自动调 leaderPredict
+- `Dashboard`：盘后区显示三剧本卡 + 风险雷达条（高中低三色）；竞价区显示"🤖 AI 预判龙一"卡
+
+### 缺口5：题材生命周期日历
+- 新建 `themeCalendar.ts`：读 7 日 zt_snapshot → 每题材首现日/运行天数/连续天数/最高高度/阶段判定
+- `ThemeLadder` 每题材行加"第N天·阶段"徽标 + 运行≥4天加"⚠接近分歧"提示
+
+### 缺口6：资金连续性 + 切换信号
+- 新建 `fundStreak.ts`：读 7 日 `kv_store:fund_streak` → 连续流入/流出天数 + 昨日流入今日流出切换标记
+- `cron.js` `fetchBoardFundServer`：push2delay 双请求（po=1+po=0 串行）→ 15:40/启动落 `kv_store:fund_streak:日期`（实测 200 行业 100流入/100流出）
+- `IndustryFundFlowChart` 行业行加 "🔥N日连续流入" / "⚠切换信号" / "↗进场" 徽标
+
+### 缺口8：大宗交易折价异动
+- `cron.js` `fetchBlockTrades`：东财 datacenter `RPT_DATA_BLOCKTRADE`（实测 200 笔，折价>8% 有 124 笔；PREMIUM_RATIO 为小数需×100）→ 落 `kv_store:block_trade:日期`
+- `DarkPool` 新增"💼大宗交易折价异动"子卡：折价>8% 红色预警条 + 折价榜 top20（折溢率/成交额/买方营业部）
+
+### 关键工程发现
+- push2.eastmoney.com 对 nodejs 直连 TLS ban（socket hang up）；**push2delay.eastmoney.com（延迟15分钟行情）node 直连可用** → cron 落库统一走 push2delay
+- 资金流双请求必须串行（并发触发限流）
+
+---
+
 ## v9.32.1 — 接手 8 缺口之 3 个：溢价分布/公告聚类/龙头卡位战 (2026-08-06)
 
 > 按《游资决策大脑-剩余8缺口修改指令.md》附录 A 推荐顺序实施。

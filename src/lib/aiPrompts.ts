@@ -14,7 +14,9 @@ export type AITask =
   | "newsDigest" | "weeklyCoach" | "stockJudge" | "policyDiff" | "supervisor"
   | "mainlineClassify" | "mainlineDiagnosis" | "mainlineRank" | "eventExplain"
   // v9.28（P1-9）：独立业务 task —— 避免复用 mainlineRank/stockJudge 造成缓存串任务与 token 配置错配
-  | "themeNewsScore" | "stockNewsScore" | "dailyIntel";
+  | "themeNewsScore" | "stockNewsScore" | "dailyIntel"
+  // v9.33（缺口2/3）：盘后自动复盘 + 次日三剧本 + 龙头预判 + 风险雷达
+  | "dailyReviewAuto" | "nextDayScenarios" | "leaderPredict" | "riskRadar";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -39,6 +41,11 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   themeNewsScore: { temperature: 0.2, maxTokens: 1200, thinking: false },
   stockNewsScore: { temperature: 0.2, maxTokens: 1200, thinking: false },
   dailyIntel:     { temperature: 0.3, maxTokens: 2000, thinking: false },
+  // v9.33（缺口2/3）：盘后自动复盘 / 次日三剧本 / 龙头预判 / 风险雷达
+  dailyReviewAuto: { temperature: 0.3, maxTokens: 2000, thinking: false },
+  nextDayScenarios: { temperature: 0.4, maxTokens: 1000, thinking: false },
+  leaderPredict:   { temperature: 0.2, maxTokens: 600, thinking: false },
+  riskRadar:       { temperature: 0.2, maxTokens: 800, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
@@ -80,6 +87,15 @@ export interface AITaskPayload {
   themeNewsScore: { prompt: string };
   stockNewsScore: { prompt: string };
   dailyIntel: { prompt: string };
+  // v9.33（缺口2/3）
+  dailyReviewAuto: {
+    date: string; mainlines: string; topStocks: string;
+    missedThemes: string; sentiment: number; blastedRate: number;
+    blackSwans: string; annHighlights: string; userReview: string | null;
+  };
+  nextDayScenarios: { prompt: string };
+  leaderPredict: { prompt: string };
+  riskRadar: { prompt: string };
 }
 
 // ============== Prompt 构建器 ==============
@@ -192,6 +208,52 @@ score=新闻对该题材的催化强度（0=无关 100=强催化）`, user: p.pr
 score=新闻对该股的短线影响强度`, user: p.prompt }),
   // v9.28（P1-9）：每日情报综合（独立 task，避免误开 thinking）
   dailyIntel: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
+  // v9.33（缺口2）：盘后自动复盘 —— 今日主线回顾/错过主线/明日关注清单
+  dailyReviewAuto: (p) => ({ system: SYSTEM_PREFIX, user:
+`日期：${p.date}，盘后自动复盘。
+
+今日主线：${p.mainlines || "无"}
+核心个股：${p.topStocks || "无"}
+今日错过/未主升方向：${p.missedThemes || "无"}
+情绪分：${p.sentiment}，炸板率：${p.blastedRate.toFixed(1)}%
+黑天鹅公告：${p.blackSwans || "无"}
+强催化公告：${p.annHighlights || "无"}
+${p.userReview ? `用户手填复盘：${p.userReview}` : "（用户今日未手填复盘）"}
+
+严格按以下四个标题输出，禁止增减标题，每段≤4行：
+【今日主线回顾】最强主线/次强/退潮主线（引用具体数字）
+【错过与教训】今日应关注但未出现信号的方向，及原因
+【明日关注清单】3-5只候选（代码+名称+理由≤20字）
+【风险提示】基于黑天鹅/炸板率/溢出的风险点` }),
+  // v9.33（缺口3）：次日三剧本（盘后）
+  nextDayScenarios: (p) => ({ system: SYSTEM_PREFIX, user:
+`你是10年经验的A股龙头战法操盘手。基于以下今日收盘数据，推演明日3种剧本。
+
+${p.prompt}
+
+输出严格JSON数组（3项，按概率降序），格式：
+[{"scenario":"主线延续","probability":60,"conditions":["条件1","条件2"],"focus":["关注股或方向"]},
+ {"scenario":"分歧换手","probability":30,"conditions":["..."],"focus":["..."]},
+ {"scenario":"高位退潮","probability":10,"conditions":["..."],"focus":["..."]}]
+conditions≤3条，focus≤2项。只返回JSON数组，无其他文字。` }),
+  // v9.33（缺口3）：竞价段龙头预判
+  leaderPredict: (p) => ({ system: SYSTEM_PREFIX, user:
+`你是A股龙头预判器。基于竞价与昨日涨停池数据，预判今日龙一。
+
+${p.prompt}
+
+输出严格JSON对象，格式：
+{"predictLeader":{"code":"600000","name":"示例股"},"confidence":75,"reason":"≤30字","watch":"应盯防的卡位竞争者"}
+只返回JSON对象，无其他文字。` }),
+  // v9.33（缺口3）：全市场风险雷达
+  riskRadar: (p) => ({ system: SYSTEM_PREFIX, user:
+`你是A股风险雷达。扫描以下数据，输出今日风险等级与关注点。
+
+${p.prompt}
+
+输出严格JSON对象，格式：
+{"level":"高|中|低","points":[{"item":"风险点1","desc":"≤30字"},{"item":"风险点2","desc":"≤30字"}],"advice":"≤40字"}
+只返回JSON对象，无其他文字。` }),
 };
 
 export function buildPrompt<T extends AITask>(task: T, payload: AITaskPayload[T]) {
@@ -252,4 +314,13 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   themeNewsScore: (_p) => JSON.stringify([{ theme: "未知", score: 50, reason: "规则版（LLM不可用）" }]),
   stockNewsScore: (_p) => JSON.stringify({ score: 50, sentiment: "中性", reason: "规则版（LLM不可用）" }),
   dailyIntel: (p) => `每日情报规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n请参考快讯与情绪数据。`,
+  // v9.33（缺口2/3）规则版兜底
+  dailyReviewAuto: (p) => `【今日主线回顾】规则版：${(p.mainlines || "无").slice(0, 80)}\n【错过与教训】规则版无法深度归因\n【明日关注清单】请AI可用时重试\n【风险提示】炸板率${p.blastedRate.toFixed(1)}%${p.blackSwans ? "；存在黑天鹅公告" : ""}`,
+  nextDayScenarios: (_p) => JSON.stringify([
+    { scenario: "主线延续", probability: 50, conditions: ["竞价主线高开>3%", "龙头一字封单>5亿"], focus: [] },
+    { scenario: "分歧换手", probability: 30, conditions: ["高标开板", "炸板率上升"], focus: [] },
+    { scenario: "高位退潮", probability: 20, conditions: ["龙头低开", "跌停家数增加"], focus: [] },
+  ]),
+  leaderPredict: (_p) => JSON.stringify({ predictLeader: null, confidence: 0, reason: "规则版（LLM不可用）", watch: "" }),
+  riskRadar: (_p) => JSON.stringify({ level: "低", points: [], advice: "规则版（LLM不可用）" }),
 };

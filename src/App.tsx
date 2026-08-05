@@ -30,6 +30,8 @@ import { calcMainlineStrength } from "./lib/mainlineScore";
 import { checkExitSignal } from "./lib/exitSignal";
 import { stageOfFunds } from "./lib/stageModel";
 import { getAllSince } from "./lib/dataStore";
+// v9.33（缺口3）：LLM 三剧本/龙头预判/风险雷达
+import { callAI, parseAIJSON } from "./lib/ai";
 import { fetchPopularityRank } from "./lib/api";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
@@ -211,6 +213,10 @@ export default function App() {
   const [topIndustryFund, setTopIndustryFund] = useState<Array<{ code: string; name: string; mainNet: number }>>([]);
   const [watchStocks, setWatchStocks] = useState<WatchStockBrief[]>([]);
   const [currentPhase, setCurrentPhase] = useState<SessionPhase>(() => getCurrentSession().phase);
+  // v9.33（缺口3）：LLM 盘后三剧本 / 竞价龙头预判 / 风险雷达
+  const [nextScenarios, setNextScenarios] = useState<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null>(null);
+  const [leaderPredict, setLeaderPredict] = useState<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null>(null);
+  const [riskRadarText, setRiskRadarText] = useState<string | null>(null);
   const inFlight = useRef(false);
   // v9.26.9：LLM 主线精排竞态护栏（慢响应不覆盖新一轮结果）
   const llmRankSeq = useRef(0);
@@ -930,6 +936,59 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
+  // v9.33（缺口3）：LLM 盘后三剧本 + 竞价龙头预判 + 风险雷达（LLM 可用时自动触发一次）
+  const llmBriefSeq = useRef(0); // 护栏：只触发一次（避免每轮 refreshAll 重复调用）
+  useEffect(() => {
+    let cancelled = false;
+    const phase = getCurrentSession().phase;
+    const bl = battlePlan;
+    const ov = overview;
+    if (!bl || !ov) return;
+    // 已触发过同类型 → 跳过（盘后/竞价各一次）
+    const want = phase === "post" ? "post" : phase === "auction" ? "auction" : null;
+    if (!want) return;
+    if (llmBriefSeq.current === (want === "post" ? 1 : 2)) return;
+
+    // 盘后（15:00 后）：三剧本 + 风险雷达
+    if (want === "post" && bl.candidates.length > 0) {
+      llmBriefSeq.current = 1;
+      const top3 = bl.candidates.slice(0, 3).map(c => `${c.mainline}(强度${c.strengthScore ?? c.score ?? 0}/涨停${c.ztCount})`).join("；");
+      const prompt = `今日涨停${ov.limitPool?.limitUpCount ?? 0}只，炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}%，最高${ov.maxBoardHeight ?? "?"}板，情绪${ov.sentiment ?? "?"}分。\nTop3主线：${top3}\n昨日溢价均值：${ov.premiumAvg ?? "?"}%`;
+      callAI("nextDayScenarios", { prompt }).then((r) => {
+        if (cancelled) return;
+        try {
+          const arr = parseAIJSON<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }>>(r.text);
+          if (Array.isArray(arr) && arr.length > 0) setNextScenarios(arr.slice(0, 3));
+        } catch { /* 解析失败静默 */ }
+      }).catch(() => {});
+      // 风险雷达（黑天鹅公告 + 跌停池由 overview 提供）
+      const rPrompt = `涨停${ov.limitPool?.limitUpCount ?? 0}只，跌停${ov.limitPool?.limitDownCount ?? 0}只，炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}%，情绪${ov.sentiment ?? "?"}分。`;
+      callAI("riskRadar", { prompt: rPrompt }).then((r) => {
+        if (cancelled) return;
+        try {
+          const j = parseAIJSON<{ level: string; points: Array<{ item: string; desc: string }>; advice: string }>(r.text);
+          if (j && j.level) setRiskRadarText(`风险雷达[${j.level}]：${(j.points ?? []).map(p => `${p.item}(${p.desc})`).join("；") || "无明显风险"}${j.advice ? `。建议：${j.advice}` : ""}`);
+        } catch { /* 静默 */ }
+      }).catch(() => {});
+    }
+    // 竞价段（9:15-9:25）：龙头预判
+    if (want === "auction") {
+      llmBriefSeq.current = 2;
+      const yesterday = loadPrevZTSnapshot(ov.limitPool?.qdate ?? null) ?? [];
+      const yt = yesterday.slice(0, 15).map(s => `${s.n ?? s.c}(${s.lbc ?? 1}板)`).join("，");
+      const zt = (ov.limitPool?.rawZTPool ?? []).slice(0, 15).map((s: any) => `${s.n}(首封${String(s.fbt ?? 0)})`).join("，");
+      callAI("leaderPredict", { prompt: `昨日涨停：${yt || "无"}\n今日已涨停：${zt || "无（竞价未出）"}` }).then((r) => {
+        if (cancelled) return;
+        try {
+          const j = parseAIJSON<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string }>(r.text);
+          if (j) setLeaderPredict({ predictLeader: j.predictLeader ?? null, confidence: Number(j.confidence) || 0, reason: String(j.reason ?? ""), watch: String(j.watch ?? "") });
+        } catch { /* 静默 */ }
+      }).catch(() => {});
+    }
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPhase, battlePlan, overview]);
+
   // 自选股异动带：每次刷新后用 fetchStockBriefBatch 批量拉取
   useEffect(() => {
     if (!overview) return;
@@ -1124,7 +1183,10 @@ export default function App() {
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
             onSwitchTab={(tab) => setActive(tab as TabKey)}
             ztPool={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined}
-            yesterdayZt={yesterdayZtBrief} />
+            yesterdayZt={yesterdayZtBrief}
+            nextScenarios={nextScenarios}
+            leaderPredict={leaderPredict}
+            riskRadarText={riskRadarText} />
         )}
 
         {/* ====== 资金主线（深潜：完整资金结构+明暗盘+全球信号+产业链） ====== */}
@@ -1210,7 +1272,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.32.1 · build 08-06 01:10 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.33 · build 08-06 00:50 · 数据源：东方财富</div>
       </footer>
     </div>
   );
