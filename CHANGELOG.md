@@ -4,6 +4,27 @@
 
 ---
 
+## v9.32.1 — 接手 8 缺口之 3 个：溢价分布/公告聚类/龙头卡位战 (2026-08-06)
+
+> 按《游资决策大脑-剩余8缺口修改指令.md》附录 A 推荐顺序实施。
+
+### 【缺口1】溢价分布 + 核按钮/地天板（价值最高）
+- 新建 `src/lib/extremeBoard.ts`：核按钮（昨≥2板今跌≤-9%秒跌停）/ 地天板（触跌停拉涨停）/ 天地板（触涨停跌停）
+- `OverviewData` 加 `premiumDist` 4 档分布（<-5% / -5~0 / 0~3 / >3%），App.tsx 在昨日涨停溢价计算处同步统计
+- `EmotionCycleCard` 加溢价分布 4 档柱图 + 赚钱/亏钱效应定性（焖面占比≥30% → "⚠ 亏钱效应强"；高溢价≥30% → "🔥 赚钱效应强"）
+- `App.tsx` 核按钮检测：昨≥2板今跌≤-9% → setNuclearAlerts → alerts 接入（≥2只 critical 顶栏）
+
+### 【缺口7】公告类型聚类 + 密度预警
+- 新建 `src/lib/annCluster.ts`：5 类聚类（业绩/重组/增减持/融资/诉讼监管）+ ANN_CATEGORY_META 配色 + detectAnnDensity
+- `AnnouncementPanel` 每条公告加聚类标签（AnnRow 标题旁）
+
+### 【缺口4】龙头卡位战 + 板型
+- `stockToMainline.ts` MainlineLeader 加 `boardType`（hs 换手率：<1 一字板 / 1-5 缩量板 / ≥5 换手板），龙一龙二龙三填充
+- 新建 `src/lib/leaderContend.ts`：同高度≥2只封单差距<20% → 卡位胶着；BOARD_TYPE_META 板型徽标配色
+- `BattlePlan` MainlineBlock：龙名旁板型徽标（一字=难上车/换手=可上车）+ 顶部"⚔️ 卡位战"警告条
+
+---
+
 ## v9.32 — 游资视角全栈审查后补 3 项实战缺口 (2026-08-06)
 
 > 基于 10 年+ 游资视角的全栈代码审查，从 11 个缺口中选 3 个最有价值的落地。

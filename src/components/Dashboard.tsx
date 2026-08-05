@@ -542,7 +542,9 @@ export default function Dashboard({
                 blastedRatePrev: null,
                 premiumAvg: overview.premiumAvg ?? null,
                 promotionRate: overview.promotionRate ?? null,
-              }} />
+              }}
+                // v9.32.1（缺口1）：溢价分布 4 档
+                premiumDist={overview.premiumDist} />
             )}
             <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
             <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />

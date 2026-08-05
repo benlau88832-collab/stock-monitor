@@ -4,6 +4,8 @@ import { callAI, parseAIJSON } from "../lib/ai";
 import type { AnnItem } from "../lib/llmNewsIntelligence";
 import { upsertAnnouncements } from "../lib/dataStore";
 import { getIndustryByCode, matchBoardsByText } from "../lib/boardMap";
+// v9.32.1（缺口7）：公告类型聚类标签
+import { clusterAnnouncement, ANN_CATEGORY_META } from "../lib/annCluster";
 
 // ============== AI 公告归因结果 ==============
 interface AnnAIScore {
@@ -578,6 +580,10 @@ function AnnRow({
 
       {/* 标签 */}
       <span className="shrink-0 flex gap-0.5">
+        {/* v9.32.1（缺口7）：公告类型聚类标签 */}
+        <span className={`rounded px-1 py-0.5 text-[10px] font-bold ${ANN_CATEGORY_META[clusterAnnouncement(item.title, item.columnName)].color}`}>
+          {ANN_CATEGORY_META[clusterAnnouncement(item.title, item.columnName)].short}
+        </span>
         {item.goodTags.map((t) => (
           <span
             key={t}

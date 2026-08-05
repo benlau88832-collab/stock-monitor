@@ -75,6 +75,8 @@ export interface MainlineLeader {
   reason: string;
   /** v9.17-fix：人气榜排名（1=人气最高），-1=未入榜 */
   popularRank: number;
+  /** v9.32.1（缺口4）：板型 —— 一字板（无换手难上车）/ 缩量板 / 换手板（可上车） */
+  boardType?: "一字板" | "缩量板" | "换手板";
 }
 
 // ============== 入口 ==============
@@ -680,6 +682,13 @@ function pickLeaders(rawPool: ZTPoolItem[], stockCodes: string[]): MainlineLeade
     return (b.fund ?? 0) - (a.fund ?? 0);
   });
   const leaders: MainlineLeader[] = [];
+  // v9.32.1（缺口4）：板型判定（hs=换手率：<1 一字板难上车；1-5 缩量板；≥5 换手板可上车）
+  const boardTypeOf = (p: ZTPoolItem): "一字板" | "缩量板" | "换手板" => {
+    const hs = p.hs ?? 0;
+    if (hs < 1) return "一字板";
+    if (hs < 5) return "缩量板";
+    return "换手板";
+  };
   const top = sorted[0];
   leaders.push({
     code: String(top.c), name: String(top.n),
@@ -691,6 +700,7 @@ function pickLeaders(rawPool: ZTPoolItem[], stockCodes: string[]): MainlineLeade
     pct: top.zdp ?? 0,
     reason: `${top.lbc ?? 1}板·首封${fmtFbt(top.fbt ?? 0)}·封单${((top.fund ?? 0) / 1e8).toFixed(1)}亿`,
     popularRank: -1,
+    boardType: boardTypeOf(top),
   });
   // 龙二：同板次封 或 次高板
   const rest = sorted.filter(s => String(s.c) !== String(top.c));
@@ -706,6 +716,7 @@ function pickLeaders(rawPool: ZTPoolItem[], stockCodes: string[]): MainlineLeade
       pct: dragon2.zdp ?? 0,
       reason: `${dragon2.lbc ?? 1}板·封单${((dragon2.fund ?? 0) / 1e8).toFixed(1)}亿`,
     popularRank: -1,
+    boardType: boardTypeOf(dragon2),
     });
   }
   // 龙三：成交额大（中军）
@@ -723,6 +734,7 @@ function pickLeaders(rawPool: ZTPoolItem[], stockCodes: string[]): MainlineLeade
       pct: dragon3.zdp ?? 0,
       reason: `成交额${((dragon3.amount ?? 0) / 1e8).toFixed(1)}亿·中军`,
     popularRank: -1,
+    boardType: boardTypeOf(dragon3),
     });
   }
   return leaders;

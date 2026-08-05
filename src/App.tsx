@@ -110,6 +110,12 @@ export interface OverviewData {
   turnoverYesterday: number | null;
   turnoverAvg5d: number | null;
   premiumAvg: number | null;       // 昨日涨停股今日平均涨幅%
+  premiumDist?: {
+    ltNeg5: number;   // 昨日涨停今日 < -5%（焖面，亏钱效应）
+    neg5to0: number;  // -5% ~ 0%（亏钱）
+    zeroTo3: number;  // 0% ~ 3%（平/小赚）
+    gt3: number;      // > 3%（连板高溢价，赚钱效应）
+  } | null;           // v9.32.1：溢价分布（游资看第一眼的是分布不是均值）
   promotionRate: number | null;    // 2板→3板晋级率(0~1)
   maxBoardHeight: number | null;   // 今日最高连板
 }
@@ -194,6 +200,8 @@ export default function App() {
   // v9.26.10：下次自动刷新时间戳（替代每秒 setCountdown，避免全树重渲染）
   const [nextRefreshAt, setNextRefreshAt] = useState<number>(0);
   const [overview, setOverview] = useState<OverviewData | null>(null);
+  // v9.32.1（缺口1）：核按钮预警（昨高位涨停今日秒跌停，退潮信号）
+  const [nuclearAlerts, setNuclearAlerts] = useState<string[]>([]);
   const [fundStructure, setFundStructure] = useState<FundStructureData | null>(null);
   const [darkPool, setDarkPool] = useState<DarkPoolData | null>(null);
   const [globalData, setGlobalData] = useState<GlobalData | null>(null);
@@ -255,6 +263,8 @@ export default function App() {
 
       // 昨日快照 → 溢价 + 晋级率
       const prevZTPool = loadPrevZTSnapshot(limitPool?.qdate ?? null);
+      // v9.32.1（缺口1）：溢价分布 4 档（游资看第一眼的是分布不是均值）
+      let premiumDist: OverviewData["premiumDist"] = null;
       if (prevZTPool && prevZTPool.length > 0) {
         // v9.26.17：取全部代码去重（push2 批量单接口 100 只限制改分批处理；昨日涨停常 > 100 不应截断）
         const codes = [...new Set(prevZTPool.map(s => String(s.c)))];
@@ -264,14 +274,36 @@ export default function App() {
             if (briefMap.size > 0) {
               // 溢价：昨日涨停股今日涨幅的算术平均值
               let pctSum = 0, pctCount = 0;
+              const dist = { ltNeg5: 0, neg5to0: 0, zeroTo3: 0, gt3: 0 };
               for (const code of codes) {
                 const brief = briefMap.get(code);
                 if (brief && Number.isFinite(brief.pct)) {
                   pctSum += brief.pct;
                   pctCount++;
+                  if (brief.pct < -5) dist.ltNeg5++;
+                  else if (brief.pct < 0) dist.neg5to0++;
+                  else if (brief.pct <= 3) dist.zeroTo3++;
+                  else dist.gt3++;
                 }
               }
               premiumAvg = pctCount > 0 ? Math.round(pctSum / pctCount * 100) / 100 : null;
+              // v9.32.1：溢价分布 —— 焖面(<-5%)多 = 亏钱效应强；连板高溢价(>3%)多 = 赚钱效应强
+              if (pctCount > 0) premiumDist = dist;
+
+              // v9.32.1（缺口1）：核按钮检测 —— 昨≥2板 今日跌≤-9%（秒跌停）是退潮最强信号
+              try {
+                const nukes: string[] = [];
+                for (const s of prevZTPool) {
+                  const lbc = s.lbc ?? 1;
+                  if (lbc >= 2) {
+                    const brief = briefMap.get(String(s.c));
+                    if (brief && brief.pct <= -9) {
+                      nukes.push(`${s.n ?? s.c}(${lbc}板跌${brief.pct.toFixed(1)}%)`);
+                    }
+                  }
+                }
+                setNuclearAlerts(nukes.slice(0, 8));
+              } catch { /* 核按钮检测失败不阻塞主流程 */ }
             }
           } catch { /* 查询失败 → premiumAvg 保持 null */ }
         }
@@ -392,6 +424,7 @@ export default function App() {
         turnoverYesterday: yesterdayAmount,
         turnoverAvg5d,
         premiumAvg,
+        premiumDist,
         promotionRate,
         maxBoardHeight,
       });
@@ -1023,6 +1056,12 @@ export default function App() {
 
   // 构建三级警报列表
   const alerts: AlertItem[] = [];
+  // v9.32.1（缺口1）：核按钮预警（昨高位涨停今日秒跌停）
+  if (nuclearAlerts.length >= 2) {
+    alerts.push({ id: "nuclear", level: "critical", message: `⚠️ 核按钮预警：${nuclearAlerts.slice(0, 3).join("、")}${nuclearAlerts.length > 3 ? ` 等${nuclearAlerts.length}只` : ""}，退潮信号` });
+  } else if (nuclearAlerts.length === 1) {
+    alerts.push({ id: "nuclear_1", level: "warning", message: `⚠️ 核按钮：${nuclearAlerts[0]}` });
+  }
   // v9.32：系统性风险预警（最高优先级，置顶）
   if (overview) {
     const hs300 = overview.indices?.find(i => i.code === "000300");
@@ -1171,7 +1210,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.32 · build 08-06 00:55 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.32.1 · build 08-06 01:10 · 数据源：东方财富</div>
       </footer>
     </div>
   );

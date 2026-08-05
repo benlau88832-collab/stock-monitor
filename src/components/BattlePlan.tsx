@@ -20,6 +20,8 @@ import type { MainlineGroup } from "../lib/stockToMainline";
 import { computePositionAdvice, type PositionAdvice } from "../lib/positionSizing";
 import { stageOfStrength } from "../lib/stageModel";
 import { loadDisciplineState } from "../lib/discipline";
+// v9.32.1（缺口4）：龙头卡位战 + 板型徽标
+import { detectLeaderContend, BOARD_TYPE_META } from "../lib/leaderContend";
 
 // ============== Props ==============
 export interface BattlePlanData {
@@ -63,7 +65,7 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
   ztCount: number;
   height: number;
   mainNet: number;
-  leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number }>;
+  leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number; boardCount?: number; boardType?: "一字板" | "缩量板" | "换手板" }>;
   logic?: string;
   isPulse?: boolean;
   caution?: string;
@@ -163,6 +165,21 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
       </div>
 
       {/* 龙一龙二龙三（v9.17-fix：人气榜对照徽标） */}
+      {/* v9.32.1（缺口4）：卡位战检测 —— 同高度多只封单接近 = 龙一未定 */}
+      {leaders.length > 1 && (() => {
+        const contend = detectLeaderContend({
+          mainline: name,
+          leaders: leaders.map(l => ({ code: l.code, name: l.name, height: l.boardCount ?? 0, sealFund: l.sealFund ?? 0, firstBoardTime: "" })),
+        });
+        if (contend.status === "卡位胶着") {
+          return (
+            <div className="mt-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300" title={contend.reason}>
+              ⚔️ 卡位战：{contend.contenders.join(" vs ")}（龙一未定，追高风险）
+            </div>
+          );
+        }
+        return null;
+      })()}
       <div className="mt-1.5 space-y-1">
         {leaders.length === 0 && <div className="text-[11px] text-slate-500">涨停梯队数据积累中</div>}
         {leaders.map((l, i) => (
@@ -176,6 +193,12 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
               {l.name}
             </a>
             <span className="text-slate-500">{l.code}</span>
+            {/* v9.32.1（缺口4）：板型徽标（一字=难上车，换手=可上车） */}
+            {l.boardType && BOARD_TYPE_META[l.boardType] && (
+              <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${BOARD_TYPE_META[l.boardType].cls}`} title={BOARD_TYPE_META[l.boardType].hint}>
+                {BOARD_TYPE_META[l.boardType].label}
+              </span>
+            )}
             {/* 人气榜徽标：人气 Top10 高亮 */}
             {l.popularRank != null && l.popularRank > 0 && (
               <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${
@@ -267,7 +290,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   // LLM 精排结果 vs 规则机候选 合并展示
   const display: Array<{
     board: string; ztCount: number; height: number; mainNet: number;
-    leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number }>;
+    leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number; boardCount?: number; boardType?: "一字板" | "缩量板" | "换手板" }>;
     logic?: string; isPulse?: boolean; caution?: string; llm?: boolean;
     strengthScore?: number; exitSignal?: boolean; exitSignalText?: string;
   }> = [];
