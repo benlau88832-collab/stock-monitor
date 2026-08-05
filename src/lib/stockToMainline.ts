@@ -13,7 +13,7 @@ import type { ZTPoolItem } from "./themeLadder";
 import { fetchBoardFundFlow, fetchBoardConstituents } from "./api";
 import { isRealConceptBoard } from "./boardTaxonomy";
 import { fetchStocksBoards } from "./stockBoards";
-import { foldConcepts } from "./conceptGroups";
+import { foldConcepts, foldBoardFunds } from "./conceptGroups";
 
 // ============== 数据结构 ==============
 /** 单只涨停股的主线归类（LLM 输出 + 代码聚合） */
@@ -223,6 +223,8 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
     for (const groups of uncoveredToGroups.values()) {
       for (const g of groups) groupZtCount.set(g, (groupZtCount.get(g) ?? 0) + 1);
     }
+    // v9.26.16：折叠 boards（用于资金匹配）
+    const foldedBoards = foldBoardFunds(input.boards);
 
     // 补充 stockMap
     const stockMap = new Map(parsedResult.stockMap);
@@ -255,15 +257,20 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
       const leaders = pickLeaders(input.rawPool, stockCodes);
       // 保留 LLM 组的 logic/caution/isPulse（若该主线 LLM 已评估），否则用概念补充
       const llmGroup = parsedResult.groups.find(g => g.mainline === ml);
-      // v9.26.15：资金匹配（boards 模糊匹配）
-      let mainNet = llmGroup?.mainNet ?? 0, mainNet5d = llmGroup?.mainNet5d ?? 0, boardPct = llmGroup?.boardPct ?? 0;
-      if (!llmGroup) {
+      // v9.26.16：资金匹配（foldBoardFunds 折叠优先 → LLM 组 → 模糊兜底）
+      let mainNet = 0, mainNet5d = 0, boardPct = 0;
+      const fb = foldedBoards.get(ml);
+      if (fb) { mainNet = fb.mainNet; mainNet5d = fb.mainNet5d ?? 0; boardPct = fb.pct; }
+      if (mainNet === 0 && !llmGroup) {
         for (const b of input.boards) {
           if (ml.includes(b.name) || b.name.includes(ml)) {
             mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
             break;
           }
         }
+      }
+      if (mainNet === 0 && llmGroup) {
+        mainNet = llmGroup.mainNet; mainNet5d = llmGroup.mainNet5d ?? 0; boardPct = llmGroup.boardPct;
       }
       groups.push({
         mainline: ml,
@@ -325,6 +332,7 @@ async function parseClassifyResult(raw: string, input: ClassifyInput): Promise<C
   }
 
   // 解析主线组
+  const foldedBoards = foldBoardFunds(input.boards); // v9.26.16：折叠 boards（"人工智能"→"AI应用"）
   const groups: MainlineGroup[] = [];
   for (const g of parsed.groups ?? []) {
     const mainline = String(g.mainline ?? "").trim();
@@ -333,12 +341,18 @@ async function parseClassifyResult(raw: string, input: ClassifyInput): Promise<C
     // 从 stockMap 找该主线下的票
     const stockCodes = [...stockMap.values()].filter(s => s.mainline === mainline).map(s => s.code);
     const leaders = pickLeaders(input.rawPool, stockCodes);
-    // 资金从 boards 模糊匹配（hybk 行业名 → boardFlow）
-    let mainNet = 0, mainNet5d = 0, boardPct = 0;
-    for (const b of input.boards) {
-      if (mainline.includes(b.name) || b.name.includes(mainline)) {
-        mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
-        break;
+    // 资金从折叠后的 boards 取（精确匹配大类 key → 不再走模糊包含）
+    const fb = foldedBoards.get(mainline);
+    let mainNet = fb?.mainNet ?? 0;
+    let mainNet5d = fb?.mainNet5d ?? 0;
+    let boardPct = fb?.pct ?? 0;
+    // 兜底：若折叠后未命中，尝试 boards 原始名模糊包含（兼容行业类主线）
+    if (mainNet === 0) {
+      for (const b of input.boards) {
+        if (mainline.includes(b.name) || b.name.includes(mainline)) {
+          mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
+          break;
+        }
       }
     }
     groups.push({
@@ -377,6 +391,8 @@ async function parseClassifyResult(raw: string, input: ClassifyInput): Promise<C
 //         ③ 多概念归属时按"今日涨停数最多"择优（数据驱动，不按名字长度）
 async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
   try {
+    // v9.26.16：折叠 boards 一次，下面所有分支都用
+    const foldedBoards = foldBoardFunds(input.boards);
     // ===== v9.21-B + v9.26.15：优先用"个股所属概念"（datacenter 接口，准确度最高）
     // v9.26.15 方案A 升级：
     //   ① 全量涨停（原 slice(0,50) 截断 → 后 70 只涨停全部丢失 = 通信/算力主线消失的元凶）
@@ -436,11 +452,17 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
         const stockCodes = items.map(p => String(p.c));
         const leaders = pickLeaders(input.rawPool, stockCodes);
         // v9.26.15：资金从 boards 模糊匹配（概念/行业名 → boardFlow）
-        let mainNet = 0, mainNet5d = 0, boardPct = 0;
-        for (const b of input.boards) {
-          if (ml.includes(b.name) || b.name.includes(ml)) {
-            mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
-            break;
+        // v9.26.16：折叠 boards（"人工智能"→"AI应用"）优先精确匹配
+        const fb = foldedBoards.get(ml);
+        let mainNet = fb?.mainNet ?? 0;
+        let mainNet5d = fb?.mainNet5d ?? 0;
+        let boardPct = fb?.pct ?? 0;
+        if (mainNet === 0) {
+          for (const b of input.boards) {
+            if (ml.includes(b.name) || b.name.includes(ml)) {
+              mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
+              break;
+            }
           }
         }
         result.push({

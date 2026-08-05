@@ -18,7 +18,7 @@ export interface ConceptGroupDef {
 export const CONCEPT_GROUPS: ConceptGroupDef[] = [
   {
     group: "通信",
-    roots: ["通信", "5G", "6G", "光模块", "光通信", "CPO", "卫星通信", "海缆", "光缆", "光纤", "华为", "华为昇腾", "交换机", "东数西算", "算力网络", "数据中心", "IDC"],
+    roots: ["通信", "5G", "6G", "光模块", "光通信", "CPO", "卫星通信", "海缆", "光缆", "光纤", "华为", "华为昇腾", "交换机", "东数西算", "算力网络", "数据中心", "IDC", "物联网"],
   },
   {
     group: "芯片",
@@ -70,7 +70,13 @@ export const CONCEPT_GROUPS: ConceptGroupDef[] = [
   },
   {
     group: "化工",
-    roots: ["化工", "化肥", "农药", "钛白粉", "磷化工", "有机硅", "氟化工", "煤化工", "染料", "涂料", "化学制品", "化学原料", "新材料"],
+    // v9.26.16：收紧——剔除塑料/玻璃/化学原料/新材料（这些归"材料"大类）
+    roots: ["化工", "化学制品", "化肥", "农药", "化纤", "钛白粉", "磷化工", "有机硅", "氟化工", "煤化工", "染料", "涂料"],
+  },
+  {
+    group: "材料",
+    // v9.26.16：从化工拆出：塑料/玻璃/化学原料/金属新材料/新材料
+    roots: ["塑料", "玻璃", "化学原料", "金属新材料", "新材料"],
   },
   {
     group: "医药",
@@ -114,4 +120,37 @@ export function foldConcepts(concepts: string[]): string[] {
     if (!seen.has(g)) { seen.add(g); out.push(g); }
   }
   return out;
+}
+
+// ============== 板块资金流聚合（v9.26.16） ==============
+// 把 boards 列表（"人工智能"/"AI眼镜" 等原始名）折叠成用户大类（"AI应用"等）并聚合资金
+// 解决：主线名是用户大类（"AI应用"），但 boards 原始名是细分概念（"人工智能"），模糊匹配对不上 → 资金 0
+export interface BoardFund {
+  name: string;
+  pct: number;
+  mainNet: number;
+  mainNet5d?: number;
+  mainNet5dPct?: number;
+}
+
+/** 把 boards 按用户大类折叠聚合资金（同大类的所有细分概念资金累加） */
+export function foldBoardFunds(boards: BoardFund[]): Map<string, BoardFund> {
+  const map = new Map<string, BoardFund>();
+  for (const b of boards) {
+    const g = conceptGroupOf(b.name) ?? b.name;
+    const prev = map.get(g);
+    if (prev) {
+      prev.mainNet += b.mainNet;
+      prev.mainNet5d = (prev.mainNet5d ?? 0) + (b.mainNet5d ?? 0);
+      prev.mainNet5dPct = ((prev.mainNet5dPct ?? 0) + (b.mainNet5dPct ?? 0)) / 2; // 简单平均
+      // pct 取加权（mainNet 绝对值大的板块更代表该大类）
+      const totalAbs = Math.abs(prev.mainNet) + Math.abs(b.mainNet);
+      prev.pct = totalAbs > 0
+        ? (prev.pct * Math.abs(prev.mainNet) + b.pct * Math.abs(b.mainNet)) / totalAbs
+        : prev.pct;
+    } else {
+      map.set(g, { name: g, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNet5dPct: b.mainNet5dPct });
+    }
+  }
+  return map;
 }
