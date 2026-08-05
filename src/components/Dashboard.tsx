@@ -747,8 +747,6 @@ export default function Dashboard({
             <LadderMini overview={overview} onSwitchTab={() => onSwitchTab?.("dragon")} />
             {/* v9.36（A3）：龙虎榜×涨停池交叉（席位加持） */}
             <LhbCrossPanel overview={overview} />
-            {/* v9.38.1（V3-12）：事件三级研判（政策/行业/事件 + 受益板块） */}
-            <EventClassifyPanel />
           </div>
         </div>
       )}
@@ -827,6 +825,8 @@ export default function Dashboard({
               <WeeklyCoach />
             </div>
           </div>
+          {/* v9.38.1（V3-12）：事件三级研判（政策/行业/事件 + 受益板块）—— 盘后独立全宽行（数据由 cron 15:40 落库） */}
+          <EventClassifyPanel />
         </>
       )}
     </div>
