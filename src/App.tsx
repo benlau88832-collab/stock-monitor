@@ -32,6 +32,8 @@ import { stageOfFunds } from "./lib/stageModel";
 import { getAllSince } from "./lib/dataStore";
 // v9.33（缺口3）：LLM 三剧本/龙头预判/风险雷达
 import { callAI, parseAIJSON } from "./lib/ai";
+// v9.34（S1）：封单衰减实时监控（龙一开板前兆）
+import { detectSealDecay, type SealAlert } from "./lib/sealMonitor";
 import { fetchPopularityRank } from "./lib/api";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
@@ -217,6 +219,8 @@ export default function App() {
   const [nextScenarios, setNextScenarios] = useState<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null>(null);
   const [leaderPredict, setLeaderPredict] = useState<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null>(null);
   const [riskRadarText, setRiskRadarText] = useState<string | null>(null);
+  // v9.34（S1）：封单衰减预警（18s 高频通道轮询对比）
+  const [sealAlerts, setSealAlerts] = useState<SealAlert[]>([]);
   const inFlight = useRef(false);
   // v9.26.9：LLM 主线精排竞态护栏（慢响应不覆盖新一轮结果）
   const llmRankSeq = useRef(0);
@@ -893,6 +897,11 @@ export default function App() {
     try {
       const limitPool = await fetchLimitPoolSummary();
       setOverview(prev => (prev ? { ...prev, limitPool } : prev));
+      // v9.34（S1）：封单衰减检测（与上一轮 18s 快照对比）
+      if (phase === "trading" && limitPool?.rawZTPool?.length) {
+        const alerts = detectSealDecay(limitPool.rawZTPool);
+        if (alerts.length > 0) setSealAlerts(alerts);
+      }
     } catch { /* 静默：高频通道失败不影响主刷新 */ }
   }, []);
   useEffect(() => {
@@ -1115,6 +1124,17 @@ export default function App() {
 
   // 构建三级警报列表
   const alerts: AlertItem[] = [];
+  // v9.34（S1）：封单衰减预警（龙一开板前兆，最高优先级）
+  if (sealAlerts.length > 0) {
+    const red = sealAlerts.filter(a => a.level === "red");
+    const yellow = sealAlerts.filter(a => a.level === "yellow");
+    if (red.length > 0) {
+      alerts.push({ id: "seal_red", level: "critical", message: `💥 封单崩落：${red.slice(0, 3).map(a => `${a.name}(${a.boardCount}板)${a.changePct.toFixed(0)}%`).join("、")} 即将炸板！` });
+    }
+    if (yellow.length > 0) {
+      alerts.push({ id: "seal_yellow", level: "warning", message: `⚠️ 封单衰减：${yellow.slice(0, 3).map(a => `${a.name}${a.changePct.toFixed(0)}%`).join("、")} 关注开板风险` });
+    }
+  }
   // v9.32.1（缺口1）：核按钮预警（昨高位涨停今日秒跌停）
   if (nuclearAlerts.length >= 2) {
     alerts.push({ id: "nuclear", level: "critical", message: `⚠️ 核按钮预警：${nuclearAlerts.slice(0, 3).join("、")}${nuclearAlerts.length > 3 ? ` 等${nuclearAlerts.length}只` : ""}，退潮信号` });
@@ -1272,7 +1292,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.33 · build 08-06 00:50 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.34 · build 08-06 01:10 · 数据源：东方财富</div>
       </footer>
     </div>
   );

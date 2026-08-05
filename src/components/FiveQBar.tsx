@@ -8,18 +8,36 @@ import { STRENGTH_META } from "../lib/mainlineScore";
 import { evaluateAdmission } from "../lib/admissionGate";
 import { stageOfStrength } from "../lib/stageModel";
 import DisclaimerTag from "./DisclaimerTag";
+// v9.34（S2）：市场状态机（幻方"状态自适应"思想落地）
+import { classifyMarketState, MARKET_STATE_META, type MarketStateResult } from "../lib/marketStateMachine";
+import type { OverviewData } from "../App";
 
 interface Props {
   battlePlan: BattlePlanData | null;
+  /** v9.34（S2）：市场状态机输入（情绪/涨停/炸板/溢价） */
+  overview?: OverviewData | null;
 }
 
-export default function FiveQBar({ battlePlan }: Props) {
+export default function FiveQBar({ battlePlan, overview }: Props) {
   const [, setTick] = useState(0);
   // 60s 自动刷新（v9.23-A1）
   useEffect(() => {
     const t = setInterval(() => setTick(v => v + 1), 60000);
     return () => clearInterval(t);
   }, []);
+
+  // v9.34（S2）：市场状态机 —— 回答"今天是什么市"，联动五问条情绪判断
+  const marketState: MarketStateResult | null = overview
+    ? classifyMarketState({
+        sentiment: overview.sentiment ?? 50,
+        ztCount: overview.limitPool?.limitUpCount ?? 0,
+        dtCount: overview.limitPool?.limitDownCount ?? 0,
+        blastedRate: overview.limitPool?.blastedRate ?? 0,
+        premiumAvg: overview.premiumAvg ?? null,
+        maxBoardHeight: overview.maxBoardHeight ?? null,
+      })
+    : null;
+  const stateMeta = marketState ? MARKET_STATE_META[marketState.state] : null;
 
   // 取最强主线（强度分最高，优先看 score/ztCount 兜底）
   const candidates = battlePlan?.candidates ?? [];
@@ -66,6 +84,22 @@ export default function FiveQBar({ battlePlan }: Props) {
 
   return (
     <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-5">
+      {/* 0. 市场状态（v9.34 S2：幻方"状态自适应"——先判今天是什么市） */}
+      {marketState && stateMeta && (
+        <div className={`rounded-lg border p-2 ${stateMeta.color.split(" ").slice(0, 2).join(" ")}`}>
+          <div className="text-[9px] text-slate-500">🏛️ 市场状态</div>
+          <div className="mt-0.5 text-xs font-black truncate" title={`置信 ${marketState.confidence}% · ${marketState.evidence.join(" · ")}`}>
+            {stateMeta.icon} {marketState.state}
+            <span className="ml-1 rounded bg-black/20 px-1 py-0.5 text-[9px] font-bold">
+              仓位{Math.round(marketState.positionFactor * 100)}%
+            </span>
+          </div>
+          <div className="text-[9px] text-slate-500 truncate" title={marketState.playbook}>
+            {marketState.playbook}
+          </div>
+        </div>
+      )}
+
       {/* 1. 主线是什么（v9.26 A.3 三态：唯一可交易/多主线轮动/无可交易） */}
       <div className="rounded-lg border border-white/10 bg-white/5 p-2">
         <div className="text-[9px] text-slate-500">1️⃣ 主线是什么</div>

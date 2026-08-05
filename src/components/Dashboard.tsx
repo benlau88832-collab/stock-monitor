@@ -533,7 +533,7 @@ export default function Dashboard({
           {/* 左 2/3 */}
           <div className="space-y-2">
             {/* v9.23-3：游资五问条（驾驶舱顶部常驻） */}
-            <FiveQBar battlePlan={battlePlan ?? null} />
+            <FiveQBar battlePlan={battlePlan ?? null} overview={overview} />
             <BattlePlan data={battlePlan ?? null} />
             {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
             {overview && (
