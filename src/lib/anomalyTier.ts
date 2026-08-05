@@ -119,7 +119,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
         level: "S",
         reason: `涨幅${pct.toFixed(1)}% 接近涨停（${trapHit.type}）`,
         aiComment: `⚠ ${trapHit.reason}`,
-        action: "禁止追高·疑似诱多",
+        action: "高风险·疑似诱多（参考）",
         mainlineHit: hit, mainlineName: name,
       };
     }
@@ -128,7 +128,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       reason: `涨幅${pct.toFixed(1)}% 接近涨停`,
       aiComment: hit ? "呼应当前主线，强势封板形态" : "孤立异动，谨慎追高",
       // 主线 + 强势封板 → 重仓参与；主线 → 轻仓参与；非主线 → 禁止追高
-      action: hit ? (pct >= limitPct ? "重仓参与（主线核心）" : "轻仓参与（跟主线）") : "禁止追高",
+      action: hit ? (pct >= limitPct ? "高关注档·重仓参考（主线核心）" : "中关注档（跟主线）") : "高风险·暂不建议",
       mainlineHit: hit, mainlineName: name,
     };
   }
@@ -138,7 +138,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
         level: "S",
         reason: `${pct.toFixed(1)}% 快速拉升 + 量比${vr.toFixed(1)}（${trapHit.type}）`,
         aiComment: `⚠ ${trapHit.reason}`,
-        action: "禁止追高·疑似诱多",
+        action: "高风险·疑似诱多（参考）",
         mainlineHit: hit, mainlineName: name,
       };
     }
@@ -146,7 +146,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       level: "S",
       reason: `${pct.toFixed(1)}% 快速拉升 + 量比${vr.toFixed(1)}`,
       aiComment: hit ? "主线内放量拉升，资金加速" : "放量急拉但不在主线，防诱多",
-      action: hit ? "轻仓参与（跟主线）" : "禁止追高",
+      action: hit ? "中关注档（跟主线）" : "高风险·暂不建议",
       mainlineHit: hit, mainlineName: name,
     };
   }
@@ -158,7 +158,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       level: "A",
       reason: `量比${vr.toFixed(1)} 异常放量`,
       aiComment: hit ? "主线内异动放量，关注承接" : "异常放量，警惕出货",
-      action: hit ? "轻仓参与（观察承接）" : "观察 · 暂不参与",
+      action: hit ? "中关注档（观察承接）" : "观察 · 暂不参与",
       mainlineHit: hit, mainlineName: name,
     };
   }
@@ -167,7 +167,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       level: "A",
       reason: `换手${turnoverRate.toFixed(0)}% 高换手`,
       aiComment: hit ? "主线内高换手，筹码活跃" : "高换手分歧，追高谨慎",
-      action: hit ? "轻仓参与（筹码活跃）" : "观察 · 暂不参与",
+      action: hit ? "中关注档（筹码活跃）" : "观察 · 暂不参与",
       mainlineHit: hit, mainlineName: name,
     };
   }
@@ -176,7 +176,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       level: "A",
       reason: `涨幅${pct.toFixed(1)}%`,
       aiComment: hit ? "主线内走强" : "偏离主线强势，防脉冲",
-      action: hit ? "轻仓参与（主线走强）" : "观察 · 暂不参与",
+      action: hit ? "中关注档（主线走强）" : "观察 · 暂不参与",
       mainlineHit: hit, mainlineName: name,
     };
   }

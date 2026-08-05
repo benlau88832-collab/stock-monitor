@@ -74,7 +74,7 @@ export async function generateDailyIntelligence(input: IntelligenceInput): Promi
   ).join("\n");
 
   // ④ 构造 Prompt
-  const result = await callAI("stockJudge", {
+  const result = await callAI("dailyIntel", {
     prompt: `你是A股顶级独立游资，擅长从消息流中提炼主线脉络。
 
 重要规则：

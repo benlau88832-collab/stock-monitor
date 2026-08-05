@@ -4,6 +4,36 @@
 
 ---
 
+## v9.29 — GLM5.2 剩余项全部落地：P1-5/8/9/10 + P2 (2026-08-05)
+
+### P1-5 最终准入闸 admissionGate.ts
+- 新建：五重准入（强度≥60 + 阶段∈启动/发酵 + 闸门非empty + 无诱多 + 梯队无致命断档）
+- 输出三态（可上车/观望/禁止）+ 置信度 + 证据链/阻止原因
+- FiveQBar 第4问"能不能上车"改用准入闸（此前仅看强度分）
+
+### P1-8 盘中高频通道
+- App.tsx 新增 refreshFast：盘中/竞价每 18s 独立刷新涨停池（轻量，不碰重接口）
+- 竞价段同样高频刷池 → "竞价即封板"早期信号更早出现
+- jsonpQueue 并发 2→3（本地大多走 proxy 不受限）
+
+### P1-9 LLM task 解耦
+- aiPrompts.ts 新增独立 task：themeNewsScore/stockNewsScore/dailyIntel（各自温度/maxTokens，均 thinking=false）
+- llmSignals scoreThemeNews/scoreStockNews 原复用 mainlineRank → 改独立 task
+- llmNewsIntelligence generateDailyIntelligence 原复用 stockJudge(thinking=true 高延迟) → 改 dailyIntel
+- server/routes/ai.js TASK_ALLOW 同步加白名单；cacheKey 按 task 天然隔离
+
+### P1-10 主线精排瘦身
+- mainlineLLM prompt 改为"两阶段推理"（先判脉冲再排序）+ schema 精简（去 caution 必填，leaders 只给龙一）
+- caution 缺失时按置信度规则推导（<60 → "强度偏弱，注意风险"）
+
+### P2 政策面/鉴权/合规
+- P2-1 政策面主动采集：cron.js 新增 fetchPolicyNews（东财快讯按政策关键词过滤）→ 落库 kv_store:policy:YYYY-MM-DD（20min 任务 + 启动抓取）
+- P2-3 可选鉴权：server/.env 配 LOCAL_TOKEN 后，/api/proxy 与 /api/ai/call 须带 x-local-token（防局域网/公网白嫖）；默认不配置=放行
+- P2-4 合规话术：SYSTEM_PREFIX 改中性强度词；anomalyTier 强指令文案 → "高关注档/中关注档/高风险·暂不建议（参考）"
+- P2-5 强催化公告：analyzeDaily 由正则粗筛 → rankStrongAnnouncements（配 key 时 LLM 一次评分 top40，score≥4 进强催化；扩展正则兜底覆盖"净利润同比+200%"类）
+
+---
+
 ## v9.28 — GLM5.2 建议落地 P1-6 仓位定量化 + P1-7 个股离场 (2026-08-05)
 
 ### P1-6 仓位定量化引擎 positionSizing.ts（决策大脑闭环第一步）

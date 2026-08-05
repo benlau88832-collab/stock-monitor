@@ -7,6 +7,17 @@ const https = require("https");
 const http = require("http");
 const { URL } = require("url");
 
+// v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
+// 所有 /api/proxy 请求必须携带 header `x-local-token` 且匹配；未配置则放行（本地默认）。
+// 防止部署到局域网/公网时被人白嫖成开放代理（虽已有 host 白名单）。
+const LOCAL_TOKEN = process.env.LOCAL_TOKEN || null;
+function checkAuth(req, res) {
+  if (!LOCAL_TOKEN) return true;
+  if (req.headers["x-local-token"] === LOCAL_TOKEN) return true;
+  res.status(401).json({ error: "unauthorized: missing/invalid x-local-token" });
+  return false;
+}
+
 // 短 TTL 缓存（5 秒），降低东财限流风险
 const cache = new Map();
 const TTL = 5000;
@@ -92,6 +103,7 @@ function forward(req, res, target, bodyBuf) {
 
 module.exports = function proxyRoutes(app) {
   app.get("/api/proxy", (req, res) => {
+    if (!checkAuth(req, res)) return;
     const t = req.query.url;
     const c = checkTarget(t);
     if (!c.ok) {
@@ -103,6 +115,7 @@ module.exports = function proxyRoutes(app) {
 
   // v9.27：POST 转发（人气榜 emappdata POST 接口 CORS 失效，本地部署经此绕行）
   app.post("/api/proxy", (req, res) => {
+    if (!checkAuth(req, res)) return;
     const t = req.query.url;
     const c = checkTarget(t);
     if (!c.ok) {

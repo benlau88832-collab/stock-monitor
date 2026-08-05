@@ -1,10 +1,12 @@
 // 游资五问条（v9.23-3，PRD 5.1-A1）
 // 驾驶舱顶部常驻 5 卡片横排：主线/阶段/龙头/操作/离场信号
 // 价值主张："3 秒告诉我今天最强的主线是什么、现在是什么阶段、我该不该上车、什么时候该跑"
-// 60 秒自动刷新；操作徽章按强度分+阶段动态计算（红/黄/绿/灰）
+// 60 秒自动刷新；v9.28（P1-5）：第4问"操作"改用最终准入闸（强度×阶段×闸门×梯队）
 import { useState, useEffect } from "react";
 import type { BattlePlanData } from "./BattlePlan";
 import { STRENGTH_META } from "../lib/mainlineScore";
+import { evaluateAdmission } from "../lib/admissionGate";
+import { stageOfStrength } from "../lib/stageModel";
 import DisclaimerTag from "./DisclaimerTag";
 
 interface Props {
@@ -26,23 +28,23 @@ export default function FiveQBar({ battlePlan }: Props) {
   const topScore = top?.strengthScore ?? 0;
   const topStage = battlePlan?.marketStyle?.label ?? "—";
 
-  // 操作徽章（四色）：
-  // 绿=可参与（强度≥80 且无离场信号）
-  // 黄=谨慎参与（强度 60-79）
-  // 灰=观望（强度 <60 或无主线）
-  // 红=应离场（离场信号触发）
-  let action = "观望";
+  // v9.28（P1-5）：操作徽章基于最终准入闸（强度×阶段×闸门×梯队×诱多）
+  const admission = evaluateAdmission({
+    strengthScore: top?.strengthScore ?? null,
+    stage: top ? stageOfStrength({ strengthScore: top.strengthScore, ztCount: top.ztCount, exitSignal: top.exitSignal }) : "观察中",
+    gateMode: battlePlan?.gate?.mode ?? "empty",
+    ztCount: top?.ztCount ?? 0,
+    height: top?.height ?? 0,
+  });
+  let action = admission.action;
   let actionColor = "bg-slate-500/20 text-slate-400 border-slate-500/30";
   if (!top) {
     action = "观望";
-  } else if (top.exitSignal) {
-    action = "应离场";
+  } else if (admission.action === "禁止") {
     actionColor = "bg-rose-500/25 text-rose-300 border-rose-500/40";
-  } else if (topScore >= 80) {
-    action = "可参与";
+  } else if (admission.action === "可上车") {
     actionColor = "bg-emerald-500/25 text-emerald-300 border-emerald-500/40";
-  } else if (topScore >= 60) {
-    action = "谨慎参与";
+  } else {
     actionColor = "bg-amber-500/25 text-amber-300 border-amber-500/40";
   }
 
@@ -101,6 +103,10 @@ export default function FiveQBar({ battlePlan }: Props) {
         <div className="text-[9px] text-slate-500">4️⃣ 能不能上车</div>
         <div className={`mt-0.5 inline-block rounded border px-1.5 py-0.5 text-[11px] font-black ${actionColor}`}>
           {action}
+          {admission.pass && <span className="ml-1 text-[9px] font-normal opacity-80">置信 {admission.confidence}%</span>}
+        </div>
+        <div className="text-[9px] text-slate-500 mt-0.5 truncate" title={admission.pass ? admission.reasons.join("；") : admission.blockers.join("；")}>
+          {admission.pass ? admission.reasons.join("；") : (admission.blockers[0] ?? "—")}
         </div>
         <div className="text-[9px] text-slate-500 mt-0.5">
           闸门×{battlePlan?.gate?.factor?.toFixed(1) ?? "—"}

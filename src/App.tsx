@@ -840,6 +840,26 @@ export default function App() {
   useEffect(() => { refreshAll(); }, [refreshAll]);
   // 每日构建板块映射表（数据驱动，零硬编码）
   useEffect(() => { ensureBoardMap().catch(e => console.warn("[boardMap] 首次构建失败:", e)); }, []);
+
+  // ============ v9.28（P1-8）：盘中高频小通道 ============
+  // 主刷新 60s 对"9:30:05 龙一直线封板"级爆发太慢；本通道独立 18s 一次，
+  // 仅刷涨停池（轻量接口，走 fetchLimitPoolSummary），让"第一时间识别主线"更快。
+  // 竞价段（auction）同样高频刷涨停池 —— 竞价涨停价锁定即出现，实现"竞价即封板"早期信号。
+  // 不碰板块资金/新闻/公告等重接口（仍走主刷新 60s），避免全量轮询打爆东财限流。
+  const refreshFast = useCallback(async () => {
+    const phase = getCurrentSession().phase;
+    if (phase !== "trading" && phase !== "auction") return;
+    try {
+      const limitPool = await fetchLimitPoolSummary();
+      setOverview(prev => (prev ? { ...prev, limitPool } : prev));
+    } catch { /* 静默：高频通道失败不影响主刷新 */ }
+  }, []);
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const t = setInterval(() => { refreshFast(); }, 18000);
+    return () => clearInterval(t);
+  }, [autoRefresh, refreshFast]);
+
   // 交易时段状态机驱动刷新：盘中60s、集合竞价30s、盘后300s、休市不刷
   // v9.26 F-01 修复：倒计时只用于显示（ref 计数），interval 只依赖 autoRefresh/refreshAll，
   // 不再依赖 countdown state（旧版每 setCountdown 一次就销毁重建 interval，countdown 永远到不了 0）
@@ -1137,7 +1157,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.28 · build 08-05 23:15 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.29 · build 08-05 23:40 · 数据源：东方财富</div>
       </footer>
     </div>
   );

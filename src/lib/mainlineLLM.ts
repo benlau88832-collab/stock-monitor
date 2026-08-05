@@ -64,10 +64,14 @@ export async function rankMainlinesWithLLM(
   }
 
   // v9.26 F-05：使用专用 mainlineRank 任务（thinking=false, temp 0.1）——不再复用 stockJudge(thinking=true 会拉长延迟)
+  // v9.28（P1-10）：schema 精简 + 两阶段推理 —— 去掉可选字段 caution 减轻输出负担；
+  //   明确"先判脉冲、再排序"两阶段，避免 flash 一次塞太多任务而漏字段
   const result: AIResult = await callAI("mainlineRank", {
     prompt: `你是A股十年经验的龙头战法分析师（游资+机构双视角），只输出JSON，不输出任何其他文字或markdown标记。
 
-任务：对候选主线排序，识别真主线 vs 一日游脉冲，确认龙头，给逻辑。
+任务：分两步完成主线精排。
+第一步【脉冲判别】：对每条候选先判断 isPulse —— 有深度催化（业绩大增/收入指引上调/中标大单/重磅政策）且涨停梯队完整 = false（真主线）；纯情绪炒作无催化 = true（一日游脉冲）。
+第二步【强度排序】：排除明显脉冲后，按"催化强度 > 涨停数 > 连板高度 > 主力资金"对剩余真主线排序，rank=1 为最强主线。
 
 市场环境：${style.label}（风险偏好${style.riskAppetite}）
 
@@ -83,8 +87,8 @@ ${JSON.stringify(payload)}
 - 龙头确认：连板最高+封板最早通常为真龙；与深度催化方向一致更可信
 - confidence = 该主线可信度 0-100
 
-输出格式（严格JSON数组，按 rank 升序）：
-[{"board":"板块名","rank":1,"isPulse":false,"confidence":80,"leaders":[{"code":"代码","name":"名称","role":"龙一","reason":"≤20字"}],"logic":"≤40字","caution":"≤20字"}]`,
+输出格式（严格JSON数组，按 rank 升序；仅 6 个字段，leaders 只给龙一）：
+[{"board":"板块名","rank":1,"isPulse":false,"confidence":80,"leaders":[{"code":"代码","name":"名称","role":"龙一","reason":"≤20字"}],"logic":"≤40字"}]`,
   });
 
   // 降级：LLM 失败 → 规则机排名（不标记 fromLLM）
@@ -150,7 +154,8 @@ function parseLLMMainlineResult(raw: string, candidates: MainlineGroup[]): Mainl
       confidence: Math.max(0, Math.min(100, Number(item.confidence) || 50)),
       leaders,
       logic: String(item.logic ?? "").slice(0, 40),
-      caution: String(item.caution ?? "").slice(0, 20),
+      // v9.28（P1-10）：caution 不再要求 LLM 必填 → 低置信度时规则推导
+      caution: String(item.caution ?? (Math.max(0, Math.min(100, Number(item.confidence) || 50)) < 60 ? "强度偏弱，注意风险" : "")).slice(0, 20),
       fromLLM: true,
     });
   }

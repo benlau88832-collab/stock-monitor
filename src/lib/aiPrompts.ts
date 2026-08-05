@@ -2,8 +2,8 @@
 // 每个任务一个模板函数；全部共享同一段 system 前缀。
 
 const SYSTEM_PREFIX = `你是游资与机构双视角的A股实战复盘分析师。
-只输出结论与数字；禁止任何免责声明与"仅供参考"类措辞；
-禁止"较多/明显"等模糊词，必须引用输入的具体数值；
+只输出结论与数字；输出须引用输入的具体数值，禁止"较多/明显"等模糊词；
+结论表述采用中性强度词（如"关注度较高/风险偏高/参考档位"），避免绝对化买卖指令；
 严格按给定小标题分段，每段不超过3行；语言精悍。`;
 
 export function getSystemPrefix(): string { return SYSTEM_PREFIX; }
@@ -12,7 +12,9 @@ export function getSystemPrefix(): string { return SYSTEM_PREFIX; }
 export type AITask =
   | "preopenPlan" | "closeReview" | "annRank" | "ladderScan"
   | "newsDigest" | "weeklyCoach" | "stockJudge" | "policyDiff" | "supervisor"
-  | "mainlineClassify" | "mainlineDiagnosis" | "mainlineRank" | "eventExplain";
+  | "mainlineClassify" | "mainlineDiagnosis" | "mainlineRank" | "eventExplain"
+  // v9.28（P1-9）：独立业务 task —— 避免复用 mainlineRank/stockJudge 造成缓存串任务与 token 配置错配
+  | "themeNewsScore" | "stockNewsScore" | "dailyIntel";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -32,6 +34,11 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   eventExplain: { temperature: 0.2, maxTokens: 300, thinking: false },
   supervisor:  { temperature: 0.4, maxTokens: 4000, thinking: false },
   policyDiff:  { temperature: 0.2, maxTokens: 1500, thinking: true },
+  // v9.28（P1-9）：独立业务 task —— 主题新闻评分 / 个股新闻评分 / 每日情报
+  // 均关闭 thinking（结构化 JSON 输出），避免此前复用 stockJudge(thinking=true) 的高延迟与配额浪费
+  themeNewsScore: { temperature: 0.2, maxTokens: 1200, thinking: false },
+  stockNewsScore: { temperature: 0.2, maxTokens: 1200, thinking: false },
+  dailyIntel:     { temperature: 0.3, maxTokens: 2000, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
@@ -69,6 +76,10 @@ export interface AITaskPayload {
   eventExplain: { prompt: string };
   supervisor: { system: string; user: string };
   policyDiff: { policyText: string };
+  // v9.28（P1-9）：新闻评分 / 每日情报（结构化 JSON 输出，独立 task 独立参数）
+  themeNewsScore: { prompt: string };
+  stockNewsScore: { prompt: string };
+  dailyIntel: { prompt: string };
 }
 
 // ============== Prompt 构建器 ==============
@@ -169,6 +180,18 @@ ${p.policyText}
 ## 利好板块
 ## 利空板块
 ## 资金方向` }),
+  // v9.28（P1-9）：主题新闻评分（结构化 JSON，与 mainlineRank 解耦）
+  themeNewsScore: (p) => ({ system:
+`你是A股题材新闻评分器。只返回JSON数组，无其他文字。
+每个元素: {theme:string, score:0-100, reason:string(≤30字)}
+score=新闻对该题材的催化强度（0=无关 100=强催化）`, user: p.prompt }),
+  // v9.28（P1-9）：个股新闻评分（结构化 JSON）
+  stockNewsScore: (p) => ({ system:
+`你是A股个股新闻评分器。只返回JSON对象，无其他文字。
+格式: {score:0-100, sentiment:"利好"|"利空"|"中性", reason:string(≤30字)}
+score=新闻对该股的短线影响强度`, user: p.prompt }),
+  // v9.28（P1-9）：每日情报综合（独立 task，避免误开 thinking）
+  dailyIntel: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
 };
 
 export function buildPrompt<T extends AITask>(task: T, payload: AITaskPayload[T]) {
@@ -226,4 +249,7 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   eventExplain: (p) => `异动解释规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n请以规则卡原因为准。`,
   supervisor: (p) => `AI督导暂不可用，请稍后重试。\n\n提问：${p.user.slice(-100)}`,
   policyDiff: (p) => `政策摘要：\n${p.policyText.slice(0, 200)}...\n规则版无法深度对比。`,
+  themeNewsScore: (_p) => JSON.stringify([{ theme: "未知", score: 50, reason: "规则版（LLM不可用）" }]),
+  stockNewsScore: (_p) => JSON.stringify({ score: 50, sentiment: "中性", reason: "规则版（LLM不可用）" }),
+  dailyIntel: (p) => `每日情报规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n请参考快讯与情绪数据。`,
 };

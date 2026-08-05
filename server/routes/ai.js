@@ -13,10 +13,12 @@ const { HttpsProxyAgent } = require("https-proxy-agent");
 const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://127.0.0.1:7897";
 
 // 任务白名单（与前端 src/lib/aiPrompts.ts TASK_CONFIG 保持一致）
+// v9.28（P1-9）：新增独立业务 task themeNewsScore/stockNewsScore/dailyIntel
 const TASK_ALLOW = new Set([
   "preopenPlan", "closeReview", "annRank", "ladderScan", "newsDigest",
   "weeklyCoach", "stockJudge", "policyDiff", "supervisor",
   "mainlineClassify", "mainlineDiagnosis", "mainlineRank", "eventExplain",
+  "themeNewsScore", "stockNewsScore", "dailyIntel",
 ]);
 
 // ---------- 简单令牌桶：60 次/分钟 ----------
@@ -83,6 +85,16 @@ function postJSON(url, body, timeoutMs = 30000) {
 }
 
 module.exports = function aiRoutes(app) {
+  // v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
+  // /api/ai/call 必须携带 header `x-local-token`（防局域网/公网白嫖 Agnes 配额）
+  const LOCAL_TOKEN = process.env.LOCAL_TOKEN || null;
+  function checkAuth(req, res) {
+    if (!LOCAL_TOKEN) return true;
+    if (req.headers["x-local-token"] === LOCAL_TOKEN) return true;
+    res.status(401).json({ error: "unauthorized: missing/invalid x-local-token" });
+    return false;
+  }
+
   // 配置查询（不返回 Key）：前端判断服务端是否可用
   app.get("/api/ai/config", (req, res) => {
     res.json({
@@ -93,6 +105,7 @@ module.exports = function aiRoutes(app) {
   });
 
   app.post("/api/ai/call", async (req, res) => {
+    if (!checkAuth(req, res)) return;
     try {
       const { task, system, user, temperature, maxTokens, thinking } = req.body || {};
 

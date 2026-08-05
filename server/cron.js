@@ -148,6 +148,59 @@ async function fetchAnnouncements() {
   }));
 }
 
+// ---------- 4.（P2-1）抓政策类快讯 → kv_store: policy:YYYY-MM-DD ----------
+// 政策面是用户核心诉求"消息/政策/公告面"中最弱的一环（此前只有手动粘贴的 policyDiff）。
+// 本函数：从东财快讯流中按政策关键词过滤（国务院/央行/证监会/发改委等），
+// 落库 kv_store:policy:YYYY-MM-DD，前端 IntelligenceDashboard 可读取展示。
+const POLICY_RE = /国务院|央行|证监会|发改委|财政部|工信部|商务部|金融监管总局|国家统计局|政策|规划|意见|通知|办法|实施方案|降准|降息|国常会|两会|专项债|新质生产力|扩大开放|减税|补贴/;
+async function fetchPolicyNews() {
+  const url = `https://np-weblist.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=80&req_trace=${Date.now()}`;
+  const json = await httpsGet(url);
+  return (json?.data?.fastNewsList ?? [])
+    .filter(n => POLICY_RE.test((n.title || "") + (n.summary || "")))
+    .map(n => ({
+      title: n.title ?? "",
+      summary: (n.summary ?? "").slice(0, 120),
+      time: `${n.date ?? ""} ${n.time ?? ""}`.trim(),
+      url: n.url ?? "",
+    }))
+    .slice(0, 30);
+}
+
+// ---------- （P2-5）公告强催化识别：LLM 评分优先 + 扩展正则兜底 ----------
+// 原 analyzeDaily 用 /业绩|中标|增持|回购|重组|突破|获批/ 粗筛，漏召回高
+// （如"净利润同比+200%"不含这些词）。改为：配了 LLM Key 时对 top40 公告
+// 一次调用打分（score≥4=强利好），LLM 不可用时用扩展关键词正则兜底。
+const STRONG_ANN_RE = /业绩|中标|增持|回购|重组|突破|获批|净利润|同比|预增|增长|合同|订单|签约|股权|合资|扩产|涨价|产能|激励|分红|扭亏|减亏/;
+async function rankStrongAnnouncements(pool, dateStr) {
+  const annR = await pool.query("SELECT * FROM announcements WHERE time >= $1 ORDER BY time DESC LIMIT 100", [dateStr]);
+  const anns = annR.rows;
+  const strongByRule = anns.filter(a => STRONG_ANN_RE.test(a.title || ""))
+    .slice(0, 15).map(a => `${a.stock_name}:${a.title}`);
+
+  // LLM 一次评分（仅配 key 时；失败静默走规则）
+  const strongByLLM = [];
+  if (process.env.AI_API_KEY && anns.length > 0) {
+    try {
+      const top40 = anns.slice(0, 40).map(a => `${a.stock_code} ${a.stock_name}: ${a.title}`).join("\n");
+      const txt = await callLLM(`对以下公告逐条评分（1-5：5=重大利好必关注，4=强利好，3=中性偏多，≤2=无关/利空），只输出JSON数组，无其他文字：\n[{"code":"代码","score":4,"logic":"≤20字"}]\n\n公告列表：\n${top40}`);
+      const cleaned = txt.replace(/```json|```/g, "").trim();
+      const arr = JSON.parse(cleaned);
+      if (Array.isArray(arr)) {
+        for (const x of arr.slice(0, 15)) {
+          if (Number(x.score) >= 4) {
+            const a = anns.find(y => y.stock_code === String(x.code));
+            strongByLLM.push(a ? `${a.stock_name}:${a.title}` : `code ${x.code}:${x.logic || ""}`);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[cron] 公告LLM评分失败，走规则:", e.message);
+    }
+  }
+  return [...new Set([...strongByLLM, ...strongByRule])].slice(0, 15);
+}
+
 // ---------- 自动 LLM 分析（可选：配了 key 才调用；无 key 走规则版标注） ----------
 // 分析结果写入 kv_store: llm_analysis:YYYY-MM-DD
 // v9.26.5：接入真实 LLM（AI_API_KEY 配置在 server/.env 时自动启用）
@@ -159,9 +212,8 @@ async function analyzeDaily({ pool }) {
     const annR = await pool.query("SELECT * FROM announcements WHERE time >= $1 ORDER BY time DESC LIMIT 100", [dateStr]);
 
     const strongNews = newsR.rows.filter(n => n.stars >= 3).slice(0, 10).map(n => n.title);
-    const strongAnn = annR.rows
-      .filter(a => /业绩|中标|增持|回购|重组|突破|获批/.test(a.title || ""))
-      .slice(0, 15).map(a => `${a.stock_name}:${a.title}`);
+    // v9.28（P2-5）：强催化公告改用"LLM评分优先 + 扩展正则兜底"（替换原粗筛正则）
+    const strongAnn = await rankStrongAnnouncements(pool, dateStr);
 
     // v9.26.5：配了服务端 Key → 真实调用 LLM 生成当日市场分析；否则规则版标注
     let llmText = "规则版（未配置服务端 LLM Key，前端 AI 功能可正常使用配置的 Key）";
@@ -260,11 +312,26 @@ function startCron({ pool }) {
         finally { client.release(); }
       }
       console.log(`[cron] 20min fetch: news=${news.length} ann=${anns.length}`);
+
+      // v9.28（P2-1）：政策类快讯落库（kv_store: policy:YYYY-MM-DD）
+      try {
+        const policies = await fetchPolicyNews();
+        if (policies.length > 0) {
+          const pDate = bjDate();
+          const pDateStr = `${pDate.slice(0, 4)}-${pDate.slice(4, 6)}-${pDate.slice(6, 8)}`;
+          await pool.query(
+            `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+             ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+            [`policy:${pDateStr}`, JSON.stringify({ date: pDateStr, items: policies })],
+          );
+          console.log(`[cron] policy ${pDateStr}: ${policies.length} 条`);
+        }
+      } catch (e) { console.error("[cron] policy fetch failed:", e.message); }
     } catch (e) { console.error("[cron] fetch failed:", e.message); }
     cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
-  // 启动时立即抓取一次（验证 + 补数据：涨停快照 + 快讯 + 公告 全部入库）
+  // 启动时立即抓取一次（验证 + 补数据：涨停快照 + 快讯 + 公告 + 政策 全部入库）
   setTimeout(async () => {
     console.log("[cron] 启动即抓取（验证 + 补数据）");
     try {
@@ -303,10 +370,26 @@ function startCron({ pool }) {
       finally { c.release(); }
       console.log(`[cron] 启动抓取入库: 快讯${news.length} 公告${anns.length}`);
     } catch (e) { console.error("[cron] 启动抓取失败:", e.message); }
+
+    // v9.28（P2-1）：启动即补政策数据
+    try {
+      const policies = await fetchPolicyNews();
+      if (policies.length > 0) {
+        const pDate = bjDate();
+        const pDateStr = `${pDate.slice(0, 4)}-${pDate.slice(4, 6)}-${pDate.slice(6, 8)}`;
+        await pool.query(
+          `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+          [`policy:${pDateStr}`, JSON.stringify({ date: pDateStr, items: policies })],
+        );
+        console.log(`[cron] 启动政策入库 ${pDateStr}: ${policies.length} 条`);
+      }
+    } catch (e) { console.error("[cron] 启动政策失败:", e.message); }
+
     await analyzeDaily({ pool });
   }, 3000);
 
-  console.log("[cron] scheduled: 15:40 快照+分析 · 每20分钟抓快讯/公告 · Asia/Shanghai");
+  console.log("[cron] scheduled: 15:40 快照+分析 · 每20分钟抓快讯/公告/政策 · Asia/Shanghai");
 };
 
 // 导出抓取函数供验证/手动触发用
@@ -314,4 +397,5 @@ module.exports = startCron;
 module.exports.fetchZTPool = fetchZTPool;
 module.exports.fetchFastNews = fetchFastNews;
 module.exports.fetchAnnouncements = fetchAnnouncements;
+module.exports.fetchPolicyNews = fetchPolicyNews;
 module.exports.analyzeDaily = analyzeDaily;
