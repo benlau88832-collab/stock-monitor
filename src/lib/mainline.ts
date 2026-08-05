@@ -93,11 +93,34 @@ export function buildMainlineCandidates(
     if (g.count < 2) continue;
 
     // 板块资金（hybk 行业名 → boardMap 匹配；概念板块用模糊匹配）
-    let boardFlow: BoardFlowLike | null = boardMap.get(g.theme) ?? null;
-    if (!boardFlow) {
+    // v9.26.13：三级匹配（精确 → 包含 → 2字 token）—— 修复"机器人(行业) vs 机器人概念(概念)"对不上
+    // 同时聚合多个相关板块资金（更真实反映"该主题资金流入强度"）
+    const matchedFlows: BoardFlowLike[] = [];
+    // 精确
+    if (boardMap.has(g.theme)) matchedFlows.push(boardMap.get(g.theme)!);
+    // 包含
+    for (const [name, b] of boardMap) {
+      if (matchedFlows.includes(b)) continue;
+      if (name.includes(g.theme) || g.theme.includes(name)) matchedFlows.push(b);
+    }
+    // token 级（拆 2 字以上片段）
+    const tokens = g.theme.split(/[·、,，\s]+/).filter(t => t.length >= 2);
+    for (const tok of tokens) {
       for (const [name, b] of boardMap) {
-        if (name.includes(g.theme) || g.theme.includes(name)) { boardFlow = b; break; }
+        if (matchedFlows.includes(b)) continue;
+        if (name.includes(tok)) matchedFlows.push(b);
       }
+    }
+    // 聚合：取 mainNet 绝对值最大的作为代表，mainNet5d/mainNet10d 累加
+    let boardFlow: BoardFlowLike | null = matchedFlows[0] ?? null;
+    if (matchedFlows.length > 0) {
+      const best = matchedFlows.reduce((a, b) => Math.abs(b.mainNet ?? 0) > Math.abs(a.mainNet ?? 0) ? b : a);
+      boardFlow = {
+        ...best,
+        // 累加 5d/10d 资金：反映该主题的持续性
+        mainNet5d: matchedFlows.reduce((s, b) => s + (b.mainNet5d ?? 0), 0),
+        mainNet5dPct: matchedFlows.reduce<number>((s, b) => s + (b.mainNet5dPct ?? 0), 0) / matchedFlows.length,
+      };
     }
 
     // 新闻催化：标题含板块名

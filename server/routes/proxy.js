@@ -20,6 +20,10 @@ const ALLOWED_HOSTS = [
   "np-weblist.eastmoney.com",
   "emappdata.eastmoney.com",
   "quote.eastmoney.com",
+  // v9.26.12：腾讯/雪球行情（提供更稳定的今开/昨收/成交量/换手；批量接口无 CORS）
+  "qt.gtimg.cn",
+  "web.ifzq.gtimg.cn",
+  "stock.gtimg.cn",
 ];
 
 module.exports = function proxyRoutes(app) {

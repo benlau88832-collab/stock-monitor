@@ -343,17 +343,41 @@ function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: Ga
   const advice = suggestPosition(s, momentum, gate?.factor ?? null);
   const momentumLabel = momentum === "heating" ? `🔥 升温 ${delta > 0 ? "+" : ""}${delta.toFixed(0)}` : momentum === "cooling" ? `❄️ 降温 ${delta.toFixed(0)}` : momentum === "flat" ? "→ 平稳" : "—";
   const posColor = advice.positionPct >= 70 ? "text-emerald-400" : advice.positionPct >= 40 ? "text-amber-300" : "text-rose-400";
+  // v9.26.13：闸门系数颜色——高位（机会/中性）= 绿/琥珀，低位（熔断）= 红
+  const gateColor = gate?.factor == null ? "text-slate-400"
+    : gate.factor >= 0.7 ? "text-emerald-400"
+    : gate.factor >= 0.4 ? "text-amber-300"
+    : "text-rose-400";
+  // v9.26.13：极端情绪反向机会提示（贪婪→控仓兑现/恐慌→超跌机会）
+  const isExtreme = s != null && (s >= 80 || s < 25);
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-center space-y-2">
       <div className="text-[11px] text-slate-500">情绪 × 闸门</div>
       <div className="text-3xl font-black" style={{ color }}>{s != null && s > 0 ? s : "—"}</div>
       <div className="text-xs text-slate-400">{overview.sentimentLabel}</div>
       {gate && (
-        <div className={`text-2xl font-black ${gate.factor != null && gate.factor >= 0.8 ? "text-emerald-400" : gate.factor != null && gate.factor >= 0.5 ? "text-amber-300" : "text-rose-400"}`}>
+        <div className={`text-2xl font-black ${gateColor}`}>
           ×{gate.factor != null ? gate.factor.toFixed(1) : "—"}
         </div>
       )}
       {gate && <div className="text-[11px] text-slate-500">{gate.label}</div>}
+      {/* v9.26.13：极端情绪反向机会提示（不再一律"禁新开仓/空仓"） */}
+      {isExtreme && (
+        <div className={`rounded-lg border px-2 py-1.5 text-left ${
+          s >= 80
+            ? "border-rose-500/40 bg-rose-500/10"
+            : "border-sky-500/40 bg-sky-500/10"
+        }`}>
+          <div className={`text-[10px] font-bold ${s >= 80 ? "text-rose-300" : "text-sky-300"}`}>
+            {s >= 80 ? "⚡ 控仓兑现（反向信号）" : "🔵 超跌机会（反向窗口）"}
+          </div>
+          <div className="text-[9px] text-slate-300 mt-0.5 leading-snug">
+            {s >= 80
+              ? "情绪极度贪婪 = 风险累积信号。已重仓者分批兑现，向确定性最高的龙头集中；轻仓者戒追高、加仓严守止损。"
+              : "情绪极度恐慌 = 逆向买入窗口。关注 ETF 与白马蓝筹的左侧机会；分批建仓（白马/龙头优先），止损位设买入下方 5-8%。"}
+          </div>
+        </div>
+      )}
       {/* P2：情绪动量标签 */}
       <div className="text-[11px] font-semibold text-slate-300">动量 {momentumLabel}</div>
       {/* P2：建议总仓位（十年机构视角：先定仓位，再谈标的） */}

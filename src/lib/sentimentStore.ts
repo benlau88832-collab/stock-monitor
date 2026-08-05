@@ -95,25 +95,35 @@ export function suggestPosition(
     return { positionPct: 0, label: "数据不足", hint: "情绪数据缺失，无法给出仓位建议" };
   }
   let base = 70; let label = "中性仓位"; let hint = "情绪中性，保持常规仓位";
-  if (sentiment >= 65) {
-    if (momentum === "heating") { base = 100; label = "进攻仓位"; hint = "情绪贪婪且升温，可全力作战但严守纪律"; }
+  if (sentiment >= 80) {
+    // v9.26.13：极度贪婪不再"禁新开仓"，而是"控仓兑现"（向确定性龙头集中）
+    if (momentum === "heating") { base = 50; label = "控仓兑现"; hint = "情绪极度贪婪且升温，已重仓者分批兑现，轻仓者不追高"; }
+    else if (momentum === "cooling") { base = 40; label = "减仓兑现"; hint = "情绪贪婪且降温，获利了结是上策"; }
+    else { base = 50; label = "控仓兑现"; hint = "情绪极度贪婪，向确定性龙头集中，戒追高"; }
+  } else if (sentiment >= 65) {
+    if (momentum === "heating") { base = 90; label = "偏进攻"; hint = "情绪贪婪且升温，可适度加仓但严守纪律"; }
     else if (momentum === "cooling") { base = 60; label = "获利了结"; hint = "情绪贪婪但降温，注意兑现利润"; }
-    else { base = 80; label = "偏进攻"; hint = "情绪贪婪但动量平稳，仓位适中偏高"; }
+    else { base = 75; label = "偏进攻"; hint = "情绪贪婪但动量平稳，仓位适中偏高"; }
   } else if (sentiment >= 45) {
-    if (momentum === "heating") { base = 80; label = "偏进攻"; hint = "情绪中性偏多且升温，可适度加仓"; }
+    if (momentum === "heating") { base = 75; label = "偏进攻"; hint = "情绪中性偏多且升温，可适度加仓"; }
     else if (momentum === "cooling") { base = 50; label = "偏防守"; hint = "情绪中性但降温，收缩战线"; }
+    else { base = 65; label = "中性"; hint = "情绪中性，按节奏操作"; }
   } else if (sentiment >= 25) {
-    if (momentum === "heating") { base = 40; label = "试探仓"; hint = "情绪低位但升温，超跌反弹试探"; }
-    else if (momentum === "cooling") { base = 20; label = "防守仓位"; hint = "情绪低迷且继续降温，轻仓等待"; }
-    else { base = 30; label = "防守仓位"; hint = "情绪低迷，保持低仓位"; }
+    // v9.26.13：恐慌+升温 = 反向机会（巴菲特"别人恐惧我贪婪"），不是被动空仓
+    if (momentum === "heating") { base = 50; label = "反向试探"; hint = "情绪恐慌但升温，关注超跌反弹机会（龙头优先）"; }
+    else if (momentum === "cooling") { base = 25; label = "防守仓位"; hint = "情绪低迷且继续降温，轻仓等待"; }
+    else { base = 35; label = "防守仓位"; hint = "情绪低迷，保持低仓位，避免抄底"; }
   } else {
-    base = 10; label = "空仓观望"; hint = "情绪极度恐慌，空仓也是答案";
+    // 极度恐慌（<25）：不再空仓，按"超跌机会"理解：恐慌极值=逆向买入窗口
+    if (momentum === "heating") { base = 40; label = "反向机会"; hint = "情绪极度恐慌但升温，分批建仓优质超跌股（白马/龙头）"; }
+    else if (momentum === "cooling") { base = 15; label = "轻仓观望"; hint = "情绪极度恐慌且降温，保留现金等反转信号"; }
+    else { base = 25; label = "反向机会"; hint = "情绪极度恐慌（逆向窗口），关注ETF与白马蓝筹的左侧机会"; }
   }
   // 闸门系数叠加（熔断时强制压缩）
   if (gateFactor != null) {
     const capped = Math.round(base * gateFactor);
-    base = gateFactor <= 0.5 ? Math.min(base, 30) : capped;
-    if (gateFactor <= 0.3) { label = "闸门熔断"; hint = "闸门系数极低，强制低仓位"; }
+    base = gateFactor <= 0.5 ? Math.min(base, 35) : capped;
+    if (gateFactor <= 0.3) { label = "闸门熔断"; hint = "闸门系数极低（熔断触发），强制低仓位"; }
   }
   return { positionPct: Math.max(0, Math.min(100, base)), label, hint };
 }

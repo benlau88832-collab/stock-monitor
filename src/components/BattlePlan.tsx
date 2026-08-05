@@ -8,7 +8,7 @@
 
 import { useState, useEffect } from "react";
 import { fmtMoney } from "../lib/format";
-import { stockRealUrl } from "../lib/realLinks";
+import { stockRealUrl, etfRealUrl, boardNameRealUrl } from "../lib/realLinks";
 import { getHitRateText } from "../lib/recTracker";
 import type { GateResult } from "../lib/regimeGate";
 import type { MarketStyleInfo } from "../lib/mainline";
@@ -191,9 +191,11 @@ function CandidatePool({ themes }: { themes: BattlePlanData["candidateThemes"] }
       {open && (
         <div className="mt-1 flex flex-wrap gap-1.5">
           {themes.map(t => (
-            <span key={t.board} className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300">
+            // v9.26.13：板块名点击跳板块详情页
+            <a key={t.board} href={boardNameRealUrl(t.board)} target="_blank" rel="noopener noreferrer"
+               className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/15 hover:border-white/30 cursor-pointer">
               {t.board} <b className="text-slate-400">{t.total}</b>
-            </span>
+            </a>
           ))}
         </div>
       )}
@@ -209,7 +211,9 @@ function ETFBlock({ etfs }: { etfs: ETFScoreResult[] }) {
       <div className="text-[11px] font-bold text-emerald-300 mb-1.5">💰 ETF 排序（风格感知 + 主线直出）</div>
       <div className="space-y-1">
         {etfs.slice(0, 4).map((e, i) => (
-          <div key={e.code} className="flex items-center gap-2 text-[11px]">
+          // v9.26.13：整行可点击跳 ETF 详情页
+          <a key={e.code} href={etfRealUrl(e.code)} target="_blank" rel="noopener noreferrer"
+             className="flex items-center gap-2 text-[11px] hover:bg-white/5 rounded px-1 -mx-1 cursor-pointer">
             <span className={`w-5 text-center font-black ${i === 0 ? "text-emerald-300" : "text-slate-500"}`}>{i + 1}</span>
             <span className="font-semibold text-slate-100">{e.name}</span>
             {e.fromMainline && e.matchedMainline && (
@@ -217,11 +221,11 @@ function ETFBlock({ etfs }: { etfs: ETFScoreResult[] }) {
             )}
             <span className="ml-auto text-slate-500 text-[10px]">{e.code}</span>
             <span className={`font-black ${e.total >= 70 ? "text-emerald-300" : e.total >= 55 ? "text-amber-300" : "text-slate-400"}`}>{e.total}</span>
-          </div>
+          </a>
         ))}
       </div>
       <div className="mt-1 text-[10px] text-slate-600">
-        评分 = 资金趋势30% + 板块联动25% + 风格适配20% + 主线直出15% + 宏观10%
+        评分 = 资金趋势30% + 板块联动25% + 风格适配20% + 主线直出15% + 宏观10% · 点击跳详情
       </div>
     </div>
   );

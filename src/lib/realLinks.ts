@@ -46,6 +46,22 @@ export function boardRealUrl(boardCode: string, boardType: string): string {
   return "https://quote.eastmoney.com/center/boardlist.html#boards-BK06551";
 }
 
+// v9.26.13：ETF 详情页（code 形如 159819 → 跳东财基金详情页）
+export function etfRealUrl(code: string): string {
+  const c = String(code ?? "").trim();
+  if (!c) return "https://fund.eastmoney.com/";
+  // ETF 沪市 (5/51开头) / 深市 (1/15开头)
+  return `https://fund.eastmoney.com/${c}.html`;
+}
+
+// v9.26.13：按板块名搜 ETF/成分股（候选观察池点击：用板块名 → 同花顺板块详情页）
+export function boardNameRealUrl(boardName: string, boardType: "industry" | "concept" | "region" = "concept"): string {
+  const name = String(boardName ?? "").trim();
+  if (!name) return boardRealUrl("", boardType);
+  // 同花顺支持按板块名 URL 编码直查
+  return `https://q.10jqka.com.cn/thsft/api/v1/stock_industry/${encodeURIComponent(name)}`;
+}
+
 // 指数行情页
 export function indexRealUrl(code: string, name?: string): string {
   // 上证指数

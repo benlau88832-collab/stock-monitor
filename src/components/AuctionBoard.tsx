@@ -51,7 +51,7 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-amber-300">🌅 竞价台（开盘强度）</span>
           <FreshnessTag type="near_realtime" text="开盘竞价结果" />
-          <span className="text-[10px] text-slate-600">数据近似：今开涨幅+首封时间（东财无竞价量字段）</span>
+          <span className="text-[10px] text-slate-600">数据源：腾讯行情（真实今开/昨收/竞价额/换手）</span>
         </div>
         <button onClick={load} disabled={loading}
           className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/20 disabled:opacity-40">
@@ -67,6 +67,8 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
             <thead><tr className="text-slate-500">
               <th className="px-1 py-0.5 text-left">股票</th>
               <th className="px-1 py-0.5 text-right">竞价涨幅</th>
+              <th className="px-1 py-0.5 text-right">竞价额</th>
+              <th className="px-1 py-0.5 text-right">换手%</th>
               <th className="px-1 py-0.5 text-center">首封</th>
               <th className="px-1 py-0.5 text-center">连板</th>
               <th className="px-1 py-0.5 text-center">强度</th>
@@ -84,6 +86,12 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
                     it.auctionPct >= 0 ? "text-rose-400" : "text-emerald-400"
                   }`}>
                     {it.auctionPct >= 0 ? "+" : ""}{it.auctionPct.toFixed(2)}%
+                  </td>
+                  <td className="px-1 py-0.5 text-right font-mono text-slate-300">
+                    {it.openAmountYi > 0 ? `${it.openAmountYi.toFixed(2)}亿` : "—"}
+                  </td>
+                  <td className="px-1 py-0.5 text-right font-mono text-slate-400">
+                    {it.turnoverRate > 0 ? it.turnoverRate.toFixed(2) : "—"}
                   </td>
                   <td className="px-1 py-0.5 text-center text-slate-400">{it.firstBoardTime ?? "—"}</td>
                   <td className="px-1 py-0.5 text-center text-slate-400">{it.boardCount ? `${it.boardCount}板` : "—"}</td>
