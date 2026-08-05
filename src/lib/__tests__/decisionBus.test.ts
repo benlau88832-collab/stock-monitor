@@ -77,3 +77,36 @@ describe("runConsensus 回测门控接入", () => {
     expect(r.gatedSignals.length).toBeGreaterThan(0);
   });
 });
+
+describe("decisionBus 因子健康度（v9.39 幻方闭环）", () => {
+  const mk = (name: string, verdict: "可上车" | "观望" | "禁止", conf: number, w: number) => ({ name, verdict, confidence: conf, weight: w, reason: `${name}测试` });
+
+  it("失效因子占比>=50% → 置信下调15", () => {
+    const srcs = [
+      mk("准入闸", "可上车", 90, 1.0),
+      mk("市场状态", "可上车", 85, 1.0),
+      mk("龙虎榜交叉", "可上车", 80, 0.9),
+    ];
+    const base = runConsensus(srcs);
+    const penalized = runConsensus(srcs, { factorStats: { decayed: 6, total: 10 } });
+    // 原始置信 100（全票一致）→ 罚 15 → clamp 到 85；base 无罚时也被 clamp 到 95
+    expect(penalized.confidence).toBe(85);
+    expect(penalized.confidence).toBeLessThan(base.confidence);
+    expect(penalized.evidence.some(e => e.includes("因子健康度"))).toBe(true);
+  });
+
+  it("失效因子占比<30% → 不降置信", () => {
+    const srcs = [mk("准入闸", "可上车", 90, 1.0), mk("市场状态", "可上车", 85, 1.0)];
+    const base = runConsensus(srcs);
+    const r = runConsensus(srcs, { factorStats: { decayed: 1, total: 10 } });
+    expect(r.confidence).toBe(base.confidence);
+  });
+
+  it("signalGates 门控激活：低胜率信号被门控", () => {
+    const srcs = [mk("情绪高位信号", "可上车", 80, 1.0), mk("市场状态", "可上车", 85, 1.0)];
+    const r = runConsensus(srcs, { signalGates: [{ name: "情绪高位信号", winRate: 30, samples: 10 }] });
+    expect(r.gatedSignals.length).toBeGreaterThan(0);
+    const vote = r.votes.find(v => v.name === "情绪高位信号");
+    expect(vote!.weight).toBeCloseTo(0.3);
+  });
+});

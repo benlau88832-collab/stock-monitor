@@ -16,7 +16,7 @@ import LhbCrossPanel from "./LhbCrossPanel";
 // v9.38.1（V3-12）：事件三级研判面板
 import EventClassifyPanel from "./EventClassifyPanel";
 // v9.38.1（V3-12）：读 kv 事件分级数据（决策消息面证据源）
-import { isLocalServer, kvGet } from "../lib/cloudStore";
+import { isLocalServer, kvGet, kvSet } from "../lib/cloudStore";
 // v9.37（V3-4/7）：AI 终裁决（多源共识）
 import DecisionVerdictCard from "./DecisionVerdictCard";
 import { collectEvidence } from "../lib/decisionCollector";
@@ -545,14 +545,21 @@ export default function Dashboard({
   const isPre = phase === "pre" || phase === "auction";
   const gate = battlePlan?.gate ?? null;
 
-  // v9.38（V3-2/3）：Agent 深审（手动触发，控 LLM 配额）
+  // v9.38（V3-2/3）：Agent 深审 —— v9.39 起自动主导（5 分钟节流）+ 保留手动按钮
   const [agentResult, setAgentResult] = useState<AgentVerdict | null>(null);
   const [agentLoading, setAgentLoading] = useState(false);
-  const runAgent = async () => {
+  const agentLastRunRef = useRef(0); // 自动触发节流（5 分钟）
+  const runAgent = async (auto = false) => {
     const top = battlePlan?.candidates?.[0];
     if (!top || agentLoading) return;
+    // 自动触发节流：5 分钟内不重复跑（省配额）；手动按钮不受限
+    if (auto) {
+      const now = Date.now();
+      if (now - agentLastRunRef.current < 5 * 60 * 1000) return;
+      agentLastRunRef.current = now;
+    }
     setAgentLoading(true);
-    setAgentResult(null);
+    if (!auto) setAgentResult(null);
     try {
       const r = await decideForMainline(
         { mainline: top.mainline, strengthScore: top.strengthScore, ztCount: top.ztCount, height: top.height, exitSignal: top.exitSignal },
@@ -562,6 +569,70 @@ export default function Dashboard({
     } catch { /* 失败静默 */ }
     setAgentLoading(false);
   };
+
+  // v9.39（改造1）：AI 自动主导 —— 主线数据更新后自动裁决（盘中/盘后/盘前都跑，5 分钟节流）
+  useEffect(() => {
+    const top = battlePlan?.candidates?.[0];
+    if (!top) return;
+    const t = setTimeout(() => runAgent(true), 1500); // 延迟 1.5s 等决策证据就绪
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [battlePlan]);
+
+  // v9.39（改造2）：幻方门控数据 —— 信号回测胜率（激活 V3-5 门控）+ 因子 IC 健康度（接入降权）
+  const [signalGates, setSignalGates] = useState<Array<{ name: string; winRate: number | null; samples: number | null }>>([]);
+  const [factorStats, setFactorStats] = useState<{ decayed: number; total: number } | null>(null);
+  useEffect(() => {
+    if (!isLocalServer()) return;
+    let alive = true;
+    (async () => {
+      try {
+        // 1. 信号回测胜率 → 门控
+        const { backtestSignals } = await import("../lib/signalBacktest");
+        const stats = await backtestSignals(14);
+        if (stats && alive) {
+          setSignalGates(stats.map(s => ({ name: s.name, winRate: s.verdict === "样本不足" ? null : s.winRate, samples: s.samples })));
+        }
+        // 2. 因子 IC 健康度（factorLib）→ 决策降权 + 落库 factor_ic:日期（改造3）
+        const { evaluateAllFactors, markNextWin } = await import("../lib/factorLib");
+        const rows = await loadFactorRows();
+        if (rows.length >= 3 && alive) {
+          const ics = evaluateAllFactors(markNextWin(rows));
+          const decayed = ics.filter(i => i.decayed).length;
+          setFactorStats({ decayed, total: ics.length });
+          // 落库（供 SignalEffectivenessPanel/历史对比）
+          const d = new Date();
+          const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          kvSet(`factor_ic:${ds}`, { date: ds, items: ics.map(i => ({ name: i.factorName, ic: i.ic, samples: i.samples, decayed: i.decayed })) }).catch(() => {});
+        }
+      } catch { /* 静默 */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // 组装因子历史行（读 sentiment/market_daily 序列）
+  async function loadFactorRows(): Promise<Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null }>> {
+    const out: Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null }> = [];
+    const d = new Date();
+    for (let i = 13; i >= 0; i--) {
+      const t = new Date(d); t.setDate(t.getDate() - i);
+      const dow = t.getDay();
+      if (dow === 0 || dow === 6) continue;
+      const ds = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+      const row: any = { date: ds, sentiment: null, blastedRate: null, ztCount: null, maxBoardHeight: null, premiumAvg: null, promotionRate: null };
+      try {
+        const sv = await kvGet(`sentiment:${ds}`);
+        const num = Number(sv ?? NaN);
+        if (Number.isFinite(num)) row.sentiment = num;
+      } catch { /* 静默 */ }
+      try {
+        const md = await kvGet(`market_daily:${ds}`) as any;
+        if (md) { row.ztCount = md.ztCount ?? null; row.blastedRate = md.blastedRate ?? null; row.maxBoardHeight = md.maxBoardHeight ?? null; }
+      } catch { /* 静默 */ }
+      out.push(row);
+    }
+    return out;
+  }
 
   // v9.38.1（V3-12）：政策级事件数（读 kv event_classify，注入消息面证据源）
   const [policyEventCount, setPolicyEventCount] = useState(0);
@@ -645,37 +716,18 @@ export default function Dashboard({
             <DecisionVerdictCard
               mainline={battlePlan?.candidates?.[0]?.mainline ?? "—"}
               sources={decisionSources}
+              agent={agentResult}
+              signalGates={signalGates}
+              factorStats={factorStats ?? undefined}
             />
-            {/* v9.38（V3-2/3）：Agent 深审（手动触发，工具收集+LLM裁决+Critic） */}
+            {/* v9.38（V3-2/3）：Agent 手动重审按钮（自动已每5分钟跑，手动可即时刷新） */}
             <div className="flex items-center gap-2">
-              <button onClick={runAgent} disabled={agentLoading}
-                className="rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[11px] font-bold text-violet-300 hover:bg-violet-500/20 disabled:opacity-50">
-                {agentLoading ? "🤖 Agent 调研中…" : "🤖 Agent 深审（LLM）"}
+              <button onClick={() => runAgent(false)} disabled={agentLoading}
+                className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50">
+                {agentLoading ? "🤖 Agent 调研中…" : "⚡ 立即重审（LLM）"}
               </button>
-              {agentResult && (
-                <span className={`rounded px-1.5 py-0.5 text-[10px] font-black ${
-                  agentResult.action === "可上车" ? "bg-emerald-500/20 text-emerald-300"
-                  : agentResult.action === "禁止" ? "bg-rose-500/20 text-rose-300"
-                  : "bg-amber-500/20 text-amber-300"}`}>
-                  Agent: {agentResult.action} · {agentResult.confidence}%
-                </span>
-              )}
+              <span className="text-[9px] text-slate-600">自动每 5 分钟裁决一次；点击即时重审</span>
             </div>
-            {agentResult && (
-              <div className="rounded-lg border border-violet-500/20 bg-violet-950/10 p-2 text-[11px]">
-                <div className="text-slate-300">{agentResult.reason}</div>
-                {agentResult.critic && <div className="mt-1 text-rose-300/90">{agentResult.critic}</div>}
-                {agentResult.degraded && <div className="mt-1 text-amber-300/80">（规则兜底：LLM 不可用）</div>}
-                {agentResult.evidence.length > 0 && (
-                  <details className="mt-1">
-                    <summary className="cursor-pointer text-[10px] text-slate-500">📋 Agent 证据（点击展开）</summary>
-                    <div className="mt-0.5 space-y-0.5">
-                      {agentResult.evidence.map((e, i) => <div key={i} className="text-[10px] text-slate-400">• {e}</div>)}
-                    </div>
-                  </details>
-                )}
-              </div>
-            )}
             <BattlePlan data={battlePlan ?? null} />
             {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
             {overview && (

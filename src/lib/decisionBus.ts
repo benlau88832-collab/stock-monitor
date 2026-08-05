@@ -43,7 +43,12 @@ const VETO_SOURCES = new Set(["系统性风险", "诱多引擎", "组合风险"]
 /** 多源共识裁决（纯函数，可单测） */
 export function runConsensus(
   sources: EvidenceSource[],
-  opts?: { vetoSources?: Set<string>; signalGates?: Array<{ name: string; winRate: number | null; samples: number | null }> },
+  opts?: {
+    vetoSources?: Set<string>;
+    signalGates?: Array<{ name: string; winRate: number | null; samples: number | null }>;
+    /** v9.39（改造2）：因子健康度（factorLib 滚动 IC 评估结果）—— 失效因子占比高 → 全局降置信 */
+    factorStats?: { decayed: number; total: number };
+  },
 ): DecisionVerdict {
   const vetoSet = opts?.vetoSources ?? VETO_SOURCES;
   const dissent: string[] = [];
@@ -82,6 +87,18 @@ export function runConsensus(
     return s;
   });
 
+  // ---- ②b 因子健康度（幻方"因子会过期"在线监测接入）----
+  // factorLib 滚动 IC 评估出"疑似失效因子"占比高 → 全局下调置信（对"用历史无效信号投票"的惩罚）
+  let factorHealthPenalty = 0;
+  if (opts?.factorStats && opts.factorStats.total >= 3) {
+    const ratio = opts.factorStats.decayed / opts.factorStats.total;
+    if (ratio >= 0.5) factorHealthPenalty = 15;
+    else if (ratio >= 0.3) factorHealthPenalty = 8;
+    if (factorHealthPenalty > 0) {
+      evidence.push(`🧪 因子健康度：${opts.factorStats.decayed}/${opts.factorStats.total} 因子疑似失效（|IC|<0.05），置信下调${factorHealthPenalty}%`);
+    }
+  }
+
   // ---- ③ 加权投票 ----
   const score = { "可上车": 0, "观望": 0, "禁止": 0 };
   let totalW = 0;
@@ -92,7 +109,8 @@ export function runConsensus(
   const winner = (Object.entries(score) as Array<[Verdict, number]>).sort((a, b) => b[1] - a[1])[0][0];
   const winScore = score[winner];
   const totalScore = score["可上车"] + score["观望"] + score["禁止"];
-  const confidence = totalScore > 0 ? Math.round(winScore / totalScore * 100) : 50;
+  let confidence = totalScore > 0 ? Math.round(winScore / totalScore * 100) : 50;
+  confidence = Math.max(10, Math.min(95, confidence - factorHealthPenalty));
 
   // ---- ④ 分歧告警 ----
   const verdicts = new Set(adjusted.map(s => s.verdict));

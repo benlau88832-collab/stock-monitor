@@ -4,6 +4,35 @@
 
 ---
 
+## v9.39 — AI 自动主导 + 幻方闭环接通（深度复盘后的 3 项改造） (2026-08-06)
+
+### 背景
+用户深度复盘指出：GLM5.2-V3 的 17 项功能代码全部落地，但"AI 主导 + 幻方方法"效果只有约 20%：
+- 断层1：AI 是手动按钮（不点不跑），终裁决卡 0 行 AI 代码（纯规则投票）
+- 断层2：幻方闭环断开——factorLib IC 算了没接入决策；V3-5 回测门控空转（collectEvidence 没传 signalGates）
+- 断层3：样本量 9 天撑不起"越用越准"
+
+### 改造1：AI 自动主导
+- Dashboard: battlePlan 更新后自动触发 decideForMainline（1.5s 延迟等证据就绪 + 5 分钟节流省配额）
+- DecisionVerdictCard 反转：Agent 裁决（LLM 工具调研）置顶大号为主结论（琥珀色高亮"AI 决策（自动主导）"），
+  规则投票折叠为"📊 规则多源投票（点击展开）"佐证区——不再是并列卡片
+- 旧 Agent 结果小框删除；按钮改"⚡ 立即重审"（手动即时刷新）
+- 决策日志升级：记录来源（AI-Agent/规则投票）+ Agent 理由 + Critic 意见
+
+### 改造2：幻方闭环接通
+- decisionBus.runConsensus 新增 factorStats 支持：因子失效占比≥50% 置信-15 / ≥30% 置信-8（幻方"因子过期自动降权"真正影响决策）
+- Dashboard 异步加载：① backtestSignals(14) → signalGates → 激活 V3-5 回测门控（此前空转！）
+  ② factorLib evaluateAllFactors → factorStats → 决策降权 + 落库 factor_ic:日期（改造3）
+- 终裁决卡显示"🧪 N/M 因子失效"红标（悬停解释）
+
+### 改造3：数据积累加速
+- factor_ic:日期 前端算完落库（跨会话可读）
+- market_intraday 盘中快照已存在（v9.38 V3-11，每20分钟）——样本从每日1条→每日多条
+
+### 单测 72 例全绿（+3：因子健康度降置信/不降/门控激活）
+
+---
+
 ## v9.38.2 — 修复 EventClassifyPanel 挂错位置 (2026-08-06)
 
 ### 用户反馈
