@@ -1,11 +1,15 @@
 // 仓位与纪律面板（v9.19-F7）
 // 实时计算：单票超限 / 总仓位超限 / 新开仓次数 / 连续亏损冷静期 / 止损参考
 // 报告口径："选股是徒弟活，仓位管理是师傅活"
+// v9.36（A1）：组合风险预算联动 —— 总仓位上限 = 基础预算 × 市场状态系数 × 连亏熔断
 import { useState } from "react";
 import { loadDisciplineState, saveDisciplineState, computeDisciplineViolations, computeStopLoss, type DisciplineState } from "../lib/discipline";
+import { classifyMarketState } from "../lib/marketStateMachine";
+import { computePortfolioRisk, type PortfolioRiskResult } from "../lib/portfolioRisk";
+import type { OverviewData } from "../App";
 import DisclaimerTag from "./DisclaimerTag";
 
-export default function DisciplinePanel() {
+export default function DisciplinePanel({ overview }: { overview?: OverviewData | null }) {
   const [state, setState] = useState<DisciplineState>(loadDisciplineState);
   const [showForm, setShowForm] = useState(false);
   // 录入表单
@@ -19,6 +23,24 @@ export default function DisciplinePanel() {
   const violations = computeDisciplineViolations(state);
   const totalValue = state.positions.reduce((s, p) => s + p.value, 0);
   const totalPct = state.settings.totalCapital > 0 ? totalValue / state.settings.totalCapital * 100 : 0;
+
+  // v9.36（A1）：组合风险预算（市场状态 × 连亏熔断）
+  const marketState = overview
+    ? classifyMarketState({
+        sentiment: overview.sentiment ?? 50,
+        ztCount: overview.limitPool?.limitUpCount ?? 0,
+        dtCount: overview.limitPool?.limitDownCount ?? 0,
+        blastedRate: overview.limitPool?.blastedRate ?? 0,
+        premiumAvg: overview.premiumAvg ?? null,
+        maxBoardHeight: overview.maxBoardHeight ?? null,
+      }).state
+    : null;
+  const risk: PortfolioRiskResult = computePortfolioRisk({
+    marketState,
+    positionPnlPcts: state.positions.map(p => p.pnlPct),
+    totalCapital: state.settings.totalCapital,
+    currentPositionValue: totalValue,
+  });
 
   const update = (next: DisciplineState) => { setState(next); saveDisciplineState(next); };
 
@@ -50,6 +72,24 @@ export default function DisciplinePanel() {
 
   return (
     <div className="rounded-xl border border-sky-500/20 bg-sky-950/10 p-3 space-y-2">
+      {/* v9.36（A1）：组合风险预算条 */}
+      <div className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${
+        risk.overLimit || risk.lossStreak >= 3
+          ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+          : marketState === "亢奋普涨"
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+          : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+      }`}>
+        <div className="flex items-center justify-between">
+          <span className="font-bold">💰 组合风险预算</span>
+          <span className="font-mono">
+            {risk.currentPct}% / 上限{risk.maxPositionPct}%
+            <span className="ml-1 text-[9px] opacity-70">({marketState ?? "—"} ×{risk.marketFactor} ×连亏熔断{risk.lossFactor})</span>
+          </span>
+        </div>
+        <div className="mt-0.5">{risk.advice}</div>
+      </div>
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-sky-300">🛡️ 仓位与纪律</span>

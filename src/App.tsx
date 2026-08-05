@@ -34,6 +34,8 @@ import { getAllSince } from "./lib/dataStore";
 import { callAI, parseAIJSON } from "./lib/ai";
 // v9.34（S1）：封单衰减实时监控（龙一开板前兆）
 import { detectSealDecay, type SealAlert } from "./lib/sealMonitor";
+// v9.36（B2）：昨日涨停统计纯函数（溢价/核按钮/晋级率）
+import { computePrevZtStats } from "./lib/prevZtStats";
 import { fetchPopularityRank } from "./lib/api";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
@@ -271,7 +273,7 @@ export default function App() {
         maxBoardHeight = maxLbc > 0 ? maxLbc : null;
       }
 
-      // 昨日快照 → 溢价 + 晋级率
+      // 昨日快照 → 溢价 + 晋级率（v9.36 B2：逻辑抽到 lib/prevZtStats.ts）
       const prevZTPool = loadPrevZTSnapshot(limitPool?.qdate ?? null);
       // v9.32.1（缺口1）：溢价分布 4 档（游资看第一眼的是分布不是均值）
       let premiumDist: OverviewData["premiumDist"] = null;
@@ -282,58 +284,15 @@ export default function App() {
           try {
             const briefMap = await fetchStockBriefBatch(codes);
             if (briefMap.size > 0) {
-              // 溢价：昨日涨停股今日涨幅的算术平均值
-              let pctSum = 0, pctCount = 0;
-              const dist = { ltNeg5: 0, neg5to0: 0, zeroTo3: 0, gt3: 0 };
-              for (const code of codes) {
-                const brief = briefMap.get(code);
-                if (brief && Number.isFinite(brief.pct)) {
-                  pctSum += brief.pct;
-                  pctCount++;
-                  if (brief.pct < -5) dist.ltNeg5++;
-                  else if (brief.pct < 0) dist.neg5to0++;
-                  else if (brief.pct <= 3) dist.zeroTo3++;
-                  else dist.gt3++;
-                }
-              }
-              premiumAvg = pctCount > 0 ? Math.round(pctSum / pctCount * 100) / 100 : null;
-              // v9.32.1：溢价分布 —— 焖面(<-5%)多 = 亏钱效应强；连板高溢价(>3%)多 = 赚钱效应强
-              if (pctCount > 0) premiumDist = dist;
-
-              // v9.32.1（缺口1）：核按钮检测 —— 昨≥2板 今日跌≤-9%（秒跌停）是退潮最强信号
-              try {
-                const nukes: string[] = [];
-                for (const s of prevZTPool) {
-                  const lbc = s.lbc ?? 1;
-                  if (lbc >= 2) {
-                    const brief = briefMap.get(String(s.c));
-                    if (brief && brief.pct <= -9) {
-                      nukes.push(`${s.n ?? s.c}(${lbc}板跌${brief.pct.toFixed(1)}%)`);
-                    }
-                  }
-                }
-                setNuclearAlerts(nukes.slice(0, 8));
-              } catch { /* 核按钮检测失败不阻塞主流程 */ }
+              // v9.36（B2）：溢价均值/4档分布/核按钮/晋级率 全部抽到纯函数
+              const stats = computePrevZtStats({ prevZTPool, todayRawPool: limitPool?.rawZTPool ?? null, briefMap });
+              premiumAvg = stats.premiumAvg;
+              premiumDist = stats.premiumDist;
+              if (stats.nuclearAlerts.length > 0) setNuclearAlerts(stats.nuclearAlerts);
+              promotionRate = stats.promotionRate;
             }
           } catch { /* 查询失败 → premiumAvg 保持 null */ }
         }
-
-        // 晋级率：昨日 lbc===1（首板）的个股中，今日在涨停池且 lbc>=2（继续涨停）的比例
-        // 这是真实"晋级率"：昨日首板今日继续封板的比例
-        const yesterdayFirstBoard = prevZTPool.filter(s => (s.lbc ?? 1) === 1);
-        if (yesterdayFirstBoard.length > 0 && limitPool && limitPool.rawZTPool) {
-          const todayPoolCodes = new Map<string, number>();
-          for (const s of limitPool.rawZTPool) {
-            todayPoolCodes.set(String(s.c), s.lbc ?? 1);
-          }
-          let promoted = 0;
-          for (const s of yesterdayFirstBoard) {
-            const todayLbc = todayPoolCodes.get(String(s.c));
-            if (todayLbc != null && todayLbc >= 2) promoted++;
-          }
-          promotionRate = Math.round(promoted / yesterdayFirstBoard.length * 1000) / 1000;
-        }
-        // 昨日没有首板个股→promotionRate保持null（无样本，不是0）
       }
 
       let sentiment: number | null = null;
@@ -1292,7 +1251,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.35 · build 08-06 01:20 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.36 · build 08-06 01:40 · 数据源：东方财富</div>
       </footer>
     </div>
   );

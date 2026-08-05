@@ -4,6 +4,34 @@
 
 ---
 
+## v9.36 — A 级优化 ×3 + B 级工程质量 ×2（2026-08-06）
+
+### A1：组合风险预算（幻方"风险预算层"落地）
+- 新建 `portfolioRisk.ts`：总仓位上限 = 基础预算(70%) × 市场状态系数 × 连亏熔断系数
+- 连亏3天熔断降0.4、2天降0.75；市场状态系数与 marketStateMachine 对齐（0.2~1.0）
+- `DisciplinePanel` 顶部新增"💰组合风险预算"条：当前仓位/预算上限/市场状态/熔断状态/操作建议
+
+### A2：竞价强度榜
+- 新建 `AuctionStrengthPanel.tsx`：复用 auction.ts fetchAuctionBoard，展示昨日涨停池竞价涨幅 top12
+- 竞价即涨停红框高亮"🔒竞价封板"、低开绿标、连板数徽标、竞价金额
+- 挂载竞价布局 AuctionBoard 旁（60s 刷新）
+
+### A3：龙虎榜×涨停池交叉（席位加持）
+- cron 新增 `fetchLhbDaily`：东财 `RPT_DAILYBILLBOARD_DETAILSNEW`（实测300只，东山精密净买15.87亿）→ 落 `kv_store:lhb:日期`
+- 新建 `LhbCrossPanel.tsx`：今日涨停×龙虎榜交叉（净买额+上榜原因），席位加持=次日溢价增强信号
+- 挂载盘后区 LadderMini 旁
+
+### B1：vitest 单测（42 个用例全绿）
+- 新增 `npm test`（vitest run）；`src/lib/__tests__/` 下 5 个测试文件
+- stageModel 6 用例 / trapDetector 8 / positionSizing 8 / stockExit 5 / 新增引擎（市场状态机+组合风险预算+封单衰减）15
+- 教训：3 个用例首跑失败均为"测试断言与实现不一致"（非实现 bug），修正断言后全绿
+
+### B2：App.tsx 拆分（减负）
+- 将"昨日溢价/核按钮/晋级率"~60 行从 refreshAll 抽取为纯函数 `lib/prevZtStats.ts`（computePrevZtStats）
+- App.tsx 改为一行调用，逻辑零变化；后续可继续按此模式拆分
+
+---
+
 ## v9.35 — S3 信号历史回测引擎（幻方"因子验证"落地）（2026-08-06）
 
 承接复盘 S3 计划：解决"30 个信号不知道信哪个"的终极痛点。

@@ -9,6 +9,10 @@ import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
 // v9.35（S3）：信号有效性回测面板
 import SignalEffectivenessPanel from "./SignalEffectivenessPanel";
+// v9.36（A2）：竞价强度榜
+import AuctionStrengthPanel from "./AuctionStrengthPanel";
+// v9.36（A3）：龙虎榜×涨停池交叉
+import LhbCrossPanel from "./LhbCrossPanel";
 import InstitutionFund from "./InstitutionFund";
 import Playbook from "./Playbook";
 import PopularityRadar from "./PopularityRadar";
@@ -564,7 +568,7 @@ export default function Dashboard({
           {/* 右 1/3 */}
           <div className="space-y-2">
             {/* v9.19-F7：仓位与纪律面板 */}
-            <DisciplinePanel />
+            <DisciplinePanel overview={overview} />
             {/* v9.33（缺口3）：LLM 盘后三剧本 + 风险雷达（复盘区上方） */}
             {(nextScenarios || riskRadarText) && (
               <div className="space-y-2">
@@ -607,6 +611,8 @@ export default function Dashboard({
             <ImportantFeed />
             <AlertFeed />
             <LadderMini overview={overview} onSwitchTab={() => onSwitchTab?.("dragon")} />
+            {/* v9.36（A3）：龙虎榜×涨停池交叉（席位加持） */}
+            <LhbCrossPanel overview={overview} />
           </div>
         </div>
       )}
@@ -627,12 +633,14 @@ export default function Dashboard({
               </div>
             )}
             <AuctionBoard yesterdayZt={yesterdayZt} todayZt={ztPool} autoRefresh={false} />
+            {/* v9.36（A2）：竞价强度榜（昨日涨停池竞价涨幅 top12） */}
+            <AuctionStrengthPanel yesterdayZt={yesterdayZt} todayZt={ztPool} />
             <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
               blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />
             {globalData && <GlobalSignals data={globalData} loading={loading} />}
             <BattlePlan data={battlePlan ?? null} />
             {/* v9.19-F7/F10：纪律+复盘（全天可用） */}
-            <DisciplinePanel />
+            <DisciplinePanel overview={overview} />
             <ReviewPanel />
           </div>
           <div className="space-y-2">

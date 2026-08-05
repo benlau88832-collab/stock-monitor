@@ -43,6 +43,23 @@ async function fetchMarketDaily() {
   };
 }
 
+// ---------- v9.36（A3）：龙虎榜采集（与涨停池交叉，识别席位加持） ----------
+// 涨停 + 龙虎榜净买入 = 次日溢价增强信号；RPT_DAILYBILLBOARD_DETAILSNEW 当日盘后数据
+async function fetchLhbDaily() {
+  const url = `https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_DAILYBILLBOARD_DETAILSNEW&columns=ALL&pageSize=300&source=WEB&client=WEB&sortColumns=TRADE_DATE&sortTypes=-1`;
+  const j = await httpsGet(url);
+  const rows = j?.result?.data ?? [];
+  return rows.map(r => ({
+    code: String(r.SECURITY_CODE ?? ""),
+    name: String(r.SECURITY_NAME_ABBR ?? ""),
+    pct: Number(r.CHANGE_RATE ?? 0),
+    buyAmt: Number(r.BILLBOARD_BUY_AMT ?? 0),   // 龙虎榜买入额（元）
+    sellAmt: Number(r.BILLBOARD_SELL_AMT ?? 0),
+    netBuy: Number(r.BILLBOARD_BUY_AMT ?? 0) - Number(r.BILLBOARD_SELL_AMT ?? 0),
+    explain: String(r.EXPLANATION ?? r.EXPLAIN ?? ""),  // 上榜原因（如"日涨幅偏离值达7%"）
+  }));
+}
+
 // ---------- 通用 https GET ----------
 function httpsGet(url, timeout = 15000) {
   return new Promise((resolve, reject) => {
@@ -439,6 +456,20 @@ function startCron({ pool }) {
         console.log(`[cron] block_trade ${tDateStr}: ${trades.length} 笔`);
       }
     } catch (e) { console.error("[cron] block_trade failed:", e.message); }
+    // v9.36（A3）：龙虎榜落库（涨停×龙虎榜交叉用）
+    try {
+      const lhb = await fetchLhbDaily();
+      if (lhb.length > 0) {
+        const lDate = bjDate();
+        const lDateStr = `${lDate.slice(0, 4)}-${lDate.slice(4, 6)}-${lDate.slice(6, 8)}`;
+        await pool.query(
+          `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+          [`lhb:${lDateStr}`, JSON.stringify({ date: lDateStr, items: lhb })],
+        );
+        console.log(`[cron] lhb ${lDateStr}: ${lhb.length} 只`);
+      }
+    } catch (e) { console.error("[cron] lhb failed:", e.message); }
     cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
@@ -616,3 +647,4 @@ module.exports.generateDailyReview = generateDailyReview;
 module.exports.fetchBoardFundServer = fetchBoardFundServer;
 module.exports.fetchBlockTrades = fetchBlockTrades;
 module.exports.fetchMarketDaily = fetchMarketDaily;
+module.exports.fetchLhbDaily = fetchLhbDaily;
