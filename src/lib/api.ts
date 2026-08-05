@@ -793,6 +793,8 @@ export interface LimitPoolSummary {
   totalBoardStocks: number; // 2连板及以上总数
   /** 涨停池原始数组（供题材梯队等下游模块复用，避免重复请求） */
   rawZTPool: any[];
+  /** v9.26.18：炸板池原始数据（字段：c/n/zdp/zbc 炸板次数/zf 炸板幅度/zttj.ct 连板数） */
+  rawZBPool?: any[];
   /** 接口返回的真实交易日（形如"20260729"），优先用于快照 key（兼容法定节假日） */
   qdate: string | null;
   /** v9.26.10：当日池总数（节假日回退判定用） */
@@ -820,9 +822,10 @@ export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSum
 }
 
 async function fetchZTPoolForDate(d: string): Promise<LimitPoolSummary> {
+  // v9.26.18：ZBPool/DT 改用 sort=fbt:asc（原 fund:asc 实际返回空数组，炸板率始终为 0）
   const ztUrl = `https://push2ex.eastmoney.com/getTopicZTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
-  const zbUrl = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
-  const dtUrl = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
+  const zbUrl = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
+  const dtUrl = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
 
   const [ztRes, zbRes, dtRes] = await Promise.allSettled([
     ztJsonp<any>(ztUrl), ztJsonp<any>(zbUrl), ztJsonp<any>(dtUrl),
@@ -852,7 +855,7 @@ async function fetchZTPoolForDate(d: string): Promise<LimitPoolSummary> {
   const blastedRate = (limitUpCount + blastedCount) > 0 ? blastedCount / (limitUpCount + blastedCount) * 100 : 0;
   const totalBoardStocks = ztPool.filter((s: any) => (s.lbc ?? 1) >= 2).length;
 
-  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, qdate, totalCount: ztPool.length + zbPool.length + dtPool.length };
+  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, rawZBPool: zbPool, qdate, totalCount: ztPool.length + zbPool.length + dtPool.length };
 }
 
 // ============== 两市历史日成交额（用于量能对比）==============

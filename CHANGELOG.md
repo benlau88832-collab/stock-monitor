@@ -4,6 +4,23 @@
 
 ---
 
+## v9.26.18 — 炸板数/炸板率接入真实数据 (2026-08-05)
+
+### 用户反馈
+炸板数 = 0 / 炸板率 = 0.0% — 实际今日有 42 只炸板
+
+### 根因
+东财 `getTopicZBPool` / `getTopicDTPool` 接口的 `sort=fund:asc`（`fund:desc`/`lbc:desc`）均返回**空数组**，只有 `sort=fbt:asc` 返回真实数据。
+但代码中 ZBPool/DT 池一直用 `sort=fund:asc` → 算出 blastedCount=0 → 炸板率永远 0。
+
+### 修复
+- `api.ts` `fetchZTPoolForDate`：ZB/DT 改 `sort=fbt:asc`
+- `LimitBoard.tsx` `fetchZBPool` / `fetchDTPool`：同样改 `sort=fbt:asc`
+- `LimitBoard.tsx` ZBStock 类型补 `blastPct/prevBoards`（用 ZBPool 真实字段 `zf`/`zttj.ct`）；`sealFund/lastBoardTime` 兼容字段（ZBPool 无 fund/lbt）
+- `api.ts` `LimitPoolSummary` 加 `rawZBPool` 字段（炸板池原始数据，供后续 UI 使用）
+
+---
+
 ## v9.26.17 — 资金走势图 + 8 处同类截断修复 (2026-08-05)
 
 ### 1. 资金走势图（核心需求）
