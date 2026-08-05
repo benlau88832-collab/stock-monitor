@@ -24,7 +24,9 @@ export interface BoardFundCurve {
   totalWan: number;
 }
 
-/** 拉单个板块 1 分钟 K 线（含 f60 主力净额） */
+/** 拉单个板块 1 分钟 K 线（含 f60 主力净额）
+ *  v9.26.17：必须传 end=20500101 才返回全字段数据；返回字段 [0]时间 [1]开 [2]高 [3]低 [4]收 [5]成交量 [6]成交额 [7]振幅 [8]涨跌幅 [9]主力净额(万)
+ */
 export async function fetchBoardKlineFlow(secid: string, lmt = 240): Promise<BoardKlinePoint[]> {
   const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60&klt=1&fqt=1&end=20500101&lmt=${lmt}`;
   try {
