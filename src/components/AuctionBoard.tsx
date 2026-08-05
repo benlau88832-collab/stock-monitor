@@ -51,7 +51,7 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-amber-300">🌅 竞价台（开盘强度）</span>
           <FreshnessTag type="near_realtime" text="开盘竞价结果" />
-          <span className="text-[10px] text-slate-600">数据源：腾讯行情（真实今开/昨收/竞价额/换手）</span>
+          <span className="text-[10px] text-slate-600">数据源：腾讯行情（实时涨幅+竞价额+换手）</span>
         </div>
         <button onClick={load} disabled={loading}
           className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/20 disabled:opacity-40">
@@ -67,6 +67,8 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
             <thead><tr className="text-slate-500">
               <th className="px-1 py-0.5 text-left">股票</th>
               <th className="px-1 py-0.5 text-right">竞价涨幅</th>
+              <th className="px-1 py-0.5 text-right">实时涨幅</th>
+              <th className="px-1 py-0.5 text-right">现价</th>
               <th className="px-1 py-0.5 text-right">竞价额</th>
               <th className="px-1 py-0.5 text-right">换手%</th>
               <th className="px-1 py-0.5 text-center">首封</th>
@@ -86,6 +88,16 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
                     it.auctionPct >= 0 ? "text-rose-400" : "text-emerald-400"
                   }`}>
                     {it.auctionPct >= 0 ? "+" : ""}{it.auctionPct.toFixed(2)}%
+                  </td>
+                  {/* v9.26.14：实时涨幅（当前价 vs 昨收） */}
+                  <td className={`px-1 py-0.5 text-right font-mono font-bold ${
+                    it.changePct >= 0 ? "text-rose-400" : "text-emerald-400"
+                  }`}
+                    title={`现价${it.currentPrice.toFixed(2)} 涨跌额${it.changeAmount >= 0 ? "+" : ""}${it.changeAmount.toFixed(2)}`}>
+                    {it.changePct >= 0 ? "+" : ""}{it.changePct.toFixed(2)}%
+                  </td>
+                  <td className="px-1 py-0.5 text-right font-mono text-slate-300">
+                    {it.currentPrice > 0 ? it.currentPrice.toFixed(2) : "—"}
                   </td>
                   <td className="px-1 py-0.5 text-right font-mono text-slate-300">
                     {it.openAmountYi > 0 ? `${it.openAmountYi.toFixed(2)}亿` : "—"}

@@ -37,6 +37,12 @@ export interface AuctionItem {
   turnoverRate: number;
   /** v9.26.12：振幅 % */
   amplitude: number;
+  /** v9.26.14：当前价（实时） */
+  currentPrice: number;
+  /** v9.26.14：实时涨幅 %（(当前价-昨收)/昨收，腾讯 field 31） */
+  changePct: number;
+  /** v9.26.14：实时涨跌额（元，腾讯 field 32） */
+  changeAmount: number;
 }
 
 // ============== 腾讯接口解析 ==============
@@ -49,6 +55,7 @@ interface QtRow {
   volumeKilo: number;       // [6] 手
   amountWan: number;        // [38] 万
   changePct: number;        // [31] %
+  changeAmount: number;     // [32] 元
   turnoverRate: number;     // [39] %
   amplitude: number;        // [50] %
   limitUpPrice: number;     // [48]
@@ -72,6 +79,7 @@ function parseQtLine(line: string): QtRow | null {
     volumeKilo: num(6),
     amountWan: num(38),
     changePct: num(31),
+    changeAmount: num(32),
     turnoverRate: num(39),
     amplitude: num(50),
     limitUpPrice: num(48),
@@ -148,6 +156,9 @@ export async function fetchAuctionBoard(
       volumeKilo: r.volumeKilo,
       turnoverRate: Math.round(r.turnoverRate * 100) / 100,
       amplitude: Math.round(r.amplitude * 100) / 100,
+      currentPrice: r.currentPrice,
+      changePct: Math.round(r.changePct * 100) / 100,
+      changeAmount: r.changeAmount,
     };
   });
 
