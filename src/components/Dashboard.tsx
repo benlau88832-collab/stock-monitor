@@ -13,6 +13,10 @@ import SignalEffectivenessPanel from "./SignalEffectivenessPanel";
 import AuctionStrengthPanel from "./AuctionStrengthPanel";
 // v9.36（A3）：龙虎榜×涨停池交叉
 import LhbCrossPanel from "./LhbCrossPanel";
+// v9.38.1（V3-12）：事件三级研判面板
+import EventClassifyPanel from "./EventClassifyPanel";
+// v9.38.1（V3-12）：读 kv 事件分级数据（决策消息面证据源）
+import { isLocalServer, kvGet } from "../lib/cloudStore";
 // v9.37（V3-4/7）：AI 终裁决（多源共识）
 import DecisionVerdictCard from "./DecisionVerdictCard";
 import { collectEvidence } from "../lib/decisionCollector";
@@ -559,6 +563,22 @@ export default function Dashboard({
     setAgentLoading(false);
   };
 
+  // v9.38.1（V3-12）：政策级事件数（读 kv event_classify，注入消息面证据源）
+  const [policyEventCount, setPolicyEventCount] = useState(0);
+  useEffect(() => {
+    if (!isLocalServer()) return;
+    let alive = true;
+    (async () => {
+      try {
+        const d = new Date();
+        const key = `event_classify:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const v = (await kvGet(key)) as { items?: Array<{ level: string }> } | null;
+        if (v?.items && alive) setPolicyEventCount(v.items.filter(i => i.level === "政策").length);
+      } catch { /* 静默 */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   // v9.37（V3-4/7）：AI 终裁决 —— 多源证据汇聚
   const decisionSources = useMemo(() => {    const top = battlePlan?.candidates?.[0];
     const admission = evaluateAdmission({
@@ -605,8 +625,9 @@ export default function Dashboard({
       sysRiskLevel: sysRisk.level,
       lhbBoost: false,
       fundStreakInflow: false,
+      policyEventCount,
     });
-  }, [battlePlan, overview, sealAlerts]);
+  }, [battlePlan, overview, sealAlerts, policyEventCount]);
 
   return (
     <div className="space-y-2">
@@ -726,6 +747,8 @@ export default function Dashboard({
             <LadderMini overview={overview} onSwitchTab={() => onSwitchTab?.("dragon")} />
             {/* v9.36（A3）：龙虎榜×涨停池交叉（席位加持） */}
             <LhbCrossPanel overview={overview} />
+            {/* v9.38.1（V3-12）：事件三级研判（政策/行业/事件 + 受益板块） */}
+            <EventClassifyPanel />
           </div>
         </div>
       )}

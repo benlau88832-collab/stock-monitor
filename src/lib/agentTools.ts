@@ -184,6 +184,30 @@ export function getAgentTools(): AgentTool[] {
       },
     },
     {
+      name: "getNewsDeep",
+      description: "事件深挖（V3-14）：仅对政策级/高分事件(catalystScore>=60)触发 LLM 推演影响路径；低分事件不深挖（成本控制）",
+      execute: async (ctx: ToolContext & { eventTitle?: string; catalystScore?: number; eventLevel?: string; beneficiaries?: string[] }) => {
+        const score = ctx.catalystScore ?? 0;
+        // 成本护栏：仅高分/政策级事件深挖，普通事件直接返回（不调 LLM）
+        if (score < 60) {
+          return { deep: false, note: `催化强度 ${score} 分 < 60，未触发深挖（成本控制）；可手动升级关注` };
+        }
+        const { callAI, parseAIJSON } = await import("./ai");
+        try {
+          const r = await callAI("eventDeepDive", {
+            title: ctx.eventTitle ?? ctx.board ?? "未知事件",
+            level: ctx.eventLevel ?? (score >= 65 ? "政策" : "行业"),
+            catalystScore: score,
+            beneficiaries: ctx.beneficiaries ?? [],
+          });
+          const j = parseAIJSON<{ chain: string; targets: Array<{ name: string; reason: string }>; risk: string; confirm: string; conclusion: string }>(r.text);
+          return { deep: true, ...j };
+        } catch {
+          return { deep: true, chain: "LLM 深挖失败", targets: [], risk: "", confirm: "看板块主力资金", conclusion: "深挖暂不可用，按分级结果参考" };
+        }
+      },
+    },
+    {
       name: "getDecisionEvidence",
       description: "多源决策证据：汇聚各引擎输出（decisionBus 视角）",
       execute: async (ctx: ToolContext) => {

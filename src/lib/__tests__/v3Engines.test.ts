@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import { evaluateAllFactors, markNextWin, FACTORS, computeFactorIC, type FactorDayRow } from "../factorLib";
 import { reconcileFundNews } from "../fundNewsReconcile";
 import { getAgentTools } from "../agentTools";
+import { collectEvidence } from "../decisionCollector";
 
 describe("factorLib 因子注册表 + IC 评估", () => {
   it("注册 ≥10 因子", () => {
@@ -91,5 +92,55 @@ describe("agentTools 工具注册表", () => {
     const r = await tools[0].execute({ strengthScore: 85, stage: "启动期", ztCount: 10, height: 3, gateMode: "full", trapFlagged: false });
     expect(typeof r).toBe("object");
     expect(r).not.toBeNull();
+  });
+
+  it("v9.38.1: getNewsDeep 低分事件不深挖（成本控制，不调 LLM）", async () => {
+    const tools = getAgentTools();
+    const deepTool = tools.find(t => t.name === "getNewsDeep");
+    expect(deepTool).toBeTruthy();
+    const r = await deepTool!.execute({ eventTitle: "某公司中标", catalystScore: 30, eventLevel: "事件" });
+    expect((r as any).deep).toBe(false);
+    expect(String((r as any).note || "")).toContain("成本控制");
+  });
+
+  it("v9.38.1: getNewsDeep 高分事件允许深挖（返回 deep=true）", async () => {
+    const tools = getAgentTools();
+    const deepTool = tools.find(t => t.name === "getNewsDeep")!;
+    const r = await deepTool.execute({ eventTitle: "央行降准", catalystScore: 90, eventLevel: "政策", beneficiaries: ["银行", "地产"] });
+    expect((r as any).deep).toBe(true);
+  });
+});
+
+describe("decisionCollector 消息对账证据源（V3-13）", () => {
+  it("利好+资金流出 → 消息对账投'禁止'（资金背离）", () => {
+        const srcs = collectEvidence({
+      mainline: "低空经济",
+      admissionAction: "可上车", admissionConfidence: 80, admissionReason: "强度高",
+      marketState: "局部主线", marketFactor: 0.8,
+      riskOverLimit: false, riskLossStreak: 0, riskMaxPct: 70,
+      trapFlagged: false, trapRate: 0,
+      sealRedCount: 0, sealYellowCount: 0,
+      sysRiskLevel: "none", lhbBoost: false, fundStreakInflow: false,
+      newsReconcile: "背离",
+    });
+    const ms = srcs.find(x => x.name === "消息对账");
+    expect(ms).toBeTruthy();
+    expect(ms!.verdict).toBe("禁止");
+  });
+
+  it("政策级事件≥2 → 消息对账投'可上车'", () => {
+        const srcs = collectEvidence({
+      mainline: "半导体",
+      admissionAction: "观望", admissionConfidence: 60, admissionReason: "观察",
+      marketState: "分歧震荡", marketFactor: 0.6,
+      riskOverLimit: false, riskLossStreak: 0, riskMaxPct: 70,
+      trapFlagged: false, trapRate: 0,
+      sealRedCount: 0, sealYellowCount: 0,
+      sysRiskLevel: "none", lhbBoost: false, fundStreakInflow: false,
+      policyEventCount: 3,
+    });
+    const ms = srcs.find(x => x.name === "消息对账");
+    expect(ms).toBeTruthy();
+    expect(ms!.verdict).toBe("可上车");
   });
 });

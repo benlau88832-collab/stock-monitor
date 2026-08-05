@@ -4,6 +4,34 @@
 
 ---
 
+## v9.38.1 — GLM5.2-V3 补全：事件分级闭环 + getNewsDeep + httpProxy 重构 (2026-08-06)
+
+### 背景
+用户确认后补全 V3 报告真实遗漏 2 项 + 部分完成 1 项（V3-P0 重构部分）。
+
+### V3-12 事件三级分类闭环（此前只有 task 定义，无 cron 落库）
+- cron.js 新增 `runEventClassify({pool})`：读当日快讯（stars 优先）→ 前缀去重 → LLM 三级分级
+  （政策/行业/事件 + beneficiaries + catalystScore + timeSensitivity）→ 落库 `kv event_classify:日期`
+- 容错：LLM JSON 常被 max_tokens 截断 → `parseLoose` 截到最后一个完整对象补 `]`；LLM 失败走规则版关键词分级
+- 批量 15 事件（30 会超 token）；maxTokens 1500 → 3000
+- 15:40 盘后任务接入 + 导出
+- 前端：`EventClassifyPanel.tsx` 三级分栏（政策/行业/事件 × 催化分徽章 × 受益板块），挂 Dashboard 盘后区
+- 接入决策总线：`decisionCollector` 新增"消息对账"证据源——`newsReconcile` 兑现=可上车 / 背离=禁止（V3-13 咬合）/
+  policyEventCount≥2 = 可上车；Dashboard 异步读政策级事件数注入
+
+### V3-14 getNewsDeep（此前完全缺失）
+- `agentTools` 注册 `getNewsDeep` 工具：catalystScore<60 直接返回"成本控制不深挖"（不调 LLM）；
+  高分/政策级事件 → `callAI("eventDeepDive")` 推演影响传导链/受益标的/风险/验证信号
+- 新增 `eventDeepDive` task（aiPrompts 5 处 + server 白名单），LLM 不可用走规则版浅挖
+
+### V3-P0 httpProxy 重构（此前只有依赖、未消重）
+- 新建 `server/lib/httpProxy.js`：https-proxy-agent **惰性 require + 容错**（未装降级直连，
+  不再顶层 require 导致干净部署启动即崩）+ 单例代理 + 直连→代理重试 + 非 2xx 不重试
+- `ai.js`/`cron.js` 删除各自重复的 postJSON/callLLM，改调公共 `postJSON` / `callModelText`
+- 单测 69 例全绿（+4：getNewsDeep 低分不深挖/高分深挖、消息对账背离→禁止、政策事件→可上车）
+
+---
+
 ## v9.38 — V3 剩余项补全：Agent 深审 + 因子IC + 资金对账 + 事件分级（2026-08-06）
 
 按 V3 修改指令表补全上一轮未做项：

@@ -34,6 +34,10 @@ export interface DecisionCollectInput {
   fundStreakInflow: boolean;
   /** 信号回测门控（V3-5） */
   signalGates?: Array<{ name: string; winRate: number | null; samples: number | null }>;
+  /** v9.38.1（V3-13）：资金-消息对账结果（兑现/背离/待观察） */
+  newsReconcile?: "兑现" | "背离" | "待观察" | null;
+  /** v9.38.1（V3-12）：今日政策级事件数（消息面强度） */
+  policyEventCount?: number;
 }
 
 export function collectEvidence(input: DecisionCollectInput): EvidenceSource[] {
@@ -95,6 +99,17 @@ export function collectEvidence(input: DecisionCollectInput): EvidenceSource[] {
   }
   if (input.fundStreakInflow) {
     sources.push({ name: "资金连续性", verdict: "可上车", confidence: 70, weight: 0.7, reason: "主线行业资金连续流入" });
+  }
+
+  // 视角4：消息面对账（V3-13：利好+资金 → 兑现/背离；V3-12：政策级事件数）
+  if (input.newsReconcile === "兑现") {
+    sources.push({ name: "消息对账", verdict: "可上车", confidence: 72, weight: 0.7, reason: "政策/消息利好 + 资金进场 = 兑现确认" });
+  } else if (input.newsReconcile === "背离") {
+    sources.push({ name: "消息对账", verdict: "禁止", confidence: 75, weight: 0.8, reason: "消息利好但资金流出 = 政策未兑现/疑似诱多" });
+  } else if (input.newsReconcile === "待观察") {
+    sources.push({ name: "消息对账", verdict: "观望", confidence: 55, weight: 0.5, reason: "中性消息，资金待确认" });
+  } else if (input.policyEventCount && input.policyEventCount >= 2) {
+    sources.push({ name: "消息对账", verdict: "可上车", confidence: 60, weight: 0.5, reason: `${input.policyEventCount} 条政策级事件（催化面活跃）` });
   }
 
   return sources;

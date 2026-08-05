@@ -3,14 +3,9 @@
 // 目的：浏览器不再持有模型 API Key —— Key 只存服务端 .env
 // 前端在 isLocalServer() 时优先调此接口；线上 GitHub Pages 无此后端，自动回退本地 Key
 // 同时实现简单令牌桶限速（F-04 基础版）：10 次/分钟
+// v9.38.1（V3-P0）：LLM 转发抽公共层 server/lib/httpProxy.js（惰性+容错，消除重复实现）
 // ============================================================
-const https = require("https");
-const http = require("http");
-const { HttpsProxyAgent } = require("https-proxy-agent");
-
-// 本机走代理（Clash 等 127.0.0.1:7897）：node 原生 https.request 不读 HTTP_PROXY 环境变量，
-// 而 curl/浏览器会走系统代理。ai.js 必须显式挂代理才能访问 apihub.agnes-ai.com（直连超时）。
-const PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://127.0.0.1:7897";
+const { postJSON, PROXY_URL } = require("../lib/httpProxy");
 
 // 任务白名单（与前端 src/lib/aiPrompts.ts TASK_CONFIG 保持一致）
 // v9.28（P1-9）：新增独立业务 task themeNewsScore/stockNewsScore/dailyIntel
@@ -21,7 +16,7 @@ const TASK_ALLOW = new Set([
   "mainlineClassify", "mainlineDiagnosis", "mainlineRank", "eventExplain",
   "themeNewsScore", "stockNewsScore", "dailyIntel",
   "dailyReviewAuto", "nextDayScenarios", "leaderPredict", "riskRadar",
-  "eventClassify",
+  "eventClassify", "eventDeepDive",
 ]);
 
 // ---------- 简单令牌桶：60 次/分钟 ----------
@@ -40,51 +35,6 @@ function takeToken() {
   if (tokens <= 0) return false;
   tokens -= 1;
   return true;
-}
-
-// v9.26.10：单例 HttpsProxyAgent（每次 new 且不销毁 → 失败重试时 socket 泄漏堆积）
-const PROXY_AGENT = new HttpsProxyAgent(PROXY_URL);
-
-function postJSON(url, body, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const lib = u.protocol === "https:" ? https : http;
-    const data = JSON.stringify(body);
-    const opts = {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(data),
-        "Authorization": "Bearer " + (process.env.AI_API_KEY || ""),
-      },
-    };
-    // v9.26.5：.cn 端点直连最稳（Clash 会把 .cn 域名绕到国外节点反而超时/不稳）。
-    // 策略：先直连（timeoutMs*0.4），失败再走代理重试一次（timeoutMs*0.6）。
-    // v9.26.10：超时按比例分配 + 校验 statusCode（非 2xx 不再走代理重试，避免重复计费）
-    const attempt = (agent, timeout) => new Promise((res2, rej2) => {
-      const req = lib.request(u, { ...opts, ...(agent ? { agent } : {}) }, r => {
-        const chunks = [];
-        r.on("data", c => chunks.push(c));
-        r.on("end", () => {
-          if (r.statusCode && (r.statusCode < 200 || r.statusCode >= 300)) {
-            const raw = Buffer.concat(chunks).toString("utf8").slice(0, 200);
-            return rej2(new Error(`model http ${r.statusCode}: ${raw}`));
-          }
-          const raw = Buffer.concat(chunks).toString("utf8");
-          try { res2(JSON.parse(raw)); }
-          catch { rej2(new Error("bad json from model")); }
-        });
-      });
-      req.on("error", rej2);
-      req.setTimeout(timeout, () => { req.destroy(new Error("model timeout")); });
-      req.write(data);
-      req.end();
-    });
-    // 直连失败（超时/网络错/非2xx）→ 走代理重试一次
-    attempt(null, Math.floor(timeoutMs * 0.4)).then(resolve, () => {
-      attempt(PROXY_AGENT, Math.floor(timeoutMs * 0.6)).then(resolve, reject);
-    });
-  });
 }
 
 module.exports = function aiRoutes(app) {
@@ -141,7 +91,7 @@ module.exports = function aiRoutes(app) {
       // 任务要求 thinking=true 时（复盘/周教练）才开启。
       body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
 
-      const json = await postJSON(baseUrl, body);
+      const json = await postJSON(baseUrl, body, 30000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
       const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
       if (!msg.content) {
         return res.json({ error: "empty content", finish_reason: json && json.choices && json.choices[0] ? json.choices[0].finish_reason : undefined });

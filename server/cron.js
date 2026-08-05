@@ -99,54 +99,8 @@ function httpsGet(url, timeout = 15000) {
 }
 
 // ---------- v9.26.5：自动 LLM 分析调用（.cn 直连优先，失败走代理） ----------
-const { HttpsProxyAgent } = require("https-proxy-agent");
-const AI_PROXY_URL = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "http://127.0.0.1:7897";
-function callLLM(payloadText, opts = {}) {
-  return new Promise((resolve, reject) => {
-    const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
-    const model = process.env.AI_MODEL || "agnes-2.5-flash";
-    // v9.33（缺口2）：opts.system 可覆盖默认系统提示（盘后自动复盘用专用提示词）
-    const body = {
-      model,
-      messages: [
-        { role: "system", content: opts.system || "你是A股资深盘面分析师。基于今日快讯与公告数据，输出当日市场速览（≤150字）：1) 主线方向 2) 强催化公告要点 3) 风险提示。直接输出正文，不要markdown。" },
-        { role: "user", content: payloadText },
-      ],
-      max_tokens: opts.maxTokens || 600,
-      temperature: opts.temperature ?? 0.2,
-      stream: false,
-      chat_template_kwargs: { enable_thinking: opts.thinking ?? false },
-    };
-    const data = JSON.stringify(body);
-    const u = new URL(baseUrl);
-    const lib = u.protocol === "https:" ? https : require("http");
-    const commonHeaders = {
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(data),
-      "Authorization": "Bearer " + (process.env.AI_API_KEY || ""),
-    };
-    const attempt = (agent) => new Promise((res2, rej2) => {
-      const req = lib.request(u, { method: "POST", headers: commonHeaders, ...(agent ? { agent } : {}) }, r => {
-        const chunks = [];
-        r.on("data", c => chunks.push(c));
-        r.on("end", () => {
-          try {
-            const j = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-            const content = (j.choices?.[0]?.message?.content || "").trim();
-            if (!content) return rej2(new Error("empty content"));
-            res2(content);
-          } catch (e) { rej2(e); }
-        });
-      });
-      req.on("error", rej2);
-      req.setTimeout(40000, () => { req.destroy(new Error("llm timeout")); });
-      req.write(data);
-      req.end();
-    });
-    // .cn 直连优先；失败走代理重试
-    attempt(null).then(resolve, () => attempt(new HttpsProxyAgent(AI_PROXY_URL)).then(resolve, reject));
-  });
-}
+// v9.38.1（V3-P0）：抽公共层 server/lib/httpProxy.js（惰性 require + 容错，消除重复实现）
+const { callModelText: callLLM } = require("./lib/httpProxy");
 
 function bjDate(offset = 0) {  const d = new Date(Date.now() + 8 * 3600 * 1000 + offset * 86400000);
   return d.toISOString().slice(0, 10).replace(/-/g, "");
@@ -372,6 +326,86 @@ async function generateDailyReview({ pool }) {
   }
 }
 
+// ---------- v9.38.1（V3-12）：事件三级分类闭环（政策/行业/事件） ----------
+// 盘后 cron 批量跑一次：读当日快讯 → 去重 → LLM 分级 → 落库 event_classify:日期
+// 验收：一条"央行降准"新闻被分为政策级、beneficiaries 含银行/地产
+async function runEventClassify({ pool }) {
+  const date = bjDate();
+  const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
+  try {
+    // 1. 读当日快讯（按 star 排序，取 top 30）
+    const r = await pool.query(
+      `SELECT title, time, stars FROM news
+       WHERE time >= $1
+       ORDER BY (stars IS NOT NULL) DESC, stars DESC, time DESC
+       LIMIT 60`,
+      [`${dateStr} 00:00:00`],
+    );
+    // 2. 去重（同标题前缀合并——同一事件多条快讯）
+    const seen = new Set();
+    const events = [];
+    for (const row of r.rows) {
+      const title = String(row.title || "").trim();
+      if (!title) continue;
+      const key = title.slice(0, 18); // 前缀去重
+      if (seen.has(key)) continue;
+      seen.add(key);
+      events.push({ title: title.slice(0, 60), source: "东财快讯" });
+      if (events.length >= 15) break; // 批量 15（太多会超 token 截断）
+    }
+    if (events.length === 0) {
+      console.log("[cron] event_classify: 当日无快讯，跳过");
+      return;
+    }
+
+    // JSON 容错解析（LLM 输出常被 max_tokens 截断 → 截到最后一个完整对象补 ]）
+    const parseLoose = (text) => {
+      try { const p = JSON.parse(text); if (Array.isArray(p)) return p; } catch { /* 继续 */ }
+      const idx = text.lastIndexOf("}");
+      if (idx > 0) {
+        try { const p = JSON.parse(text.slice(0, idx + 1) + "]"); if (Array.isArray(p)) return p; } catch { /* 继续 */ }
+      }
+      return null;
+    };
+
+    // 3. LLM 三级分级（与前端 aiPrompts eventClassify 同构）；不可用 → 规则版
+    let items = null;
+    const system = `你是A股事件分级器。对以下新闻/公告事件做三级分类并评估影响。\n只返回JSON数组，无其他文字。`;
+    const userText = `事件列表（标题|来源）：\n${events.map(e => `- ${e.title} | ${e.source}`).join("\n")}\n\n输出严格JSON数组，每事件一项：\n[{"title":"原标题","level":"政策|行业|事件","beneficiaries":["受益板块1","板块2"],"catalystScore":0-100,"timeSensitivity":"即时|短期|中长期","reason":"≤25字"}]\n分级规则：\n- 政策级：国务院/央行/证监会/发改委/国常会/部委发文 → beneficiaries 给受益行业清单\n- 行业级：产业链事件/涨价/订单/技术突破 → beneficiaries 给细分方向\n- 事件级：个股公告/中标/减持 → beneficiaries 给该股行业\ncatalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业级 40-64 / 个股级 20-40`;
+    if (process.env.AI_API_KEY) {
+      try {
+        const text = await callLLM(userText, { system, maxTokens: 3000, temperature: 0.1 });
+        const parsed = parseLoose(text);
+        if (parsed && parsed.length > 0) items = parsed;
+      } catch (e) {
+        console.warn("[cron] event_classify LLM 失败，走规则版:", e.message);
+      }
+    }
+    if (!items) {
+      items = events.map(e => {
+        const t = e.title;
+        let level = "事件";
+        if (/国务院|央行|证监会|发改委|国常会|部委|印发|通知|规划|试点|专项/.test(t)) level = "政策";
+        else if (/产业链|涨价|订单|技术|量产|突破|扩产|招标/.test(t)) level = "行业";
+        return { title: t.slice(0, 30), level, beneficiaries: [], catalystScore: level === "政策" ? 70 : level === "行业" ? 50 : 30, timeSensitivity: "短期", reason: "规则版分级" };
+      });
+    }
+
+    // 4. 落库
+    const payload = { date: dateStr, items, createdAt: new Date().toISOString() };
+    await pool.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      [`event_classify:${dateStr}`, JSON.stringify(payload)],
+    );
+    const policyCount = items.filter(i => i.level === "政策").length;
+    const indCount = items.filter(i => i.level === "行业").length;
+    console.log(`[cron] event_classify ${dateStr}: ${items.length} 事件（政策${policyCount}/行业${indCount}/事件${items.length - policyCount - indCount}）`);
+  } catch (e) {
+    console.error("[cron] event_classify failed:", e.message);
+  }
+}
+
 // ---------- v9.33（缺口6）：板块资金流落库（行业全量双请求，供前端连续性/切换分析） ----------
 // v9.30.2 教训：clist po=1 降序只拿到流入端，必须 po=1 + po=0 双请求合并
 // v9.33.1：push2 对 nodejs 直连 TLS ban（socket hang up）；push2delay（延迟15分钟行情）node 可直连 → 改用 push2delay
@@ -450,6 +484,8 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] market_daily failed:", e.message); }
     // v9.33（缺口2/6）：盘后自动复盘 + 板块资金流落库（连续性/切换分析数据源）
     try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] review failed:", e.message); }
+    // v9.38.1（V3-12）：事件三级分类（政策/行业/事件）—— 盘后批量跑一次
+    try { await runEventClassify({ pool }); } catch (e) { console.error("[cron] event_classify failed:", e.message); }
     try {
       const funds = await fetchBoardFundServer();
       if (funds.length > 0) {
@@ -677,6 +713,7 @@ module.exports.fetchAnnouncements = fetchAnnouncements;
 module.exports.fetchPolicyNews = fetchPolicyNews;
 module.exports.analyzeDaily = analyzeDaily;
 module.exports.generateDailyReview = generateDailyReview;
+module.exports.runEventClassify = runEventClassify;
 module.exports.fetchBoardFundServer = fetchBoardFundServer;
 module.exports.fetchBlockTrades = fetchBlockTrades;
 module.exports.fetchMarketDaily = fetchMarketDaily;

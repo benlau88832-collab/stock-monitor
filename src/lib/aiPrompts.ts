@@ -18,7 +18,9 @@ export type AITask =
   // v9.33（缺口2/3）：盘后自动复盘 + 次日三剧本 + 龙头预判 + 风险雷达
   | "dailyReviewAuto" | "nextDayScenarios" | "leaderPredict" | "riskRadar"
   // v9.38（V3-12）：事件三级分类（政策/行业/事件）
-  | "eventClassify";
+  | "eventClassify"
+  // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
+  | "eventDeepDive";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -50,6 +52,8 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   riskRadar:       { temperature: 0.2, maxTokens: 800, thinking: false },
   // v9.38（V3-12）：事件三级分类（政策级/行业级/事件级）—— 批量小输出
   eventClassify:   { temperature: 0.1, maxTokens: 1500, thinking: false },
+  // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
+  eventDeepDive:   { temperature: 0.3, maxTokens: 800, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
@@ -101,6 +105,7 @@ export interface AITaskPayload {
   leaderPredict: { prompt: string };
   riskRadar: { prompt: string };
   eventClassify: { events: Array<{ title: string; source: string }> };
+  eventDeepDive: { title: string; level: string; catalystScore: number; beneficiaries: string[] };
 }
 
 // ============== Prompt 构建器 ==============
@@ -274,6 +279,18 @@ ${p.events.map(e => `- ${e.title} | ${e.source}`).join("\n") || "（无）"}
 - 事件级：个股公告/中标/减持 → beneficiaries 给该股行业
 catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业级 40-64 / 个股级 20-40
 只返回JSON数组，无其他文字。` }),
+  // v9.38.1（V3-14）：单事件深挖（Agent 工具 getNewsDeep 用；仅高分事件触发）
+  eventDeepDive: (p) => ({ system: SYSTEM_PREFIX, user:
+`你是A股事件深挖分析师。对以下已分级事件做影响推演，回答三个问题并给结论。
+
+事件标题：${p.title}
+事件级别：${p.level}
+催化强度：${p.catalystScore}/100
+受益方向：${(p.beneficiaries || []).join("、") || "待定"}
+
+请输出严格JSON对象：
+{"chain":"从事件到板块到个股的影响传导路径(≤60字)","targets":[{"name":"最可能受益标的/板块","reason":"≤20字"}],"risk":"反面风险或未兑现的可能(≤30字)","confirm":"验证该催化是否兑现的观察信号(≤30字,如'看龙头竞价封单'/'看板块主力资金')","conclusion":"一句话结论(≤30字)"}
+只返回JSON对象，无其他文字。` }),
 };
 
 export function buildPrompt<T extends AITask>(task: T, payload: AITaskPayload[T]) {
@@ -353,4 +370,12 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
       return { title: t.slice(0, 30), level, beneficiaries: [], catalystScore: level === "政策" ? 70 : level === "行业" ? 50 : 30, timeSensitivity: "短期", reason: "规则版分级" };
     }),
   ),
+  // v9.38.1（V3-14）规则版：浅挖（关键词推受益方向）
+  eventDeepDive: (p) => JSON.stringify({
+    chain: `规则版：${p.title.slice(0, 30)} 影响传导待 LLM 深挖`,
+    targets: [{ name: (p.beneficiaries || []).join("、") || p.title.slice(0, 12), reason: "规则版推荐" }],
+    risk: "规则版无法推演风险，请配置 LLM Key 深挖",
+    confirm: "看板块主力资金是否进场",
+    conclusion: `事件${p.catalystScore >= 65 ? "强度高，重点跟踪" : "强度中，观察确认"}`,
+  }),
 };
