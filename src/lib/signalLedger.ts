@@ -140,6 +140,61 @@ export function backfillEntry(id: string, priceT1: number | null, priceT5: numbe
 /** 获取完整账本 */
 export function getLedger(): SignalEntry[] { return loadLedger(); }
 
+// ============== v9.44（④）：信号净值曲线 ==============
+// 幻方"信号验证"的收益视图：把已回填的信号按 T+N 收益率做等权复利净值。
+export interface EquityPoint {
+  date: string;
+  equity: number;  // 净值（从 100 起）
+  ret: number;     // 该笔收益 %
+  win: boolean;    // 收益 > 0
+}
+
+export interface EquityStats {
+  count: number;          // 已回填信号数
+  winRate: number;        // T+N 胜率 %
+  totalReturn: number;    // 累计收益 %（净值-100）
+  avgReturn: number;      // 平均单笔收益 %
+  maxDrawdown: number;    // 最大回撤 %（正数）
+}
+
+/** 构建等权复利净值序列（按日期升序；默认 T1 收益，可选 T5） */
+export function buildEquitySeries(entries: SignalEntry[], horizon: 1 | 5 = 1): EquityPoint[] {
+  const filled = entries
+    .filter(e => (horizon === 1 ? e.returnT1 != null : e.returnT5 != null))
+    .map(e => ({ date: e.date, ret: horizon === 1 ? e.returnT1! : e.returnT5! }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const pts: EquityPoint[] = [];
+  let eq = 100;
+  for (const { date, ret } of filled) {
+    eq = eq * (1 + ret / 100);
+    pts.push({ date, equity: Math.round(eq * 100) / 100, ret, win: ret > 0 });
+  }
+  return pts;
+}
+
+/** 净值统计：胜率 / 累计收益 / 平均单笔 / 最大回撤 */
+export function computeEquityStats(pts: EquityPoint[]): EquityStats {
+  if (pts.length === 0) return { count: 0, winRate: 0, totalReturn: 0, avgReturn: 0, maxDrawdown: 0 };
+  const wins = pts.filter(p => p.win).length;
+  const totalReturn = pts[pts.length - 1].equity - 100;
+  const avgReturn = pts.reduce((s, p) => s + p.ret, 0) / pts.length;
+  // 最大回撤：遍历中 equity 峰值到当前点的最大跌幅
+  let peak = pts[0].equity;
+  let maxDD = 0;
+  for (const p of pts) {
+    if (p.equity > peak) peak = p.equity;
+    const dd = (peak - p.equity) / peak * 100;
+    if (dd > maxDD) maxDD = dd;
+  }
+  return {
+    count: pts.length,
+    winRate: Math.round(wins / pts.length * 100),
+    totalReturn: Math.round(totalReturn * 100) / 100,
+    avgReturn: Math.round(avgReturn * 100) / 100,
+    maxDrawdown: Math.round(maxDD * 100) / 100,
+  };
+}
+
 /** 按类型统计信号命中率 */
 export interface SignalStats {
   typeLabel: string;

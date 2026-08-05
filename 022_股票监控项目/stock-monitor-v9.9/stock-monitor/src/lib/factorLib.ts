@@ -194,3 +194,57 @@ export function evaluateFactorIcSeries(rows: FactorDayRow[], window = 10): Recor
   for (const f of FACTORS) out[f.id] = computeFactorIcSeries(f, rows, window);
   return out;
 }
+
+// ============================================================
+// v9.44（③）：因子自动处置 —— 方向反转自动反向 + 长期失效自动退役
+// 幻方"因子会过期"终极闭环：检测到后自动执行（连续反转≥3日→自动反向使用；
+// 连续真失效≥5日→退役，不再参与决策），无需人工介入。
+// ============================================================
+
+export interface FactorAutoState {
+  factorId: string;
+  name: string;
+  /** 连续 reversed ≥ flipDays → 已自动反向（expectedDir 取反使用，IC 按新方向显示） */
+  flipped: boolean;
+  /** 连续真失效（decayed 且样本≥5）≥ retireDays → 已退役（权重 0，不再参与决策） */
+  retired: boolean;
+  /** 有效方向（flipped 后取反） */
+  effDir: 1 | -1;
+  /** 按有效方向对齐的当前 IC（flipped 时取反；无样本为 null） */
+  effIc: number | null;
+  /** 从最新日往前连续反向的天数（遇到非反转即停） */
+  revStreak: number;
+  /** 从最新日往前连续真失效的天数（decayed 且 samples≥5，样本不足不累计） */
+  decayStreak: number;
+}
+
+/** 从序列末尾统计连续满足条件的点数（遇到不满足即停） */
+export function consecutiveFromEnd(pts: FactorIcPoint[], pred: (p: FactorIcPoint) => boolean): number {
+  let n = 0;
+  for (let i = pts.length - 1; i >= 0; i--) {
+    if (pred(pts[i])) n++;
+    else break;
+  }
+  return n;
+}
+
+/** 全因子自动处置判定（面板/Agent/快照共用）。pts 需含完整历史序列。 */
+export function resolveAutoStates(
+  seriesMap: Record<string, FactorIcPoint[]>,
+  opts?: { flipDays?: number; retireDays?: number },
+): FactorAutoState[] {
+  const flipDays = opts?.flipDays ?? 3;
+  const retireDays = opts?.retireDays ?? 5;
+  return FACTORS.map(f => {
+    const pts = seriesMap[f.id] ?? [];
+    const revStreak = consecutiveFromEnd(pts, p => Boolean(p.reversed) && !p.decayed);
+    // 退役只认"真失效"（样本≥5 且 |IC|<0.05）；样本不足（新因子积累期）不累计，避免误退役
+    const decayStreak = consecutiveFromEnd(pts, p => p.decayed && p.samples >= 5);
+    const retired = pts.length > 0 && decayStreak >= retireDays;
+    const flipped = !retired && revStreak >= flipDays;
+    const cur = pts[pts.length - 1];
+    const effDir: 1 | -1 = flipped ? (f.expectedDir === 1 ? -1 : 1) : f.expectedDir;
+    const effIc = cur ? (flipped ? Math.round(-cur.ic * 1000) / 1000 : cur.ic) : null;
+    return { factorId: f.id, name: f.name, flipped, retired, effDir, effIc, revStreak, decayStreak };
+  });
+}

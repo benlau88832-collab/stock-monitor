@@ -6,14 +6,14 @@
 // ============================================================
 import { useState, useEffect, useMemo } from "react";
 import { isLocalServer } from "../lib/cloudStore";
-import { FACTORS, markNextWin, evaluateFactorIcSeries, type FactorIcPoint, type FactorDayRow } from "../lib/factorLib";
+import { FACTORS, markNextWin, evaluateFactorIcSeries, resolveAutoStates, type FactorIcPoint, type FactorDayRow } from "../lib/factorLib";
 import { loadFactorIcHistory, type FactorIcHistory } from "../lib/factorHistory";
 import DisclaimerTag from "./DisclaimerTag";
 
 const IC_Y_MAX = 0.15; // 纵轴固定 ±0.15（IC 常见范围）
 
 // ---------- SVG 迷你曲线（无外部图表库） ----------
-function IcSpark({ points, factorName }: { points: FactorIcPoint[]; factorName: string }) {
+function IcSpark({ points, factorName, overrideIc }: { points: FactorIcPoint[]; factorName: string; overrideIc?: number | null }) {
   const W = 260, H = 58, PAD = 5;
   const innerW = W - PAD * 2, innerH = H - PAD * 2;
   if (points.length < 2) {
@@ -25,6 +25,11 @@ function IcSpark({ points, factorName }: { points: FactorIcPoint[]; factorName: 
   const last = points[points.length - 1];
   const lastX = xOf(points.length - 1);
   const dotColor = last.decayed ? "#fb7185" : last.reversed ? "#fbbf24" : "#34d399";
+  // v9.44（③）：已反向因子 → 当前点标签/圆点按新方向 IC 显示
+  const dispIc = overrideIc != null ? overrideIc : last.ic;
+  const dispColor = overrideIc != null
+    ? (overrideIc >= 0.05 ? "#22d3ee" : "#fb7185") // 反向后的方向：正=已恢复有效
+    : dotColor;
   return (
     <svg width={W} height={H} className="shrink-0">
       {/* ±0.05 失效阈值带 */}
@@ -42,12 +47,12 @@ function IcSpark({ points, factorName }: { points: FactorIcPoint[]; factorName: 
         </circle>
       ))}
       {/* 当前点大圆 */}
-      <circle cx={lastX} cy={yOf(last.ic)} r="3.5" fill={dotColor} stroke="#0f172a" strokeWidth="1.2">
-        <title>{`${factorName} ${last.date}\nIC=${last.ic} 样本=${last.samples}${last.decayed ? " 疑似失效" : last.reversed ? " 方向反转" : " 健康"}`}</title>
+      <circle cx={lastX} cy={yOf(overrideIc != null ? overrideIc : last.ic)} r="3.5" fill={dispColor} stroke="#0f172a" strokeWidth="1.2">
+        <title>{`${factorName} ${last.date}\nIC=${last.ic} 样本=${last.samples}${last.decayed ? " 疑似失效" : last.reversed ? " 方向反转" : " 健康"}${overrideIc != null ? `\n自动反向后 IC=${overrideIc}` : ""}`}</title>
       </circle>
       {/* 右缘当前 IC 标签 */}
-      <text x={W - PAD - 2} y={yOf(last.ic) - 4} textAnchor="end" fontSize="8.5" fill={last.decayed ? "#fb7185" : last.reversed ? "#fbbf24" : "#6ee7b7"} fontWeight="bold">
-        {last.ic >= 0 ? "+" : ""}{last.ic.toFixed(2)}
+      <text x={W - PAD - 2} y={yOf(dispIc) - 4} textAnchor="end" fontSize="8.5" fill={dispColor} fontWeight="bold">
+        {dispIc >= 0 ? "+" : ""}{dispIc.toFixed(2)}
       </text>
     </svg>
   );
@@ -113,6 +118,16 @@ export default function FactorHealthPanel() {
     return { total: ids.length, decayed, reversed, avgAbsIc, healthScore };
   }, [seriesMap]);
 
+  // v9.44（③）：自动处置判定 —— 连续反转≥3日自动反向 / 连续真失效≥5日退役
+  const autoStates = useMemo(() => resolveAutoStates(seriesMap, { flipDays: 3, retireDays: 5 }), [seriesMap]);
+  const autoMap = useMemo(() => new Map(autoStates.map(a => [a.factorId, a])), [autoStates]);
+  const flippedCount = autoStates.filter(a => a.flipped).length;
+  const retiredCount = autoStates.filter(a => a.retired).length;
+  const autoNote = [
+    flippedCount > 0 ? `${flippedCount} 因子已自动反向` : "",
+    retiredCount > 0 ? `${retiredCount} 因子已退役` : "",
+  ].filter(Boolean).join(" · ");
+
   if (loading) {
     return <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-xs text-slate-500">因子健康度加载中…</div>;
   }
@@ -152,6 +167,8 @@ export default function FactorHealthPanel() {
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
           <span>失效因子 <b className="font-black">{stats.decayed}</b> / {stats.total}</span>
           {stats.reversed > 0 && <span>方向反转 <b className="font-black text-amber-300">{stats.reversed}</b></span>}
+          {flippedCount > 0 && <span>已自动反向 <b className="font-black text-cyan-300">{flippedCount}</b></span>}
+          {retiredCount > 0 && <span>已退役 <b className="font-black text-slate-400">{retiredCount}</b></span>}
           <span>平均 |IC| <b className="font-mono">{stats.avgAbsIc.toFixed(3)}</b></span>
           <span>健康分 <b className="font-black">{stats.healthScore}</b> / 100</span>
           {stats.decayed >= Math.ceil(stats.total * 0.5) && (
@@ -174,31 +191,46 @@ export default function FactorHealthPanel() {
           const pts = seriesMap[f.id];
           if (!pts || pts.length === 0) return null;
           const cur = pts[pts.length - 1];
+          // v9.44（③）：自动处置状态优先于原始状态（退役 > 已反向 > 失效 > 反转 > 健康）
+          const auto = autoMap.get(f.id);
+          const retired = Boolean(auto?.retired);
+          const flipped = Boolean(auto?.flipped);
+          const showIc = flipped ? (auto?.effIc ?? cur.ic) : cur.ic;
           return (
-            <div key={f.id} className={`flex items-center gap-3 rounded-lg border px-2.5 py-1.5 ${cur.decayed ? "border-rose-500/25 bg-rose-500/5" : cur.reversed ? "border-amber-500/25 bg-amber-500/5" : "border-white/5 bg-white/[0.03]"}`}>
+            <div key={f.id} className={`flex items-center gap-3 rounded-lg border px-2.5 py-1.5 ${
+              retired ? "border-slate-600/40 bg-slate-800/20 opacity-70"
+              : flipped ? "border-cyan-500/25 bg-cyan-500/5"
+              : cur.decayed ? "border-rose-500/25 bg-rose-500/5"
+              : cur.reversed ? "border-amber-500/25 bg-amber-500/5"
+              : "border-white/5 bg-white/[0.03]"
+            }`}>
               <div className="w-36 shrink-0">
                 <div className="text-xs font-semibold text-slate-200">{f.name}</div>
                 <div className="mt-0.5 flex items-center gap-1">
                   <span className={`rounded px-1 py-px text-[9px] font-bold ${
-                    cur.decayed ? "bg-rose-500/20 text-rose-300"
+                    retired ? "bg-slate-500/30 text-slate-300"
+                    : flipped ? "bg-cyan-500/20 text-cyan-300"
+                    : cur.decayed ? "bg-rose-500/20 text-rose-300"
                     : cur.reversed ? "bg-amber-500/20 text-amber-300"
                     : "bg-emerald-500/20 text-emerald-300"
                   }`}>
-                    {cur.decayed ? "⚠ 失效" : cur.reversed ? "↻ 反转" : "健康"}
+                    {retired ? "⛔ 退役" : flipped ? "↻ 已反向" : cur.decayed ? "⚠ 失效" : cur.reversed ? "↻ 反转" : "健康"}
                   </span>
                   <span className="text-[9px] text-slate-500">样本{cur.samples}</span>
                 </div>
               </div>
-              <div className="min-w-0 flex-1"><IcSpark points={pts} factorName={f.name} /></div>
+              <div className="min-w-0 flex-1"><IcSpark points={pts} factorName={f.name} overrideIc={flipped ? showIc : null} /></div>
             </div>
           );
         })}
       </div>
 
       <div className="text-[10px] text-slate-600">
-        <span className="text-slate-400">💡 失效因子已自动降权（weight 0.3）并计入决策门控；反转因子（IC 持续为负）需人工复核方向，暂不自动改向</span>　·　{history && history.dates.length >= 2
+        <span className="text-slate-400">💡 失效因子已自动降权（weight 0.3）；连续反转≥3日自动反向使用（IC 按新方向显示）、连续真失效≥5日自动退役（不参与决策），均已在 AI 调研中体现</span>
+        {autoNote && <span className="text-cyan-400/80">　{autoNote}</span>}
+        <span>　·　{history && history.dates.length >= 2
           ? `历史快照 ${history.dates.length} 天（server cron 每日 15:40 落库，不依赖开页面）`
-          : "历史快照不足，当前为实时计算（market_daily + sentiment），cron 落库后自动切换"}
+          : "历史快照不足，当前为实时计算（market_daily + sentiment），cron 落库后自动切换"}</span>
       </div>
     </div>
   );

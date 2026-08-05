@@ -61,6 +61,10 @@ export interface FactorHealthReport {
   decayedCount: number;
   reversedCount: number;
   total: number;
+  /** v9.44（③）：已自动反向的因子名（连续反转≥3日） */
+  flippedFactors: string[];
+  /** v9.44（③）：已退役的因子名（连续真失效≥5日） */
+  retiredFactors: string[];
   /** 按 decisionBus 规则：0 / 8 / 15 */
   penalty: number;
   summary: string;
@@ -69,8 +73,9 @@ export interface FactorHealthReport {
 export async function evaluateFactorHealth(): Promise<FactorHealthReport | null> {
   try {
     const { loadFactorIcHistory, loadFactorRows } = await import("./factorHistory");
-    const { FACTORS, markNextWin, evaluateFactorIcSeries } = await import("./factorLib");
+    const { FACTORS, markNextWin, evaluateFactorIcSeries, resolveAutoStates } = await import("./factorLib");
     let items: FactorHealthReport["items"] = [];
+    let seriesMap: Record<string, unknown[]> = {};
 
     // 1. 主数据源：PG 快照（server cron 每日落库，含最新一天的 IC/失效/反转）
     try {
@@ -81,6 +86,7 @@ export async function evaluateFactorHealth(): Promise<FactorHealthReport | null>
           const series = hist.byFactor[f.name];
           const cur = series && series.length > 0 ? series[series.length - 1] : null;
           if (cur) pts.set(f.name, { ic: cur.ic, samples: cur.samples, decayed: cur.decayed, reversed: cur.reversed });
+          if (series && series.length > 0) seriesMap[f.id] = series; // 完整序列 → 自动处置判定
         }
         if (pts.size > 0) {
           items = FACTORS.map(f => {
@@ -99,15 +105,27 @@ export async function evaluateFactorHealth(): Promise<FactorHealthReport | null>
         const cur = series[f.id]?.[series[f.id].length - 1];
         return { name: f.name, ic: cur?.ic ?? 0, samples: cur?.samples ?? 0, decayed: cur?.decayed ?? false, reversed: cur?.reversed ?? false };
       });
+      seriesMap = series;
     }
+
+    // v9.44（③）：自动处置判定 —— 连续反转≥3日自动反向 / 连续真失效≥5日退役
+    const auto = seriesMap && Object.keys(seriesMap).length > 0
+      ? resolveAutoStates(seriesMap as Record<string, import("./factorLib").FactorIcPoint[]>)
+      : [];
+    const flippedFactors = auto.filter(a => a.flipped).map(a => a.name);
+    const retiredFactors = auto.filter(a => a.retired).map(a => a.name);
 
     const total = items.length;
     const decayedCount = items.filter(i => i.decayed).length;
     const reversedCount = items.filter(i => !i.decayed && i.reversed).length;
     const ratio = total >= 3 ? decayedCount / total : 0;
     const penalty = ratio >= 0.5 ? 15 : ratio >= 0.3 ? 8 : 0;
-    const summary = `${total}因子中 ${decayedCount} 失效${reversedCount > 0 ? `、${reversedCount} 方向反转` : ""}（失效占比 ${Math.round(ratio * 100)}%）${penalty > 0 ? ` → 置信度应扣 ${penalty} 分` : "，未触发置信扣减"}`;
-    return { date: null, window: 10, items, decayedCount, reversedCount, total, penalty, summary };
+    const autoNote = [
+      flippedFactors.length > 0 ? `${flippedFactors.length} 因子已自动反向(${flippedFactors.join("、")})` : "",
+      retiredFactors.length > 0 ? `${retiredFactors.length} 因子已退役(${retiredFactors.join("、")})` : "",
+    ].filter(Boolean).join("；");
+    const summary = `${total}因子中 ${decayedCount} 失效${reversedCount > 0 ? `、${reversedCount} 方向反转` : ""}（失效占比 ${Math.round(ratio * 100)}%）${penalty > 0 ? ` → 置信度应扣 ${penalty} 分` : "，未触发置信扣减"}${autoNote ? `；${autoNote}` : ""}`;
+    return { date: null, window: 10, items, decayedCount, reversedCount, total, flippedFactors, retiredFactors, penalty, summary };
   } catch {
     return null; // 数据层整体不可用（GitHub Pages / 无历史）→ 不影响 AI 主流程
   }

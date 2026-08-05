@@ -4,6 +4,31 @@
 
 ---
 
+## v9.44 — 复盘三件套：决策审计时间线 + 信号净值曲线 + 因子自动处置 (2026-08-06)
+
+### ② 决策过程审计面板（DecisionAuditPanel）
+- 读 localStorage decision_log:日期（DecisionVerdictCard 每次裁决落库，cloudStore 5 分钟同步 PG）
+- 时间线回放：时间/主线/动作/置信/来源（AI/规则）/门控降档/Critic/分歧，支持今日/近3天/近7天切换
+- 顶部统计：决策总数、AI 主导数、禁止数、门控降档数 —— 复盘"AI 为什么这么判"可追责
+
+### ④ 信号净值曲线（SignalEquityPanel）
+- 读 signalLedger 已回填信号 → T+1/T+5 等权复利净值曲线（SVG 手绘，红涨绿跌）
+- 统计：已回填笔数、胜率、累计收益、平均单笔、最大回撤；T1/T5 视图切换
+- signalLedger 新增纯函数 buildEquitySeries/computeEquityStats（可单测）
+
+### ③ 因子自动处置（方向反转自动反向 + 长期失效自动退役）
+- factorLib 新增 resolveAutoStates：连续反转≥3日 → 自动反向（expectedDir 取反、IC 按新方向显示）；
+  连续真失效≥5日（样本≥5 且 |IC|<0.05）→ 自动退役（不参与决策）；样本不足不累计（新因子积累期保护）
+- FactorHealthPanel 五态徽标：退役(灰) > 已反向(青) > 失效(红) > 反转(琥珀) > 健康(绿)，汇总条显示自动处置计数
+- agentTools.evaluateFactorHealth 输出 flippedFactors/retiredFactors → AI 调研摘要自动带"已自动反向/已退役"（v9.43 闭环延续）
+
+### Dashboard
+- 盘后按钮区新增「📜 决策审计」「💰 信号净值」（与信号回测/因子健康度并列）
+
+### 单测 83 → 91 全绿（新增 8 例：自动处置 4 + 净值曲线 4）
+
+---
+
 ## v9.43 — AI 闭环：因子健康度喂给 Agent（幻方"因子失效"成为 AI 决策依据）(2026-08-06)
 
 ### 三层闭环（AI 看得见 + 跑不掉门控）

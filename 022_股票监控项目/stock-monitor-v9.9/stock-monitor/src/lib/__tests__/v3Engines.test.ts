@@ -1,6 +1,6 @@
 // V3-8/13 新引擎单测：因子IC / 资金消息对账 / 工具注册表
 import { describe, it, expect } from "vitest";
-import { evaluateAllFactors, markNextWin, FACTORS, computeFactorIC, computeFactorIcSeries, evaluateFactorIcSeries, type FactorDayRow } from "../factorLib";
+import { evaluateAllFactors, markNextWin, FACTORS, computeFactorIC, computeFactorIcSeries, evaluateFactorIcSeries, resolveAutoStates, type FactorDayRow, type FactorIcPoint } from "../factorLib";
 import { reconcileFundNews } from "../fundNewsReconcile";
 import { getAgentTools } from "../agentTools";
 import { collectEvidence } from "../decisionCollector";
@@ -109,6 +109,51 @@ describe("factorLib 滚动 IC 序列", () => {
     for (const f of FACTORS) {
       expect(seriesMap[f.id].length).toBeGreaterThanOrEqual(1);
     }
+  });
+});
+
+// v9.44（③）：因子自动处置（连续反转→自动反向 / 连续失效→退役）
+describe("factorLib 自动处置", () => {
+  const mkPts = (arr: Array<[number, number, boolean?]>): FactorIcPoint[] =>
+    arr.map(([ic, samples, rev], i) => ({
+      date: `d${i}`,
+      ic,
+      samples,
+      decayed: samples < 5 || Math.abs(ic) < 0.05,
+      reversed: rev ?? false,
+    }));
+
+  it("连续 3 日方向反转 → 自动反向（flipped，effDir 取反，effIc 取反）", () => {
+    const f = FACTORS[0]; // 任意因子
+    const map = { [f.id]: mkPts([[0.2, 6], [0.15, 6], [-0.12, 6, true], [-0.11, 6, true], [-0.13, 6, true]]) };
+    const [st] = resolveAutoStates(map, { flipDays: 3, retireDays: 5 });
+    expect(st.flipped).toBe(true);
+    expect(st.retired).toBe(false);
+    expect(st.effDir).toBe(f.expectedDir === 1 ? -1 : 1);
+    expect(st.effIc).toBeCloseTo(0.13, 2); // 新方向 IC 为正
+  });
+
+  it("连续 5 日真失效（样本≥5 且 |IC|<0.05）→ 退役", () => {
+    const f = FACTORS[0];
+    const map = { [f.id]: mkPts([[0.02, 6], [0.03, 6], [0.01, 6], [0.04, 6], [0.02, 6]]) };
+    const [st] = resolveAutoStates(map, { flipDays: 3, retireDays: 5 });
+    expect(st.retired).toBe(true);
+    expect(st.flipped).toBe(false);
+  });
+
+  it("样本不足（samples<5）不累计退役（新因子积累期保护）", () => {
+    const f = FACTORS[0];
+    const map = { [f.id]: mkPts([[0, 3], [0, 4], [0, 2], [0, 3], [0, 4], [0, 3], [0, 2]]) };
+    const [st] = resolveAutoStates(map, { flipDays: 3, retireDays: 5 });
+    expect(st.decayStreak).toBe(0); // 真失效天数不累计
+    expect(st.retired).toBe(false);
+  });
+
+  it("单日反转不触发（revStreak < 3）", () => {
+    const f = FACTORS[0];
+    const map = { [f.id]: mkPts([[0.2, 6], [-0.3, 6, true], [0.1, 6]]) };
+    const [st] = resolveAutoStates(map, { flipDays: 3, retireDays: 5 });
+    expect(st.flipped).toBe(false);
   });
 });
 

@@ -11,6 +11,9 @@ import SignalPanel from "./SignalPanel";
 import SignalEffectivenessPanel from "./SignalEffectivenessPanel";
 // v9.42：因子健康度面板（幻方"因子失效"IC 曲线可视化）
 import FactorHealthPanel from "./FactorHealthPanel";
+// v9.44（②/④）：决策审计时间线 + 信号净值曲线
+import DecisionAuditPanel from "./DecisionAuditPanel";
+import SignalEquityPanel from "./SignalEquityPanel";
 // v9.36（A2）：竞价强度榜
 import AuctionStrengthPanel from "./AuctionStrengthPanel";
 // v9.36（A3）：龙虎榜×涨停池交叉
@@ -539,6 +542,9 @@ export default function Dashboard({
   const [showSignalEffect, setShowSignalEffect] = useState(false);
   // v9.42：因子健康度面板（幻方"因子失效"IC 曲线）
   const [showFactorHealth, setShowFactorHealth] = useState(false);
+  // v9.44（②/④）：决策审计 + 信号净值
+  const [showAudit, setShowAudit] = useState(false);
+  const [showEquity, setShowEquity] = useState(false);
   useEffect(() => {
     // 当 phase 变到 post 时自动打开 AI 复盘（盘后场景）
     if (phase === "post") setShowAI(true);
@@ -896,11 +902,25 @@ export default function Dashboard({
               className="rounded px-3 py-1 text-xs bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/30">
               {showFactorHealth ? "收起因子" : "📉 因子健康度"}
             </button>
+            {/* v9.44（②）：决策审计时间线 */}
+            <button onClick={() => setShowAudit(v => !v)}
+              className="rounded px-3 py-1 text-xs bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30">
+              {showAudit ? "收起审计" : "📜 决策审计"}
+            </button>
+            {/* v9.44（④）：信号净值曲线 */}
+            <button onClick={() => setShowEquity(v => !v)}
+              className="rounded px-3 py-1 text-xs bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 border border-rose-500/30">
+              {showEquity ? "收起净值" : "💰 信号净值"}
+            </button>
           </div>
           {showAI && <DailySummary overview={overview} fund={fund} />}
           {showSignalEffect && <SignalEffectivenessPanel />}
           {/* v9.42：因子健康度（server cron 15:40 落库 factor_ic:日期） */}
           {showFactorHealth && <FactorHealthPanel />}
+          {/* v9.44（②）：决策审计时间线（decision_log） */}
+          {showAudit && <DecisionAuditPanel />}
+          {/* v9.44（④）：信号净值曲线（signalLedger 等权复利） */}
+          {showEquity && <SignalEquityPanel />}
           {showSignal && <SignalPanel />}
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
