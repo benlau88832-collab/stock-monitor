@@ -6,7 +6,7 @@
 //   - 游资看"涨停潮爆发力"（涨停家数、连板高度、首封时间）
 // 二者融合成"主线强度分"，再经 LLM 精排输出最终作战卡。
 
-import { buildThemeLadder, type ZTPoolItem, type ThemeGroup } from "./themeLadder";
+import { buildThemeLadder, buildThemeLadderByConcept, type ZTPoolItem, type ThemeGroup } from "./themeLadder";
 
 // ============== 数据结构 ==============
 
@@ -78,10 +78,14 @@ export function buildMainlineCandidates(
   rawPool: ZTPoolItem[],
   boards: BoardFlowLike[],
   newsItems: NewsInput[],
+  conceptOf?: (code: string) => string[] | null,
 ): MainlineCandidate[] {
   if (!rawPool || rawPool.length === 0) return [];
 
-  const ladder = buildThemeLadder(rawPool);  // 按 hybk 分组，含梯队/先锋/中军
+  // v9.26.15 方案A：优先按概念聚类（与开盘啦/同花顺口径一致），无概念数据时回退 hybk
+  const ladder = conceptOf
+    ? buildThemeLadderByConcept(rawPool, conceptOf)
+    : buildThemeLadder(rawPool);
   const boardMap = new Map<string, BoardFlowLike>();
   for (const b of boards) boardMap.set(b.name, b);
 
