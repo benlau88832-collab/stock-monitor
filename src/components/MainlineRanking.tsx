@@ -5,24 +5,9 @@ import { fmtMoney } from "../lib/format";
 import type { MainlineGroup } from "../lib/stockToMainline";
 import type { BattlePlanData } from "./BattlePlan";
 import DisclaimerTag from "./DisclaimerTag";
+import { stageOfStrength, STAGE_COLOR } from "../lib/stageModel";
 
-// ============== 阶段判定（PRD 6.2 简化版，按强度分+离场信号+涨停家数） ==============
-function inferStage(c: MainlineGroup): string {
-  if (c.exitSignal) return "退潮";
-  const s = c.strengthScore ?? c.score;
-  if (s >= 80) return "加速";
-  if (s >= 60) return "主升";
-  if (c.ztCount >= 5) return "分歧";
-  return "启动";
-}
-
-const STAGE_COLOR: Record<string, string> = {
-  启动: "bg-sky-500/20 text-sky-300",
-  加速: "bg-rose-500/20 text-rose-300",
-  主升: "bg-amber-500/20 text-amber-300",
-  分歧: "bg-violet-500/20 text-violet-300",
-  退潮: "bg-emerald-500/20 text-emerald-300",
-};
+// ============== 阶段判定（v9.27：统一走 stageModel.stageOfStrength，词表与全局一致） ==============
 
 // ============== 操作建议徽章（四色，与 FiveQBar 同口径） ==============
 function actionBadge(c: MainlineGroup): { label: string; cls: string } {
@@ -91,7 +76,7 @@ export default function MainlineRanking({ battlePlan, loading }: {
               const rowBg = s >= 80 ? "bg-rose-500/5" : i % 2 === 1 ? "bg-white/[0.02]" : "";
               const leader = c.leaders[0];
               const badge = actionBadge(c);
-              const stage = inferStage(c);
+              const stage = stageOfStrength(c);
               return (
                 <tr key={c.mainline} className={`border-b border-white/5 ${rowBg}`}>
                   <td className="py-2 pr-2 text-slate-500">{i + 1}</td>

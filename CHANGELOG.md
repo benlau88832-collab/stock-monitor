@@ -4,6 +4,35 @@
 
 ---
 
+## v9.27 — GLM5.2 审查建议落地：P0-2/3/4 + 卫生6 (2026-08-05)
+
+> 审核并落地 `GLM5.2建议.txt`（基于 HEAD e497f47 的全量审查报告）中的重要项。
+> 审核结论：报告质量高，P0-1（https-proxy-agent 依赖）已闭环（此前已加），其余声明全部验证为真。
+
+### P0-2 安全：移除硬编码数据库密码（已确认泄露到公开 GitHub）
+- server/db.js 移除 `StockMonitor2026` 明文 fallback → 未配置 DATABASE_URL 直接报错退出
+- backup.bat 不再写死密码 → 委托新增 server/scripts/backup.js（读 server/.env 解析密码，不落盘）
+- 新增 server/.env.example 模板；grep 验证 root 与子目录均无明文密码
+- 首次成功执行备份：stock-monitor/backups/stock_monitor_20260805.dump (1MB)
+
+### P0-3 决策大脑：单一权威阶段模型 stageModel.ts
+- 此前 6 套互不一致的阶段词表（App/MainlineRanking/mainline/themeScore/emotionCycle/LLM）→ 收敛为唯一词表"启动期/发酵期/高潮期/分歧期/退潮期/观察中"
+- 新建 src/lib/stageModel.ts：stageOfFunds（板块资金级）/ stageOfStrength（强度级）/ classifyStage（市场级完整版）/ emotionToStage（情绪对齐）
+- App.tsx judgeMainlineStage → stageOfFunds（含新增"分歧期"：高位放量主力不跟=量价背离）
+- MainlineRanking inferStage → stageOfStrength（加速→高潮期、主升→发酵期）
+- themeScore 权重/分数映射收敛到 stageModel 共享常量；EmotionCycleCard 显示词表对齐
+
+### P0-4 诱多探测引擎 trapDetector.ts（用户核心诉求"识别诱多"）
+- 新建 src/lib/trapDetector.ts：假封板（封单<5%成交额+炸板≥2）、诱多拉升（涨≥7%主力流出散户接盘）、量价背离、尾盘抢筹出货（预留）、封单衰减（预留）
+- detectMainlineTrap：主线内诱多个股占比≥40% → 主线整体出货预警
+- anomalyTier.ts S 级接入 detectTrap：命中 → action 强制"禁止追高·疑似诱多" + ⚠ 标注
+
+### 卫生6：人气榜 CORS 失效
+- server/routes/proxy.js 新增 POST 转发支持（emappdata 已在白名单）
+- api.ts fetchPopularityRank 本地部署走 /api/proxy POST 绕行 CORS；线上保持降级
+
+---
+
 ## v9.26.21 — 资金流向图 K 线拉取限流修复 (2026-08-05)
 
 ### 用户反馈

@@ -1,18 +1,21 @@
 // 情绪周期雷达卡片（v9.18-F5）
 // 把温度计升级为"五档周期判断 + 证据链"——避免黑箱评分
+// v9.27：显示层词表对齐 stageModel（情绪五档 → 权威词表），避免"启动 vs 启动期"混用
 import { computeEmotionCycle, PHASE_META, type EmotionCycleInput, type EmotionCycleResult } from "../lib/emotionCycle";
+import { emotionToStage } from "../lib/stageModel";
 import DisclaimerTag from "./DisclaimerTag";
 
 export default function EmotionCycleCard({ input }: { input: EmotionCycleInput }) {
   const result: EmotionCycleResult = computeEmotionCycle(input);
   const meta = PHASE_META[result.phase];
+  const stageLabel = emotionToStage(result.phase);
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-2">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-slate-200">🎚️ 情绪周期雷达</span>
           <span className={`rounded border px-1.5 py-0.5 text-[11px] font-black ${meta.color}`}>
-            {meta.icon} {result.phase}
+            {meta.icon} {stageLabel}
           </span>
           <span className="text-[10px] text-slate-500">置信度 {result.confidence}%</span>
           <DisclaimerTag />

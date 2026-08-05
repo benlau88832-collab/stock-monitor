@@ -4,6 +4,8 @@
 // A级(重要): 量比>5、换手>15%、快速拉升>7% → 列表置顶+高亮
 // B级(关注): 温和放量、题材小幅异动 → 常规列表
 // 前端事件流（内存+localStorage 会话级），未来可无缝接真实 tick 数据源
+// v9.27（P0-4）：接入诱多探测引擎 detectTrap —— S 级命中诱多 → 强制"禁止追高·疑似诱多"
+import { detectTrap } from "./trapDetector";
 
 export type AnomalyLevel = "S" | "A" | "B";
 
@@ -65,6 +67,12 @@ export interface AnomalyInput {
   turnoverRate: number;
   /** v9.26.10：涨跌幅限制（10/20），区分主板/创业板/科创板（原 9.5 阈值对 20cm 股误判） */
   limitPct?: number;
+  /** v9.27（P0-4）：诱多特征（可选，命中则并入判定） */
+  sealFund?: number;      // 封单金额(元)
+  amount?: number;        // 成交额(元)
+  blastCount?: number;    // 当日炸板次数 zbc
+  mainNetPct?: number;    // 主力净占比 %
+  retailNetPct?: number;  // 散户净占比 %
 }
 
 export interface AnomalyVerdict {
@@ -97,7 +105,24 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
 
   // S 级：近涨停 / 20cm 快速拉升 / 天量
   // v9.26.11：仓位建议五档 —— 重仓参与（主线核心）> 轻仓参与 > 观察·暂不参与 > 禁止追高 > 无需操作
+  // v9.27（P0-4）：命中诱多特征 → 强制"禁止追高·疑似诱多"并红色标注
+  const trapHit = detectTrap({
+    code: s.code, name: s.name, pct,
+    sealFund: s.sealFund, amount: s.amount, blastCount: s.blastCount,
+    mainNetPct: s.mainNetPct, retailNetPct: s.retailNetPct,
+    isMainline: hit,
+  });
+
   if (pct >= nearLimit) {
+    if (trapHit.isTrap) {
+      return {
+        level: "S",
+        reason: `涨幅${pct.toFixed(1)}% 接近涨停（${trapHit.type}）`,
+        aiComment: `⚠ ${trapHit.reason}`,
+        action: "禁止追高·疑似诱多",
+        mainlineHit: hit, mainlineName: name,
+      };
+    }
     return {
       level: "S",
       reason: `涨幅${pct.toFixed(1)}% 接近涨停`,
@@ -108,6 +133,15 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
     };
   }
   if (pct >= 7 && vr >= 3) {
+    if (trapHit.isTrap) {
+      return {
+        level: "S",
+        reason: `${pct.toFixed(1)}% 快速拉升 + 量比${vr.toFixed(1)}（${trapHit.type}）`,
+        aiComment: `⚠ ${trapHit.reason}`,
+        action: "禁止追高·疑似诱多",
+        mainlineHit: hit, mainlineName: name,
+      };
+    }
     return {
       level: "S",
       reason: `${pct.toFixed(1)}% 快速拉升 + 量比${vr.toFixed(1)}`,

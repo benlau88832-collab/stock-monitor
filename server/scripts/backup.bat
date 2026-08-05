@@ -1,15 +1,13 @@
 @echo off
 REM ============================================================
-REM stock-monitor 数据库每日备份脚本（Windows 计划任务调用）
-REM 用法：手动执行或加到计划任务（建议每日 03:00）
+REM stock-monitor 数据库每日备份（Windows 计划任务调用）
+REM v9.27（P0-2）：不再硬编码密码 —— 委托 node scripts/backup.js
+REM 从 server/.env 读取 DATABASE_URL，密码不落盘、不入版本库
+REM 建议每日 03:00 执行
 REM ============================================================
-set PGBIN=C:\Program Files (x86)\PostgreSQL\16\bin
-set PGPASSWORD=StockMonitor2026
-set BACKUP_DIR=E:\CC-HAHA\workspace\022_股票监控项目\backups
-set DATE=%date:~0,4%%date:~5,2%%date:~8,2%
-
-if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
-
-"%PGBIN%\pg_dump.exe" -U postgres -h 127.0.0.1 -d stock_monitor -F c -f "%BACKUP_DIR%\stock_monitor_%DATE%.dump"
-
-echo 备份完成: %BACKUP_DIR%\stock_monitor_%DATE%.dump
+cd /d "%~dp0.."
+node scripts/backup.js
+if errorlevel 1 (
+  echo 备份失败，请检查 server/.env 与 PostgreSQL 服务
+  exit /b 1
+)

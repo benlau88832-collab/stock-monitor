@@ -1,12 +1,19 @@
 // ============================================================
 // stock-monitor 本地服务端 · 数据库层
 // PostgreSQL 16 (stock_monitor 库) · node-postgres 连接池
+// v9.27（P0-2）：移除明文密码 fallback —— 密码只存在 server/.env（不入 git）
 // ============================================================
 const { Pool } = require("pg");
 require("dotenv").config();
 
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  console.error("[db] DATABASE_URL 未配置（请复制 server/.env.example 为 server/.env 并填写）");
+  process.exit(1);
+}
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || "postgres://postgres:StockMonitor2026@127.0.0.1:5432/stock_monitor",
+  connectionString,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,

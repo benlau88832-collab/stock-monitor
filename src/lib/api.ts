@@ -987,7 +987,15 @@ export interface PopularityItem {
 }
 
 export async function fetchPopularityRank(pageSize = 50): Promise<PopularityItem[]> {
-  const url = "https://emappdata.eastmoney.com/stockrank/getAllCurrentList";
+  // v9.27（卫生6）：emappdata 无 CORS 头 → 浏览器直连必然失败；
+  // 本地部署走 /api/proxy POST 转发（proxy ALLOWED_HOSTS 已含 emappdata.eastmoney.com），
+  // 线上 GitHub Pages 无后端 → 仍会失败，由调用方显示"待接入"。
+  const isLocal = typeof window !== "undefined"
+    && !window.location.hostname.endsWith("github.io")
+    && !window.location.hostname.includes("pages.dev");
+  const url = isLocal
+    ? "/api/proxy?url=" + encodeURIComponent("https://emappdata.eastmoney.com/stockrank/getAllCurrentList")
+    : "https://emappdata.eastmoney.com/stockrank/getAllCurrentList";
   const body = {
     appId: "appId01",
     globalId: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,

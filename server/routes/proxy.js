@@ -1,6 +1,7 @@
 // ============================================================
 // /api/proxy/*  东方财富接口转发（解决浏览器 CORS / JSONP 限制 / 限流）
 // 用法：/api/proxy/<完整URL>?<query>  → 代理转发，带短 TTL 缓存
+// v9.27（P0-2 卫生6）：新增 POST 支持（人气榜 emappdata 等 POST 接口 CORS 失效）
 // ============================================================
 const https = require("https");
 const http = require("http");
@@ -28,21 +29,25 @@ const ALLOWED_HOSTS = [
   "push2his.eastmoney.com",
 ];
 
-module.exports = function proxyRoutes(app) {
-  app.get("/api/proxy", async (req, res) => {
-    const target = req.query.url;
-    if (!target) return res.status(400).json({ error: "url param required" });
+/** 校验目标 URL 是否在白名单内，返回 { ok, url?, err? } */
+function checkTarget(target) {
+  if (!target) return { ok: false, err: "url param required" };
+  let u;
+  try { u = new URL(target); }
+  catch { return { ok: false, err: "bad url" }; }
+  if (!ALLOWED_HOSTS.includes(u.hostname)) {
+    return { ok: false, err: `host not allowed: ${u.hostname}` };
+  }
+  return { ok: true, url: u };
+}
 
-    let u;
-    try { u = new URL(target); }
-    catch { return res.status(400).json({ error: "bad url" }); }
-
-    if (!ALLOWED_HOSTS.includes(u.hostname)) {
-      return res.status(403).json({ error: `host not allowed: ${u.hostname}` });
-    }
-
-    // 缓存命中（v9.26.10：剔除 req_trace/时间戳类动态参数，否则缓存永不命中）
-    let cacheKey = target;
+/** 核心转发（GET/POST 共用） */
+function forward(req, res, target, bodyBuf) {
+  const { url: u } = checkTarget(target);
+  // 缓存命中（v9.26.10：剔除 req_trace/时间戳类动态参数；POST 不缓存）
+  let cacheKey = null;
+  if (!bodyBuf) {
+    cacheKey = target;
     try {
       const cu = new URL(target);
       cu.searchParams.delete("req_trace");
@@ -54,29 +59,58 @@ module.exports = function proxyRoutes(app) {
       res.set("Content-Type", hit.type);
       return res.send(hit.body);
     }
+  }
 
-    const lib = u.protocol === "https:" ? https : http;
-    let sent = false; // v9.26.10：防 502/504 双重发送（destroy 触发 error → 二次 res）
-    const done = (fn) => { if (!sent) { sent = true; fn(); } };
-    const req2 = lib.get(u, r => {
-      const chunks = [];
-      r.on("data", c => chunks.push(c));
-      r.on("end", () => {
-        const body = Buffer.concat(chunks);
-        const type = r.headers["content-type"] || "application/json";
+  const lib = u.protocol === "https:" ? https : http;
+  let sent = false; // v9.26.10：防 502/504 双重发送
+  const done = (fn) => { if (!sent) { sent = true; fn(); } };
+  const upstream = lib.request(u, { method: bodyBuf ? "POST" : "GET", headers: bodyBuf ? { "Content-Type": "application/json" } : {} }, r => {
+    const chunks = [];
+    r.on("data", c => chunks.push(c));
+    r.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const type = r.headers["content-type"] || "application/json";
+      if (cacheKey) {
         cache.set(cacheKey, { ts: Date.now(), body, type });
-        if (cache.size > 200) { // 简单 LRU：清掉最老一半
+        if (cache.size > 200) {
           const keys = [...cache.keys()].slice(0, 100);
           keys.forEach(k => cache.delete(k));
         }
-        done(() => {
-          res.set("Content-Type", type);
-          res.set("Access-Control-Allow-Origin", "*");
-          res.send(body);
-        });
+      }
+      done(() => {
+        res.set("Content-Type", type);
+        res.set("Access-Control-Allow-Origin", "*");
+        res.send(body);
       });
     });
-    req2.on("error", e => done(() => res.status(502).json({ error: e.message })));
-    req2.setTimeout(12000, () => { done(() => res.status(504).json({ error: "upstream timeout" })); req2.destroy(); });
+  });
+  upstream.on("error", e => done(() => res.status(502).json({ error: e.message })));
+  upstream.setTimeout(12000, () => { done(() => res.status(504).json({ error: "upstream timeout" })); upstream.destroy(); });
+  if (bodyBuf) upstream.write(bodyBuf);
+  upstream.end();
+}
+
+module.exports = function proxyRoutes(app) {
+  app.get("/api/proxy", (req, res) => {
+    const t = req.query.url;
+    const c = checkTarget(t);
+    if (!c.ok) {
+      const code = c.err && c.err.startsWith("host") ? 403 : 400;
+      return res.status(code).json({ error: c.err });
+    }
+    forward(req, res, t, null);
+  });
+
+  // v9.27：POST 转发（人气榜 emappdata POST 接口 CORS 失效，本地部署经此绕行）
+  app.post("/api/proxy", (req, res) => {
+    const t = req.query.url;
+    const c = checkTarget(t);
+    if (!c.ok) {
+      const code = c.err && c.err.startsWith("host") ? 403 : 400;
+      return res.status(code).json({ error: c.err });
+    }
+    const chunks = [];
+    req.on("data", ck => chunks.push(ck));
+    req.on("end", () => forward(req, res, t, Buffer.concat(chunks)));
   });
 };

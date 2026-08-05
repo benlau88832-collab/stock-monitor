@@ -28,6 +28,7 @@ import { classifyStocksToMainlines, type MainlineGroup } from "./lib/stockToMain
 import { buildMainlineCatalysts } from "./lib/mainlineCatalyst";
 import { calcMainlineStrength } from "./lib/mainlineScore";
 import { checkExitSignal } from "./lib/exitSignal";
+import { stageOfFunds } from "./lib/stageModel";
 import { getAllSince } from "./lib/dataStore";
 import { fetchPopularityRank } from "./lib/api";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
@@ -165,19 +166,6 @@ export interface MainlineData {
     pe: number | null; boardName: string; vetoed: boolean; vetoReasons: string[];
     crowding: string;
   }>;
-}
-
-function judgeMainlineStage(b: { pct: number; mainNetPct: number; mainNet5dPct: number; mainNet10dPct: number }) {
-  const { pct, mainNetPct, mainNet5dPct, mainNet10dPct } = b;
-  if (mainNetPct < 0 && mainNet5dPct < 0)
-    return { stage: "退潮期", reason: "今日与近5日主力净占比均为负，资金持续撤出" };
-  if (pct >= 7 && (mainNetPct < mainNet5dPct - 1 || mainNetPct < 0))
-    return { stage: "高潮期", reason: "涨幅已明显放大但今日主力净占比走弱甚至转负，量价背离" };
-  if (mainNet5dPct > 3 && mainNet10dPct > 1 && mainNetPct > 0)
-    return { stage: "发酵期", reason: "近5日、近10日主力净占比持续为正且在走强" };
-  if (mainNetPct > 0 && Math.abs(mainNet5dPct) < 1.5)
-    return { stage: "启动期", reason: "今日资金净流入转正，但近5日累计净占比尚小" };
-  return { stage: "观察中", reason: "资金与涨幅信号不够一致，暂无法给出明确阶段判断" };
 }
 
 function boardWeight(stage: string) {
@@ -541,7 +529,7 @@ export default function App() {
         for (const r of [industryRes, conceptRes, regionRes]) {
           if (r.status !== "fulfilled") continue;
           for (const b of r.value) {
-            const { stage, reason } = judgeMainlineStage({ pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct });
+            const { stage, reason } = stageOfFunds({ pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct });
             boards.push({ ...b, stage, stageReason: reason, weight: boardWeight(stage) });
           }
         }
@@ -603,7 +591,7 @@ export default function App() {
         try {
           const indRaw = await fetchBoardFundFlow("industry", 30);
           industryBoards = indRaw.map(b => {
-            const { stage } = judgeMainlineStage({ pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct });
+            const { stage } = stageOfFunds({ pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct });
             return { ...b, stage, stageReason: "", weight: "" };
           });
         } catch { /* 行业频道拉取失败不影响题材推荐 */ }
@@ -1149,7 +1137,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.26.21 · build 08-05 16:45 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.27 · build 08-05 22:55 · 数据源：东方财富</div>
       </footer>
     </div>
   );
