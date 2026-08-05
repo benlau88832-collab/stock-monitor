@@ -30,6 +30,7 @@ import { calcMainlineStrength } from "./lib/mainlineScore";
 import { checkExitSignal } from "./lib/exitSignal";
 import { getAllSince } from "./lib/dataStore";
 import { fetchPopularityRank } from "./lib/api";
+import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
 import StatusBar from "./components/StatusBar";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
@@ -208,8 +209,8 @@ export default function App() {
   const [globalData, setGlobalData] = useState<GlobalData | null>(null);
   const [mainline, setMainline] = useState<MainlineData | null>(null);
   const [battlePlan, setBattlePlan] = useState<BattlePlanData | null>(null);
-  // v9.26.17：板块资金走势图数据（取 mainNet 绝对值最大的 8 个）
-  const [topFundBoards, setTopFundBoards] = useState<Array<{ code: string; name: string }>>([]);
+  // v9.26.19：行业资金流向（行业板块前 8 流入 + 前 8 流出 = 16 个，挂在 fundline tab）
+  const [topIndustryFund, setTopIndustryFund] = useState<Array<{ code: string; name: string; mainNet: number }>>([]);
   const [watchStocks, setWatchStocks] = useState<WatchStockBrief[]>([]);
   const [currentPhase, setCurrentPhase] = useState<SessionPhase>(() => getCurrentSession().phase);
   const inFlight = useRef(false);
@@ -618,13 +619,15 @@ export default function App() {
             .map(b => ({ code: b.code, name: b.name, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct, stage: b.stage, kind: "industry" as const })),
         ];
 
-        // v9.26.17：取 |mainNet| 最大的 8 个板块（fund 走势图用）
-        const top = [...allScoringBoards]
-          .filter(b => b.code)
-          .sort((a, b) => Math.abs(b.mainNet ?? 0) - Math.abs(a.mainNet ?? 0))
-          .slice(0, 8)
-          .map(b => ({ code: b.code, name: b.name }));
-        setTopFundBoards(top);
+        // v9.26.19：行业资金流向图（资金主线 tab 顶部）—— 行业板块前 8 流入 + 前 8 流出 = 16 行业
+        const sortedIndustry = [...industryBoards]
+          .filter(b => b.code && typeof b.mainNet === "number")
+          .sort((a, b) => (b.mainNet ?? 0) - (a.mainNet ?? 0));
+        const topInflow = sortedIndustry.filter(b => (b.mainNet ?? 0) >= 0).slice(0, 8);
+        const topOutflow = sortedIndustry.filter(b => (b.mainNet ?? 0) < 0).reverse().slice(0, 8);
+        const topIndustryFund = [...topInflow, ...topOutflow]
+          .map(b => ({ code: b.code, name: b.name, mainNet: b.mainNet ?? 0 }));
+        setTopIndustryFund(topIndustryFund);
 
         const themeResults = rawPool.length > 0 && allScoringBoards.length > 0
           ? computeThemeScores(allScoringBoards, rawPool, newsItems, hlPulseNew)
@@ -1062,8 +1065,7 @@ export default function App() {
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
             onSwitchTab={(tab) => setActive(tab as TabKey)}
             ztPool={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined}
-            yesterdayZt={yesterdayZtBrief}
-            topFundBoards={topFundBoards} />
+            yesterdayZt={yesterdayZtBrief} />
         )}
 
         {/* ====== 资金主线（深潜：完整资金结构+明暗盘+全球信号+产业链） ====== */}
@@ -1071,6 +1073,10 @@ export default function App() {
           <>
             {/* v9.24-P1-1：主线强度排行榜（PRD B1，页面首屏） */}
             <MainlineRanking battlePlan={battlePlan} loading={loading} />
+            {/* v9.26.19：行业资金流向走势图（仿开盘啦"资金流向"图：16 行业叠加） */}
+            {topIndustryFund.length > 0 && (
+              <IndustryFundFlowChart boards={topIndustryFund} refreshSec={60} splitCount={8} />
+            )}
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构详情</h3>
               <FundStructure data={fundStructure} loading={loading} />
@@ -1145,7 +1151,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.26.18 · build 08-05 15:30 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.26.19 · build 08-05 16:30 · 数据源：东方财富</div>
       </footer>
     </div>
   );

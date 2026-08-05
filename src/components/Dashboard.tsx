@@ -8,7 +8,6 @@ import FiveQBar from "./FiveQBar";
 import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
 import InstitutionFund from "./InstitutionFund";
-import BoardFundFlowChart from "./BoardFundFlowChart";
 import Playbook from "./Playbook";
 import PopularityRadar from "./PopularityRadar";
 
@@ -497,14 +496,11 @@ interface DashboardProps {
   ztPool?: Array<{ c: string; n: string; fbt: number; lbc: number }>;
   /** v9.19-F2：昨日涨停股（竞价台用） */
   yesterdayZt?: Array<{ code: string; name: string }>;
-  /** v9.26.17：板块资金分时走势（取 mainNet 绝对值最大的 8 个板块） */
-  topFundBoards?: Array<{ code: string; name: string }>;
 }
 
 export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
   phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, ztPool, yesterdayZt,
-  topFundBoards = [],
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
   const phase: SessionPhase = phaseProp;
@@ -525,11 +521,6 @@ export default function Dashboard({
     <div className="space-y-2">
       {/* 指数光带（极薄通栏） */}
       <IndexStrip overview={overview} />
-
-      {/* v9.26.17：今日行业资金流入/流出走势图（最强 8 个板块，每分钟主力净额） */}
-      {topFundBoards.length > 0 && (
-        <BoardFundFlowChart boards={topFundBoards} refreshSec={120} />
-      )}
 
       {/* ============== 盘中布局 ============== */}
       {isTrading && (

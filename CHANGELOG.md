@@ -4,6 +4,25 @@
 
 ---
 
+## v9.26.19 — 资金主线页加"行业资金流向走势图"（用户验收修正） (2026-08-05)
+
+### 用户反馈
+v9.26.17 实现的"资金走势图"用户未看到 → 排查发现：
+- 我把组件挂在 Dashboard 顶部，但 App.tsx **没有 import 也没有传 prop** 给 Dashboard
+- 即使传了，选的也是 `|mainNet|` 前 8 概念板块（数据源不对），不是用户期望的"行业资金流"
+- 用户实际期望：在 **fundline（资金主线）tab 顶部**展示**行业板块**的资金流入/流出走势图（开盘啦风格：电子/半导体/工业金属/通信等 16 行业叠加折线）
+
+### 修复
+- 新建 `IndustryFundFlowChart.tsx`：16 行业叠加（8 流入 + 8 流出），按"流入红/流出绿"配色，红涨绿跌
+- 数据源用 `industryBoards`（kind="industry"）按 mainNet 降序取前 8 流入 + 前 8 流出 = 16 个
+- 挂到 `fundline` tab：**MainlineRanking 之后**最显眼位置
+- 标签自动在曲线右端，水平 1 字行；下方有"主力净流入 TOP8"和"净流出 TOP8"双榜
+- 删旧 `BoardFundFlowChart.tsx`（数据源错 + 位置错）
+- Dashboard 移除相关 prop + import
+- App.tsx `topIndustryFund` state 存 16 个行业数据
+
+---
+
 ## v9.26.18 — 炸板数/炸板率接入真实数据 (2026-08-05)
 
 ### 用户反馈
