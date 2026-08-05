@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { fetchStockOne, fetchStockNews, fetchStockAnnouncements, fetchLiftBan, stockLimitPct, type StockNewsItem, type StockAnnouncement } from "../lib/api";
 import { fetchStockMargin, detectMarginSignal, marginSignalColor, type StockMarginInfo, type MarginSignal } from "../lib/margin";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
@@ -6,6 +6,9 @@ import { stockRealUrl } from "../lib/realLinks";
 
 // ============== LLM 配置（引用 AI 中枢的统一常量） ==============
 import { callAI, hasAvailableAI, hasAIOptimistic, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
+// v9.27（P1-7）：个股级离场引擎 + 纪律（持仓成本）
+import { checkStockExit, exitBadge } from "../lib/stockExit";
+import { loadDisciplineState } from "../lib/discipline";
 import StockDecisionCard from "./StockDecisionCard";
 
 // ============== 数据结构 ==============
@@ -313,6 +316,8 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   const [followUpLoading, setFollowUpLoading] = useState(false);
   // 融资融券（按代码缓存展示，T+1 数据 5 分钟缓存）
   const [marginInfo, setMarginInfo] = useState<Record<string, StockMarginInfo | null>>({});
+  // v9.27（P1-7）：持仓纪律（成本止损用）；随行情刷新重读，保证成本最新
+  const disciplineState = useMemo(() => loadDisciplineState(), [stocks]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -561,6 +566,15 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
             {sortedCodes.map(code => {
               const s = stocks[code];
               const isSel = selected === code;
+              // v9.27（P1-7）：个股离场信号（持仓股启用成本止损，监控股用资金/量价结构）
+              const pos = disciplineState.positions.find(p => p.code === code);
+              const exit = s ? checkStockExit({
+                code, name: s.name,
+                cost: pos?.cost ?? null, price: s.price, pct: s.pct,
+                mainNetPct: s.mainNetPct, retailNetPct: s.smallNet > 0 ? 1 : 0,
+                mainNet: s.mainNet, mainNet5d: s.mainNet5d, mainNet10d: s.mainNet10d,
+              }) : null;
+              const exitB = exit ? exitBadge(exit) : null;
               return (
                 <div key={code} onClick={() => setSelected(code)}
                   className={`relative rounded px-2 py-2 cursor-pointer transition text-xs ${
@@ -569,6 +583,13 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                   {/* 异动角标 */}
                   {s && s.alertCount > 0 && (
                     <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[11px] font-bold text-white">{s.alertCount}</span>
+                  )}
+                  {/* v9.27（P1-7）：离场角标（红=立即离场，黄=减仓） */}
+                  {s && exit && exitB && exitB.label && (
+                    <span className={`absolute -top-1 -right-5 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold ${exit.level === "red" ? "bg-red-600 text-white" : "bg-amber-500 text-black"}`}
+                      title={`${exitB.label}：${exit.reasons.join("；")}`}>
+                      {exit.level === "red" ? "!" : "⚠"}
+                    </span>
                   )}
                   <div className="flex items-center justify-between">
                     <div>
@@ -627,7 +648,8 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
 
           {/* v9.24-P1-2：个股决策卡（PRD C1，融资融券之上，先给结论再给数据） */}
           {selected && stocks[selected] && (
-            <StockDecisionCard stock={stocks[selected]} vetoList={vetoList} mainlines={mainlines} />
+            <StockDecisionCard stock={stocks[selected]} vetoList={vetoList} mainlines={mainlines}
+              cost={disciplineState.positions.find(p => p.code === selected)?.cost ?? null} />
           )}
 
           {/* 融资融券信号卡（融资客动向） */}

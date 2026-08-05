@@ -6,7 +6,7 @@
 //   4. 顶部市场风格标签（进攻/轮动/防守）+ 风险偏好
 //   5. LLM 精排逻辑 + 真主线 vs 脉冲判定
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { fmtMoney } from "../lib/format";
 import { stockRealUrl, etfRealUrl, boardNameRealUrl } from "../lib/realLinks";
 import { getHitRateText } from "../lib/recTracker";
@@ -16,6 +16,10 @@ import MainlineDiagnosisCard from "./MainlineDiagnosisCard";
 import type { MainlineLLMResult } from "../lib/mainlineLLM";
 import type { ETFScoreResult } from "../lib/etfScore";
 import type { MainlineGroup } from "../lib/stockToMainline";
+// v9.27（P1-6）：仓位定量化 + 阶段模型 + 纪律
+import { computePositionAdvice, type PositionAdvice } from "../lib/positionSizing";
+import { stageOfStrength } from "../lib/stageModel";
+import { loadDisciplineState } from "../lib/discipline";
 
 // ============== Props ==============
 export interface BattlePlanData {
@@ -53,7 +57,7 @@ function StyleBadge({ style }: { style: MarketStyleInfo }) {
 }
 
 // ============== 主线区块（含龙一龙二龙三 + v9.23 强度分/离场/诊断） ==============
-function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose }: {
+function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose, position }: {
   rank: number;
   name: string;
   ztCount: number;
@@ -71,6 +75,8 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
   exitSignalText?: string;
   /** v9.23-4：点击生成 AI 结构化诊断 */
   onDiagnose?: () => void;
+  /** v9.27（P1-6）：仓位定量化建议（可上车/观望/禁止 + 建议%） */
+  position?: PositionAdvice;
 }) {
   const rankColor = rank === 1 ? "border-rose-500/40 bg-rose-500/5" : rank === 2 ? "border-amber-500/30 bg-amber-500/5" : "border-slate-500/20 bg-white/5";
   const rankLabel = rank === 1 ? "🏆 第一主线" : rank === 2 ? "🥈 第二主线" : "🥉 第三主线";
@@ -109,6 +115,19 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
           {exitSignal && (
             <span className="rounded border border-rose-500/50 bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-black text-rose-300" title={exitSignalText}>
               ⚠ 退潮
+            </span>
+          )}
+          {/* v9.27（P1-6）：仓位定量化徽章 */}
+          {position && position.action !== "可上车" && (
+            <span className={`rounded border px-1.5 py-0.5 text-[9px] font-black ${
+              position.action === "禁止" ? "border-rose-500/50 bg-rose-500/15 text-rose-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+            }`} title={position.rationale}>
+              {position.action === "禁止" ? "🚫 禁止" : "👀 观望"} · {position.rationale.slice(0, 18)}
+            </span>
+          )}
+          {position && position.action === "可上车" && (
+            <span className="rounded border border-emerald-500/50 bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black text-emerald-300" title={position.rationale}>
+              🚀 仓位 {position.suggestedPct}% · 首仓 {position.tranches[0]?.pct ?? 0}% · 止损 {position.stopLoss}%
             </span>
           )}
           {/* v9.23.1-fix：折叠按钮（<60 默认折叠，点击展开） */}
@@ -239,6 +258,11 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   const isEmpty = candidates.length === 0;
   // v9.23-4：当前诊断的主线（点击"诊断"按钮时设置）
   const [diagMainline, setDiagMainline] = useState<string | null>(null);
+  // v9.27（P1-6）：纪律状态（总资金/单票上限/当前持仓/今日开仓）
+  const disciplineState = useMemo(() => loadDisciplineState(), []);
+  const currentTotalPct = disciplineState.settings.totalCapital > 0
+    ? disciplineState.positions.reduce((s, p) => s + p.value, 0) / disciplineState.settings.totalCapital * 100
+    : 0;
 
   // LLM 精排结果 vs 规则机候选 合并展示
   const display: Array<{
@@ -362,6 +386,16 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
               exitSignal={d.exitSignal}
               exitSignalText={d.exitSignalText}
               onDiagnose={() => setDiagMainline(d.board)}
+              // v9.27（P1-6）：仓位定量化（闸门×强度×单票上限，联动纪律截断）
+              position={computePositionAdvice({
+                mainline: d.board,
+                strengthScore: d.strengthScore ?? null,
+                stage: stageOfStrength({ strengthScore: d.strengthScore, ztCount: d.ztCount, exitSignal: d.exitSignal }),
+                gate,
+                discipline: disciplineState.settings,
+                currentTotalPct,
+                todayNewPositions: disciplineState.todayNewPositions,
+              })}
             />
           ))}
           {display.length < 3 && (

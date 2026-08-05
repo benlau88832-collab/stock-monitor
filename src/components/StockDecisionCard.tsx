@@ -1,15 +1,19 @@
 // 个股决策卡（v9.24-P1-2，PRD C1）
 // 个股雷达页选中个股首屏：一句话结论/主线归属/技术位置/资金性质/风险点/止损止盈/置信度
 // 实现：纯规则引擎基于现有实时数据（零额外请求、零等待），符合 PRD "决策卡先于信息流"
+// v9.27（P1-7）：新增"离场信号"行（个股级离场，联动持仓成本止损）
 import { fmtMoney, fmtPct } from "../lib/format";
 import type { WatchStock, VetoItem } from "./StockWatchlist";
 import DisclaimerTag from "./DisclaimerTag";
+import { checkStockExit, exitBadge } from "../lib/stockExit";
 
 interface Props {
   stock: WatchStock;
   vetoList: VetoItem[];
   /** 今日主线名称列表（由 App 传入 battlePlan.candidates），用于主线归属判断 */
   mainlines?: string[];
+  /** v9.27（P1-7）：持仓成本（若该股在持仓中），用于成本止损 */
+  cost?: number | null;
 }
 
 // ============== 规则引擎 ==============
@@ -61,12 +65,20 @@ function stopRef(s: WatchStock): { stop: string; take: string } {
 }
 
 // ============== 组件 ==============
-export default function StockDecisionCard({ stock, vetoList, mainlines = [] }: Props) {
+export default function StockDecisionCard({ stock, vetoList, mainlines = [], cost = null }: Props) {
   const pos = techPosition(stock);
   const fund = fundNature(stock);
   const own = mainlineOwn(stock, mainlines);
   const vetoed = vetoList.length > 0;
   const ref = stopRef(stock);
+  // v9.27（P1-7）：个股离场信号（持仓成本止损 + 资金/量价结构）
+  const exit = checkStockExit({
+    code: stock.code, name: stock.name,
+    cost, price: stock.price, pct: stock.pct,
+    mainNetPct: stock.mainNetPct, retailNetPct: stock.smallNet > 0 ? 1 : 0,
+    mainNet: stock.mainNet, mainNet5d: stock.mainNet5d, mainNet10d: stock.mainNet10d,
+  });
+  const exitB = exitBadge(exit);
 
   // 一句话结论（五色操作徽章，与主线口径一致；v9.26.11：新增"重仓参与"档）
   // 参与档位：重仓（强势+大资金+主线命中）> 轻仓（强势+大资金 或 主线内走强）> 谨慎 > 观望 > 不建议
@@ -99,6 +111,13 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [] }: P
         <span className={`rounded border px-2 py-0.5 text-[11px] font-bold ${conclusion.color}`}>{conclusion.label}</span>
       </div>
       <div className="space-y-1.5">
+        {/* v9.27（P1-7）：离场信号（置顶最醒目） */}
+        {exit.shouldExit && (
+          <div className={`rounded border px-2 py-1.5 ${exit.level === "red" ? "border-rose-500/50 bg-rose-500/10" : "border-amber-500/40 bg-amber-500/10"}`}>
+            <div className={`text-[11px] font-black ${exit.level === "red" ? "text-rose-300" : "text-amber-300"}`}>{exitB.label}</div>
+            <div className="mt-0.5 text-[10px] text-slate-400 leading-relaxed">{exit.reasons.join("；")}</div>
+          </div>
+        )}
         <Row k="主线归属">
           <span className={own.color}>{own.label}</span>
           <span className="ml-1 text-[10px] text-slate-500">{own.desc}</span>
