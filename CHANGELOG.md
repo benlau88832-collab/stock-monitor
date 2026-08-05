@@ -4,6 +4,28 @@
 
 ---
 
+## v9.31 — 人气榜回归真实数据：东财 + 同花顺双榜交叉比对 (2026-08-06)
+
+### 用户反馈
+人气榜不能用涨停榜糊弄，必须与东方财富人气榜一致；并新增同花顺人气榜做交叉比对（双榜共振提醒）。
+
+### 关键实测发现（推翻 v9.27 的错误假设）
+- **emappdata.eastmoney.com 完全支持 CORS**：OPTIONS 预检 200 + `Access-Control-Allow-Origin` 回显任意 Origin + `Allow-Methods: POST`，且不校验 Referer/Origin → **浏览器直连即可，线上线下均可用**
+- v9.27 加 proxy 中转是**错误方向**：emappdata 对 proxy 的 nodejs https.request 做 TLS 指纹层 ban（12s socket hang up），浏览器直连反而畅通
+- **dq.10jqka.com.cn（同花顺热度接口）同样支持 CORS**：OPTIONS 204 + `Allow-Methods:*` + Origin 回显，不校验 Referer → 浏览器直连可用
+
+### 修复
+- `fetchPopularityRank`（东财）：**去掉 proxy 中转**，改浏览器直连 fetch → 真实东财人气榜（SZ002428 云南锗业等）
+- 新增 `fetchTHSPopularityRank`（同花顺）：浏览器直连 dq.10jqka.com.cn 热度接口 → 云南锗业/风华高科等真实数据（含概念标签/人气标签/排名变化）
+- **PopularityRadar 双榜交叉比对**：
+  - 双数据源并行拉取（一个失败不影响另一个，标题显示 东财✓/✗ · 同花顺✓/✗）
+  - **双榜共振**：同一只股票两边都上榜 → 顶部紫色醒目提醒条 + 行高亮 + "⚡共振"徽章 + 显示双平台排名
+  - 单榜个股正常展示（东财榜/同花顺榜排名分列）
+  - 拥挤度预警、新入榜检测、概念标签展示保留
+- proxy.js：forward 改 options 对象（hostname/path/servername）补 UA/Referer（防御性；同花顺白名单已加 dq.10jqka.com.cn）
+
+---
+
 ## v9.30.3 — 人气榜拥挤度改用涨停池（emappdata 对 nodejs TLS 指纹 ban） (2026-08-06)
 
 ### 用户反馈

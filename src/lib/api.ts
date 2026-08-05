@@ -1011,15 +1011,10 @@ export interface PopularityItem {
 }
 
 export async function fetchPopularityRank(pageSize = 50): Promise<PopularityItem[]> {
-  // v9.27（卫生6）：emappdata 无 CORS 头 → 浏览器直连必然失败；
-  // 本地部署走 /api/proxy POST 转发（proxy ALLOWED_HOSTS 已含 emappdata.eastmoney.com），
-  // 线上 GitHub Pages 无后端 → 仍会失败，由调用方显示"待接入"。
-  const isLocal = typeof window !== "undefined"
-    && !window.location.hostname.endsWith("github.io")
-    && !window.location.hostname.includes("pages.dev");
-  const url = isLocal
-    ? "/api/proxy?url=" + encodeURIComponent("https://emappdata.eastmoney.com/stockrank/getAllCurrentList")
-    : "https://emappdata.eastmoney.com/stockrank/getAllCurrentList";
+  // v9.31：实测 emappdata.eastmoney.com **支持 CORS**（OPTIONS 预检 200 + Allow-Origin 回显任意 Origin），
+  // 且不校验 Referer/Origin → **浏览器直连即可，线上线下均可用**。
+  // 之前的 proxy 中转反而失败（emappdata 对 proxy 的 nodejs https.request 做 TLS 指纹 ban → 12s socket hang up）。
+  const url = "https://emappdata.eastmoney.com/stockrank/getAllCurrentList";
   const body = {
     appId: "appId01",
     globalId: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1054,7 +1049,51 @@ export async function fetchPopularityRank(pageSize = 50): Promise<PopularityItem
     });
   } catch (err) {
     recordApiCall("人气榜", false, Date.now() - start);
-    throw new Error("人气榜接口不可用（可能 CORS 受限）");
+    throw new Error("人气榜接口不可用");
+  }
+}
+
+// ============== 同花顺人气榜（v9.31：与东财双榜交叉比对） ==============
+export interface THSPopularityItem {
+  code: string;
+  name: string;
+  /** 同花顺榜内排名 */
+  rank: number;
+  /** 涨跌幅 % */
+  riseAndFall: number;
+  /** 热度值（字符串，大=热） */
+  rate: string;
+  /** 排名变化 */
+  hotRankChg: number;
+  /** 概念标签（如 ["光纤概念","第三代半导体"]） */
+  concepts: string[];
+  /** 人气标签（如 "2天2板"） */
+  tag: string;
+}
+
+export async function fetchTHSPopularityRank(pageSize = 30): Promise<THSPopularityItem[]> {
+  // 实测 dq.10jqka.com.cn 支持 CORS（OPTIONS 204 + Allow-Methods:* + Origin 回显）且不校验 Referer → 浏览器直连可用
+  const url = "https://dq.10jqka.com.cn/fuyao/hot_list_data/out/hot_list/v1/stock?stock_type=a&type=hour&list_type=normal";
+  const start = Date.now();
+  try {
+    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    recordApiCall("同花顺人气榜", true, Date.now() - start);
+    const list: any[] = json?.data?.stock_list ?? [];
+    return list.slice(0, pageSize).map((s: any, i: number) => ({
+      code: String(s.code ?? ""),
+      name: String(s.name ?? ""),
+      rank: Number(s.order) || i + 1,
+      riseAndFall: num(s.rise_and_fall),
+      rate: String(s.rate ?? ""),
+      hotRankChg: num(s.hot_rank_chg),
+      concepts: Array.isArray(s.tag?.concept_tag) ? s.tag.concept_tag : [],
+      tag: String(s.tag?.popularity_tag ?? ""),
+    }));
+  } catch (err) {
+    recordApiCall("同花顺人气榜", false, Date.now() - start);
+    throw new Error("同花顺人气榜接口不可用");
   }
 }
 

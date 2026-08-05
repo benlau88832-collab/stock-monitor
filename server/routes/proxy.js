@@ -41,6 +41,8 @@ const ALLOWED_HOSTS = [
   "stock.gtimg.cn",
   // v9.26.17：东财 push2his（板块分钟 K 线，含主力净额分时 f60）
   "push2his.eastmoney.com",
+  // v9.31：同花顺人气榜（dq.10jqka.com.cn 热度接口，GET JSON）
+  "dq.10jqka.com.cn",
 ];
 
 /** 校验目标 URL 是否在白名单内，返回 { ok, url?, err? } */
@@ -78,13 +80,18 @@ function forward(req, res, target, bodyBuf) {
   const lib = u.protocol === "https:" ? https : http;
   let sent = false; // v9.26.10：防 502/504 双重发送
   const done = (fn) => { if (!sent) { sent = true; fn(); } };
-  // v9.30.3：emappdata 等接口对 nodejs 默认 UA("node") 拒响应（实测 socket hang up），
-  //   必须补浏览器 UA + Referer 才能正常转发。其他 push2 接口不 ban node 但也一并补齐（防御性）。
-  const upstream = lib.request(u, {
+  // v9.31：改用 options 对象（hostname/path/servername）而非 URL 对象 ——
+  //   实测 emappdata 对 `lib.request(urlObject)` 的请求永远 socket hang up（HTTP 000），
+  //   而 `https.request({hostname, path, ...})` 正常返回 200。同花顺 dq.10jqka.com.cn 需 Referer。
+  const upstream = lib.request({
+    hostname: u.hostname,
+    port: u.port || undefined,
+    path: u.pathname + u.search,
     method: bodyBuf ? "POST" : "GET",
     headers: bodyBuf
       ? { "Content-Type": "application/json", "User-Agent": BROWSER_UA, "Referer": `https://${u.hostname}/` }
       : { "User-Agent": BROWSER_UA, "Referer": `https://${u.hostname}/` },
+    servername: u.hostname, // TLS SNI（HTTPS 必须，避免证书校验失败）
   }, r => {
     const chunks = [];
     r.on("data", c => chunks.push(c));
