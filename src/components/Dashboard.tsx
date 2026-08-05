@@ -564,6 +564,8 @@ export default function Dashboard({
       const r = await decideForMainline(
         { mainline: top.mainline, strengthScore: top.strengthScore, ztCount: top.ztCount, height: top.height, exitSignal: top.exitSignal },
         { trapFlagged: false, marketFactor: decisionSources.find(s => s.name === "市场状态")?.confidence ? 0.6 : 0.5 },
+        // v9.40（V4-D）：默认开 Critic 挑刺（多 1 次调用价值高）；自洽投票默认关省配额
+        { useCritic: true, selfConsistency: false },
       );
       setAgentResult(r);
     } catch { /* 失败静默 */ }
@@ -610,16 +612,16 @@ export default function Dashboard({
     return () => { alive = false; };
   }, []);
 
-  // 组装因子历史行（读 sentiment/market_daily 序列）
-  async function loadFactorRows(): Promise<Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null }>> {
-    const out: Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null }> = [];
+  // 组装因子历史行（读 sentiment/market_daily 序列；v9.40 V4-G 补 4 因子输入字段）
+  async function loadFactorRows(): Promise<Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }>> {
+    const out: Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }> = [];
     const d = new Date();
     for (let i = 13; i >= 0; i--) {
       const t = new Date(d); t.setDate(t.getDate() - i);
       const dow = t.getDay();
       if (dow === 0 || dow === 6) continue;
       const ds = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
-      const row: any = { date: ds, sentiment: null, blastedRate: null, ztCount: null, maxBoardHeight: null, premiumAvg: null, promotionRate: null };
+      const row: any = { date: ds, sentiment: null, blastedRate: null, ztCount: null, maxBoardHeight: null, premiumAvg: null, promotionRate: null, sealDecayCount: null, lhbBoostCount: null, fundInflowStreak: null, nuclearCount: null };
       try {
         const sv = await kvGet(`sentiment:${ds}`);
         const num = Number(sv ?? NaN);
@@ -627,7 +629,15 @@ export default function Dashboard({
       } catch { /* 静默 */ }
       try {
         const md = await kvGet(`market_daily:${ds}`) as any;
-        if (md) { row.ztCount = md.ztCount ?? null; row.blastedRate = md.blastedRate ?? null; row.maxBoardHeight = md.maxBoardHeight ?? null; }
+        if (md) {
+          row.ztCount = md.ztCount ?? null;
+          row.blastedRate = md.blastedRate ?? null;
+          row.maxBoardHeight = md.maxBoardHeight ?? null;
+          row.sealDecayCount = md.sealDecayCount ?? null;
+          row.lhbBoostCount = md.lhbBoostCount ?? null;
+          row.fundInflowStreak = md.fundInflowStreak ?? null;
+          row.nuclearCount = md.nuclearCount ?? null;
+        }
       } catch { /* 静默 */ }
       out.push(row);
     }

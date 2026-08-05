@@ -23,7 +23,7 @@ function contentKey(seed) {
 // ---------- v9.35（S3）：市场日指标落库（信号回测的数据源） ----------
 // 目的：给前端 signalBacktest 提供"每日市场指标"历史序列（涨停/跌停/炸板/最高板）。
 // 情绪分由前端 cloudStore 已同步（kv sentiment:日期 = 数字分），本键只补池类指标。
-async function fetchMarketDaily() {
+async function fetchMarketDaily(pool) {
   const date = bjDate();
   const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
   const zt = await httpsGet(`https://push2ex.eastmoney.com/getTopicZTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${date}`);
@@ -33,7 +33,7 @@ async function fetchMarketDaily() {
   const zbPool = zb?.data?.pool ?? [];
   const dtPool = dt?.data?.pool ?? [];
   const maxBoard = ztPool.length > 0 ? Math.max(0, ...ztPool.map(p => Number(p?.lbc ?? 1))) : 0;
-  return {
+  const md = {
     date: dateStr,
     ztCount: ztPool.length,
     zbCount: zbPool.length,
@@ -41,6 +41,50 @@ async function fetchMarketDaily() {
     blastedRate: ztPool.length + zbPool.length > 0 ? Math.round(zbPool.length / (ztPool.length + zbPool.length) * 1000) / 10 : 0,
     maxBoardHeight: maxBoard,
   };
+  // v9.40（V4-G）：补齐 4 个因子输入字段（此前缺失 → factorLib 4 因子永远 decayed）
+  // sealDecayCount：封单衰减预警数（炸板 = 封单消失的直接结果，用当日炸板数代理）
+  try { md.sealDecayCount = zbPool.length; } catch { md.sealDecayCount = null; }
+  // lhbBoostCount：龙虎榜净买入股票数（席位加持）
+  try {
+    const lhb = await fetchLhbDaily();
+    md.lhbBoostCount = lhb.filter(x => x.netBuy > 0).length;
+  } catch { md.lhbBoostCount = null; }
+  // fundInflowStreak：主线行业连续流入天数（读 fund_streak 历史）
+  try {
+    const funds = await fetchBoardFundServer();
+    if (funds.length > 0) {
+      const fDateStr = `${bjDate().slice(0, 4)}-${bjDate().slice(4, 6)}-${bjDate().slice(6, 8)}`;
+      await pool?.query(
+        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+         ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+        [`fund_streak:${fDateStr}`, JSON.stringify({ date: fDateStr, items: funds })],
+      );
+      // 取流入最强势行业的连续天数作为整体信号
+      const topInflow = funds[0];
+      md.fundInflowStreak = topInflow && topInflow.mainNet > 0 ? 1 : -1;
+    } else md.fundInflowStreak = null;
+  } catch { md.fundInflowStreak = null; }
+  // nuclearCount：核按钮数（昨 ≥2 板 今跌 ≤-9%，退潮最强信号）
+  try {
+    md.nuclearCount = await fetchNuclearCount(pool, dateStr);
+  } catch { md.nuclearCount = null; }
+  return md;
+}
+
+// V4-G：核按钮计数 —— 读昨日涨停快照 ≥2 板 → push2delay 批量拉今日行情 → 统计 ≤-9%
+async function fetchNuclearCount(pool, todayStr) {
+  if (!pool) return null;
+  const r = await pool.query("SELECT data FROM zt_snapshot WHERE date < $1 ORDER BY date DESC LIMIT 1", [todayStr]);
+  if (!r.rows[0]?.data?.pool) return null;
+  const prev = r.rows[0].data.pool;
+  const highBoards = prev.filter(s => (s.lbc ?? 1) >= 2);
+  if (highBoards.length === 0) return 0;
+  const codes = highBoards.map(s => s.code).slice(0, 80);
+  const secids = codes.map(c => (/^(60|68|9)/.test(String(c)) ? "1." : "0.") + c).join(",");
+  const j = await httpsGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f12&secids=${secids}`);
+  const diff = j?.data?.diff;
+  const items = Array.isArray(diff) ? diff : (diff && typeof diff === "object" ? Object.values(diff) : []);
+  return items.filter(it => Number(it?.f2 ?? 999) <= -9).length;
 }
 
 // ---------- v9.36（A3）：龙虎榜采集（与涨停池交叉，识别席位加持） ----------
@@ -474,7 +518,7 @@ function startCron({ pool }) {
     try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] analyze failed:", e.message); }
     // v9.35（S3）：市场日指标落库（信号回测数据源）
     try {
-      const md = await fetchMarketDaily();
+      const md = await fetchMarketDaily(pool);
       await pool.query(
         `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
          ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,

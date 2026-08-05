@@ -4,6 +4,42 @@
 
 ---
 
+## v9.40 — GLM5.2-V4 落地：AI 真独立推理 + 门控约束最终结论 + 分歧不静默 (2026-08-06)
+
+### 审核 GLM5.2建议-v4.txt（基于 v9.39 实证核查）
+- 核心发现：AI 是"规则打包器+LLM摘要器"（喂规则结论非原始盘面）→ 只能复述规则；
+  幻方门控只作用于规则投票路，被 AI 覆盖绕过 → "越用越准"闭环没到出结论的路上
+- V4-H 验证为误报（https-proxy-agent@^9.1.0 已在 server/package.json，V1 已修）
+
+### V4-A：AI 真独立推理（喂原始盘面，可推翻规则）
+- aiAgent 工具分两类：vote（8 个决策工具归一为证据投票）/ data（4 个数据工具：backtestSignal/getFundStreak/getThemeCalendar/getNewsDeep 原始结果）
+- adjudicateOnce 喂"规则投票 + 原始盘面数据"两段，prompt 明确"可据此推翻规则结论"——AI 有独立信息源
+
+### V4-B：幻方门控真正约束最终结论（修"绕过"）
+- DecisionVerdictCard 融合裁决：因子失效占比≥50% 时 AI 说"可上车"强制降"观望"+标注"🧪因子失效门控降档"；
+  规则硬否决（禁止）优先于 AI 乐观可上车；置信随门控下调
+
+### V4-C：AI-规则分歧显式告警（不静默覆盖）
+- aiRuleDivergent 检测 → 顶部红横幅"⚠ AI 与规则多源分歧：AI=X/规则=Y，建议人工复核"
+
+### V4-D：默认开 Critic
+- Dashboard runAgent 传 { useCritic: true, selfConsistency: false }——AI 结论必经挑刺
+
+### V4-F：工具统一 schema
+- AgentTool 加 kind(vote/data) + normalize(raw→{verdict,confidence,reason})，9 工具各自归一（level:red→禁止 等）
+- 消除 collectToolEvidence 的 ?? 链 + 乘 100 脆弱映射
+
+### V4-G：补齐 4 个因子输入字段
+- cron fetchMarketDaily 补 sealDecayCount(炸板数代理)/lhbBoostCount(龙虎榜净买数)/fundInflowStreak/fetchNuclearCount(昨≥2板今跌≤-9%)
+- 前端 loadFactorRows 一并读取 → factorLib 4 因子不再恒 decayed
+
+### V4-I：样本不足显式提示
+- factorStats.total<3 或门控命中时标"⚠ 历史样本不足，AI 结论仅参考"
+
+### 单测 77 例全绿（+5：统一schema 3 + 融合裁决 2）
+
+---
+
 ## v9.39 — AI 自动主导 + 幻方闭环接通（深度复盘后的 3 项改造） (2026-08-06)
 
 ### 背景

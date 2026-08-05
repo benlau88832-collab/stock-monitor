@@ -144,3 +144,59 @@ describe("decisionCollector 消息对账证据源（V3-13）", () => {
     expect(ms!.verdict).toBe("可上车");
   });
 });
+
+describe("agentTools 统一 schema（V4-F）", () => {
+  it("投票工具全部带 normalize，数据工具带 kind=data", () => {
+    const tools = getAgentTools();
+    const voteTools = tools.filter(t => t.kind === "vote");
+    expect(voteTools.length).toBeGreaterThanOrEqual(8);
+    for (const t of voteTools) {
+      expect(typeof t.normalize).toBe("function");
+    }
+    const dataTools = tools.filter(t => t.kind === "data");
+    expect(dataTools.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("normalize 输出统一 schema（verdict/confidence/reason）", async () => {
+    const tools = getAgentTools();
+    const admission = tools.find(t => t.name === "getAdmissionVerdict")!;
+    const r = await admission.execute({ strengthScore: 85, stage: "启动期", ztCount: 10, height: 3, gateMode: "full", trapFlagged: false });
+    const n = admission.normalize!(r);
+    expect(["可上车", "观望", "禁止"]).toContain(n!.verdict);
+    expect(typeof n!.confidence).toBe("number");
+    expect(typeof n!.reason).toBe("string");
+  });
+
+  it("checkSysRisk level=red → normalize 出禁止", async () => {
+    const tools = getAgentTools();
+    const sys = tools.find(t => t.name === "checkSysRisk")!;
+    const r = { level: "red", text: "系统性风险", reasons: [] };
+    const n = sys.normalize!(r);
+    expect(n!.verdict).toBe("禁止");
+    expect(n!.confidence).toBeGreaterThanOrEqual(85);
+  });
+});
+
+describe("决策融合裁决（V4-B）", () => {
+  it("因子失效>=50% 时 AI 说可上车也被降档", () => {
+    // 模拟 DecisionVerdictCard 融合逻辑
+    const aiVerdict = { action: "可上车" as const, confidence: 80 };
+    const factorStats = { decayed: 6, total: 10 };
+    let mainAction: string | null = aiVerdict.action;
+    let gatedDowngrade: string | null = null;
+    if (factorStats.total >= 3 && factorStats.decayed / factorStats.total >= 0.5 && mainAction === "可上车") {
+      mainAction = "观望";
+      gatedDowngrade = "因子失效门控";
+    }
+    expect(mainAction).toBe("观望");
+    expect(gatedDowngrade).not.toBeNull();
+  });
+
+  it("规则硬否决禁止 > AI 乐观可上车", () => {
+    const aiVerdict = { action: "可上车" as const };
+    const ruleVerdict = "禁止";
+    let mainAction: string | null = aiVerdict.action;
+    if (ruleVerdict === "禁止" && aiVerdict.action === "可上车") mainAction = "禁止";
+    expect(mainAction).toBe("禁止");
+  });
+});

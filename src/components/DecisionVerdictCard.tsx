@@ -30,10 +30,28 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
     return runConsensus(sources, { signalGates, factorStats });
   }, [sources, signalGates, factorStats]);
 
-  // AI 主导：Agent 裁决优先作为主结论（degraded=true 表示 LLM 不可用，退规则）
+  // ===== v9.40（V4-B/C）：AI 与规则的融合裁决（不再静默覆盖） =====
   const aiVerdict = agent && !agent.degraded ? agent : null;
-  const mainAction = aiVerdict?.action ?? verdict?.action;
-  const mainConfidence = aiVerdict?.confidence ?? verdict?.confidence;
+  const ruleVerdict = verdict?.action ?? null;
+  const aiRuleDivergent = Boolean(aiVerdict && ruleVerdict && aiVerdict.action !== ruleVerdict);
+
+  // V4-B：门控约束最终结论 —— 因子失效占比高 → AI 说"可上车"强制降档；规则硬否决优先于 AI 乐观
+  let gatedDowngrade: string | null = null;
+  let mainAction: string | null = aiVerdict?.action ?? ruleVerdict;
+  if (aiVerdict && factorStats && factorStats.total >= 3 && factorStats.decayed / factorStats.total >= 0.5 && mainAction === "可上车") {
+    mainAction = "观望";
+    gatedDowngrade = `🧪 ${factorStats.decayed}/${factorStats.total} 因子疑似失效，AI 判定自动降档（幻方门控）`;
+  }
+  if (aiVerdict && ruleVerdict === "禁止" && aiVerdict.action === "可上车") {
+    mainAction = "禁止";
+    gatedDowngrade = gatedDowngrade ?? "⛔ 规则硬否决（系统性风险/诱多/组合风险）优先于 AI 乐观判断";
+  }
+  const mainConfidence = mainAction === aiVerdict?.action
+    ? aiVerdict?.confidence
+    : (mainAction === "观望" && gatedDowngrade ? Math.min(aiVerdict?.confidence ?? 50, 60) : verdict?.confidence);
+
+  // V4-I：样本不足提示
+  const lowSamples = factorStats == null || factorStats.total < 3 || (verdict?.gatedSignals.length ?? 0) > 0;
 
   useEffect(() => {
     if (!mainAction || !mainConfidence) return;
@@ -45,6 +63,7 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
         action: mainAction,
         confidence: mainConfidence,
         source: aiVerdict ? "AI-Agent" : "规则投票",
+        gatedDowngrade,
         votes: verdict?.votes,
         dissent: verdict?.dissent,
         agentReason: aiVerdict?.reason,
@@ -55,7 +74,7 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
       arr.push(log);
       localStorage.setItem(key, JSON.stringify(arr.slice(-50))); // 每日最多留 50 条
     } catch { /* 日志失败不影响功能 */ }
-  }, [mainAction, mainConfidence, aiVerdict, verdict?.votes, mainline]);
+  }, [mainAction, mainConfidence, aiVerdict, verdict?.votes, mainline, gatedDowngrade]);
 
   if (!verdict && !aiVerdict) return null;
 
@@ -89,6 +108,23 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
           </span>
         )}
       </div>
+
+      {/* V4-C：AI-规则分歧显式告警（不静默覆盖） */}
+      {aiRuleDivergent && (
+        <div className="mt-1.5 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300">
+          ⚠ AI 与规则多源分歧：AI={aiVerdict!.action} / 规则={ruleVerdict}，已按{mainAction === ruleVerdict ? "规则" : "AI"}显示，建议人工复核
+        </div>
+      )}
+      {/* V4-B：门控降档标注 */}
+      {gatedDowngrade && (
+        <div className="mt-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+          {gatedDowngrade}
+        </div>
+      )}
+      {/* V4-I：样本不足提示 */}
+      {lowSamples && (
+        <div className="mt-1 text-[9px] text-slate-500">⚠ 历史样本不足（因子/回测数据积累中），AI 结论仅参考，不构成高置信决策</div>
+      )}
 
       {/* AI 推理链（置顶理由） */}
       {aiVerdict ? (

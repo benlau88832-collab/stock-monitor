@@ -8,9 +8,15 @@
 export interface AgentTool<TResult = unknown> {
   name: string;
   description: string;
+  /** v9.40（V4-F）：工具类别 —— vote=决策类（归一为 EvidenceSource 投票）/ data=数据类（原始盘面，供 LLM 独立推理） */
+  kind?: "vote" | "data";
+  /** v9.40（V4-F）：统一 schema 归一函数 —— 由工具自身把结果映射为 {verdict, confidence, reason}，消除 ?? 链脆弱映射 */
+  normalize?: (raw: any) => { verdict: Verdict; confidence: number; reason: string } | null;
   /** 执行函数：纯规则/数据查询，禁止内部再调 LLM */
   execute: (args: any) => Promise<TResult> | TResult;
 }
+
+export type Verdict = "可上车" | "观望" | "禁止";
 
 // ---- 工具输入类型（宽松，execute 内部防御） ----
 export interface ToolContext {
@@ -47,6 +53,8 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "getAdmissionVerdict",
       description: "最终准入闸：强度×阶段×闸门×梯队 → 可上车/观望/禁止",
+      kind: "vote",
+      normalize: (r) => r ? { verdict: r.action as Verdict, confidence: r.confidence ?? 50, reason: (r.reasons ?? []).join("；").slice(0, 60) } : null,
       execute: async (ctx: ToolContext) => {
         const { evaluateAdmission } = await import("./admissionGate");
         const r = evaluateAdmission({
@@ -63,6 +71,12 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "classifyMarketState",
       description: "市场状态机：情绪/涨停/炸板/溢价/高度 → 5 态 + 仓位系数",
+      kind: "vote",
+      normalize: (r) => r ? {
+        verdict: (r.positionFactor ?? 0.5) >= 0.8 ? "可上车" : (r.positionFactor ?? 0.5) >= 0.5 ? "观望" : "禁止",
+        confidence: Math.round(40 + (r.positionFactor ?? 0.5) * 50),
+        reason: String(r.state ?? "未知") + "市（系数" + (r.positionFactor ?? 0.5) + "）",
+      } : null,
       execute: async (ctx: ToolContext) => {
         const { classifyMarketState } = await import("./marketStateMachine");
         const r = classifyMarketState({
@@ -79,6 +93,8 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "computePositionAdvice",
       description: "仓位定量化：闸门×强度×单票上限 → 建议仓位% + 分批 + 止损",
+      kind: "vote",
+      normalize: (r) => r ? { verdict: r.action as Verdict, confidence: Math.min(90, 50 + (r.suggestedPct ?? 0) / 2), reason: "建议仓位" + (r.suggestedPct ?? 0) + "%·止损" + (r.stopLoss ?? 0) + "%" } : null,
       execute: async (ctx: ToolContext) => {
         const { computePositionAdvice } = await import("./positionSizing");
         const r = computePositionAdvice({
@@ -97,6 +113,12 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "checkExitSignal",
       description: "个股离场：7 条规则 → red/yellow/none",
+      kind: "vote",
+      normalize: (r) => {
+        if (!r) return null;
+        const map: Record<string, Verdict> = { red: "禁止", yellow: "观望", none: "可上车" };
+        return { verdict: map[r.level] ?? "观望", confidence: r.level === "red" ? 85 : r.level === "yellow" ? 60 : 50, reason: (r.reasons ?? []).join("；").slice(0, 50) };
+      },
       execute: async (ctx: ToolContext) => {
         const { checkStockExit } = await import("./stockExit");
         const r = checkStockExit({
@@ -110,6 +132,12 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "computePortfolioRisk",
       description: "组合风险预算：市场状态×连亏熔断×集中度 → 总仓位上限",
+      kind: "vote",
+      normalize: (r) => r ? {
+        verdict: (r.maxPositionPct ?? 50) >= 60 ? "可上车" : (r.maxPositionPct ?? 50) >= 40 ? "观望" : "禁止",
+        confidence: Math.min(90, (r.maxPositionPct ?? 50)),
+        reason: "总仓上限" + (r.maxPositionPct ?? 0) + "%" + (r.lossStreak ? "·连亏" + r.lossStreak + "天" : ""),
+      } : null,
       execute: async (ctx: ToolContext) => {
         const { computePortfolioRisk } = await import("./portfolioRisk");
         const r = computePortfolioRisk({
@@ -125,6 +153,12 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "checkSysRisk",
       description: "系统性风险：沪深300/跌停/炸板/情绪 → red/yellow/none",
+      kind: "vote",
+      normalize: (r) => {
+        if (!r) return null;
+        const map: Record<string, Verdict> = { red: "禁止", yellow: "观望", none: "可上车" };
+        return { verdict: map[r.level] ?? "观望", confidence: r.level === "red" ? 90 : r.level === "yellow" ? 65 : 50, reason: r.text ?? "" };
+      },
       execute: async (ctx: ToolContext) => {
         const { checkSysRisk } = await import("./sysRiskGuard");
         const r = checkSysRisk({
@@ -139,6 +173,7 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "backtestSignal",
       description: "信号回测：查历史胜率（回测门控用）",
+      kind: "data",
       execute: async () => {
         const { backtestSignals } = await import("./signalBacktest");
         return await backtestSignals(14) ?? [];
@@ -147,6 +182,12 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "reconcileFundNews",
       description: "资金-消息对账：消息利好板块 × 资金流 → 兑现/背离/待观察",
+      kind: "vote",
+      normalize: (r) => r ? {
+        verdict: (r.action === "可上车" ? "可上车" : r.action === "禁止" ? "禁止" : "观望"),
+        confidence: r.status === "兑现" ? 72 : r.status === "背离" ? 75 : 55,
+        reason: r.conclusion ?? "",
+      } : null,
       execute: async (ctx: ToolContext) => {
         const { reconcileFundNews } = await import("./fundNewsReconcile");
         const r = reconcileFundNews({
@@ -161,6 +202,7 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "getFundStreak",
       description: "资金连续性：板块连续流入天数（本地服务端）",
+      kind: "data",
       execute: async (ctx: ToolContext) => {
         const { buildFundStreaks } = await import("./fundStreak");
         const list = await buildFundStreaks();
@@ -171,6 +213,7 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "getThemeCalendar",
       description: "题材生命周期：首现日/运行天数/阶段（本地服务端）",
+      kind: "data",
       execute: async () => {
         const { buildThemeCalendar } = await import("./themeCalendar");
         return await buildThemeCalendar(7) ?? [];
@@ -179,6 +222,14 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "detectSealDecay",
       description: "封单衰减检测：封单环比变化 → 黄/红预警",
+      kind: "vote",
+      normalize: (r) => {
+        if (!r) return null;
+        const red = Number(r.red ?? 0), yellow = Number(r.yellow ?? 0);
+        if (red > 0) return { verdict: "禁止", confidence: 85, reason: red + "只封单崩落" };
+        if (yellow > 0) return { verdict: "观望", confidence: 60, reason: yellow + "只封单衰减" };
+        return { verdict: "可上车", confidence: 50, reason: "封单稳定" };
+      },
       execute: async (ctx: ToolContext) => {
         return { red: ctx.sealRed ?? 0, yellow: ctx.sealYellow ?? 0 };
       },
@@ -186,6 +237,7 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "getNewsDeep",
       description: "事件深挖（V3-14）：仅对政策级/高分事件(catalystScore>=60)触发 LLM 推演影响路径；低分事件不深挖（成本控制）",
+      kind: "data",
       execute: async (ctx: ToolContext & { eventTitle?: string; catalystScore?: number; eventLevel?: string; beneficiaries?: string[] }) => {
         const score = ctx.catalystScore ?? 0;
         // 成本护栏：仅高分/政策级事件深挖，普通事件直接返回（不调 LLM）
@@ -210,6 +262,7 @@ export function getAgentTools(): AgentTool[] {
     {
       name: "getDecisionEvidence",
       description: "多源决策证据：汇聚各引擎输出（decisionBus 视角）",
+      kind: "data",
       execute: async (ctx: ToolContext) => {
         const { collectEvidence } = await import("./decisionCollector");
         return collectEvidence({
