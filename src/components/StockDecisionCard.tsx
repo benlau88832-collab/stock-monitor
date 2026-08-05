@@ -2,10 +2,12 @@
 // 个股雷达页选中个股首屏：一句话结论/主线归属/技术位置/资金性质/风险点/止损止盈/置信度
 // 实现：纯规则引擎基于现有实时数据（零额外请求、零等待），符合 PRD "决策卡先于信息流"
 // v9.27（P1-7）：新增"离场信号"行（个股级离场，联动持仓成本止损）
+// v9.32：新增"快速下单"行（券商 URL Scheme 直通同花顺/通达信/东财，秒级执行）
 import { fmtMoney, fmtPct } from "../lib/format";
 import type { WatchStock, VetoItem } from "./StockWatchlist";
 import DisclaimerTag from "./DisclaimerTag";
 import { checkStockExit, exitBadge } from "../lib/stockExit";
+import { orderUrl } from "../lib/realLinks";
 
 interface Props {
   stock: WatchStock;
@@ -142,6 +144,14 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
         </Row>
         <Row k="置信度">
           <span className="text-violet-300">{confidence}%</span>
+        </Row>
+        {/* v9.32：快速下单（券商 URL Scheme 直通，秒级执行） */}
+        <Row k="快速下单">
+          <div className="flex gap-1">
+            <a href={orderUrl(stock.code, "ths")} className="rounded px-1.5 py-0.5 text-[10px] bg-rose-500/20 text-rose-300 hover:bg-rose-500/30">同花顺</a>
+            <a href={orderUrl(stock.code, "tdx")} className="rounded px-1.5 py-0.5 text-[10px] bg-sky-500/20 text-sky-300 hover:bg-sky-500/30">通达信</a>
+            <a href={orderUrl(stock.code, "dfcf")} className="rounded px-1.5 py-0.5 text-[10px] bg-amber-500/20 text-amber-300 hover:bg-amber-500/30">东财</a>
+          </div>
         </Row>
       </div>
       <div className="pt-1 border-t border-white/5 flex items-center justify-between">

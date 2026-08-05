@@ -125,3 +125,25 @@ export function northboundUrl(): string {
 export function marketBreadthUrl(): string {
   return "https://quote.eastmoney.com/center/gridlist.html#hs_a_board";
 }
+
+// ============== v9.32：游资实战"看到信号到下单<10秒" ==============
+// 券商下单 URL Scheme —— 需用户本地装了对应客户端才会跳转；浏览器会弹"打开 xxx 应用"确认
+// 同花顺：ths://chart?code=SH600519（支持 iOS/Android/PC 客户端）
+// 通达信：tdx://stock?code=600519&market=SH
+// 东方财富：dfcf://stock?code=SH600519
+export function orderUrl(code: string, broker: "ths" | "tdx" | "dfcf" = "ths"): string {
+  const c = String(code ?? "").trim();
+  if (!c) return "#";
+  // 6/5开头=沪市(SH)，0/3开头=深市(SZ)，4/8开头=北交所(沿用SH)
+  const prefix = c.startsWith("6") || c.startsWith("5") || c.startsWith("4") || c.startsWith("8") ? "SH" : "SZ";
+  switch (broker) {
+    case "ths": return `ths://chart?code=${prefix}${c}`;
+    case "tdx": return `tdx://stock?code=${c}&market=${prefix}`;
+    case "dfcf": return `dfcf://stock?code=${prefix}${c}`;
+  }
+}
+
+// 自选股一键导出（代码逗号串，可粘贴到券商批量下单/导入自选）
+export function exportWatchlist(codes: string[]): string {
+  return codes.filter(c => /^\d{6}$/.test(c)).join(",");
+}

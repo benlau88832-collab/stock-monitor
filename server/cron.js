@@ -172,6 +172,8 @@ async function fetchPolicyNews() {
 // （如"净利润同比+200%"不含这些词）。改为：配了 LLM Key 时对 top40 公告
 // 一次调用打分（score≥4=强利好），LLM 不可用时用扩展关键词正则兜底。
 const STRONG_ANN_RE = /业绩|中标|增持|回购|重组|突破|获批|净利润|同比|预增|增长|合同|订单|签约|股权|合资|扩产|涨价|产能|激励|分红|扭亏|减亏/;
+// v9.32：黑天鹅公告（利空向）—— 盘前突发立案/退市/商誉减值等会让持仓秒跌停
+const BLACK_ANN_RE = /立案|退市|商誉减值|被问询|警示函|行政处罚|预亏|业绩预减|减持|质押|违约|停牌核查|风险提示|控股股东|被列为失信|司法冻结/;
 async function rankStrongAnnouncements(pool, dateStr) {
   const annR = await pool.query("SELECT * FROM announcements WHERE time >= $1 ORDER BY time DESC LIMIT 100", [dateStr]);
   const anns = annR.rows;
@@ -327,6 +329,21 @@ function startCron({ pool }) {
           console.log(`[cron] policy ${pDateStr}: ${policies.length} 条`);
         }
       } catch (e) { console.error("[cron] policy fetch failed:", e.message); }
+
+      // v9.32：黑天鹅公告落库（kv_store: black_swan:YYYY-MM-DD）—— 利空向公告实时采集
+      try {
+        const blackSwans = anns.filter(a => BLACK_ANN_RE.test(a.title || ""));
+        if (blackSwans.length > 0) {
+          const bsDate = bjDate();
+          const bsDateStr = `${bsDate.slice(0, 4)}-${bsDate.slice(4, 6)}-${bsDate.slice(6, 8)}`;
+          await pool.query(
+            `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+             ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+            [`black_swan:${bsDateStr}`, JSON.stringify({ date: bsDateStr, items: blackSwans.map(a => ({ code: a.stockCode, name: a.stockName, title: a.title, time: a.time, url: a.url })) })],
+          );
+          console.log(`[cron] black_swan ${bsDateStr}: ${blackSwans.length} 条`);
+        }
+      } catch (e) { console.error("[cron] black_swan fetch failed:", e.message); }
     } catch (e) { console.error("[cron] fetch failed:", e.message); }
     cronBusy = false;
   }, { timezone: "Asia/Shanghai" });

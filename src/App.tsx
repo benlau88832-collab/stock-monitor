@@ -35,6 +35,8 @@ import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
 import StatusBar from "./components/StatusBar";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
+// v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
+import { checkSysRisk } from "./lib/sysRiskGuard";
 import { appendSignal } from "./lib/signalLedger";
 import { runSignalBackfill, isBackfilledToday, markBackfilledToday } from "./lib/signalLedger";
 import { recordRecommendation, runAttribution } from "./lib/recTracker";
@@ -1021,6 +1023,18 @@ export default function App() {
 
   // 构建三级警报列表
   const alerts: AlertItem[] = [];
+  // v9.32：系统性风险预警（最高优先级，置顶）
+  if (overview) {
+    const hs300 = overview.indices?.find(i => i.code === "000300");
+    const sysRisk = checkSysRisk({
+      hs300Pct: hs300?.pct ?? null,
+      limitDownCount: overview.limitPool?.limitDownCount ?? 0,
+      blastedRate: overview.limitPool?.blastedRate ?? 0,
+      sentiment: overview.sentiment,
+    });
+    if (sysRisk.level === "red") alerts.push({ id: "sys_risk_red", level: "critical", message: sysRisk.text });
+    else if (sysRisk.level === "yellow") alerts.push({ id: "sys_risk_yellow", level: "warning", message: sysRisk.text });
+  }
   if (vetoActive) {
     alerts.push({ id: "veto_main", level: "critical", message: "重度背离：主力持续流出+散户接盘（历史统计风险偏高）" });
   }
@@ -1157,7 +1171,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.31 · build 08-06 00:40 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.32 · build 08-06 00:55 · 数据源：东方财富</div>
       </footer>
     </div>
   );

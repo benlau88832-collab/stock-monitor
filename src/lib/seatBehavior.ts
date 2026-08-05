@@ -335,6 +335,22 @@ export function analyzeSeatsGroup(
   if (scores.historicalT1 >= 75) signals.push({ kind: "强势T1", label: `📈 买方历史 T+1 均 ${avgBuyerT1?.toFixed(1)}%`, tone: "good" });
   else if (scores.historicalT1 <= 35 && avgBuyerT1 != null) signals.push({ kind: "弱势T1", label: `📉 买方历史 T+1 均 ${avgBuyerT1?.toFixed(1)}%`, tone: "bad" });
 
+  // v9.32：席位协同检测（同一游资标签下 ≥2 个不同席位同向买入 —— 比单席位信号强数倍）
+  const buyerByLabel = new Map<string, { seats: Set<string>; netBuy: number }>();
+  for (const b of buyers) {
+    const tag = matchSeatTag(b.deptName);
+    if (!tag || tag.category !== "hotmoney") continue;
+    const entry = buyerByLabel.get(tag.label) ?? { seats: new Set(), netBuy: 0 };
+    entry.seats.add(b.deptName);
+    entry.netBuy += b.net;
+    buyerByLabel.set(tag.label, entry);
+  }
+  const synergyGroups = [...buyerByLabel.entries()].filter(([, v]) => v.seats.size >= 2);
+  if (synergyGroups.length > 0) {
+    const txt = synergyGroups.map(([label, v]) => `${label}(${v.seats.size}席位协同)`).join("、");
+    signals.push({ kind: "协同", label: `🔗 游资多席位协同：${txt}`, tone: "good" });
+  }
+
   // ============== 信号解读（基于 5 维评分，中性表述） ==============
   const confidence: GroupAnalysis["confidence"] = scores.total >= 70 ? "强" : scores.total >= 40 ? "中" : "弱";
   let suggestion = "";
