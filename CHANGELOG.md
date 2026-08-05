@@ -4,6 +4,38 @@
 
 ---
 
+## v9.38 — V3 剩余项补全：Agent 深审 + 因子IC + 资金对账 + 事件分级（2026-08-06）
+
+按 V3 修改指令表补全上一轮未做项：
+
+### V3-8/9：因子注册表 + IC 评估 + 衰减监测
+- 新建 `factorLib.ts`：注册 11 个标准因子（炸板率高/低/涨停数/高度/溢价/晋级率/情绪极值/封单衰减/席位加持/资金连续性/核按钮）
+- 每因子对"次日主线延续"计算 Spearman 秩相关 IC；滚动样本 |IC|<0.05 或样本<5 → 标"⚠ 疑似失效"并自动降权 0.3（幻方"因子会过期"核心）
+
+### V3-13：资金-消息对账引擎
+- 新建 `fundNewsReconcile.ts`：消息利好(score≥60) × 资金流对账
+  - 利好+连续流入 → "兑现"可上车；利好+流出 → "资金背离"观望/禁止（政策未兑现/诱多）；中性+流入 → 待观察
+
+### V3-1/2/3/6：Agent 工具注册表 + 主循环 + Critic
+- 新建 `agentTools.ts`：12 个工具包装现有纯函数（准入闸/市场状态/仓位/离场/组合风险/系统风险/回测/资金对账/资金连续性/题材日历/封单/决策证据），execute 均不触发额外 LLM
+- 新建 `aiAgent.ts`：轻量 ReAct——① 规则工具收集证据（0 次 LLM）→ ② Agnes 读证据裁决 → ③ Critic 挑刺（有效反对则降置信/改判）→ ④ 自洽投票开关（temperature 0.1/0.4/0.7 三票多数，默认关省配额）；LLM 不可用降级 rule decisionBus
+- Dashboard：终裁决卡下新增"🤖 Agent 深审"按钮（手动触发，显示 action/置信/理由/Critic意见/证据链）
+
+### V3-12/14：事件三级分类
+- aiPrompts 新增 task `eventClassify`（政策/行业/事件三级 + beneficiaries + catalystScore + timeSensitivity）+ FALLBACKS 规则版 + ai.js 白名单
+
+### V3-11：加速回测样本积累
+- cron 新增 `fetchMarketIntraday`：20min 任务内每小时落 `market_intraday:日期`（盘中快照）
+
+### 单测：65 例全绿（+12：factorLib 5 + fundNewsReconcile 5 + agentTools 3 - 修正 1）
+- V3-8 IC 计算 / V3-13 对账五场景 / V3-1 工具注册表 12+ 唯一性
+
+### 教训
+- agentTools 泛型 execute 参数类型需宽松（any）避免 unknown 不兼容
+- factorLib 测试 rows 需补全所有因子输入字段（缺失→extract null→样本0）
+
+---
+
 ## v9.37 — GLM5.2-V3 审查落地：决策总线 + 终裁决卡 + 死代码消除（2026-08-06）
 
 审核 GLM5.2建议-v3.txt（基于 dddc288 全栈审查）：

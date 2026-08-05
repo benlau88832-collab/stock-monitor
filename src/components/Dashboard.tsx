@@ -20,6 +20,8 @@ import { classifyMarketState } from "../lib/marketStateMachine";
 import { checkSysRisk } from "../lib/sysRiskGuard";
 import { evaluateAdmission } from "../lib/admissionGate";
 import { stageOfStrength } from "../lib/stageModel";
+// v9.38（V3-2/3）：AI 决策 Agent（手动触发深审）
+import { decideForMainline, type AgentVerdict } from "../lib/aiAgent";
 import InstitutionFund from "./InstitutionFund";
 import Playbook from "./Playbook";
 import PopularityRadar from "./PopularityRadar";
@@ -539,9 +541,26 @@ export default function Dashboard({
   const isPre = phase === "pre" || phase === "auction";
   const gate = battlePlan?.gate ?? null;
 
-  // v9.37（V3-4/7）：AI 终裁决 —— 多源证据汇聚
-  const decisionSources = useMemo(() => {
+  // v9.38（V3-2/3）：Agent 深审（手动触发，控 LLM 配额）
+  const [agentResult, setAgentResult] = useState<AgentVerdict | null>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const runAgent = async () => {
     const top = battlePlan?.candidates?.[0];
+    if (!top || agentLoading) return;
+    setAgentLoading(true);
+    setAgentResult(null);
+    try {
+      const r = await decideForMainline(
+        { mainline: top.mainline, strengthScore: top.strengthScore, ztCount: top.ztCount, height: top.height, exitSignal: top.exitSignal },
+        { trapFlagged: false, marketFactor: decisionSources.find(s => s.name === "市场状态")?.confidence ? 0.6 : 0.5 },
+      );
+      setAgentResult(r);
+    } catch { /* 失败静默 */ }
+    setAgentLoading(false);
+  };
+
+  // v9.37（V3-4/7）：AI 终裁决 —— 多源证据汇聚
+  const decisionSources = useMemo(() => {    const top = battlePlan?.candidates?.[0];
     const admission = evaluateAdmission({
       strengthScore: top?.strengthScore ?? null,
       stage: top ? stageOfStrength({ strengthScore: top.strengthScore, ztCount: top.ztCount, exitSignal: top.exitSignal }) : "观察中",
@@ -606,6 +625,36 @@ export default function Dashboard({
               mainline={battlePlan?.candidates?.[0]?.mainline ?? "—"}
               sources={decisionSources}
             />
+            {/* v9.38（V3-2/3）：Agent 深审（手动触发，工具收集+LLM裁决+Critic） */}
+            <div className="flex items-center gap-2">
+              <button onClick={runAgent} disabled={agentLoading}
+                className="rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[11px] font-bold text-violet-300 hover:bg-violet-500/20 disabled:opacity-50">
+                {agentLoading ? "🤖 Agent 调研中…" : "🤖 Agent 深审（LLM）"}
+              </button>
+              {agentResult && (
+                <span className={`rounded px-1.5 py-0.5 text-[10px] font-black ${
+                  agentResult.action === "可上车" ? "bg-emerald-500/20 text-emerald-300"
+                  : agentResult.action === "禁止" ? "bg-rose-500/20 text-rose-300"
+                  : "bg-amber-500/20 text-amber-300"}`}>
+                  Agent: {agentResult.action} · {agentResult.confidence}%
+                </span>
+              )}
+            </div>
+            {agentResult && (
+              <div className="rounded-lg border border-violet-500/20 bg-violet-950/10 p-2 text-[11px]">
+                <div className="text-slate-300">{agentResult.reason}</div>
+                {agentResult.critic && <div className="mt-1 text-rose-300/90">{agentResult.critic}</div>}
+                {agentResult.degraded && <div className="mt-1 text-amber-300/80">（规则兜底：LLM 不可用）</div>}
+                {agentResult.evidence.length > 0 && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-[10px] text-slate-500">📋 Agent 证据（点击展开）</summary>
+                    <div className="mt-0.5 space-y-0.5">
+                      {agentResult.evidence.map((e, i) => <div key={i} className="text-[10px] text-slate-400">• {e}</div>)}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
             <BattlePlan data={battlePlan ?? null} />
             {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
             {overview && (

@@ -21,6 +21,7 @@ const TASK_ALLOW = new Set([
   "mainlineClassify", "mainlineDiagnosis", "mainlineRank", "eventExplain",
   "themeNewsScore", "stockNewsScore", "dailyIntel",
   "dailyReviewAuto", "nextDayScenarios", "leaderPredict", "riskRadar",
+  "eventClassify",
 ]);
 
 // ---------- 简单令牌桶：60 次/分钟 ----------

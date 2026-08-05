@@ -60,6 +60,27 @@ async function fetchLhbDaily() {
   }));
 }
 
+// ---------- v9.38（V3-11）：盘中市场快照（加速信号回测样本积累） ----------
+// 盘中每小时落 market_intraday:日期 → 前端 signalBacktest 可读日内快照补样本
+async function fetchMarketIntraday() {
+  const date = bjDate();
+  const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
+  const zt = await httpsGet(`https://push2ex.eastmoney.com/getTopicZTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${date}`);
+  const zb = await httpsGet(`https://push2ex.eastmoney.com/getTopicZBPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${date}`);
+  const dt = await httpsGet(`https://push2ex.eastmoney.com/getTopicDTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${date}`);
+  const ztPool = zt?.data?.pool ?? [];
+  const zbPool = zb?.data?.pool ?? [];
+  const dtPool = dt?.data?.pool ?? [];
+  return {
+    date: dateStr,
+    ts: new Date().toISOString(),
+    ztCount: ztPool.length,
+    zbCount: zbPool.length,
+    dtCount: dtPool.length,
+    blastedRate: ztPool.length + zbPool.length > 0 ? Math.round(zbPool.length / (ztPool.length + zbPool.length) * 1000) / 10 : 0,
+  };
+}
+
 // ---------- 通用 https GET ----------
 function httpsGet(url, timeout = 15000) {
   return new Promise((resolve, reject) => {
@@ -544,6 +565,18 @@ function startCron({ pool }) {
         }
       } catch (e) { console.error("[cron] black_swan fetch failed:", e.message); }
     } catch (e) { console.error("[cron] fetch failed:", e.message); }
+
+    // v9.38（V3-11）：盘中市场快照（每小时一次，加速回测样本）
+    try {
+      const md = await fetchMarketIntraday();
+      const iDate = bjDate();
+      const iDateStr = `${iDate.slice(0, 4)}-${iDate.slice(4, 6)}-${iDate.slice(6, 8)}`;
+      await pool.query(
+        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+         ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+        [`market_intraday:${iDateStr}`, JSON.stringify(md)],
+      );
+    } catch (e) { console.error("[cron] intraday snapshot failed:", e.message); }
     cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
@@ -648,3 +681,4 @@ module.exports.fetchBoardFundServer = fetchBoardFundServer;
 module.exports.fetchBlockTrades = fetchBlockTrades;
 module.exports.fetchMarketDaily = fetchMarketDaily;
 module.exports.fetchLhbDaily = fetchLhbDaily;
+module.exports.fetchMarketIntraday = fetchMarketIntraday;

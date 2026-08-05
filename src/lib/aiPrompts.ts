@@ -16,7 +16,9 @@ export type AITask =
   // v9.28（P1-9）：独立业务 task —— 避免复用 mainlineRank/stockJudge 造成缓存串任务与 token 配置错配
   | "themeNewsScore" | "stockNewsScore" | "dailyIntel"
   // v9.33（缺口2/3）：盘后自动复盘 + 次日三剧本 + 龙头预判 + 风险雷达
-  | "dailyReviewAuto" | "nextDayScenarios" | "leaderPredict" | "riskRadar";
+  | "dailyReviewAuto" | "nextDayScenarios" | "leaderPredict" | "riskRadar"
+  // v9.38（V3-12）：事件三级分类（政策/行业/事件）
+  | "eventClassify";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -46,6 +48,8 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   nextDayScenarios: { temperature: 0.4, maxTokens: 1000, thinking: false },
   leaderPredict:   { temperature: 0.2, maxTokens: 600, thinking: false },
   riskRadar:       { temperature: 0.2, maxTokens: 800, thinking: false },
+  // v9.38（V3-12）：事件三级分类（政策级/行业级/事件级）—— 批量小输出
+  eventClassify:   { temperature: 0.1, maxTokens: 1500, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
@@ -96,6 +100,7 @@ export interface AITaskPayload {
   nextDayScenarios: { prompt: string };
   leaderPredict: { prompt: string };
   riskRadar: { prompt: string };
+  eventClassify: { events: Array<{ title: string; source: string }> };
 }
 
 // ============== Prompt 构建器 ==============
@@ -254,6 +259,21 @@ ${p.prompt}
 输出严格JSON对象，格式：
 {"level":"高|中|低","points":[{"item":"风险点1","desc":"≤30字"},{"item":"风险点2","desc":"≤30字"}],"advice":"≤40字"}
 只返回JSON对象，无其他文字。` }),
+  // v9.38（V3-12）：事件三级分类（政策/行业/事件）
+  eventClassify: (p) => ({ system: SYSTEM_PREFIX, user:
+`你是A股事件分级器。对以下新闻/公告事件做三级分类并评估影响。
+
+事件列表（标题|来源）：
+${p.events.map(e => `- ${e.title} | ${e.source}`).join("\n") || "（无）"}
+
+输出严格JSON数组，每事件一项：
+[{"title":"原标题","level":"政策|行业|事件","beneficiaries":["受益板块1","板块2"],"catalystScore":0-100,"timeSensitivity":"即时|短期|中长期","reason":"≤25字"}]
+分级规则：
+- 政策级：国务院/央行/证监会/发改委/国常会/部委发文 → beneficiaries 给受益行业清单
+- 行业级：产业链事件/涨价/订单/技术突破 → beneficiaries 给细分方向
+- 事件级：个股公告/中标/减持 → beneficiaries 给该股行业
+catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业级 40-64 / 个股级 20-40
+只返回JSON数组，无其他文字。` }),
 };
 
 export function buildPrompt<T extends AITask>(task: T, payload: AITaskPayload[T]) {
@@ -323,4 +343,14 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   ]),
   leaderPredict: (_p) => JSON.stringify({ predictLeader: null, confidence: 0, reason: "规则版（LLM不可用）", watch: "" }),
   riskRadar: (_p) => JSON.stringify({ level: "低", points: [], advice: "规则版（LLM不可用）" }),
+  // v9.38（V3-12）规则版：按关键词粗分级
+  eventClassify: (p) => JSON.stringify(
+    p.events.slice(0, 10).map(e => {
+      const t = e.title;
+      let level: "政策" | "行业" | "事件" = "事件";
+      if (/国务院|央行|证监会|发改委|国常会|部委|印发|通知|规划|试点|专项/.test(t)) level = "政策";
+      else if (/产业链|涨价|订单|技术|量产|突破|扩产|招标/.test(t)) level = "行业";
+      return { title: t.slice(0, 30), level, beneficiaries: [], catalystScore: level === "政策" ? 70 : level === "行业" ? 50 : 30, timeSensitivity: "短期", reason: "规则版分级" };
+    }),
+  ),
 };
