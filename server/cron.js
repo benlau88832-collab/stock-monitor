@@ -20,6 +20,29 @@ function contentKey(seed) {
   return `fb_${h.toString(36)}_${fallbackSeq++}`;
 }
 
+// ---------- v9.35（S3）：市场日指标落库（信号回测的数据源） ----------
+// 目的：给前端 signalBacktest 提供"每日市场指标"历史序列（涨停/跌停/炸板/最高板）。
+// 情绪分由前端 cloudStore 已同步（kv sentiment:日期 = 数字分），本键只补池类指标。
+async function fetchMarketDaily() {
+  const date = bjDate();
+  const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
+  const zt = await httpsGet(`https://push2ex.eastmoney.com/getTopicZTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${date}`);
+  const zb = await httpsGet(`https://push2ex.eastmoney.com/getTopicZBPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${date}`);
+  const dt = await httpsGet(`https://push2ex.eastmoney.com/getTopicDTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${date}`);
+  const ztPool = zt?.data?.pool ?? [];
+  const zbPool = zb?.data?.pool ?? [];
+  const dtPool = dt?.data?.pool ?? [];
+  const maxBoard = ztPool.length > 0 ? Math.max(0, ...ztPool.map(p => Number(p?.lbc ?? 1))) : 0;
+  return {
+    date: dateStr,
+    ztCount: ztPool.length,
+    zbCount: zbPool.length,
+    dtCount: dtPool.length,
+    blastedRate: ztPool.length + zbPool.length > 0 ? Math.round(zbPool.length / (ztPool.length + zbPool.length) * 1000) / 10 : 0,
+    maxBoardHeight: maxBoard,
+  };
+}
+
 // ---------- 通用 https GET ----------
 function httpsGet(url, timeout = 15000) {
   return new Promise((resolve, reject) => {
@@ -377,6 +400,16 @@ function startCron({ pool }) {
       console.log(`[cron] zt snapshot ${dateStr}: ${snap.count} 只涨停`);
     } catch (e) { console.error("[cron] zt snapshot failed:", e.message); }
     try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] analyze failed:", e.message); }
+    // v9.35（S3）：市场日指标落库（信号回测数据源）
+    try {
+      const md = await fetchMarketDaily();
+      await pool.query(
+        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+         ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+        [`market_daily:${md.date}`, JSON.stringify(md)],
+      );
+      console.log(`[cron] market_daily ${md.date}: 涨停${md.ztCount} 炸板${md.zbCount} 跌停${md.dtCount} 炸板率${md.blastedRate}%`);
+    } catch (e) { console.error("[cron] market_daily failed:", e.message); }
     // v9.33（缺口2/6）：盘后自动复盘 + 板块资金流落库（连续性/切换分析数据源）
     try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] review failed:", e.message); }
     try {
@@ -582,3 +615,4 @@ module.exports.analyzeDaily = analyzeDaily;
 module.exports.generateDailyReview = generateDailyReview;
 module.exports.fetchBoardFundServer = fetchBoardFundServer;
 module.exports.fetchBlockTrades = fetchBlockTrades;
+module.exports.fetchMarketDaily = fetchMarketDaily;

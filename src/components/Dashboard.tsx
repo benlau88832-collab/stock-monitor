@@ -7,6 +7,8 @@ import AuctionBoard from "./AuctionBoard";
 import FiveQBar from "./FiveQBar";
 import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
+// v9.35（S3）：信号有效性回测面板
+import SignalEffectivenessPanel from "./SignalEffectivenessPanel";
 import InstitutionFund from "./InstitutionFund";
 import Playbook from "./Playbook";
 import PopularityRadar from "./PopularityRadar";
@@ -512,6 +514,8 @@ export default function Dashboard({
   // 修复：原代码只在组件首次挂载时算一次 phase，phase 改变时不会重新打开 AI 复盘
   const [showAI, setShowAI] = useState(phase === "post");
   const [showSignal, setShowSignal] = useState(false);
+  // v9.35（S3）：信号有效性回测面板
+  const [showSignalEffect, setShowSignalEffect] = useState(false);
   useEffect(() => {
     // 当 phase 变到 post 时自动打开 AI 复盘（盘后场景）
     if (phase === "post") setShowAI(true);
@@ -652,8 +656,14 @@ export default function Dashboard({
               className="rounded px-3 py-1 text-xs bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10">
               {showSignal ? "收起信号/日记" : "信号账本/日记"}
             </button>
+            {/* v9.35（S3）：信号有效性回测面板 */}
+            <button onClick={() => setShowSignalEffect(v => !v)}
+              className="rounded px-3 py-1 text-xs bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border border-violet-500/30">
+              {showSignalEffect ? "收起回测" : "🧪 信号有效性回测"}
+            </button>
           </div>
           {showAI && <DailySummary overview={overview} fund={fund} />}
+          {showSignalEffect && <SignalEffectivenessPanel />}
           {showSignal && <SignalPanel />}
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
