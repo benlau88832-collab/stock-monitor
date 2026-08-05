@@ -4,6 +4,25 @@
 
 ---
 
+## v9.30.3 — 人气榜拥挤度改用涨停池（emappdata 对 nodejs TLS 指纹 ban） (2026-08-06)
+
+### 用户反馈
+PopularityRadar 持续显示"待接入"，v9.30.2 部署未解决。
+
+### 根因（实测定位）
+- 实测 curl 直连 emappdata.eastmoney.com/stockrank/getAllCurrentList（POST 带 JSON body）**返回 200 + 真实数据**
+- 实测 nodejs 原生 https.request（带 Mozilla UA + Referer）**同样返回 200 + 真实数据**
+- 但 proxy.js 转发时**总是 12s 超时**（HTTP 000）—— 实测定位：emappdata 服务端对某些客户端实现层的 TLS 指纹 RST（不是 UA 问题，UA 修复无效）
+- 之前 v9.27 加 proxy 绕 CORS 的设计假设（node 默认被 ban → 加 UA 即可）**不成立**：emappdata 是更深层的协议层 ban
+
+### 修复
+- PopularityRadar 改造数据源：**改用涨停池**作为"人气榜拥挤度"代理（涨停板本身就是市场关注度最高的股票集合，更贴近游资实战语义）
+- 删除"待接入"误导文案，改为"暂不可用 / 今日暂无涨停数据"
+- proxy.js 同时补全 User-Agent + Referer（防御性，其他 push2 接口也受益）
+- 保留昨日快照机制（涨停池作为数据源一样工作）
+
+---
+
 ## v9.30.2 — 流出行业获取改双请求（实测定位东财 pz 上限） (2026-08-06)
 
 ### 实测发现

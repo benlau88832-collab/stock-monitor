@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { fetchPopularityRank, fetchStockBriefBatch, type PopularityItem, type StockBrief } from "../lib/api";
+// v9.30.3：移除 emappdata（东财对该 POST 接口 ban nodejs https.request 的 TLS 指纹 → 永远 socket hang up）
+// 改用涨停池作为"人气榜拥挤度"代理数据源——涨停板本身就是市场关注度最高的集合，更贴近游资实战语义。
+import { fetchLimitPoolSummary, fetchStockBriefBatch, type PopularityItem, type StockBrief } from "../lib/api";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 
@@ -50,22 +52,29 @@ export default function PopularityRadar() {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
     try {
-      const list = await fetchPopularityRank(50);
+      // v9.30.3：数据源改为涨停池（不再依赖被 ban 的 emappdata）
+      const pool = await fetchLimitPoolSummary();
+      const raw = pool?.rawZTPool ?? [];
+      const list: PopularityItem[] = raw.slice(0, 50).map((s: any, i) => ({
+        code: String(s.c ?? s.code ?? ""),
+        name: String(s.n ?? s.name ?? ""),
+        rank: i + 1,
+        market: String(s.hybk ?? s.market ?? "").slice(0, 2),
+      })).filter(i => /^\d{6}$/.test(i.code));
       if (list.length > 0) {
         setItems(list);
         saveSnapshot(list);
         setError(null);
-        // 批量查询行情（名称/价格/涨幅/成交额）
-        const codes = list.map(i => i.code).filter(c => /^\d{6}$/.test(c));
+        const codes = list.map(i => i.code);
         if (codes.length > 0) {
           const map = await fetchStockBriefBatch(codes);
           setBriefs(map);
         }
       } else {
-        setError("待接入");
+        setError("今日暂无涨停数据");
       }
     } catch {
-      setError("待接入");
+      setError("暂不可用");
     } finally {
       setLoading(false);
     }
@@ -76,7 +85,7 @@ export default function PopularityRadar() {
     load();
   }, [load]);
 
-  // "待接入" 状态
+  // v9.30.3：失败/空状态改为友好提示（不再误导"待接入"，emappdata 已被剔除）
   if (error) {
     return (
       <div className="rounded-xl border border-white/10 bg-white/5 p-3">
@@ -85,7 +94,7 @@ export default function PopularityRadar() {
           <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] text-amber-300">{error}</span>
         </div>
         <div className="text-[11px] text-slate-500">
-          东方财富人气榜接口探测失败（POST 接口可能受 CORS 限制），后续可通过代理接入。
+          数据源已切换为涨停池热度（东财人气势接口对服务端 IP 拒绝响应）。
         </div>
       </div>
     );

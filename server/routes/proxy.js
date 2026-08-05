@@ -22,6 +22,9 @@ function checkAuth(req, res) {
 const cache = new Map();
 const TTL = 5000;
 
+// v9.30.3：模拟浏览器 UA（node 默认 "node" 会被 emappdata 等接口 ban 导致 socket hang up）
+const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 const ALLOWED_HOSTS = [
   "push2.eastmoney.com",
   "push2delay.eastmoney.com",
@@ -75,7 +78,14 @@ function forward(req, res, target, bodyBuf) {
   const lib = u.protocol === "https:" ? https : http;
   let sent = false; // v9.26.10：防 502/504 双重发送
   const done = (fn) => { if (!sent) { sent = true; fn(); } };
-  const upstream = lib.request(u, { method: bodyBuf ? "POST" : "GET", headers: bodyBuf ? { "Content-Type": "application/json" } : {} }, r => {
+  // v9.30.3：emappdata 等接口对 nodejs 默认 UA("node") 拒响应（实测 socket hang up），
+  //   必须补浏览器 UA + Referer 才能正常转发。其他 push2 接口不 ban node 但也一并补齐（防御性）。
+  const upstream = lib.request(u, {
+    method: bodyBuf ? "POST" : "GET",
+    headers: bodyBuf
+      ? { "Content-Type": "application/json", "User-Agent": BROWSER_UA, "Referer": `https://${u.hostname}/` }
+      : { "User-Agent": BROWSER_UA, "Referer": `https://${u.hostname}/` },
+  }, r => {
     const chunks = [];
     r.on("data", c => chunks.push(c));
     r.on("end", () => {
