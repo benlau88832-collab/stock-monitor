@@ -1037,32 +1037,32 @@ export interface StockBrief {
 
 export async function fetchStockBriefBatch(codes: string[]): Promise<Map<string, StockBrief>> {
   if (codes.length === 0) return new Map();
-  // push2 的 ulist.np 支持批量 secids（逗号分隔），一次最多约100只
-  // v9.24-P1-4：fields 加 f10（量比）供异动分级使用
-  const secids = codes.map(c => toSecid(c)).join(",");
-  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f6,f8,f10,f12,f14&secids=${secids}`;
-  try {
-    const json = await trackedJsonp<any>("人气榜行情", url, 10000);
-    const diff = normalizeDiff(json?.data?.diff);
-    const map = new Map<string, StockBrief>();
-    for (const d of diff) {
-      const code = String(d.f12 ?? "");
-      if (code) {
-        map.set(code, {
-          code,
-          name: String(d.f14 ?? ""),
-          price: num(d.f2),
-          pct: num(d.f3),
-          amount: num(d.f6),
-          turnoverRate: num(d.f8),
-          volumeRatio: num(d.f10),
-        });
+  // push2 ulist.np 单次最多约 100 只 secids；v9.26.17 自动分批支持 > 100 只
+  const map = new Map<string, StockBrief>();
+  for (let i = 0; i < codes.length; i += 100) {
+    const chunk = codes.slice(i, i + 100);
+    const secids = chunk.map(c => toSecid(c)).join(",");
+    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f6,f8,f10,f12,f14&secids=${secids}`;
+    try {
+      const json = await trackedJsonp<any>("人气榜行情", url, 10000);
+      const diff = normalizeDiff(json?.data?.diff);
+      for (const d of diff) {
+        const code = String(d.f12 ?? "");
+        if (code) {
+          map.set(code, {
+            code,
+            name: String(d.f14 ?? ""),
+            price: num(d.f2),
+            pct: num(d.f3),
+            amount: num(d.f6),
+            turnoverRate: num(d.f8),
+            volumeRatio: num(d.f10),
+          });
+        }
       }
-    }
-    return map;
-  } catch {
-    return new Map();
+    } catch { /* 单批失败跳过 */ }
   }
+  return map;
 }
 
 /** 全市场 股票代码 -> 申万行业（f128=行业），分页拉取 */

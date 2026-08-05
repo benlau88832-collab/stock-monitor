@@ -50,7 +50,8 @@ export async function fetchStocksBoards(codes: string[]): Promise<Map<string, St
 
   for (const chunk of chunks) {
     const codeList = chunk.map(c => `"${c}"`).join(",");
-    const url = `${DATACENTER}?reportName=RPT_F10_CORETHEME_BOARDTYPE&columns=ALL&filter=(SECURITY_CODE%20in%20(${encodeURIComponent(codeList).replace(/%22/g, '"')}))&pageSize=500&source=HSF10&client=WEB`;
+    // v9.26.17：pageSize 5000（30 只/批 × 多板块可能 > 500；避免尾部股概念被静默截断）
+    const url = `${DATACENTER}?reportName=RPT_F10_CORETHEME_BOARDTYPE&columns=ALL&filter=(SECURITY_CODE%20in%20(${encodeURIComponent(codeList).replace(/%22/g, '"')}))&pageSize=5000&source=HSF10&client=WEB`;
     try {
       const resp = await fetch(url, { headers: { Referer: "https://emweb.securities.eastmoney.com/" } });
       const json = await resp.json();

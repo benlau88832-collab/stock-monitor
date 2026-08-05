@@ -528,9 +528,9 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
       }
     }
 
-    // 4. 给涨停股打概念标签（v9.21-A：多概念时选今日涨停数最多的概念）
+    // 4. 给涨停股打概念标签（v9.26.17：全量遍历，原 slice(0,50) 截断导致后 70 只涨停漏归）
     const stockMap = new Map<string, StockToMainline>();
-    for (const p of input.rawPool.slice(0, 50)) {
+    for (const p of input.rawPool) {
       const code = String(p.c ?? "");
       if (!code) continue;
       const cnames = stockToConcepts.get(code);
@@ -609,8 +609,9 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
 
 // 兜底再兜底：原 hybk 逻辑（保留作为最后防线）
 function legacyFallbackByHybk(input: ClassifyInput): ClassifyResult {
+  // v9.26.17：全量遍历（原 slice(0,50) 截断漏掉后 70 只涨停）
   const stockMap = new Map<string, StockToMainline>();
-  for (const p of input.rawPool.slice(0, 50)) {
+  for (const p of input.rawPool) {
     const code = String(p.c ?? "");
     if (!code) continue;
     stockMap.set(code, {

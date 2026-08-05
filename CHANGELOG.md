@@ -4,6 +4,25 @@
 
 ---
 
+## v9.26.17 — 资金走势图 + 8 处同类截断修复 (2026-08-05)
+
+### 1. 资金走势图（核心需求）
+- 新建 `boardFundFlow.ts`：拉取东财 `push2his stock/kline/get` 板块分钟 K 线，提取 f60=主力净额（万）
+- 新建 `BoardFundFlowChart.tsx`：SVG 多板块折线图（x=时间 09:30-15:00，y=累计主力净额亿；红涨绿跌；最多 8 板块叠加）
+- 挂到 Dashboard 顶部（IndexStrip 后最显眼位置）
+- App 选 |mainNet| 最大的 8 个板块，传入 Dashboard
+- proxy ALLOWED_HOSTS 加 `push2his.eastmoney.com`
+
+### 2. 8 处同类截断/不完整修复
+- **stockToMainline.ts:533**：fallback 概念聚合 B 路径还残留 `slice(0,50)` → 全量（漏 70 只涨停）
+- **stockToMainline.ts:613**：legacyFallbackByHybk `slice(0,50)` → 全量
+- **stockBoards.ts:53**：datacenter pageSize 500 → 5000（30 只/批 × 多概念可能超 500）
+- **api.ts fetchStockBriefBatch**：单次 100 只 secids 无分批 → 加分批支持 > 100 只自选
+- **App.tsx:267**：昨日涨停溢价 `slice(0,100)` → 全量
+- **App.tsx:888**：自选股 `slice(0,30)` → 全量（fetchStockBriefBatch 已加分批）
+
+---
+
 ## v9.26.16 — 资金为 0 + 化工过宽 修复 (2026-08-05)
 
 ### 用户反馈

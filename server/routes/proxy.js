@@ -24,6 +24,8 @@ const ALLOWED_HOSTS = [
   "qt.gtimg.cn",
   "web.ifzq.gtimg.cn",
   "stock.gtimg.cn",
+  // v9.26.17：东财 push2his（板块分钟 K 线，含主力净额分时 f60）
+  "push2his.eastmoney.com",
 ];
 
 module.exports = function proxyRoutes(app) {

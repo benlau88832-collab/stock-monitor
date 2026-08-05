@@ -208,6 +208,8 @@ export default function App() {
   const [globalData, setGlobalData] = useState<GlobalData | null>(null);
   const [mainline, setMainline] = useState<MainlineData | null>(null);
   const [battlePlan, setBattlePlan] = useState<BattlePlanData | null>(null);
+  // v9.26.17：板块资金走势图数据（取 mainNet 绝对值最大的 8 个）
+  const [topFundBoards, setTopFundBoards] = useState<Array<{ code: string; name: string }>>([]);
   const [watchStocks, setWatchStocks] = useState<WatchStockBrief[]>([]);
   const [currentPhase, setCurrentPhase] = useState<SessionPhase>(() => getCurrentSession().phase);
   const inFlight = useRef(false);
@@ -263,8 +265,8 @@ export default function App() {
       // 昨日快照 → 溢价 + 晋级率
       const prevZTPool = loadPrevZTSnapshot(limitPool?.qdate ?? null);
       if (prevZTPool && prevZTPool.length > 0) {
-        // 取全部代码去重，超过100只取前100只（push2批量上限）
-        const codes = [...new Set(prevZTPool.map(s => String(s.c)))].slice(0, 100);
+        // v9.26.17：取全部代码去重（push2 批量单接口 100 只限制改分批处理；昨日涨停常 > 100 不应截断）
+        const codes = [...new Set(prevZTPool.map(s => String(s.c)))];
         if (codes.length > 0) {
           try {
             const briefMap = await fetchStockBriefBatch(codes);
@@ -616,6 +618,14 @@ export default function App() {
             .map(b => ({ code: b.code, name: b.name, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct, stage: b.stage, kind: "industry" as const })),
         ];
 
+        // v9.26.17：取 |mainNet| 最大的 8 个板块（fund 走势图用）
+        const top = [...allScoringBoards]
+          .filter(b => b.code)
+          .sort((a, b) => Math.abs(b.mainNet ?? 0) - Math.abs(a.mainNet ?? 0))
+          .slice(0, 8)
+          .map(b => ({ code: b.code, name: b.name }));
+        setTopFundBoards(top);
+
         const themeResults = rawPool.length > 0 && allScoringBoards.length > 0
           ? computeThemeScores(allScoringBoards, rawPool, newsItems, hlPulseNew)
           : [];
@@ -885,7 +895,8 @@ export default function App() {
         const raw = localStorage.getItem("stock_watchlist");
         const codes: string[] = raw ? JSON.parse(raw) : [];
         if (codes.length === 0) { if (!cancelled) setWatchStocks([]); return; }
-        const map = await fetchStockBriefBatch(codes.slice(0, 30));
+        // v9.26.17：自选股全量（fetchStockBriefBatch 已支持分批）
+        const map = await fetchStockBriefBatch(codes);
         if (cancelled) return;
         const items: WatchStockBrief[] = [];
         for (const [code, b] of map) {
@@ -1051,7 +1062,8 @@ export default function App() {
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
             onSwitchTab={(tab) => setActive(tab as TabKey)}
             ztPool={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined}
-            yesterdayZt={yesterdayZtBrief} />
+            yesterdayZt={yesterdayZtBrief}
+            topFundBoards={topFundBoards} />
         )}
 
         {/* ====== 资金主线（深潜：完整资金结构+明暗盘+全球信号+产业链） ====== */}
@@ -1133,7 +1145,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.26.16 · build 08-05 14:35 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.26.17 · build 08-05 15:00 · 数据源：东方财富</div>
       </footer>
     </div>
   );
