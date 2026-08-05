@@ -4,6 +4,1528 @@
 
 ---
 
+## v9.42 — 因子 IC/健康度可视化：幻方"哪些因子在失效"曲线闭环 (2026-08-06)
+
+### 数据权威化：server cron 自动落库 factor_ic（不再依赖开页面）
+- 新增 `server/lib/factorIc.js`：因子评估服务端版（与 factorLib.ts 同构，11 因子）
+  - 读最近 30 交易日 kv（market_daily + sentiment）→ 组装日行 → 次日延续标签
+  - 每因子取最近 10 个有效样本交易日算滚动窗口 IC（Spearman，按期望方向对齐）
+- cron 15:40 收盘落库 + 启动即补 → `kv_store:factor_ic:YYYY-MM-DD`（PG 权威，永不缺数据）
+
+### 因子失效曲线（FactorHealthPanel）
+- 新增 `src/components/FactorHealthPanel.tsx`：SVG 手绘滚动 IC 曲线（无图表库）
+  - 每因子一行：名称 + 三态徽标（健康 emerald / ⚠失效 rose / ↻反转 amber）+ 样本数 + 曲线
+  - 曲线叠加 ±0.05 失效阈值带（灰带）+ 0 线 + 失效/反转点高亮 + 当前点大圆 + 当前 IC 标签
+  - 汇总条：失效因子数/总数、方向反转数、平均 |IC|、健康分、门控影响提示（≥50%→-15% / ≥30%→-8%）
+- 降级逻辑：历史快照 <2 天时用 market_daily+sentiment 前端实时计算，cron 落库后自动切换
+- Dashboard 盘后布局新增「📉 因子健康度」按钮（与信号回测并列）
+
+### 引擎增强
+- factorLib 新增 `computeFactorIcSeries` / `evaluateFactorIcSeries`：滚动窗口 IC 序列（此前 ic20d 为单批近似）
+- **三态判定（业务盲区修复）**：持续负 IC 不再是"失效"而是"方向反转"（reversed）——
+  有预测力但方向反了，需人工复核/反向使用，暂不自动改向；前端/服务端逻辑同构
+- factorHistory.ts：数据加载层（loadFactorRows / loadFactorIcHistory，兼容新旧快照格式）
+
+### 单测 81/81 全绿（新增 4 例滚动 IC 序列：正相关/负相关反转/样本不足/全因子覆盖）
+
+---
+
+## v9.41 — V4 里程碑：真·tool_calls Agent + 高置信自洽 + Top-3 主线覆盖 (2026-08-06)
+
+### V4-A：真·ReAct 多轮循环（AI 从"复读机"变"真智能体"）
+- server ai.js /api/ai/call 支持 tools/tool_choice 透传（OpenAI 兼容 {type:function,function:{...}} 包装层）
+- 实测：Agnes 原生接受 tools，且**自主返回 `{"calls":[{"tool":"checkSysRisk"},{"tool":"getAdmissionVerdict"}]}`** —— LLM 自己决定先查系统性风险再查准入
+- aiAgent runDecisionAgent 重写为 ≤5 轮 ReAct 循环：
+  - 第 1 轮 LLM 自主选 1-3 个关键工具 → 执行 → 结果回灌 → 观察后再选 → 循环
+  - 任一强否决工具（checkSysRisk/detectTrap/detectSealDecay/computePortfolioRisk 出禁止）→ 早停直接"禁止"
+  - 轮次耗尽/LLM 不可用 → 回退 v9.40 全跑工具 + 规则投票兜底
+- 兼容双协议：原生 toolCalls（Agnes 支持时）+ JSON calls/final（手动格式）
+
+### V4-D：Critic + 自洽投票
+- finalize 统一出口：final 后 自洽投票（可选，换温度 0.4/0.7 复核取多数）→ Critic 挑刺（默认开）
+
+### V4-E：Top-3 主线覆盖
+- Dashboard runAgent 循环 candidates.slice(0,3) 各出裁决（共享 5 分钟节流）
+- 裁决卡展示 Top1 完整 + Top-2/3 一行摘要（行动/置信/理由）
+
+### 单测 77 例全绿（ReAct 降级路径已被现有测试覆盖）
+
+---
+
+## v9.40 — GLM5.2-V4 落地：AI 真独立推理 + 门控约束最终结论 + 分歧不静默 (2026-08-06)
+
+### 审核 GLM5.2建议-v4.txt（基于 v9.39 实证核查）
+- 核心发现：AI 是"规则打包器+LLM摘要器"（喂规则结论非原始盘面）→ 只能复述规则；
+  幻方门控只作用于规则投票路，被 AI 覆盖绕过 → "越用越准"闭环没到出结论的路上
+- V4-H 验证为误报（https-proxy-agent@^9.1.0 已在 server/package.json，V1 已修）
+
+### V4-A：AI 真独立推理（喂原始盘面，可推翻规则）
+- aiAgent 工具分两类：vote（8 个决策工具归一为证据投票）/ data（4 个数据工具：backtestSignal/getFundStreak/getThemeCalendar/getNewsDeep 原始结果）
+- adjudicateOnce 喂"规则投票 + 原始盘面数据"两段，prompt 明确"可据此推翻规则结论"——AI 有独立信息源
+
+### V4-B：幻方门控真正约束最终结论（修"绕过"）
+- DecisionVerdictCard 融合裁决：因子失效占比≥50% 时 AI 说"可上车"强制降"观望"+标注"🧪因子失效门控降档"；
+  规则硬否决（禁止）优先于 AI 乐观可上车；置信随门控下调
+
+### V4-C：AI-规则分歧显式告警（不静默覆盖）
+- aiRuleDivergent 检测 → 顶部红横幅"⚠ AI 与规则多源分歧：AI=X/规则=Y，建议人工复核"
+
+### V4-D：默认开 Critic
+- Dashboard runAgent 传 { useCritic: true, selfConsistency: false }——AI 结论必经挑刺
+
+### V4-F：工具统一 schema
+- AgentTool 加 kind(vote/data) + normalize(raw→{verdict,confidence,reason})，9 工具各自归一（level:red→禁止 等）
+- 消除 collectToolEvidence 的 ?? 链 + 乘 100 脆弱映射
+
+### V4-G：补齐 4 个因子输入字段
+- cron fetchMarketDaily 补 sealDecayCount(炸板数代理)/lhbBoostCount(龙虎榜净买数)/fundInflowStreak/fetchNuclearCount(昨≥2板今跌≤-9%)
+- 前端 loadFactorRows 一并读取 → factorLib 4 因子不再恒 decayed
+
+### V4-I：样本不足显式提示
+- factorStats.total<3 或门控命中时标"⚠ 历史样本不足，AI 结论仅参考"
+
+### 单测 77 例全绿（+5：统一schema 3 + 融合裁决 2）
+
+---
+
+## v9.39 — AI 自动主导 + 幻方闭环接通（深度复盘后的 3 项改造） (2026-08-06)
+
+### 背景
+用户深度复盘指出：GLM5.2-V3 的 17 项功能代码全部落地，但"AI 主导 + 幻方方法"效果只有约 20%：
+- 断层1：AI 是手动按钮（不点不跑），终裁决卡 0 行 AI 代码（纯规则投票）
+- 断层2：幻方闭环断开——factorLib IC 算了没接入决策；V3-5 回测门控空转（collectEvidence 没传 signalGates）
+- 断层3：样本量 9 天撑不起"越用越准"
+
+### 改造1：AI 自动主导
+- Dashboard: battlePlan 更新后自动触发 decideForMainline（1.5s 延迟等证据就绪 + 5 分钟节流省配额）
+- DecisionVerdictCard 反转：Agent 裁决（LLM 工具调研）置顶大号为主结论（琥珀色高亮"AI 决策（自动主导）"），
+  规则投票折叠为"📊 规则多源投票（点击展开）"佐证区——不再是并列卡片
+- 旧 Agent 结果小框删除；按钮改"⚡ 立即重审"（手动即时刷新）
+- 决策日志升级：记录来源（AI-Agent/规则投票）+ Agent 理由 + Critic 意见
+
+### 改造2：幻方闭环接通
+- decisionBus.runConsensus 新增 factorStats 支持：因子失效占比≥50% 置信-15 / ≥30% 置信-8（幻方"因子过期自动降权"真正影响决策）
+- Dashboard 异步加载：① backtestSignals(14) → signalGates → 激活 V3-5 回测门控（此前空转！）
+  ② factorLib evaluateAllFactors → factorStats → 决策降权 + 落库 factor_ic:日期（改造3）
+- 终裁决卡显示"🧪 N/M 因子失效"红标（悬停解释）
+
+### 改造3：数据积累加速
+- factor_ic:日期 前端算完落库（跨会话可读）
+- market_intraday 盘中快照已存在（v9.38 V3-11，每20分钟）——样本从每日1条→每日多条
+
+### 单测 72 例全绿（+3：因子健康度降置信/不降/门控激活）
+
+---
+
+## v9.38.2 — 修复 EventClassifyPanel 挂错位置 (2026-08-06)
+
+### 用户反馈
+"v9.38.1 的事件三级研判卡看不到"——Dashboard 截图是盘后布局，但组件挂在了**盘中布局分支**（`isTrading`），所以盘后模式下整块不渲染。
+
+### 修复
+- Dashboard.tsx 移除盘中分支的挂载
+- 移到盘后布局 grid 之后（独立全宽行，3 列分栏不被 1fr/340 列挤压）
+- 数据由 cron 15:40 落库 `event_classify:日期`，盘后/午休布局可见
+
+---
+
+## v9.38.1 — GLM5.2-V3 补全：事件分级闭环 + getNewsDeep + httpProxy 重构 (2026-08-06)
+
+### 背景
+用户确认后补全 V3 报告真实遗漏 2 项 + 部分完成 1 项（V3-P0 重构部分）。
+
+### V3-12 事件三级分类闭环（此前只有 task 定义，无 cron 落库）
+- cron.js 新增 `runEventClassify({pool})`：读当日快讯（stars 优先）→ 前缀去重 → LLM 三级分级
+  （政策/行业/事件 + beneficiaries + catalystScore + timeSensitivity）→ 落库 `kv event_classify:日期`
+- 容错：LLM JSON 常被 max_tokens 截断 → `parseLoose` 截到最后一个完整对象补 `]`；LLM 失败走规则版关键词分级
+- 批量 15 事件（30 会超 token）；maxTokens 1500 → 3000
+- 15:40 盘后任务接入 + 导出
+- 前端：`EventClassifyPanel.tsx` 三级分栏（政策/行业/事件 × 催化分徽章 × 受益板块），挂 Dashboard 盘后区
+- 接入决策总线：`decisionCollector` 新增"消息对账"证据源——`newsReconcile` 兑现=可上车 / 背离=禁止（V3-13 咬合）/
+  policyEventCount≥2 = 可上车；Dashboard 异步读政策级事件数注入
+
+### V3-14 getNewsDeep（此前完全缺失）
+- `agentTools` 注册 `getNewsDeep` 工具：catalystScore<60 直接返回"成本控制不深挖"（不调 LLM）；
+  高分/政策级事件 → `callAI("eventDeepDive")` 推演影响传导链/受益标的/风险/验证信号
+- 新增 `eventDeepDive` task（aiPrompts 5 处 + server 白名单），LLM 不可用走规则版浅挖
+
+### V3-P0 httpProxy 重构（此前只有依赖、未消重）
+- 新建 `server/lib/httpProxy.js`：https-proxy-agent **惰性 require + 容错**（未装降级直连，
+  不再顶层 require 导致干净部署启动即崩）+ 单例代理 + 直连→代理重试 + 非 2xx 不重试
+- `ai.js`/`cron.js` 删除各自重复的 postJSON/callLLM，改调公共 `postJSON` / `callModelText`
+- 单测 69 例全绿（+4：getNewsDeep 低分不深挖/高分深挖、消息对账背离→禁止、政策事件→可上车）
+
+---
+
+## v9.38 — V3 剩余项补全：Agent 深审 + 因子IC + 资金对账 + 事件分级（2026-08-06）
+
+按 V3 修改指令表补全上一轮未做项：
+
+### V3-8/9：因子注册表 + IC 评估 + 衰减监测
+- 新建 `factorLib.ts`：注册 11 个标准因子（炸板率高/低/涨停数/高度/溢价/晋级率/情绪极值/封单衰减/席位加持/资金连续性/核按钮）
+- 每因子对"次日主线延续"计算 Spearman 秩相关 IC；滚动样本 |IC|<0.05 或样本<5 → 标"⚠ 疑似失效"并自动降权 0.3（幻方"因子会过期"核心）
+
+### V3-13：资金-消息对账引擎
+- 新建 `fundNewsReconcile.ts`：消息利好(score≥60) × 资金流对账
+  - 利好+连续流入 → "兑现"可上车；利好+流出 → "资金背离"观望/禁止（政策未兑现/诱多）；中性+流入 → 待观察
+
+### V3-1/2/3/6：Agent 工具注册表 + 主循环 + Critic
+- 新建 `agentTools.ts`：12 个工具包装现有纯函数（准入闸/市场状态/仓位/离场/组合风险/系统风险/回测/资金对账/资金连续性/题材日历/封单/决策证据），execute 均不触发额外 LLM
+- 新建 `aiAgent.ts`：轻量 ReAct——① 规则工具收集证据（0 次 LLM）→ ② Agnes 读证据裁决 → ③ Critic 挑刺（有效反对则降置信/改判）→ ④ 自洽投票开关（temperature 0.1/0.4/0.7 三票多数，默认关省配额）；LLM 不可用降级 rule decisionBus
+- Dashboard：终裁决卡下新增"🤖 Agent 深审"按钮（手动触发，显示 action/置信/理由/Critic意见/证据链）
+
+### V3-12/14：事件三级分类
+- aiPrompts 新增 task `eventClassify`（政策/行业/事件三级 + beneficiaries + catalystScore + timeSensitivity）+ FALLBACKS 规则版 + ai.js 白名单
+
+### V3-11：加速回测样本积累
+- cron 新增 `fetchMarketIntraday`：20min 任务内每小时落 `market_intraday:日期`（盘中快照）
+
+### 单测：65 例全绿（+12：factorLib 5 + fundNewsReconcile 5 + agentTools 3 - 修正 1）
+- V3-8 IC 计算 / V3-13 对账五场景 / V3-1 工具注册表 12+ 唯一性
+
+### 教训
+- agentTools 泛型 execute 参数类型需宽松（any）避免 unknown 不兼容
+- factorLib 测试 rows 需补全所有因子输入字段（缺失→extract null→样本0）
+
+---
+
+## v9.37 — GLM5.2-V3 审查落地：决策总线 + 终裁决卡 + 死代码消除（2026-08-06）
+
+审核 GLM5.2建议-v3.txt（基于 dddc288 全栈审查）：
+- **P0-A（https-proxy-agent 幽灵依赖）验证为误报**——依赖已在 server/package.json（V1 已修），无需处理
+- **P1-B（classifyStage 死代码）确认属实**——已接线（见下）
+- **P1-C（缺统一决策总线）确认属实**——本版核心（见下）
+
+### V3-P1：classifyStage 死代码消除
+- classifyStage（市场级阶段：涨停环比/炸板/晋级率/高度/资金综合判定）原只定义未调用
+- 接入 FiveQBar：市场阶段徽标改用 classifyStage 计算（marketStageLabel），取代 marketStyle.label 展示
+
+### V3-4/5/7：统一决策总线 + 回测门控 + AI 终裁决卡（替代决策核心）
+- 新建 `decisionBus.ts`：多源共识层
+  - ① 硬否决：系统性风险/诱多引擎/组合风险 任一"禁止"→ 直接禁止（一票否决）
+  - ② 回测门控 gateWeight：信号样本<6 或胜率<45% → 降权 0.3（只信历史有效因子）
+  - ③ 加权投票：置信度×权重求和定结论；④ 分歧告警：各源分裂且置信<60% → 观望+反对意见
+- 新建 `decisionCollector.ts`：各引擎输出（准入闸/系统风险/组合风险/市场状态/诱多/封单/龙虎榜/资金连续性）→ 统一 EvidenceSource
+- 新建 `DecisionVerdictCard.tsx`：驾驶舱五问条下方"🧠 AI 终裁决"卡
+  - 一屏看清：结论（参考关注/观望/禁止）+ 置信度 + 各源投票明细 + 反对意见 + 回测门控提示 + 证据链（可展开）
+  - V3-P2 决策日志：每次裁决落 localStorage `decision_log:日期`（可审计/可复盘）
+- Dashboard 接入：sealAlerts 从 App 传入 → 汇聚 6 源 → 终裁决卡
+
+### V3-10：组合相关性风险（portfolioRisk 扩展）
+- concentrationPct（同主线持仓占比）：>60% → 折扣 0.8；>80% → 折扣 0.6
+- 解决游资"看起来 5 只票其实全押同一主线"的死法
+
+### 单测：53 例全绿（+11：decisionBus 8 + portfolioRisk 集中度 2 + 修正 1）
+- decisionBus：硬否决/多源一致/分歧标观望/多数票压制/回测门控/门控接入
+
+### 未做（V3-1/2/3 Agent、V3-6 自洽投票、V3-8/9 因子IC、V3-11~14 新闻三级/资金对账）
+- 本轮聚焦"替代决策骨架"（总线+门控+终裁决卡）；Agent 化/因子IC/新闻对账建议下一轮
+
+---
+
+## v9.36 — A 级优化 ×3 + B 级工程质量 ×2（2026-08-06）
+
+### A1：组合风险预算（幻方"风险预算层"落地）
+- 新建 `portfolioRisk.ts`：总仓位上限 = 基础预算(70%) × 市场状态系数 × 连亏熔断系数
+- 连亏3天熔断降0.4、2天降0.75；市场状态系数与 marketStateMachine 对齐（0.2~1.0）
+- `DisciplinePanel` 顶部新增"💰组合风险预算"条：当前仓位/预算上限/市场状态/熔断状态/操作建议
+
+### A2：竞价强度榜
+- 新建 `AuctionStrengthPanel.tsx`：复用 auction.ts fetchAuctionBoard，展示昨日涨停池竞价涨幅 top12
+- 竞价即涨停红框高亮"🔒竞价封板"、低开绿标、连板数徽标、竞价金额
+- 挂载竞价布局 AuctionBoard 旁（60s 刷新）
+
+### A3：龙虎榜×涨停池交叉（席位加持）
+- cron 新增 `fetchLhbDaily`：东财 `RPT_DAILYBILLBOARD_DETAILSNEW`（实测300只，东山精密净买15.87亿）→ 落 `kv_store:lhb:日期`
+- 新建 `LhbCrossPanel.tsx`：今日涨停×龙虎榜交叉（净买额+上榜原因），席位加持=次日溢价增强信号
+- 挂载盘后区 LadderMini 旁
+
+### B1：vitest 单测（42 个用例全绿）
+- 新增 `npm test`（vitest run）；`src/lib/__tests__/` 下 5 个测试文件
+- stageModel 6 用例 / trapDetector 8 / positionSizing 8 / stockExit 5 / 新增引擎（市场状态机+组合风险预算+封单衰减）15
+- 教训：3 个用例首跑失败均为"测试断言与实现不一致"（非实现 bug），修正断言后全绿
+
+### B2：App.tsx 拆分（减负）
+- 将"昨日溢价/核按钮/晋级率"~60 行从 refreshAll 抽取为纯函数 `lib/prevZtStats.ts`（computePrevZtStats）
+- App.tsx 改为一行调用，逻辑零变化；后续可继续按此模式拆分
+
+---
+
+## v9.35 — S3 信号历史回测引擎（幻方"因子验证"落地）（2026-08-06）
+
+承接复盘 S3 计划：解决"30 个信号不知道信哪个"的终极痛点。
+
+### 数据层
+- cron 新增 `fetchMarketDaily`：15:40 拉涨停/炸板/跌停三池 → 落 `kv_store:market_daily:日期`（ztCount/zbCount/dtCount/blastedRate/maxBoardHeight）
+- 情绪分沿用前端 cloudStore 已同步的 `sentiment:日期`（实测已积累 9 天：73/0/99/96/96/49/97/89/89）
+
+### 回测引擎
+- 新建 `signalBacktest.ts`：读近 14 交易日 sentiment + market_daily → 对 7 个核心信号统计
+  - 情绪高位≥70 / 情绪冰点≤30 / 情绪连续2日下跌 / 炸板率≥35% / 涨停≥50 / 涨停≤15 / 最高板≥6
+  - 每信号输出：触发次数 / 次日正面率 / 次日情绪均变 / 结论（有效≥60% / 存疑45-60% / 样本不足<6）
+  - 样本每日自动 +1，≥6 后自动出结论
+
+### 前端展示
+- 新建 `SignalEffectivenessPanel.tsx`：信号有效性表格（样本数/正面率/情绪均变/结论徽标）+ 当前可信信号摘要
+- Dashboard 盘后区新增"🧪 信号有效性回测"按钮 → 面板
+
+---
+
+## v9.34 — 全面复盘落地 + 幻方方法论 S1/S2（2026-08-06）
+
+基于全面复盘（《游资决策大脑-全面复盘与幻方方法论落地.md》），从游资 ★★★★★ 痛点 + 幻方量化方法论中落地两个高价值模块：
+
+### S1：封单衰减实时监控（游资打板最大雷区）
+- 新建 `sealMonitor.ts`：18s 高频通道（v9.29 refreshFast）每轮记录封单快照，与上轮对比变化率
+- 封单环比 ≤-50% → 黄色预警（开板前兆）；≤-80% 且 <500万 → 红色"💥 封单崩落"
+- 过期快照 120s 窗口防误报；`__resetSealMonitor` 供单测
+- App.tsx refreshFast 接入 → alerts 顶栏（red=critical/yellow=warning）
+- 解决："龙一开板前 3 秒封单 8 亿掉到 5000 万" 来不及跑的最大痛点
+
+### S2：市场状态机（幻方"状态自适应"思想落地）
+- 新建 `marketStateMachine.ts`：情绪/涨停/跌停/炸板/溢价/高度 → 5 态（亢奋普涨/局部主线/分歧震荡/亏钱效应/冰点恐慌）
+- 每态输出：置信度 + 证据链 + **仓位系数（0.2~1.0）** + 打法建议
+- 幻方中层"策略工厂按市场状态动态调整参数"的游资版翻译：先判"今天是什么市"，再决定仓位与打法
+- FiveQBar 新增"🏛️ 市场状态"卡（状态 + 仓位系数 + 打法提示）
+
+### 复盘文档
+- 《游资决策大脑-全面复盘与幻方方法论落地.md》：任务目标 vs 成果 / 关键问题战役 / 架构评估 / 经验教训 / 游资痛点清单（15项）/ 幻方三层策略金字塔解密 / S1-S3 行动计划
+
+---
+
+## v9.33 — 剩余8缺口全部闭环（2/3/5/6/8）（2026-08-06）
+
+承接《游资决策大脑-剩余8缺口修改指令.md》，完成最后 5 个缺口。至此 8 缺口全部落地（1/4/7 已在 v9.32.1 完成）。
+
+### 缺口2：盘后自动复盘 + 历史主线回放
+- `server/cron.js` 新增 `generateDailyReview`：15:40 后读 zt_snapshot + 强催化公告 + 黑天鹅 → LLM（dailyReviewAuto 专用 system）生成【今日主线回顾/错过与教训/明日关注清单/风险提示】→ 落 `kv_store:review:日期`
+- `aiPrompts.ts` 新增 task `dailyReviewAuto`（+ TASK_CONFIG/payload/B构建器/FALLBACKS），`ai.js` TASK_ALLOW 同步
+- `ReviewPanel`：自动复盘展示（回退近3日）+ 日期选择器 + "🕘回放当日涨停池"按钮（读 zt_snapshot 重建主线摘要）
+
+### 缺口3：LLM 次日三剧本 + 龙头预判 + 风险雷达
+- `aiPrompts.ts` 新增 task `nextDayScenarios` / `leaderPredict` / `riskRadar`（均 thinking=false）
+- `App.tsx`：盘后自动调 nextDayScenarios + riskRadar（护栏只触发一次）；竞价段自动调 leaderPredict
+- `Dashboard`：盘后区显示三剧本卡 + 风险雷达条（高中低三色）；竞价区显示"🤖 AI 预判龙一"卡
+
+### 缺口5：题材生命周期日历
+- 新建 `themeCalendar.ts`：读 7 日 zt_snapshot → 每题材首现日/运行天数/连续天数/最高高度/阶段判定
+- `ThemeLadder` 每题材行加"第N天·阶段"徽标 + 运行≥4天加"⚠接近分歧"提示
+
+### 缺口6：资金连续性 + 切换信号
+- 新建 `fundStreak.ts`：读 7 日 `kv_store:fund_streak` → 连续流入/流出天数 + 昨日流入今日流出切换标记
+- `cron.js` `fetchBoardFundServer`：push2delay 双请求（po=1+po=0 串行）→ 15:40/启动落 `kv_store:fund_streak:日期`（实测 200 行业 100流入/100流出）
+- `IndustryFundFlowChart` 行业行加 "🔥N日连续流入" / "⚠切换信号" / "↗进场" 徽标
+
+### 缺口8：大宗交易折价异动
+- `cron.js` `fetchBlockTrades`：东财 datacenter `RPT_DATA_BLOCKTRADE`（实测 200 笔，折价>8% 有 124 笔；PREMIUM_RATIO 为小数需×100）→ 落 `kv_store:block_trade:日期`
+- `DarkPool` 新增"💼大宗交易折价异动"子卡：折价>8% 红色预警条 + 折价榜 top20（折溢率/成交额/买方营业部）
+
+### 关键工程发现
+- push2.eastmoney.com 对 nodejs 直连 TLS ban（socket hang up）；**push2delay.eastmoney.com（延迟15分钟行情）node 直连可用** → cron 落库统一走 push2delay
+- 资金流双请求必须串行（并发触发限流）
+
+---
+
+## v9.32.1 — 接手 8 缺口之 3 个：溢价分布/公告聚类/龙头卡位战 (2026-08-06)
+
+> 按《游资决策大脑-剩余8缺口修改指令.md》附录 A 推荐顺序实施。
+
+### 【缺口1】溢价分布 + 核按钮/地天板（价值最高）
+- 新建 `src/lib/extremeBoard.ts`：核按钮（昨≥2板今跌≤-9%秒跌停）/ 地天板（触跌停拉涨停）/ 天地板（触涨停跌停）
+- `OverviewData` 加 `premiumDist` 4 档分布（<-5% / -5~0 / 0~3 / >3%），App.tsx 在昨日涨停溢价计算处同步统计
+- `EmotionCycleCard` 加溢价分布 4 档柱图 + 赚钱/亏钱效应定性（焖面占比≥30% → "⚠ 亏钱效应强"；高溢价≥30% → "🔥 赚钱效应强"）
+- `App.tsx` 核按钮检测：昨≥2板今跌≤-9% → setNuclearAlerts → alerts 接入（≥2只 critical 顶栏）
+
+### 【缺口7】公告类型聚类 + 密度预警
+- 新建 `src/lib/annCluster.ts`：5 类聚类（业绩/重组/增减持/融资/诉讼监管）+ ANN_CATEGORY_META 配色 + detectAnnDensity
+- `AnnouncementPanel` 每条公告加聚类标签（AnnRow 标题旁）
+
+### 【缺口4】龙头卡位战 + 板型
+- `stockToMainline.ts` MainlineLeader 加 `boardType`（hs 换手率：<1 一字板 / 1-5 缩量板 / ≥5 换手板），龙一龙二龙三填充
+- 新建 `src/lib/leaderContend.ts`：同高度≥2只封单差距<20% → 卡位胶着；BOARD_TYPE_META 板型徽标配色
+- `BattlePlan` MainlineBlock：龙名旁板型徽标（一字=难上车/换手=可上车）+ 顶部"⚔️ 卡位战"警告条
+
+---
+
+## v9.32 — 游资视角全栈审查后补 3 项实战缺口 (2026-08-06)
+
+> 基于 10 年+ 游资视角的全栈代码审查，从 11 个缺口中选 3 个最有价值的落地。
+
+### 【5】快速下单直通券商（S 级，秒级执行闭环）
+- 痛点：游资"看到信号到下单<10秒"，当前只有看行情链接，点完还要手动切券商输代码
+- 修复：
+  - `realLinks.ts` 新增 `orderUrl(code, broker)` —— 同花顺 `ths://`、通达信 `tdx://`、东财 `dfcf://` URL Scheme
+  - `realLinks.ts` 新增 `exportWatchlist(codes)` —— 自选股一键导出逗号串（可粘贴券商批量下单）
+  - `StockDecisionCard.tsx` 新增"快速下单"行：同花顺/通达信/东财三按钮直通
+
+### 【3】系统性风险预警 + 黑天鹅公告（S 级，"先活下来"底线）
+- 痛点：系统性杀跌时所有主线分析失效；盘前立案/退市公告会让持仓秒跌停
+- 修复：
+  - 新建 `src/lib/sysRiskGuard.ts`：沪深300跌幅≤-2% / 跌停≥50 / 炸板率≥50 / 情绪≤15 → red；≤-1% / ≥20 / ≥35 / ≥85 → yellow
+  - `App.tsx` alerts 接入：sysRisk red → critical 顶栏，yellow → warning
+  - `cron.js` 新增 `BLACK_ANN_RE`（立案/退市/商誉减值/被问询/警示函/行政处罚/预亏/业绩预减/减持/质押/违约/停牌核查/风险提示/司法冻结）→ 20min 任务过滤黑天鹅公告落库 `kv_store:black_swan:YYYY-MM-DD`
+
+### 【8】席位协同检测（S 级，游资多席位联动）
+- 痛点：章盟主/赵老哥常多席位协同买入，"同一游资多席位同日同向"比单席位信号强数倍
+- 修复：`seatBehavior.ts` analyzeSeatsGroup 新增协同信号：用 `matchSeatTag` 按 label 聚合 buyers，同 label ≥2 个不同席位 → "🔗 游资多席位协同"信号徽标
+
+---
+
+## v9.31 — 人气榜回归真实数据：东财 + 同花顺双榜交叉比对 (2026-08-06)
+
+### 用户反馈
+人气榜不能用涨停榜糊弄，必须与东方财富人气榜一致；并新增同花顺人气榜做交叉比对（双榜共振提醒）。
+
+### 关键实测发现（推翻 v9.27 的错误假设）
+- **emappdata.eastmoney.com 完全支持 CORS**：OPTIONS 预检 200 + `Access-Control-Allow-Origin` 回显任意 Origin + `Allow-Methods: POST`，且不校验 Referer/Origin → **浏览器直连即可，线上线下均可用**
+- v9.27 加 proxy 中转是**错误方向**：emappdata 对 proxy 的 nodejs https.request 做 TLS 指纹层 ban（12s socket hang up），浏览器直连反而畅通
+- **dq.10jqka.com.cn（同花顺热度接口）同样支持 CORS**：OPTIONS 204 + `Allow-Methods:*` + Origin 回显，不校验 Referer → 浏览器直连可用
+
+### 修复
+- `fetchPopularityRank`（东财）：**去掉 proxy 中转**，改浏览器直连 fetch → 真实东财人气榜（SZ002428 云南锗业等）
+- 新增 `fetchTHSPopularityRank`（同花顺）：浏览器直连 dq.10jqka.com.cn 热度接口 → 云南锗业/风华高科等真实数据（含概念标签/人气标签/排名变化）
+- **PopularityRadar 双榜交叉比对**：
+  - 双数据源并行拉取（一个失败不影响另一个，标题显示 东财✓/✗ · 同花顺✓/✗）
+  - **双榜共振**：同一只股票两边都上榜 → 顶部紫色醒目提醒条 + 行高亮 + "⚡共振"徽章 + 显示双平台排名
+  - 单榜个股正常展示（东财榜/同花顺榜排名分列）
+  - 拥挤度预警、新入榜检测、概念标签展示保留
+- proxy.js：forward 改 options 对象（hostname/path/servername）补 UA/Referer（防御性；同花顺白名单已加 dq.10jqka.com.cn）
+
+---
+
+## v9.30.3 — 人气榜拥挤度改用涨停池（emappdata 对 nodejs TLS 指纹 ban） (2026-08-06)
+
+### 用户反馈
+PopularityRadar 持续显示"待接入"，v9.30.2 部署未解决。
+
+### 根因（实测定位）
+- 实测 curl 直连 emappdata.eastmoney.com/stockrank/getAllCurrentList（POST 带 JSON body）**返回 200 + 真实数据**
+- 实测 nodejs 原生 https.request（带 Mozilla UA + Referer）**同样返回 200 + 真实数据**
+- 但 proxy.js 转发时**总是 12s 超时**（HTTP 000）—— 实测定位：emappdata 服务端对某些客户端实现层的 TLS 指纹 RST（不是 UA 问题，UA 修复无效）
+- 之前 v9.27 加 proxy 绕 CORS 的设计假设（node 默认被 ban → 加 UA 即可）**不成立**：emappdata 是更深层的协议层 ban
+
+### 修复
+- PopularityRadar 改造数据源：**改用涨停池**作为"人气榜拥挤度"代理（涨停板本身就是市场关注度最高的股票集合，更贴近游资实战语义）
+- 删除"待接入"误导文案，改为"暂不可用 / 今日暂无涨停数据"
+- proxy.js 同时补全 User-Agent + Referer（防御性，其他 push2 接口也受益）
+- 保留昨日快照机制（涨停池作为数据源一样工作）
+
+---
+
+## v9.30.2 — 流出行业获取改双请求（实测定位东财 pz 上限） (2026-08-06)
+
+### 实测发现
+- 东财 `fs=m:90+t:2` 行业细分**远超 100 个**，接口对 pz 有上限（约 100 条/页）
+- `fid=f62&po=1`（降序）pz=500 → 只返回 f62 最大的 100 个，**全是正数**（流出行业被挤出）
+- `fid=f62&po=0`（升序）pz=100 → 全是负数（通信网络设备 -28.48亿 / 传媒 -20.68亿 / 食品饮料 -16.36亿）
+
+### 修复
+- `fetchBoardFundFlow` 的 `all` 模式改为**双请求**：`po=1` 拉流入 top300 + `po=0` 拉流出 top300
+- 合并去重后本地按 mainNet 降序 → 资金走势图红绿双榜都有真实数据
+- 沿用项目已有 `fetchBoardRankTopBottom` 的成熟模式
+
+### v9.30.1 说明
+- 初版方案"pz=500 拉全量"实测无效（东财 pz 截断），被本版双请求取代
+
+---
+
+## v9.30 — 行业资金流向走势图重写（摆脱被 ban 的 push2his）(2026-08-05)
+
+### 用户反馈
+截图显示 IndustryFundFlowChart 折线图区域全空（仅显示 ±1亿/0亿 刻度），底部"主力净流出（0 行业）"——数据管道异常导致没有有效曲线。
+
+### 根因
+- v9.27 起依赖 `fetchBoardFundCurves`（push2his stock/kline/get 分钟 K 线，f60=主力净额）—— 东财 push2his 持续对机房 IP 限流/ban（v9.26.21 修复后仍断流），5/批+重试也只能拿到稀疏数据
+- 稀疏数据导致 SVG 里 y 值几乎全为 0 → 曲线挤在 0 附近 → 视觉上"空"
+- mainNet 默认 0 → 全部被划入"流入" → 流出行业数为 0
+
+### 修复
+- 重写 IndustryFundFlowChart.tsx：**不再依赖 push2his 分钟 K 线**，直接消费 App.tsx 传入的 `industryBoards`（kind="industry"，30 个申万行业）
+- 每条行业折线：(09:30, 0) → (asOfMinutes, mainNet/1e8 亿)，三次贝塞尔曲线（模拟"累积过程"形态）
+- y 轴：所有行业中 |mainNet| 最大的 ±15% 区间（红涨绿跌对称）
+- 流入行业红色系梯度（12 色），流出行业绿色系梯度（12 色），自动循环
+- 末端标签：智能防重叠（按 y 排序错位 + clamp 到绘图区）
+- 底部双榜：流入榜（红）/ 流出榜（绿），按 mainNet 排序，全量展示
+- asOfMinutes 参数：默认 270（=15:00），盘中可传当前时点让折线画到当前位置
+
+---
+
+## v9.29 — GLM5.2 剩余项全部落地：P1-5/8/9/10 + P2 (2026-08-05)
+
+### P1-5 最终准入闸 admissionGate.ts
+- 新建：五重准入（强度≥60 + 阶段∈启动/发酵 + 闸门非empty + 无诱多 + 梯队无致命断档）
+- 输出三态（可上车/观望/禁止）+ 置信度 + 证据链/阻止原因
+- FiveQBar 第4问"能不能上车"改用准入闸（此前仅看强度分）
+
+### P1-8 盘中高频通道
+- App.tsx 新增 refreshFast：盘中/竞价每 18s 独立刷新涨停池（轻量，不碰重接口）
+- 竞价段同样高频刷池 → "竞价即封板"早期信号更早出现
+- jsonpQueue 并发 2→3（本地大多走 proxy 不受限）
+
+### P1-9 LLM task 解耦
+- aiPrompts.ts 新增独立 task：themeNewsScore/stockNewsScore/dailyIntel（各自温度/maxTokens，均 thinking=false）
+- llmSignals scoreThemeNews/scoreStockNews 原复用 mainlineRank → 改独立 task
+- llmNewsIntelligence generateDailyIntelligence 原复用 stockJudge(thinking=true 高延迟) → 改 dailyIntel
+- server/routes/ai.js TASK_ALLOW 同步加白名单；cacheKey 按 task 天然隔离
+
+### P1-10 主线精排瘦身
+- mainlineLLM prompt 改为"两阶段推理"（先判脉冲再排序）+ schema 精简（去 caution 必填，leaders 只给龙一）
+- caution 缺失时按置信度规则推导（<60 → "强度偏弱，注意风险"）
+
+### P2 政策面/鉴权/合规
+- P2-1 政策面主动采集：cron.js 新增 fetchPolicyNews（东财快讯按政策关键词过滤）→ 落库 kv_store:policy:YYYY-MM-DD（20min 任务 + 启动抓取）
+- P2-3 可选鉴权：server/.env 配 LOCAL_TOKEN 后，/api/proxy 与 /api/ai/call 须带 x-local-token（防局域网/公网白嫖）；默认不配置=放行
+- P2-4 合规话术：SYSTEM_PREFIX 改中性强度词；anomalyTier 强指令文案 → "高关注档/中关注档/高风险·暂不建议（参考）"
+- P2-5 强催化公告：analyzeDaily 由正则粗筛 → rankStrongAnnouncements（配 key 时 LLM 一次评分 top40，score≥4 进强催化；扩展正则兜底覆盖"净利润同比+200%"类）
+
+---
+
+## v9.28 — GLM5.2 建议落地 P1-6 仓位定量化 + P1-7 个股离场 (2026-08-05)
+
+### P1-6 仓位定量化引擎 positionSizing.ts（决策大脑闭环第一步）
+- 新建 src/lib/positionSizing.ts：闸门×强度×单票上限 → 具体建议仓位 %
+  - 公式：base(maxSinglePct) × gateFactor × strengthDiscount(≥80→1/≥60→0.6/其他0.3)
+  - 联动截断：闸门 positionLimit / 单票上限 / 总仓位剩余容量 / 今日开仓上限
+  - 硬禁止：主线诱多 / 退潮期 / 闸门数据不足 / 开仓次数超限 / 未配置资金
+  - 阶段准入：仅"启动期/发酵期"可上车，其余观望
+  - 分批方案：首仓50% → 确认加仓30% → 冲高减仓20%；止损按阶段档位(启动5%/发酵7%/高潮8%/分歧5%/退潮4%)
+- BattlePlan.tsx MainlineBlock 显示仓位徽章："🚀 仓位X% · 首仓Y% · 止损Z%"（绿=可上车/黄=观望/红=禁止）
+
+### P1-7 个股级离场引擎 stockExit.ts（"我手里这只票什么时候跑"）
+- 新建 src/lib/stockExit.ts：7 条离场规则（从重到轻）
+  - red：诱多出货(涨≥7%主力流出散户接) / 龙头熄火(跟风票) / 封单消失(<2%成交额) / 跌破成本-3%
+  - yellow：逼近止损线(-1.5%) / 资金持续流出(今5日10日全负) / 主力净占比转弱 / 高位放量背离
+  - 输出：level + reasons + 建议减仓比例
+- StockWatchlist 自选股行加离场角标（红! / 黄⚠，tooltip 显示原因）；持仓股自动启用成本止损（读 discipline.positions）
+- StockDecisionCard 新增"离场信号"置顶行（红/黄徽章 + 触发原因）
+
+---
+
+## v9.27 — GLM5.2 审查建议落地：P0-2/3/4 + 卫生6 (2026-08-05)
+
+> 审核并落地 `GLM5.2建议.txt`（基于 HEAD e497f47 的全量审查报告）中的重要项。
+> 审核结论：报告质量高，P0-1（https-proxy-agent 依赖）已闭环（此前已加），其余声明全部验证为真。
+
+### P0-2 安全：移除硬编码数据库密码（已确认泄露到公开 GitHub）
+- server/db.js 移除 `StockMonitor2026` 明文 fallback → 未配置 DATABASE_URL 直接报错退出
+- backup.bat 不再写死密码 → 委托新增 server/scripts/backup.js（读 server/.env 解析密码，不落盘）
+- 新增 server/.env.example 模板；grep 验证 root 与子目录均无明文密码
+- 首次成功执行备份：stock-monitor/backups/stock_monitor_20260805.dump (1MB)
+
+### P0-3 决策大脑：单一权威阶段模型 stageModel.ts
+- 此前 6 套互不一致的阶段词表（App/MainlineRanking/mainline/themeScore/emotionCycle/LLM）→ 收敛为唯一词表"启动期/发酵期/高潮期/分歧期/退潮期/观察中"
+- 新建 src/lib/stageModel.ts：stageOfFunds（板块资金级）/ stageOfStrength（强度级）/ classifyStage（市场级完整版）/ emotionToStage（情绪对齐）
+- App.tsx judgeMainlineStage → stageOfFunds（含新增"分歧期"：高位放量主力不跟=量价背离）
+- MainlineRanking inferStage → stageOfStrength（加速→高潮期、主升→发酵期）
+- themeScore 权重/分数映射收敛到 stageModel 共享常量；EmotionCycleCard 显示词表对齐
+
+### P0-4 诱多探测引擎 trapDetector.ts（用户核心诉求"识别诱多"）
+- 新建 src/lib/trapDetector.ts：假封板（封单<5%成交额+炸板≥2）、诱多拉升（涨≥7%主力流出散户接盘）、量价背离、尾盘抢筹出货（预留）、封单衰减（预留）
+- detectMainlineTrap：主线内诱多个股占比≥40% → 主线整体出货预警
+- anomalyTier.ts S 级接入 detectTrap：命中 → action 强制"禁止追高·疑似诱多" + ⚠ 标注
+
+### 卫生6：人气榜 CORS 失效
+- server/routes/proxy.js 新增 POST 转发支持（emappdata 已在白名单）
+- api.ts fetchPopularityRank 本地部署走 /api/proxy POST 绕行 CORS；线上保持降级
+
+---
+
+## v9.26.21 — 资金流向图 K 线拉取限流修复 (2026-08-05)
+
+### 用户反馈
+"并没有展示 深度复盘 一并排除是否还有其他问题" — 截图里"今日行业资金流入走势"只显示 2-3 条线，远少于预期的 20+ 条
+
+### 深度复盘根因
+1. **接口被 ban**：东财 push2his 对非浏览器 IP 持续 `socket hang up`（机房 IP 屏蔽）
+2. **并发过大**：`Promise.all(40 板块)` 触发东财限流 99% 失败，只有 2-3 个能拿到
+3. **secid 缺市场前缀**：`industryBoards` 返回的 code 是 `BK1201` 不带 `90.`，K 线接口要 `90.BK1201`
+
+### 修复
+- `boardFundFlow.ts` `fetchBoardKlineFlow`：secid 加 90. 前缀（行业板块 code 自动转换）
+- `boardFundFlow.ts` `fetchBoardFundCurves`：5/批分批串行 + 失败重试 1 次 + Promise.allSettled 单条失败不阻塞其他
+- 批间 100ms 延迟降低被 ban 风险
+- export 修复（之前函数没 export 导致 tsc 警告）
+
+---
+
+## v9.26.20 — 资金流向图去硬编码（按实际数据为准） (2026-08-05)
+
+### 用户反馈
+"并非十六个行业叠加，你不可以做硬编码，要以实际数据为准"
+
+### 修复
+- `App.tsx`：去掉 `slice(0, 8)` × 2 硬编码 → 全部有 mainNet 数据的行业板块传入
+- `IndustryFundFlowChart.tsx`：去掉 `splitCount` prop 与 slice → 全部曲线绘制
+- 标签智能防重叠：按末端 y 排序，间距 < 16px 自动错位 + clamp 到绘图区
+- 下方双榜改"主力净流入（N 行业）/主力净流出（N 行业）"，N 来自实际数据
+- 颜色数组扩到 12 色自动循环（行业数不固定）
+
+---
+
+## v9.26.19 — 资金主线页加"行业资金流向走势图"（用户验收修正） (2026-08-05)
+
+### 用户反馈
+v9.26.17 实现的"资金走势图"用户未看到 → 排查发现：
+- 我把组件挂在 Dashboard 顶部，但 App.tsx **没有 import 也没有传 prop** 给 Dashboard
+- 即使传了，选的也是 `|mainNet|` 前 8 概念板块（数据源不对），不是用户期望的"行业资金流"
+- 用户实际期望：在 **fundline（资金主线）tab 顶部**展示**行业板块**的资金流入/流出走势图（开盘啦风格：电子/半导体/工业金属/通信等 16 行业叠加折线）
+
+### 修复
+- 新建 `IndustryFundFlowChart.tsx`：16 行业叠加（8 流入 + 8 流出），按"流入红/流出绿"配色，红涨绿跌
+- 数据源用 `industryBoards`（kind="industry"）按 mainNet 降序取前 8 流入 + 前 8 流出 = 16 个
+- 挂到 `fundline` tab：**MainlineRanking 之后**最显眼位置
+- 标签自动在曲线右端，水平 1 字行；下方有"主力净流入 TOP8"和"净流出 TOP8"双榜
+- 删旧 `BoardFundFlowChart.tsx`（数据源错 + 位置错）
+- Dashboard 移除相关 prop + import
+- App.tsx `topIndustryFund` state 存 16 个行业数据
+
+---
+
+## v9.26.18 — 炸板数/炸板率接入真实数据 (2026-08-05)
+
+### 用户反馈
+炸板数 = 0 / 炸板率 = 0.0% — 实际今日有 42 只炸板
+
+### 根因
+东财 `getTopicZBPool` / `getTopicDTPool` 接口的 `sort=fund:asc`（`fund:desc`/`lbc:desc`）均返回**空数组**，只有 `sort=fbt:asc` 返回真实数据。
+但代码中 ZBPool/DT 池一直用 `sort=fund:asc` → 算出 blastedCount=0 → 炸板率永远 0。
+
+### 修复
+- `api.ts` `fetchZTPoolForDate`：ZB/DT 改 `sort=fbt:asc`
+- `LimitBoard.tsx` `fetchZBPool` / `fetchDTPool`：同样改 `sort=fbt:asc`
+- `LimitBoard.tsx` ZBStock 类型补 `blastPct/prevBoards`（用 ZBPool 真实字段 `zf`/`zttj.ct`）；`sealFund/lastBoardTime` 兼容字段（ZBPool 无 fund/lbt）
+- `api.ts` `LimitPoolSummary` 加 `rawZBPool` 字段（炸板池原始数据，供后续 UI 使用）
+
+---
+
+## v9.26.17 — 资金走势图 + 8 处同类截断修复 (2026-08-05)
+
+### 1. 资金走势图（核心需求）
+- 新建 `boardFundFlow.ts`：拉取东财 `push2his stock/kline/get` 板块分钟 K 线，提取 f60=主力净额（万）
+- 新建 `BoardFundFlowChart.tsx`：SVG 多板块折线图（x=时间 09:30-15:00，y=累计主力净额亿；红涨绿跌；最多 8 板块叠加）
+- 挂到 Dashboard 顶部（IndexStrip 后最显眼位置）
+- App 选 |mainNet| 最大的 8 个板块，传入 Dashboard
+- proxy ALLOWED_HOSTS 加 `push2his.eastmoney.com`
+
+### 2. 8 处同类截断/不完整修复
+- **stockToMainline.ts:533**：fallback 概念聚合 B 路径还残留 `slice(0,50)` → 全量（漏 70 只涨停）
+- **stockToMainline.ts:613**：legacyFallbackByHybk `slice(0,50)` → 全量
+- **stockBoards.ts:53**：datacenter pageSize 500 → 5000（30 只/批 × 多概念可能超 500）
+- **api.ts fetchStockBriefBatch**：单次 100 只 secids 无分批 → 加分批支持 > 100 只自选
+- **App.tsx:267**：昨日涨停溢价 `slice(0,100)` → 全量
+- **App.tsx:888**：自选股 `slice(0,30)` → 全量（fetchStockBriefBatch 已加分批）
+
+---
+
+## v9.26.16 — 资金为 0 + 化工过宽 修复 (2026-08-05)
+
+### 用户反馈
+1. 部分主线资金仍为 0（如 AI应用/化工）
+2. 化工 28 只涨停太多（塑料/玻璃/新材料也被算入）
+
+### 根因
+- **资金 0**：boards（资金板块）原始名是细分概念（"人工智能"/"基础化工"/"化学制品"/"氟化工"），主线用用户大类名（"AI应用"/"化工"），模糊匹配对不上
+- **化工 28 只**：化工词根过宽（"化学原料"/"塑料"/"玻璃"/"新材料"被纳入化工）
+
+### 修复
+- `conceptGroups.ts`：
+  - 新增 `foldBoardFunds()`：boards 按用户大类折叠聚合资金（"人工智能"→"AI应用"累加资金）
+  - 新增"材料"大类：收纳塑料/玻璃/化学原料/金属新材料/新材料
+  - 化工词根收紧：剔除塑料/玻璃/化学原料/新材料
+  - 通信组加"物联网"词根
+- `stockToMainline.ts`：所有资金匹配分支（LLM/fallback 概念聚合/merge/legacy）改为"折叠 boards 优先 + 模糊兜底"
+
+### 验证（折叠后资金）
+- 芯片 534 亿 / 通信 372 亿 / 有色 152 亿 / AI应用 146 亿 / 机器人 126 亿 / 元器件 36 亿 / 化工 20 亿
+
+---
+
+## v9.26.15 — 主线作战卡概念级聚类（方案A落地，修复与开盘啦口径不一致） (2026-08-05)
+
+### 复盘结论（用户反馈：今天涨停潮 通信25/芯片24/有色11/算力10/AI应用8/元器件7/智能驾驶6，我列出的主线全对不上）
+根因 4 条：
+1. **LLM 归类只处理前 30 只涨停**（slice(0,30)）→ 120 只涨停后 90 只全丢 = "通信/算力主线消失"的元凶
+2. **fallback 概念聚合只处理前 50 只**（slice(0,50)）→ 同样丢
+3. **每只股"择优取1"概念**（无一对多展开）→ 通信/芯片/算力概念被拆散
+4. **无词根折叠** → "光模块/CPO/华为"不并入"通信"
+
+### 修复（方案A：纯概念级聚类）
+- 新建 `conceptGroups.ts`：20 个用户视角大类词根表（通信/芯片/AI应用/算力/智能驾驶/有色金属/元器件/消费电子/军工/新能源车/机器人/化工/医药/金融等），`foldConcepts()` 折叠
+- `themeLadder.ts`：新增 `buildThemeLadderByConcept`（一对多展开聚类），hybk 作 fallback；抽出公共 `buildGroupsFromMap`
+- `mainline.ts`：`buildMainlineCandidates` 支持可选 conceptOf（概念聚类优先）
+- `stockToMainline.ts`（**真正的主线引擎**）：
+  - **LLM prompt 带概念归属提示**（datacenter 折叠后）→ 归类更准
+  - **mergeWithConceptFallback**：LLM 归类（前30只）+ 概念聚合补全（其余涨停）→ 防漏主线
+  - **fallbackByHybk 升级**：全量涨停（不再截断）+ 词根折叠 + 一对多展开 + 资金匹配
+
+---
+
+## v9.26.14 — 竞价台补"实时涨幅/现价"列 (2026-08-05)
+
+- 用户反馈：竞价台只有"竞价涨幅"（开盘 vs 昨收），缺"实时涨幅"（当前 vs 昨收）
+- 修复：AuctionItem 新增 currentPrice / changePct / changeAmount（腾讯 field 3/31/32）
+- UI 新增"实时涨幅"和"现价"两列（红涨绿跌），鼠标悬停显示涨跌额
+
+---
+
+## v9.26.13 — 竞价真实数据 + 闸门反向机会 + 主线资金 + ETF/候选点击 (2026-08-05)
+
+### 1. 竞价台：真实数据替代虚假字段
+- 根因：东财 ulist 的 f46(今开)/f60(昨收) 已重映射为市值/成交额，原实现算 -100%
+- 改造：改用腾讯 qt.gtimg.cn（雪球格式 GBK）—— 单 URL 批量 50 只，含真实今开/昨收/成交量/成交额/换手/振幅
+- 服务端代理 ALLOWED_HOSTS 加 qt.gtimg.cn（绕过 CORS + 解决 GBK 编码）
+- UI 加列：竞价额（亿）、换手率
+
+### 2. 情绪闸门：不再"永远禁新开仓/空仓"
+- 根因：旧映射 s≥80 → factor 0.3 + "极度贪婪·禁新开仓"；s<25 → 0.2 + "极度恐慌·仅ETF"
+- 重设计：
+  - 极度恐慌 0.2→0.5，label "极度恐慌·超跌机会"
+  - 极度贪婪 0.3→0.5，label "极度贪婪·控仓兑现"
+- suggestPosition 升级：恐慌+升温 → "反向试探/反向机会"（巴菲特"别人恐惧我贪婪"）；贪婪 → "控仓兑现"
+- GateGauge UI 加"反向信号"卡片：贪婪时给兑现路径，恐慌时给超跌路径
+
+### 3. 主线资金为 0 修复
+- 根因：mainline.ts 用 hybk 行业名与资金流接口的"概念板块名"维度不匹配（"机器人"行业 vs "机器人概念"概念）
+- 改造：三级匹配（精确 → 包含 → 2字 token 模糊）+ 多板块聚合（取 mainNet 绝对值最大的作为代表，5d/10d 累加）
+
+### 4. ETF/候选观察池点击跳转
+- realLinks.ts 新增 etfRealUrl(code) → 东财基金详情页；boardNameRealUrl(name) → 同花顺板块页
+- BattlePlan ETFBlock 整行可点击跳 ETF 详情；CandidatePool 板块标签可点击跳板块详情
+
+---
+
+## v9.26.11 — 仓位建议体系升级（新增"重仓/轻仓参与"档位） (2026-08-04)
+
+- 背景：用户反馈异动/研判只有"观察、禁止追高"，缺"轻仓/重仓参与"建议
+- anomalyTier（异动分级）action 升级为五档：
+  - S级+主线+封板 → **重仓参与（主线核心）**
+  - S级+主线 / S级放量 / A级+主线 → **轻仓参与（跟主线/观察承接）**
+  - S级非主线 → **禁止追高**；A级非主线 → **观察·暂不参与**；B级 → 无需操作
+- StockDecisionCard（个股决策卡）新增**重仓参与**档：
+  - 强势上行+大资金进场+命中主线 → 重仓参与（主线核心）
+  - 强势+大资金 或 主线内走强 → 轻仓参与
+  - 高位放量 → 谨慎参与；其余观望；否决 → 不建议参与
+- Dashboard 建议动作按语义着色（重仓=红粗、轻仓=琥珀、观察=蓝、禁止/无需=灰）
+
+---
+
+## v9.26.10 — 全栈逐文件审查修复（4 代理审查 + 20+ 项修复） (2026-08-04)
+
+### 服务端
+- proxy.js：502/504 双重发送修复（sent 标志）；缓存 key 剔除 req_trace 动态参数（缓存原本永不命中）
+- cron.js：内容哈希确定性主键（防重复入库）；fallbackSeq 提到模块顶（消 TDZ）；busy 互斥锁防重叠；20min 调度修正
+- ai.js：HttpsProxyAgent 单例（防 socket 泄漏）；超时按 0.4/0.6 比例分配；statusCode 非 2xx 不走代理重试（防重复计费）；takeToken 移到 Key 校验后
+- db.js：limit 下界校验（防 LIMIT -1 语法错误）
+
+### 前端核心
+- ai.ts：releaseSlot token 模型（并发精确释放）；executeAI 加 catch（防 slot 泄漏）
+- themeScore：先锋加分恒真修复（parseInt 改字符串比较）
+- llmSignals：0 分被 || 吞修复；JSON 任务改 mainlineRank 槽（thinking:false）
+- tradingSession：getUTC* 修复双重时区
+- regimeGate：情绪边界错位一档修复 + s≥101 兜底
+- seatProfiles：游资识别 token 级模糊匹配（"股份有限公司"插入词问题）
+- signalLedger：日期按 +08:00 解析（凌晨时区错位）
+- recTracker：>50 只时截断不再误标完成
+- seatLedger：停牌股 priceT1 null 不再标回填完成
+- boardMap：内存缓存 + in-flight 锁（重复 parse 500 项优化）
+- api：节假日涨停池空自动回退最近交易日；anomalyTier 按 10/20cm 区分近涨停
+
+### 组件
+- App：countdown 每秒 setState 改 nextRefreshAt 时间戳（消除全树每秒重渲染）；yesterdayZt useMemo（盘前每秒请求修复）；竞态护栏
+- TopNav：本地每秒计算倒计时
+- NewsPanel：mainlines 闭包旧值修复（"命中主线"标签）
+- MarginPanel：融资上涨红涨绿跌修复（原颠倒）
+- DarkPool：marketFlowType 匹配对齐实际文案（原死分支恒灰）
+- BattlePlan：collapsed 随强度分同步
+- StockWatchlist：loadInfo 竞态护栏
+- AnnouncementPanel：items ref 镜像（闭包旧值）
+
+### 确认无问题
+SQL 全参数化；SSRF allowlist 安全；前后端任务白名单一致
+
+---
+
+## v9.26.9 — 全面审查修复（AI 可用性误判 x3 + 限速双计数 + 缓存漏写 + 竞态护栏） (2026-08-04)
+
+### 全面排查结论：同类 bug 修复
+1. **AI 可用性误判（getApiKey 只查浏览器 Key，服务端中转被误拦）** —— 共修复 3 处同 v9.26.7 的 bug：
+   - IntelligenceDrawer（督导输入框被禁用、提示"请配置Key"）
+   - StockWatchlist（个股 AI 研判/追问/批量扫描按钮被禁用）
+   - llmNewsIntelligence（**全栈情报分析核心引擎**直接 return null → "分析中…"卡住）
+   - 统一改用 hasAvailableAI()/hasAIOptimistic()
+
+2. **服务端中转成功分支漏写缓存+统计**（ai.ts）：latencyMs 错误、缓存永不写入、今日调用数恒 0 → 补 recordCall/recordSuccess/setCache
+
+3. **限速双计数 + 释放错位**（ai.ts）：reserveSlot 占位 + recordCall 重复 push = 双计数；pop 释放他人槽位；4xx 不释放 → 统一为按时间戳精确释放
+
+4. **cron 覆盖 AI 星级**：ON CONFLICT 不再覆盖 sentiment/stars（保留前端 AI 分析值）
+
+5. **竞态护栏**：LLM 主线精排（llmRankSeq）、自选股异动带（cancelled）防慢响应覆盖新结果
+
+6. **杂项**：429 文案动态显示限速值；快讯 time 缺失用北京时间兜底；cron 主键兜底去 Math.random 改时间戳+序号；文案纠正（"请配置Key"→准确原因）
+
+### 审查确认无问题
+- 前后端 13 个任务白名单完全一致；SQL 全参数化无注入；恐慌阈值三处一致（25）
+
+---
+
+## v9.26.8 — 全栈情报分析直读 PostgreSQL（突破 localStorage 5MB）+ 存储文案纠正 (2026-08-04)
+
+- 背景：数据已存 PG，但分析仍走 localStorage（5MB 上限），且文案还提示"请接入 PostgreSQL"
+- 修复：
+  - dataStore.ts 新增 `fetchAnalysisDataFromCloud()`：本地部署直接从 PG 拉近 30 天全量 news/ann（绕过 localStorage）
+  - IntelligenceDashboard 分析取数统一入口 `getAnalysisData()`：本地优先 PG 全量（含指定日期/近N天/自动窗口过滤），线上回退 localStorage
+  - 产业链追溯（板块链）本地部署同样用 PG 数据
+  - 状态条本地显示「📀 数据已存本地 PostgreSQL · 可回溯至 X」；"网页存储容量有限"提示仅线上显示
+- 验证：tsc 通过
+
+---
+
+## v9.26.7 — 修复"已配 Key 但全栈情报分析/每日复盘提示不可用" (2026-08-04)
+
+- 根因：DailySummary 和 IntelligenceDashboard 组件用 `getApiKey()` 仅检查**浏览器 Key**。
+  本地部署模式下浏览器 Key 故意留空（v9.26.3 F-03 设计：Key 只存服务端 .env），
+  但这两个组件**没考虑服务端中转可用** → 误判"未配置 Key" → 禁用按钮、显示警告。
+  而 AI 督导（IntelligenceDrawer）走的是标准 `callAI("supervisor")` → 自动走服务端中转 → 正常工作。
+
+- 修复：
+  - ai.ts 新增 `hasAvailableAI()` 异步检测：浏览器有 Key ✓ 或 服务端 /api/ai/config enabled=true ✓ 任一可用
+  - `hasAIOptimistic()` 同步乐观判断（初始渲染 + 本地部署默认 true）
+  - DailySummary / IntelligenceDashboard 改用 `noAI = !hasAvailableAI()` 替代 `noKey = !getApiKey()`
+  - 警告文案改准确："浏览器未填 Key 且服务端未启用 → 检查 ① 设置 ② server/.env"
+
+- 验证：tsc 通过，AI 督导 + 全栈情报分析 + 每日复盘 都走服务端中转
+
+---
+
+## v9.26.6 — 席位画像历史拉回 + 全局字号放大 (2026-08-04)
+
+### 席位画像历史数据恢复
+- 背景：历史 seats/playbook/rec_tracker 等 410 个 key 已导入 PG，但 syncLocalWithCloud 只拉回 4 个固定 key，
+  本地页面 localStorage 空 → 席位画像(读 localStorage seats:*) 看不到历史
+- 修复：
+  - server/routes/db.js 新增 GET /api/db/kv/keys（列出全部 key）+ GET /api/db/kv/bulk（批量拉取）
+  - cloudStore.syncLocalWithCloud 全量拉回 PG 缺失 key（只填本机缺失，不覆盖本地新数据，分批 50/key）
+- 验证：seats:07-28~08-03 共 5 天 2134 条席位记录、playbook:07-28~08-04 全部在 PG
+
+### 全局字号放大（阅读舒适度）
+- html font-size 16→17px（基准微放大）
+- 覆盖超小字号类：text-[9px]→11px、text-[10px]→12px、text-[11px]→13px、text-xs→14px、text-sm→15px
+- 驾驶舱等 600+ 处小字同步提升，大数字(text-2xl/3xl)保持醒目
+- 方案：CSS 高优先级规则覆盖，无需逐组件改动
+
+---
+
+## v9.26.5 — 修复"降级模式（LLM失败）" + 自动 LLM 分析接通 (2026-08-04)
+
+### 根因：页面每次刷新触发 10+ AI 任务并发 → 服务端令牌桶仅 10 次/分钟 → 秒级 429 → 前端误降级
+
+### 修复
+1. 服务端令牌桶 10 → 60 次/分钟（个人本地部署足够，不再误伤）
+2. 前端 callAIviaServer 加 35s 超时 + 429/403 错误透传（不再静默回退本地误报"未配置Key"）
+3. 降级文案如实展示原因（服务端限速/超时 vs 未配置Key）
+4. **服务端 AI 调用改"直连优先、失败走代理"**：实测 .cn 端点直连 6.7s 稳定，而 Clash 代理会把 .cn 域名绕国外节点导致频繁超时
+5. cron 自动 LLM 分析接通：analyzeDaily 配了 .env Key 即真实调用 LLM 生成当日市场速览（7s 直连成功）
+6. index.js/cron.js 显式加载 dotenv（保证任意启动方式读到配置）
+
+### 实测
+- 5 次调用 4 次成功（6.5~36s），成功率 80%（升级前 100% 超时）
+- cron 自动分析生成真实文本（"今日市场缺乏明确主线…"）
+
+---
+
+## v9.26.4 — 历史数据恢复（Chrome localStorage → PostgreSQL 全量迁移） (2026-08-04)
+
+- 背景：本地部署前历史数据只存在线上 github.io 域名的浏览器 localStorage（按域名隔离），本地 PG 看不到
+- 恢复：从 Chrome leveldb 导出 github.io 域名 localStorage（399 key / 140 万字符）→ 导入 PG
+  - `ds_news` 1082 条快讯 → news 表（历史 7/30~8/4）
+  - `ds_ann` 1776 条公告 → announcements 表（历史 7/29~8/4）
+  - 龙虎榜台账 seats:07-28~08-03、复盘 playbook:07-28~08-04、rec_tracker 200 条、
+    情绪 sentiment、快照 ann/ztpool/popularity 等 397 key → kv_store
+- 启动拉取窗口 3→10 天（main.tsx syncNewsFromCloud(10)），覆盖全部历史
+- 数据源：Chrome `AppData/Local/Google/Chrome/User Data/Default/Local Storage/leveldb`
+
+---
+
+## v9.26.3 — AI 设置面板服务端中转模式 UI（方案A） (2026-08-04)
+
+- 设置面板自动检测本地服务端 `/api/ai/config`：
+  - 服务端已启用 → 顶部绿色横幅「✅ 服务端AI中转已启用·Key在server/.env」
+  - Key/BaseURL/模型/厂商/思考模式 全部禁用（🔒），浏览器不再持有 Key（F-03 安全要求）
+  - 「测试连接」按钮改为「测试服务端」（走 /api/ai/call 真实调用）
+- 线上 GitHub Pages / 服务端未配 Key → 保持原有浏览器直连模式 + 黄/琥珀色提示
+- 涉及：src/components/SettingsModal.tsx、src/lib/aiSettings.ts（新增 fetchServerAIConfig/testServerAI）
+
+---
+
+## v9.26.2 — Agnes 按官方公告改回 .cn 端点 + flash 模型 (2026-08-04)
+
+- 官方公告：国际站用户改 Endpoint 为 `https://apihub.agnes-ai.cn/v1` 即可继续用原 API Key
+- Endpoint：`.com` → `apihub.agnes-ai.cn`（国际站镜像端点，实测 flash 模型可用）
+- 模型：`agnes-2.5-pro`（需付费）→ `agnes-2.5-flash`（免费）
+- 实测验证：`.cn + agnes-2.5-flash` 真实调用正常返回分析（S级异动解释成功）
+- 涉及：server/.env、server/routes/ai.js、src/lib/ai.ts、src/lib/aiSettings.ts
+
+---
+
+## v9.26 — 审查报告 V2 三波落地（刷新修复 + AI 安全 + 决策三态 + 事件驱动） (2026-08-04)
+
+### 依据
+Arena agent 对 v9.25 的全面审查《方案优化V2.txt》，按用户确认的三波清单执行。
+
+### 第一波：P0 修复（5 项）
+- **F-01+F-02**：App.tsx 刷新 orchestrator 重写
+  - 定时刷新改为单一 interval + ref 计数（不再依赖 countdown state 重建 interval，刷新真正会触发）
+  - refreshAll 空依赖闭包修复：overview/darkPool 改 ref 镜像，失败保留旧值真正生效
+- **F-08**：allScoringBoards 补回 mainNet/mainNet5d（去掉 as unknown as 强断言，资金不再显示 undefined/NaN）
+- **F-09**：runSignalBackfill 改为 await 成功后才 markBackfilledToday（失败 30 分钟重试生效）
+- **F-10**：vite ^7.3.6 + esbuild ^0.28.1，npm audit 0 漏洞
+- **F-06**：ai.ts 不再把 reasoning_content（思维链）当 content；content 为空=协议错误，上层重试 thinking=false
+
+### 第二波：AI 安全与透明化（4 项）
+- **F-05**：新增 mainlineRank 专用任务（thinking=false, temp 0.1, 1500 tokens），主线精排不再复用 stockJudge(thinking=true)
+- **F-03**：服务端 AI 中转 server/routes/ai.js（/api/ai/call + /api/ai/config）
+  - 模型 Key 只存服务端 .env（AI_API_KEY），浏览器不再持有；前端 isLocalServer 时优先走中转
+  - 任务白名单 + 10次/分钟令牌桶；线上 GitHub Pages 自动回退本地 Key
+- **F-07**：mainlineLLM 候选白名单校验——board 必须来自输入候选、code 必须属于该候选龙头池、rank 唯一；幻觉板块/股票 100% 拦截
+- **F-12**：主线强度分加 dataCompleteness/missingFields（晋级率/10日资金/换手/催化 任一缺失即下调置信度）
+  - MainlineRanking 表格新增"完整度"列 + 公式版本说明；五问条显示缺失字段
+
+### 第三波：产品方向（4 项）
+- **A.3**：五问条三态输出——唯一可交易主线（Top1≥60 且分差≥10）/ 多主线轮动（分差<10 禁止强行选唯一）/ 无可交易（强度或完整度不足）
+- **A.4 简化**：MainlineGroup 加 observedAt 快照时间（可回放审计）
+- **A.6 简化**：AnomalyTier S/A 级事件驱动 LLM 解释——新增 eventExplain 任务（thinking=false, 300 tokens），异步补一句归因+建议（每 eventId 一次，降级标 aiLLMDegraded）
+- **F-04**：前端限速改"预留-释放"模型（reserveSlot/releaseSlot），失败不占配额
+
+### 其他
+- `index.html` title v9.25 → v9.26
+- `App.tsx` footer v9.26 · build 08-04 13:00
+- 本地部署：server/routes/ai.js 新增；.env 增加 AI_API_KEY 配置（留空=回退本地 Key）
+
+
+---
+
+## v9.25 — 主线深度催化注入 LLM（业绩/收入指引识别） (2026-08-04)
+
+### 问题
+- 用户反馈："医药生物是有时间催化——药明康德业绩和利润大增+收入指引提高，如何让LLM精准识别到呢"
+- 当前 LLM 主线精排只看了"涨停梯队 + 简单新闻标题"，没把业绩/收入指引等深度催化纳入，医药生物被排到第三（53分），实际应该是最强主线候选
+
+### 根因
+- `lib/mainlineLLM.ts` 的 payload 只有 `news: c.newsTitles.slice(0, 3)` —— 这些是 stockToMainline 匹配到的简单快讯标题
+- 缺：dataStore 中**公告淘金**里的业绩/收入指引/中标等深度催化信息（这是"业绩大增"这种强催化的来源）
+
+### 修复
+- 新增 `lib/mainlineCatalyst.ts`：buildMainlineCatalysts(mainlines, news, anns)
+  - 子词匹配主线名（与 NewsPanel 一致）
+  - 提取强催化关键词（业绩大增/收入指引上调/中标/政策利好/重大利好等）
+  - 同时识别负向催化（减持/暴雷/亏损/立案等 → 标注【风险·xx】）
+  - 输出 Map<主线名, 催化摘要字符串[]>
+- `lib/mainlineLLM.ts`：
+  - 签名加 catalysts 参数
+  - payload 加 `catalyst: catalysts?.get(c.mainline) ?? []` 字段
+  - prompt 顶部增加【重要·近期深度催化】区块
+  - 判断规则明确：强业绩催化 → rank 显著优先、confidence ≥80；强负向催化 → rank 显著降低
+- `App.tsx`：在 rankMainlinesWithLLM 调用前从 getAllSince(3天) 拉取 news+ann，构建 catalystsMap 传入
+
+### 预期效果
+- "医药生物 + 药明康德业绩大增 + 收入指引上调"会作为强催化注入 LLM → LLM 倾向于把医药生物排到 rank 1、confidence 80+
+- 同时如有"减持/暴雷"类公告，rank 自动降低并打【风险】标签
+
+### 其他
+- `index.html` title v9.24.2 → v9.25
+- `App.tsx` footer v9.25 · build 08-04 11:10
+
+---
+
+## v9.24.2 — 两融图表重构（双折线对比）+ 清理失效 AI 端点 (2026-08-03)
+
+### 用户反馈
+1. 两融余额图表"被修坏了"——柱状图只显示最近 5 天（07-27~07-31），融券余量柱状太小看不见
+2. 所有 AI 输出走"LLM 失败·规则版"——降级模式全开
+
+### 修复 1：MarginPanel 图表重构（用户期望同花顺风格）
+- 主图：两融余额走势 = 融资余额折线（左轴·橙色面积） + 融券余额折线（右轴·蓝色虚线，自动独立 scale）
+- 副图：融资资金流 = 融资买入额浅粉柱 + 融资净买入红涨/绿跌柱（recharts Cell 条件染色）
+- 移除原"融券余量 Bar"（与融资余额量级悬殊，柱状图上不可见）
+- 新增数据时效说明（东财 T+1 披露 + 滞后提示）
+
+### 修复 2：AI 端点清理
+- 实测 apihub.agnes-ai.com 已挂（curl exit 23），从 AGNES_ENDPOINTS 移除
+- 端点列表构建逻辑改为遍历式（更健壮）
+- AGNES_ENDPOINTS 改为只保留 .cn 一个端点
+
+### 已知遗留
+- Agnes 默认免费 Key 路径可能仍不可用——若用户未配置自有 Key 或 Key 失效，所有 AI 仍走规则版
+- 建议：用户在设置面板中配置自有 API Key（已支持 7 厂商：Agnes / DeepSeek / 智谱 / Moonshot / 通义千问 / OpenAI / 自定义）
+
+### 其他
+- `index.html` title v9.24.1 → v9.24.2
+- `App.tsx` footer v9.24.2 · build 08-03 19:30
+
+---
+
+## v9.24.1 — 修复 React #310（hooks 顺序违规导致整页崩溃） (2026-08-03)
+
+### Bug
+- 用户报告：点击任意 Tab 后驾驶舱页崩，显示 ErrorBoundary "页面模块异常 + Minified React error #310"
+- 表现：今日作战卡（BattlePlan）模块消失（实际是 Dashboard 整个崩了，连带 BattlePlan 不显示）
+
+### 根因
+- `components/Dashboard.tsx` 的 AnomalyStrip（v9.24-P1-4 新增）
+- 函数体内 hooks 顺序：`useState` → `useRef` → `useEffect`(订阅) → `useEffect`(定时) → **if(stocks.length === 0) return null** → `const verdicts` → `useEffect`(emit)
+- 当自选股数量从 0 变 N（或反向）时，渲染期间 hooks 调用次数从 4 变 5
+- 违反 React Rules of Hooks → React 抛错 #310 → ErrorBoundary 接住 → 整页显示错误页
+
+### 修复
+- 把 `if (stocks.length === 0) return null` 移到所有 hooks 之后
+- `verdicts` 用三元判断 `stocks.length === 0 ? [] : ...` 兜底（确保 useEffect(emit) 回调执行时安全）
+
+### 其他
+- `index.html` title v9.24 → v9.24.1
+- `App.tsx` footer v9.24.1 · build 08-03 19:10
+
+---
+
+## v9.24 — 游资决策大脑 P1（主线强度排行榜 + 个股决策卡 + 消息主线联动 + 异动SAB分级） (2026-08-03)
+
+### PRD《游资决策大脑升级方案》P1 落地（4 项全做）
+
+### 1. 主线强度排行榜（PRD B1）
+- `components/MainlineRanking.tsx`（新）：资金主线页首屏表格
+  - 排名/主线/强度分/阶段/涨停/连板高度/晋级率(因子得分)/换手(因子得分)/资金净流入(今/5日)/龙头/AI诊断/操作参考
+  - 默认按强度分降序；≥80 整行红底 + 红色大字号；阶段徽章（启动/加速/主升/分歧/退潮）
+  - 操作参考四色徽章与五问条同口径；复用 calcMainlineScore 注入的 strengthScore
+- App.tsx：fundline 区块首屏接入（资金结构详情之前）
+
+### 2. 个股决策卡（PRD C1）
+- `components/StockDecisionCard.tsx`（新）：个股雷达页选中股首屏（融资融券之上）
+  - 字段：一句话结论(四色徽章)/主线归属/技术位置/资金性质/风险点(≤2)/止损止盈参考/置信度
+  - 纯规则引擎基于实时数据（零额外请求）；资金口径附"无法识别拆单"局限说明
+- StockWatchlist 导出 WatchStock/VetoItem 类型 + 接收 mainlines prop
+- App.tsx 传入今日主线名
+
+### 3. 消息主线联动（PRD E1）
+- NewsPanel：每条快讯新增"⚡命中主线：XX"高亮标签 + "定价：已部分反应/已充分反应/尚未反应"
+  - 匹配算法：主线名拆子词（"机器人/减速器"→"机器人"），子词≥2 字防误命中
+  - 定价状态按命中主线涨停家数近似（≥10 充分/≥5 部分/≥1 反应中/0 尚未）
+- App.tsx 传入 battlePlan 主线名+涨停数
+
+### 4. 异动捕捉引擎 S/A/B 分级（PRD 5.6/A5）
+- `lib/anomalyTier.ts`（新）：classifyAnomaly 分级 + 事件流（emit/get/subscribe，同 code+level 15min 冷却）
+  - S级：≥9.5% 近涨停 / ≥7%+量比≥3 快速拉升
+  - A级：量比≥5 / 换手≥15% / 涨幅≥7%
+  - B级：涨幅≥3% / 量比≥1.5 / 换手≥8%
+  - 每级输出：触发原因 + 呼应主线 + AI一句话研判 + 建议动作
+- Dashboard 自选异动带升级为 AnomalyStrip：S红闪/A高亮/B灰 + 色条 + 事件流摘要
+- api.ts fetchStockBriefBatch 加 f10 量比字段
+
+### 其他
+- `index.html` title v9.23.1 → v9.24
+- `App.tsx` footer v9.24 · build 08-03 16:00
+
+---
+
+## v9.23.1 — 工作区完善项补提交 + tsc 清零 (2026-08-03)
+
+### 背景
+v9.23 提交后工作区遗留 21 文件未提交改动（v9.23 开发过程中的完善项），本次一并收尾提交部署。
+
+### 1. v9.23.1-fix：主线卡折叠（PRD A2）
+- BattlePlan：主线强度分 <60 的卡片默认折叠为一行摘要，点击展开（v9.23.1-fix）
+
+### 2. 其他 v9.23 配套完善（工作区遗留）
+- App.tsx：昨日涨停池按主线分组接入离场信号环比（v9.23.1-fix）
+- DragonTiger / MarginPanel / StockWatchlist / seatLedger / seatProfiles / sentimentStore / signalLedger / regimeGate / recTracker / etfScore 等配套改动
+
+### 3. tsc 类型错误清零（6 个）
+- App.tsx(1071)：`sentiment: number|null` → `?? 0`（MarketSnapshotForNews 要求 number）
+- MarketOverview.tsx(254)：SentimentGauge `value={sentiment ?? 0}`
+- Playbook.tsx(115/153)：payload `sentiment ?? 0`
+- api.ts(1070)：`jsonp<any>` 修复 `data` 属性访问
+- `npx tsc --noEmit` 全绿 ✅
+
+### 其他
+- `index.html` title v9.23 → v9.23.1
+- `App.tsx` footer v9.23.1 · build 08-03 15:40
+
+---
+
+## v9.23 — 游资决策大脑 P0（强度分 + 离场信号 + 五问条 + AI结构化诊断） (2026-08-03)
+
+### PRD《游资决策大脑升级方案》P0 落地（已确认 4 项全做）
+
+### 1. 主线强度分（PRD 6.1）
+- `lib/mainlineScore.ts`（新）：calcMainlineStrength() 六维加权公式
+  - 涨停家数占比 25% + 连板高度 20% + 晋级率 15% + 资金连续性 20% + 换手 10% + 催化剂 10%
+  - 输出 score/factors（证据链）/tier（gold≥80/silver 60-79/bronze<60）
+- App.tsx 注入 candidates：strengthScore + strengthFactors，并按强度分重新排序
+- BattlePlan 主线卡加强度分大字号徽章（红≥80/橙60-79/灰<60，带公式 tooltip）
+
+### 2. 主线级离场信号（PRD 6.4）
+- `lib/exitSignal.ts`（新）：checkExitSignal() 四规则
+  - 炸板率环比+15pp / 涨停家数环比-30% / 最高板下降 / 主力转流出
+- App.tsx 注入 candidates：exitSignal + exitSignalText
+- BattlePlan 主线卡显示"⚠ 退潮"红色徽标
+
+### 3. 游资五问条（PRD 5.1-A1）
+- `components/FiveQBar.tsx`（新）：驾驶舱顶部 5 卡片横排
+  - 1️⃣主线是什么（强度分徽章）2️⃣处于什么阶段 3️⃣谁是龙头 4️⃣能不能上车（四色操作徽章）5️⃣什么时候跑（离场状态）
+  - 60 秒自动刷新；操作徽章按强度分+离场信号动态算（可参与/谨慎参与/观望/应离场）
+  - 含 DisclaimerTag 合规标注
+
+### 4. AI 结构化主线诊断（PRD 7.2）
+- `lib/aiPrompts.ts`：新增 mainlineDiagnosis 任务槽（thinking=false + maxTokens 1500 + temp 0.2）
+- `components/MainlineDiagnosisCard.tsx`（新）：结构化 JSON 输出
+  - 真实 LLM 优先（strength_score/stage/sustain_forecast/leader core-follower-hype/action/risk/exit/confidence）
+  - 失败降级规则引擎（强度分+离场信号）
+  - 卡片化渲染（阶段/操作/置信度/核心跟风蹭热点/风险/离场状态）
+- BattlePlan 主线卡加"🎯 诊断"按钮，点击弹出诊断卡
+
+### 其他
+- `index.html` title v9.22 → v9.23
+- `App.tsx` footer v9.23 · build 08-03 15:10
+
+---
+
+## v9.22 — ETF pctBoost + isThemeBoard 加强过滤 (2026-08-03)
+
+### 用户反馈
+- 第一主线"昨日高振幅"被错当主线（非题材，是涨跌状态类）
+- "机构重仓"被错当主线（非题材，是资金特征类）
+- ETF 排序首推"人工智能ETF 跌0.11%"——跌的 ETF 不该被推为主推
+
+### 修复
+- **isThemeBoard 加强过滤**：新增"涨跌幅/换手/成交额/资金特征/主力流向/封板状态/涨跌状态"等非题材词表
+  - "昨日高振幅/昨日连板/最近多板/机构重仓/游资重仓/主力资金/超大单大单中单小单/封板炸板" 等全部过滤
+- **ETF 评分新增 pctBoost 维度**（权重 20%）：ETF 自身今日涨跌幅
+  - 涨 ≥1% → +30 分
+  - 跌 0~-1% → -10~-30 分
+  - 跌 ≥-1% → 强制降级为 C、total ≤ 55
+  - 重新分配权重：fundTrend 30→20 / pctBoost 20（新增）/ boardLink 25→20 / styleFit 20→15 / mainline 15 / macro 10
+- App.tsx：ETF 行情拉取新增 `f3` 字段（今日涨跌幅）
+
+### 其他
+- `index.html` title v9.21 → v9.22
+- `App.tsx` footer v9.22 · build 08-03 12:45
+
+---
+
+## v9.21 — 概念主线精确归类（A 反查增强 + B 个股所属概念 + C 开盘啦式UI） (2026-08-03)
+
+### 用户反馈（v9.20.1 仍错）
+- 中大力德(机器人)归到"通用设备"；信测标准被错归"风电"；中国船舶错归"军工"
+- 仍是申万行业名（"计算机设备""工业设备"）
+
+### A：成分股反查增强（fallback 兜底层）
+- `fetchBoardConstituents` 15→50 只（涨停股常在成分股 16-30 位，之前被漏）
+- 过滤"新股/次新股/最近强势/活跃"等非题材板块分类
+- 多概念归属时按"今日涨停数最多"择优（数据驱动，不按名字长度）
+
+### B：个股所属概念（核心新增，同花顺式）
+- 新接口 `RPT_F10_CORETHEME_BOARDTYPE`（datacenter）：每只股票直接返回所属全部板块
+  - 中大力德 → 人形机器人/机器人执行器/减速器/机器人概念（不再是"通用设备"）
+  - 支持 IN 批量查询（一次 30 只）
+- `lib/stockBoards.ts`（新）：fetchStocksBoards() + isThemeBoard() 过滤非题材
+- fallback 顺序：个股所属概念(datacenter) → 成分股反查(方案A) → hybk(最后防线)
+
+### C：开盘啦式主线 UI
+- 主线卡热度条：🔥涨停数 + 最高板 + 跟风数 + 资金净流入（带 tooltip 解释）
+
+### 其他
+- `index.html` title v9.20.1 → v9.21
+- `App.tsx` footer v9.21 · build 08-03 11:30
+
+---
+
+## v9.20 — 概念板块主线归类（按概念而非行业） (2026-08-03)
+
+### 用户反馈问题
+- **问题 1**："降级模式（LLM失败）：按申万行业 hybk 分组"——为什么 LLM 失败？
+- **问题 2**：中大力德是机器人概念，但归类到"通用设备"（申万二级行业）——抓取的是行业不是概念
+
+### 修复
+- **fallbackByHybk → fallbackByConcept**：v9.17 降级路径用申万行业分组（"通用设备""计算机设备"），v9.20 改为：
+  1. 拉今日热门概念板块（涨幅+资金正向，前 60 个）
+  2. 并行拉每个概念成分股（15 只/概念，8 并发避免限速）
+  3. 反向索引 涨停股code → 概念名（多对一，选最短的）
+  4. 按概念聚合涨停股；未匹配上 → hybk 兜底
+- **加降级日志**：degraded/JSON 解析失败都 console.warn，便于排查（用户可在 ?debug=1 看到 console）
+- **强化 LLM prompt**：明确"⚠️ 强制规则：mainline 必须是概念主线（机器人/AI应用/稀土 等），绝不能用申万行业名（通用设备/电气设备 等）"
+- **终极兜底**：概念板块反查也失败 → 旧 hybk 分组（保留作为最后防线）
+
+### 其他
+- `index.html` title v9.19.1 → v9.20
+- `App.tsx` footer v9.20 · build 08-03 10:45
+
+---
+
+## v9.19 — 仓位纪律 + 复盘日志 + 竞价台（审查报告第2层） (2026-08-02)
+
+### F6-F8 仓位纪律面板
+- `lib/discipline.ts`（新）：DisciplineState（总资金/持仓/单票上限/新开仓次数/连续亏损）
+  - computeDisciplineViolations：单票超限/总仓位超限/新开仓超限/连续亏损冷静期
+  - computeStopLoss：基于波动率的止损参考计算器（默认4%，ATR×1.2封顶10%）
+  - recordTradeResult：记录盈亏 → 更新连续亏损计数
+- `components/DisciplinePanel.tsx`（新）：持仓录入表单 + 违规提醒 + 止损参考 + 仓位百分比
+
+### F9-F11 每日复盘日志
+- `lib/dailyReview.ts`（新）：DailyReview（日期/主线/龙头/个股/盈亏/反思）
+  - upsertReview / computeLossStreak / searchReviews / statByMainline（题材盈亏统计）
+- `components/ReviewPanel.tsx`（新）：收盘后引导填写 + 题材盈亏徽标 + 按题材检索 + 连续亏损冷静期徽标
+
+### F1-F3 竞价台
+- 探测结论：东财无集合竞价量字段 → 采用"今开涨幅 + 首封时间"近似方案
+- `lib/auction.ts`（新）：fetchAuctionBoard() 批量拉 f46今开/f60昨收 + 涨停池首封
+  - 早盘强度分：竞价涨幅 + 首封时间加成 + 连板加成
+  - 标记：竞价即涨停（≥9.8%）/ 大幅低开（<-3%）
+- `components/AuctionBoard.tsx`（新）：竞价强度排行 + 高亮标记 + 30s 自动刷新
+- Dashboard 接入：盘前/竞价布局展示（isPre 块），附时效标签
+
+### 其他
+- `index.html` title v9.18 → v9.19
+- `App.tsx` footer v9.19 · build 08-02 20:25
+
+---
+
+## v9.18 — 合规收敛 + 数据时效标签 + 情绪周期雷达（审查报告第1层） (2026-08-02)
+
+### T1-T4 合规话术收敛（弱化荐股指令）
+- `components/DisclaimerTag.tsx`（新）：卡片级小字免责标注（"仅供参考，不构成投资建议"）
+- DragonTiger：主导派与操作建议 → 主导派信号研判；一句话操作建议 → 信号解读
+- seatBehavior：suggestion 文案中性化（"务必警惕"→"历史统计中回吐概率较高"；"可作中线跟踪"→"历史统计中组合走强概率较高"）
+- BattlePlan：低闸门"不可重仓追高" → "历史统计中该环境下主线成功率偏低"
+- Dashboard/App.tsx：逆风减仓/追高风险等强指令词 → "历史统计风险偏高"
+
+### U1-U3 数据时效标签
+- `components/FreshnessTag.tsx`（新）：实时/准实时/T+1 三态徽标（绿/琥珀/蓝）
+- DragonTiger 顶部接入 T+1 标签（"数据于交易日收盘后 16:00 起陆续更新，仅用于复盘及次日参考"）
+
+### F4-F5 情绪周期雷达（温度计 2.0）
+- `lib/emotionCycle.ts`（新）：computeEmotionCycle() 五档周期判断（启动/主升/分歧/退潮/冰点）
+  - 判定信号：炸板率趋势 + 涨停数环比 + 溢价转负 + 晋级率 + 高度变化
+  - 退潮预警复合模型（游资最看重）：炸板率攀升/溢价转负/晋级率低 → ebbAlert
+- `components/EmotionCycleCard.tsx`（新）：周期徽标 + 操作基调（中性表述）+ 证据链（避免黑箱）+ 退潮预警
+- Dashboard 首屏接入（BattlePlan 下方）
+
+### 其他
+- `index.html` title v9.17.1 → v9.18
+- `App.tsx` footer v9.18 · build 08-02 17:50
+
+---
+
+## v9.17.1 — LLM 归类修复 + 龙二龙三补齐 + 人气榜对照 (2026-08-02)
+
+### Bug 修复：LLM 主线归类一直降级
+- 根因：`classifyStocksToMainlines` 用 stockJudge 任务槽（thinking=true + maxTokens 8000），
+  50 只涨停 payload + 长 prompt → 超时降级 → 一直"按申万行业 hybk 分组"
+- 修复：
+  - `aiPrompts.ts` 新增 `mainlineClassify` 任务槽：thinking=false + maxTokens 4000 + temperature 0.1
+  - `stockToMainline.ts` 改用 mainlineClassify + payload 50→30 只
+  - LLM 调用更快更稳，归类成功率大幅提升
+
+### 龙二龙三补齐
+- 根因：LLM 精排（rankMainlinesWithLLM）返回的 leaders 可能只有龙一 → 覆盖规则机的龙二龙三
+- 修复：BattlePlan.tsx 合并逻辑——LLM leaders <3 时，用规则机 candidates.leaders 补齐，
+  保证每个主线显示完整龙一龙二龙三
+
+### 人气榜对照（用户要求）
+- App.tsx：fetchPopularityRank(50) 拉人气榜，按 code 匹配注入各主线 leaders.popularRank
+- BattlePlan.tsx：龙一龙二龙三旁边显示 "🔥人气#N" 徽标（Top3 红色高亮，其他琥珀）
+- 人气榜不可用时静默降级（不影响主线展示）
+
+### 其他
+- `index.html` title v9.17 → v9.17.1
+- `App.tsx` footer v9.17.1 · build 08-02 17:20
+
+---
+
+## v9.17 — LLM 涨停主线归类 + 主线阈值修复（核心改进） (2026-08-02)
+
+### 问题反馈
+- 单只孤峰（9板独苗）被排进第一主线（实际应为弱主线/孤峰）
+- AI应用/云计算/线上消费 等"软语义"主线没被识别（hybk 申万行业硬分类的局限）
+- ETF池缺 云计算/线上消费/创业板软件 等主线品种
+
+### 核心新增：LLM 涨停主线归类
+- `lib/stockToMainline.ts`（新）：
+  - `classifyStocksToMainlines(rawPool, boards, news)`：一次 LLM 调用把涨停池按"软语义"归类
+    到主线（如 "AI应用"/"云计算"/"机器人"/"信创"/"光通信CPO"/"稀土"等投资者口语化标签）
+  - 同时让 LLM 评估"是否真主线"：涨停≥3只=真主线，1-2只=孤峰/弱主线
+  - 一次调用输出：个股归类 + 主线聚合 + 整体市场逻辑
+  - 失败降级：hybk 申万行业硬分类（依然可用）
+
+### 主线阈值修复（v9.17）
+- `lib/mainline.ts` 改：`g.count < 2 continue`（要求 ztCount ≥ 2 进主线）
+- 即使 9板独苗，1只涨停也不算"板块效应"——这是用户核心反馈
+- 单只孤峰现在会显示"💨 脉冲/孤峰"或"板块效应弱"角标
+
+### ETF_POOL 扩充（v9.17）
+- 云计算ETF、线上消费ETF、软件ETF(创业板)、互联网ETF、游戏ETF、家电ETF、化工ETF
+- 医疗ETF、化工ETF(新材料) 等 5+ 个新品种
+
+### UI 强化
+- 顶部"🤖 LLM 归类总览"：XX只涨停 → YY条主线（ZZ条真主线）· 市场逻辑
+- 主线卡：板块效应弱时显示"⚠ 板块效应弱"角标
+- LLM 精排不变（继续异步补位）
+
+### 改动文件
+- 新增：lib/stockToMainline.ts（240+ 行）
+- 改：lib/mainline.ts、lib/etfScore.ts、lib/mainlineLLM.ts、App.tsx、components/BattlePlan.tsx
+
+### 其他
+- `index.html` title v9.16 → v9.17
+- `App.tsx` footer v9.17 · build 08-02 17:10
+
+---
+
+## v9.16 — 今日主线作战卡（打破重建：涨停潮→风格感知→主线排序→ETF直出） (2026-08-02)
+
+### 打破重建背景
+- 旧"今日推荐"三列结构（板块/个股/ETF）杂乱：个股用板块成分股而非涨停梯队、
+  news 维度写死空数组、LLM 只做新闻打分、ETF 无风格感知（7-31 进攻 AI 却推红利）
+- 用户要求：≥3 主线 + 多主线个股排序 + 多只 ETF 排序 + 随情绪/资金/大盘实时切换
+
+### 新引擎（三层）
+- **`lib/mainline.ts`（新）**：
+  - `buildMainlineCandidates(rawPool, boards, news)`：涨停潮检测（涨停≥2/高度≥2）
+    + 龙一龙二龙三判定（最高板+最早封板=龙一 / 次高板+封单=龙二 / 成交额大=龙三）
+    + 主线强度分（资金35% + 涨停潮35% + 梯队20% + 涨幅10%）
+  - `detectMarketStyle()`：进攻日/轮动日/防守日 + 风险偏好 0-100（情绪40%+涨停30%+涨家30%，
+    炸板率/闸门惩罚）
+- **`lib/mainlineLLM.ts`（新）**：`rankMainlinesWithLLM()` 精排主线（真主线vs脉冲 + rank + 龙头确认
+  + 逻辑/风险），复用 callAI 中枢，失败降级回规则
+- **`lib/etfScore.ts`（重构）**：五维权重 fundTrend30/boardLink25/styleFit20/mainlineLink15/macro10
+  - ETF_POOL 扩充：5G通信/AI/软件/游戏/新能源车/医药 等主线品种
+  - 修复红利 boardKeywords 空 bug + 进攻日红利减分
+  - `styleFit`：进攻日成长加分、防守日避险加分
+  - `mainlineLink`：主线→ETF 直出匹配（如主线=AI → 人工智能ETF/科创50）
+
+### App.tsx 数据流
+- `newsItems` 修复：从 dataStore `getAllSince(近2日)` 读真实新闻（原来空数组）
+- battlePlan 结构：`{ gate, candidates, llmRanked, marketStyle, etfs, candidateThemes }`
+- 推荐落盘：主线（含龙一龙二龙三）+ ETF
+- LLM 精排：规则渲染后异步 1 次，失败降级
+
+### BattlePlan.tsx（重建为"主线作战卡"）
+- 风格徽标（🔥进攻/🔁轮动/🛡️防守 + 风险偏好）
+- ≥3 主线区块：第一/第二/第三 + 脉冲线标记（LLM判定）
+- 每线：龙一龙二龙三（角色徽标 + 理由）+ LLM 逻辑 + 风险提示
+- ETF 排序区块：4 只（含主线直出标记）
+- 候选观察池（板块4-8名）
+
+### 其他
+- `index.html` title v9.15.1 → v9.16
+- `App.tsx` footer v9.16 · build 08-02 16:50
+
+---
+
+## v9.15.1 — 今日推荐 bug 修复（v9.15 hotfix） (2026-08-02)
+
+### Bug 1：闸门 × 0.3 错判为"谨慎模式"
+- 原因：`deriveGateMode` 用 `factor < 0.3`（严格小于），0.3 不满足，被错分到 cautious（0.3-0.7）
+- 修复：`factor <= 0.3` → low 模式（v9.15 边界 bug）
+
+### Bug 2：低闸门模式个股推荐为空
+- 原因：极端情绪下 topThemes 板块的成分股被 `buildVetoList` 全否决（mainNet<0 + smallNet>0），topStocks 为空
+- 修复：低闸门模式 + topStocks 为空时，从涨停板 rawPool 中选资金最强 2 只作为"低闸门精选"
+  - 绕过 stockScore 因子计算（涨停板已确认封板）
+  - 标 tier="B" + invalidation="低闸门精选：涨停板资金最强"
+
+### 其他
+- `index.html` title v9.15 → v9.15.1
+- `App.tsx` footer v9.15.1 · build 08-02 13:50
+
+---
+
+## v9.15 — 今日推荐 3 模式分层（机构纪律+游资选股 融合） (2026-08-02)
+
+### 问题
+- 旧版"今日无推荐"在闸门≤0.3 时一票否决，但用户实际需求是"强中选强，推荐主线标的"——即使情绪过热，**最强主线**仍有资金接力，错过机会成本高
+- 旧逻辑偏机构风控，缺游资视角的"低仓试探"机会
+
+### 改造
+- `regimeGate.ts` GateResult 新增：
+  - `mode: "full" | "cautious" | "low" | "empty"` 4 模式
+  - `positionLimit: number` 建议仓位上限 %
+  - `riskLevel: "low" | "mid" | "high" | "none"` 风险等级
+- `BattlePlan.tsx` 3 模式渲染：
+  - **full**（闸门≥0.7）: 正常模式，显示所有 A/B 档
+  - **cautious**（0.3≤闸门<0.7 或熔断）: 谨慎模式，主题前 3 + 个股前 5 + 全部 ETF + 风险徽标
+  - **low**（闸门<0.3）: 低闸门模式，主题前 1 + 个股前 2 + ETF 前 1（**最强主线**）+ 仓位角标 + 红色警示横幅
+  - **empty**（数据缺失）: 显示"今日无推荐"
+- ThemeCard / StockCard / ETFCard 新增 `showPositionCap` 角标（"💰 上限 30% 仓"）
+
+### 仓位上限规则
+- full: 100% × 闸门（如 0.8 → 80%）
+- cautious: 50% × 闸门
+- low: 30% × 闸门
+- 空仓: 0%（缺数据时）
+
+### 其他
+- `index.html` title v9.14 → v9.15
+- `App.tsx` footer v9.15 · build 08-02 13:30
+
+---
+
+## v9.14 — 连续动作+展开 + 画像按票聚合 + 操作建议5维评分 (2026-08-01)
+
+### A. 游资连续动作 + 展开
+- `SeatRepeatPanel` 每行加 + 按钮
+- 展开：复用 SeatHistoryExpansion（按股票聚合版），看该席位做过的所有票
+
+### B. 席位画像按票聚合（v9.13 + 号改版）
+- `seatLedger.ts` 新增 `buildSeatStocksByDept(deptName, maxDays)`：按股票聚合
+- `SeatHistoryExpansion` 重写：列出该席位做过的每只票（次数+累计净买入+平均T+1+末次T+1+末次上榜日）
+- 头部汇总：近30日做过的票数 / 累计上榜次数 / 累计净买入
+
+### C. 操作建议多重信号交叉验证（5 维评分，v9.14 核心新增）
+- `analyzeSeatsGroup` 重构为 5 维加权评分：
+  - 行为模式 35%（派系组合：格局主买+砸盘主卖=95分；新面孔/数据不足=35分）
+  - 集中度 25%（合力加分≥3家同买；独食减分单家>60%）
+  - 历史 T+1 20%（买方前五的 T+1 均收益方向）
+  - 席位类别 10%（机构主导加分；机构派发减分；北向加仓加分）
+  - 新面孔比例 10%（已识别派系占比<40%减分）
+- `BuySellAnalysisPanel` 重写：
+  - 头部：买方主导派/卖方主导派/综合分/信号强度
+  - 信号徽标（多枚，good/warn/bad/info 四色）
+  - 一句话操作建议
+  - 风险警示（低分/独食/新面孔多）
+  - 5 维评分进度条
+  - 派系分布
+
+### 其他
+- `index.html` title v9.13 → v9.14
+- `App.tsx` footer v9.14 · build 08-01 20:15
+
+---
+
+## v9.13 — 席位画像 + 号展开 + 龙虎榜操作建议 (2026-08-01)
+
+### A. 席位画像 + 号展开（点击行查该席位历史）
+- `seatLedger.ts` 新增 `buildSeatHistoryByDept(deptName, maxDays)`：返回该席位近 N 天上榜记录
+- `DragonTiger.tsx` SeatProfileCard 每行加 + 按钮，展开显示该席位最近操作
+  - 列：日期 / 股票名 / 方向（买/卖）/ 净额 / T+1收益（已回填）
+  - 鼠标悬停 + 按钮高亮（amber）
+
+### B. 龙虎榜买入/卖出前五加行为模式 + 操作建议（核心新增）
+- `seatBehavior.ts` 新增 `analyzeSeatsGroup(buyers, sellers, behaviorMap)`：
+  - 综合买卖双方前五的"行为模式"分布
+  - 输出：买方主导派 / 卖方主导派 / 派系分布 / 一句话操作建议 / 信号强度
+  - 6 大操作建议规则（格局派主买+砸盘派主卖 → "洗盘嫌疑大、可作中线跟踪"等）
+- `DragonTiger.tsx` SeatTable 每行加两列：画像（席位名标签）+ 行为（格局派/砸盘派/波段派等）
+- 展开行加 BuySellAnalysisPanel：显示主导派徽标 + 一句话操作建议 + 派系分布
+
+### 其他
+- `index.html` title v9.12 → v9.13
+- `App.tsx` footer v9.13 · build 08-01 19:56
+
+---
+
+## v9.12 — 持仓-主线匹配修复 + 游资行为模式长期打标 (2026-08-01)
+
+### A. 持仓-主线匹配 bug 修复（v9.10 P3 增强）
+- **bug 根因**：原匹配只看"申万行业名==主线 board 名"，但太极实业等行业（光学光电子）今天没在 top10 industry 内；且"涨停票"常因"光通信/低空经济"等小众概念发力，不在行业维度
+- 修复点：
+  - `positionMatch.ts` 增加"概念匹配"维度（行业 OR 概念双匹配）
+  - `App.tsx` mainline 拉取范围：industry 10→30, concept 10→30, region 6→10（更多主线候选）
+  - 新增"概念异动"状态：涨幅 ≥5% 但行业/概念都不在主线 → 标 🔥概念异动（不再是孤立）
+  - 新增"弱势孤立"状态：跌幅 ≤-3% 且不匹配 → 标 ⚠弱势（区别于普通孤立）
+  - 提示语区分"行业匹配"vs"概念匹配"vs"概念异动"
+- `Dashboard.tsx` PositionMatchStrip：5 种状态色 + 警示条 + 匹配来源角标
+
+### B. 游资/机构长期行为模式标签（v9.12 核心新增）
+- `lib/seatBehavior.ts`（新）：基于 `SeatProfile` 的统计自动给席位打行为模式
+- 5 种行为标签（v9.12 已实现，可按数据微调阈值）：
+  - **格局派**（红）= 值得跟踪：T+1 ≥+2% + 胜率≥60%
+  - **波段派**（橙）= 适合跟踪波段：T+1 ≥+3% 但胜率<60%
+  - **接力派**（紫）= 高频高胜可长线跟：上榜≥10次 + 胜率≥50%
+  - **砸盘派**（灰）= 务必警惕：T+1 ≤-2% 或胜率<35%
+  - **一日游**（浅灰）= 上榜后次日常跌
+  - **新面孔** / **数据不足**（兜底）
+- `DragonTiger.tsx` SeatProfileCard 新增"行为模式"列 + 配色图例
+- 鼠标悬停看 triggers 数据（reasons 数组）
+
+### 其他
+- `index.html` title v9.11 → v9.12
+- `App.tsx` footer v9.12 · build 08-01 19:42
+
+---
+
+## v9.11 — 游资标签全面化 + 两融观察券商风格重做 (2026-08-01)
+
+### A. 游资标签全面化（席位画像）
+- `lib/seatProfiles.ts` SEAT_PROFILES 从 14 条扩充到 ~35 条，覆盖主流游资：
+  - 顶级游资（rose 红）：章盟主（国泰海通上海江苏路）/ 赵老哥（银河绍兴）/ 炒股养家（华鑫上海分公司）/ 佛山系（财通佛山新城等）/ 欢乐海（财通杭州延安路）
+  - 次级游资（hot1 橙）：作手新一（财通杭州解放路）/ 苏南帮（华泰苏州人民路）/ 益田路荣超（招商深圳益田路）/ 思明南路（财通厦门思明南路）
+  - 主流席位（hot2 绿）：章牛（国海济南）/ 上海超短帮（东方上海分公司）/ 中信系游资 / 孙哥（古北路/溧阳路）/ 财通杭州系 / 东兴北京系 / 太平洋系
+  - 综合席位（fund 紫）：拉萨帮 / 招商深圳系 / 中金财富系 / 开源系 / 成都北一环 / 南京太平南路 / 申万宏源系 / 海通系 等
+- 新增 `isTopHotMoney()` 判断顶级游资（红色高亮）
+- 已有的"知名游资"占位标签全部替换为具体名字（龙虎榜/席位画像/连续动作 三处自动生效）
+
+### B. 两融观察券商风格重做
+- `components/MarginPanel.tsx` 全重写：
+  - 顶部 4 卡：融资融券余额 / 融资余额 / 融资买入额（当日）/ 融券余量金额，每卡带"较前日 ▲/▼ 数值"变化指示
+  - 顶部时间窗：1月 / 3月 / 半年 / 1年，显示区间累计（融资买入+净买入）
+  - 主图：两融余额走势（融资余额折线 + 融券余量柱状，双 Y 轴）
+  - 主图时间窗：3M / 6M / 1Y / 3Y
+  - 副图：融资资金流（融资买入额柱 + 融资净买入柱，红涨绿跌）
+  - 数据源标签："沪深两市融资融券汇总 · 交易所 T+1 披露 · 数据截至 YYYY-MM-DD"
+
+### C. 个股雷达两融直观化
+- `components/StockWatchlist.tsx` MarginSignalCard 升级：
+  - 4 指标卡：融资余额 / 融券余额 / 今日净买入 / 5日净买入
+  - **变化率多窗口对比柱（核心新增）**：3/5/10 日变化率中线对齐迷你柱状图，一眼看加速/减速
+  - 净买入多窗口：3/5/10 日净买入
+  - 信号徽章 + 一句话解释保留
+
+### 其他
+- `index.html` title v9.10 → v9.11
+- `App.tsx` footer v9.11 · build 08-01 19:25
+
+---
+
+## v9.10 — 十年机构视角四大优化：信号验证闭环 / 情绪动量仓位 / 持仓主线匹配 / 游资连续动作 (2026-08-01)
+
+按"机构决策闭环"原则实施四大优化，让工具从"信息聚合器"升级为"决策系统"。
+
+### P1 信号验证闭环（最高优先：没有胜率的信号=噪音）
+- `lib/signalLedger.ts`：
+  - 新增 `runSignalBackfill()` 批量自动回填 T+1/T+5（真实日K收盘价），配合 `isBackfilledToday`/`markBackfilledToday` 幂等
+  - `getSignalStats()` 增加 `health` 字段：胜率≥55%有效 / 45-55%一般 / <45%存疑 / 样本<10不足
+- `App.tsx`：回填三保险（首载自动 + 30分钟定时 + SignalPanel手动按钮），不再依赖"盘后打开页面"
+- `components/SignalPanel.tsx`：新增"补全回填"按钮 + 健康度角标（存疑红色高亮）
+- `lib/recTracker.ts`：新增 `getBoardHitBadge`/`getStockHitBadge`（按板块/个股查历史推荐命中率）
+- `components/BattlePlan.tsx`：板块卡/个股卡新增 🎯 历史命中率徽标（绿≥60% / 黄40-60% / 红<40%）
+
+### P2 情绪动量 + 仓位映射（机构看变化率，不看绝对值）
+- `lib/sentimentStore.ts`：
+  - 新增 `recordIntradaySentiment()` 日内采样（5分钟节流，保留80点）
+  - 新增 `loadIntradaySeries()` / `computeMomentum()`（30分钟斜率 → 升温/降温/平稳）
+  - 新增 `suggestPosition()` 仓位建议：情绪×动量×闸门 → 建议总仓位%（10%-100%）
+- `components/Dashboard.tsx` GateGauge 升级：
+  - 情绪日内折线（纯SVG零依赖）
+  - 动量标签（🔥升温/❄️降温/→平稳）
+  - 建议总仓位卡片（先定仓位，再谈标的）
+
+### P3 持仓-主线匹配（交易员每天第一问：我的票还在主线上吗？）
+- `lib/positionMatch.ts`（新）：`matchStockToMainline()` 用行业映射把自选股对应到主线板块阶段
+- `components/Dashboard.tsx` 新增 PositionMatchStrip 卡片：
+  - 顺风（在主线上）/ 孤立（不在任何主线）/ 逆风（所在板块退潮→提示减仓）
+  - 逆风数量>0 时红字警示 + 每只票的板块阶段徽标
+
+### P4 龙虎榜游资连续动作跟踪（单日上榜 vs 反复动作）
+- `lib/seatLedger.ts`：新增 `buildSeatRepeatActions()` 聚合近60日"同席位同票≥2次"的连续动作
+- `components/DragonTiger.tsx`：新增 SeatRepeatPanel：
+  - 持续买入（游资反复加仓）/ 持续卖出（派发中回避）/ 买卖反复（博弈主战场）
+  - 每次动作显示次数、方向、T+1均值溢价、上榜日期
+
+### 其他
+- `index.html` title v9.9.1 → v9.10（与 footer 统一）
+- `App.tsx` footer v9.10 · build 08-01 18:46
+
+---
+
 ## v9.9.1 — 修复：时区bug全量治理 + 关键性能/质量改进 (2026-08-01)
 
 本版本系统性修复一组跨时区/数据一致性 bug，覆盖 12 个源文件。根因是多个组件用

@@ -9,6 +9,8 @@ import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
 // v9.35（S3）：信号有效性回测面板
 import SignalEffectivenessPanel from "./SignalEffectivenessPanel";
+// v9.42：因子健康度面板（幻方"因子失效"IC 曲线可视化）
+import FactorHealthPanel from "./FactorHealthPanel";
 // v9.36（A2）：竞价强度榜
 import AuctionStrengthPanel from "./AuctionStrengthPanel";
 // v9.36（A3）：龙虎榜×涨停池交叉
@@ -535,6 +537,8 @@ export default function Dashboard({
   const [showSignal, setShowSignal] = useState(false);
   // v9.35（S3）：信号有效性回测面板
   const [showSignalEffect, setShowSignalEffect] = useState(false);
+  // v9.42：因子健康度面板（幻方"因子失效"IC 曲线）
+  const [showFactorHealth, setShowFactorHealth] = useState(false);
   useEffect(() => {
     // 当 phase 变到 post 时自动打开 AI 复盘（盘后场景）
     if (phase === "post") setShowAI(true);
@@ -887,9 +891,16 @@ export default function Dashboard({
               className="rounded px-3 py-1 text-xs bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border border-violet-500/30">
               {showSignalEffect ? "收起回测" : "🧪 信号有效性回测"}
             </button>
+            {/* v9.42：因子健康度面板（幻方"因子失效"IC 曲线） */}
+            <button onClick={() => setShowFactorHealth(v => !v)}
+              className="rounded px-3 py-1 text-xs bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/30">
+              {showFactorHealth ? "收起因子" : "📉 因子健康度"}
+            </button>
           </div>
           {showAI && <DailySummary overview={overview} fund={fund} />}
           {showSignalEffect && <SignalEffectivenessPanel />}
+          {/* v9.42：因子健康度（server cron 15:40 落库 factor_ic:日期） */}
+          {showFactorHealth && <FactorHealthPanel />}
           {showSignal && <SignalPanel />}
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">

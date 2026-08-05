@@ -4,6 +4,32 @@
 
 ---
 
+## v9.42 — 因子 IC/健康度可视化：幻方"哪些因子在失效"曲线闭环 (2026-08-06)
+
+### 数据权威化：server cron 自动落库 factor_ic（不再依赖开页面）
+- 新增 `server/lib/factorIc.js`：因子评估服务端版（与 factorLib.ts 同构，11 因子）
+  - 读最近 30 交易日 kv（market_daily + sentiment）→ 组装日行 → 次日延续标签
+  - 每因子取最近 10 个有效样本交易日算滚动窗口 IC（Spearman，按期望方向对齐）
+- cron 15:40 收盘落库 + 启动即补 → `kv_store:factor_ic:YYYY-MM-DD`（PG 权威，永不缺数据）
+
+### 因子失效曲线（FactorHealthPanel）
+- 新增 `src/components/FactorHealthPanel.tsx`：SVG 手绘滚动 IC 曲线（无图表库）
+  - 每因子一行：名称 + 三态徽标（健康 emerald / ⚠失效 rose / ↻反转 amber）+ 样本数 + 曲线
+  - 曲线叠加 ±0.05 失效阈值带（灰带）+ 0 线 + 失效/反转点高亮 + 当前点大圆 + 当前 IC 标签
+  - 汇总条：失效因子数/总数、方向反转数、平均 |IC|、健康分、门控影响提示（≥50%→-15% / ≥30%→-8%）
+- 降级逻辑：历史快照 <2 天时用 market_daily+sentiment 前端实时计算，cron 落库后自动切换
+- Dashboard 盘后布局新增「📉 因子健康度」按钮（与信号回测并列）
+
+### 引擎增强
+- factorLib 新增 `computeFactorIcSeries` / `evaluateFactorIcSeries`：滚动窗口 IC 序列（此前 ic20d 为单批近似）
+- **三态判定（业务盲区修复）**：持续负 IC 不再是"失效"而是"方向反转"（reversed）——
+  有预测力但方向反了，需人工复核/反向使用，暂不自动改向；前端/服务端逻辑同构
+- factorHistory.ts：数据加载层（loadFactorRows / loadFactorIcHistory，兼容新旧快照格式）
+
+### 单测 81/81 全绿（新增 4 例滚动 IC 序列：正相关/负相关反转/样本不足/全因子覆盖）
+
+---
+
 ## v9.41 — V4 里程碑：真·tool_calls Agent + 高置信自洽 + Top-3 主线覆盖 (2026-08-06)
 
 ### V4-A：真·ReAct 多轮循环（AI 从"复读机"变"真智能体"）
