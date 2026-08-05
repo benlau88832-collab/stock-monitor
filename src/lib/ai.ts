@@ -563,6 +563,8 @@ export interface AgentToolCall {
 export interface AgentChatResult {
   text: string;
   toolCalls?: AgentToolCall[];
+  /** v9.45（V5-1）：true = 服务端配额受限（429，非模型不可用）→ 前端显式标注，不静默降级 */
+  rateLimited?: boolean;
 }
 
 /** 单轮 Agent 对话（带工具清单；LLM 可选择返回 tool_calls 或直接出文本） */
@@ -591,7 +593,13 @@ export async function callAgentChat(
       signal: ctrl.signal,
     });
     clearTimeout(timer);
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      // v9.45（V5-1）：429 配额受限 → 显式标记（区别于"服务端不可用"），AI 不再静默退回规则
+      if (resp.status === 429) {
+        try { const j = await resp.json(); if (j?.rateLimited) return { text: "", rateLimited: true }; } catch { /* keep */ }
+      }
+      return null;
+    }
     const j = await resp.json();
     if (j.error) return null;
     return { text: j.text ?? "", toolCalls: j.toolCalls };

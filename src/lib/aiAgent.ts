@@ -21,8 +21,14 @@ export interface AgentVerdict {
   evidence: string[];      // 工具收集的投票证据（结论级）
   rawEvidence?: Array<{ name: string; data: unknown }>; // v9.40（V4-A）：原始盘面（数据类工具结果，LLM 独立信息源）
   critic: string | null;   // Critic 意见
-  degraded: boolean;       // true = 规则兜底（LLM 不可用）
+  degraded: boolean;       // true = 规则兜底（LLM 不可用 / 轮次耗尽 / 配额受限）
   selfConsistency?: number; // 自洽投票一致性 0-100（开启时）
+  // v9.45（V5-2）：Agent 路径埋点 —— 验证 flash 真在用原生 tool_calls
+  path?: "native_toolcall" | "manual_json" | "rule_fallback";
+  rounds?: number;          // 实际 LLM 轮数
+  toolsCalled?: string[];   // 本轮实际调用的工具（去重）
+  /** v9.45（V5-1）：true = 服务端配额受限（429）导致的降级，非模型不可用 */
+  rateLimited?: boolean;
 }
 
 /** 从规则工具收集证据（0 次 LLM）—— v9.40（V4-F）：用工具自带 normalize 归一为统一 schema，消除脆弱映射 */
@@ -156,11 +162,19 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
   let history: string[] = []; // 前几轮的工具调用与结果（回灌给 LLM）
   let agentTrace: string[] = [];
   let llmOk = true;
+  // v9.45（V5-2）：Agent 路径埋点
+  let agentPath: AgentVerdict["path"] = undefined; // 首个成功解析的协议（原生 tool_calls / 手动 JSON）
+  let llmRounds = 0;          // 成功执行的 LLM 轮数
+  let rateLimitedFlag = false;
+  const calledTools = new Set<string>();
 
   // v9.41（V4-D）：final 后统一过 自洽投票（可选）+ Critic 挑刺（默认开）
   // v9.43：+ 因子健康度强制门控（AI 结论同样适用 decisionBus 的失效因子扣分规则）
   const finalize = async (action: "可上车" | "观望" | "禁止", confidence: number, reason: string): Promise<AgentVerdict> => {
-    let v: AgentVerdict = { action, confidence, reason, evidence: agentTrace, rawEvidence: [], critic: null, degraded: false };
+    let v: AgentVerdict = {
+      action, confidence, reason, evidence: agentTrace, rawEvidence: [], critic: null, degraded: false,
+      path: agentPath, rounds: llmRounds, toolsCalled: [...calledTools],
+    };
     if (fhReport && fhReport.penalty > 0 && fhReport.total >= 3) {
       const cap = action === "可上车" ? 60 : 65; // 高失效环境可上车置信不超 60
       v = {
@@ -179,14 +193,18 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
     const user = `主线：${mainline}\n强度${ctx.strengthScore ?? "?"}分·涨停${ctx.ztCount ?? "?"}只·高度${ctx.height ?? "?"}板·阶段${ctx.stage ?? "?"}\n${fhInject ? "\n" + fhInject + "\n" : ""}\n${history.join("\n") || "（第一轮，开始调研）"}\n\n本轮请输出JSON（工具调用或最终裁决）：`;
     const r = await callAgentChat(system, user, toolDefs, { temperature: 0.2 });
     if (!r) { llmOk = false; break; } // LLM/服务端不可用 → 降级
+    if (r.rateLimited) { llmOk = false; rateLimitedFlag = true; break; } // v9.45：配额受限 → 显式降级
+    llmRounds++;
 
     // ① 原生 tool_calls（Agnes 支持时）
     if (r.toolCalls && r.toolCalls.length > 0) {
+      if (!agentPath) agentPath = "native_toolcall"; // 首个协议记录
       let roundOut: string[] = [];
       let hardVeto = false;
       for (const tc of r.toolCalls) {
         const tool = toolByName.get(tc.name);
         if (!tool) { roundOut.push(`未知工具 ${tc.name}`); continue; }
+        calledTools.add(tc.name);
         let args = ctx;
         try { args = { ...ctx, ...(JSON.parse(tc.args || "{}") as object) }; } catch { /* 参数解析失败用默认 ctx */ }
         try {
@@ -212,6 +230,7 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
     // ② LLM 手动 JSON（Agnes 不支持原生 tool_calls 时）：calls 或 final
     const parsed = parseAIJSON<{ calls?: Array<{ tool: string; reason?: string }>; final?: { action: string; confidence: number; reason: string } }>(r.text);
     if (parsed?.final) {
+      if (!agentPath) agentPath = "manual_json";
       const f = parsed.final;
       return await finalize(
         f.action === "可上车" || f.action === "禁止" ? f.action : "观望",
@@ -220,11 +239,13 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
       );
     }
     if (parsed?.calls && parsed.calls.length > 0) {
+      if (!agentPath) agentPath = "manual_json";
       const roundOut: string[] = [];
       let hardVeto = false;
       for (const c of parsed.calls) {
         const tool = toolByName.get(c.tool);
         if (!tool) { roundOut.push(`未知工具 ${c.tool}`); continue; }
+        calledTools.add(c.tool);
         try {
           const res = await tool.execute(ctx as never);
           agentTrace.push(`${c.tool} → ${JSON.stringify(res).slice(0, 120)}`);
@@ -247,7 +268,7 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
     break;
   }
 
-  // ---------- ② 降级：LLM 不可用 / 轮次耗尽 → 回退 v9.40 全跑工具 + 规则投票 ----------
+  // ---------- ② 降级：LLM 不可用 / 轮次耗尽 / 配额受限 → 回退 v9.40 全跑工具 + 规则投票 ----------
   const { votes, raw } = await collectToolEvidence(ctx);
   // v9.43：降级路径也接入因子健康度门控（此前 runConsensus 未传 factorStats）
   const factorStats = fhReport && fhReport.total >= 3 ? { decayed: fhReport.decayedCount, total: fhReport.total } : undefined;
@@ -255,11 +276,17 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
   return {
     action: fb.action,
     confidence: fb.confidence,
-    reason: llmOk ? `5轮调研后规则兜底（${agentTrace.length} 次工具调用）` : "LLM/服务端不可用，规则投票兜底",
+    reason: rateLimitedFlag
+      ? "AI 配额受限（服务端限速），规则投票兜底"
+      : llmOk ? `5轮调研后规则兜底（${agentTrace.length} 次工具调用）` : "LLM/服务端不可用，规则投票兜底",
     evidence: votes.map(e => `${e.name}: ${e.verdict}`),
     rawEvidence: raw,
     critic: null,
     degraded: true,
+    path: "rule_fallback",
+    rounds: llmRounds,
+    toolsCalled: [...calledTools],
+    rateLimited: rateLimitedFlag || undefined,
   };
 }
 

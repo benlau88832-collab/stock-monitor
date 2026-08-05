@@ -56,6 +56,7 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
   useEffect(() => {
     if (!mainAction || !mainConfidence) return;
     // v9.37（V3-P2）：决策日志落库（可审计/可复盘）
+    // v9.45（V5-2）：追加 Agent 路径埋点（path/rounds/toolsCalled/rateLimited）
     try {
       const log = {
         ts: new Date().toISOString(),
@@ -68,13 +69,17 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
         dissent: verdict?.dissent,
         agentReason: aiVerdict?.reason,
         agentCritic: aiVerdict?.critic,
+        path: agent?.path,
+        rounds: agent?.rounds,
+        toolsCalled: agent?.toolsCalled,
+        rateLimited: agent?.rateLimited,
       };
       const key = `decision_log:${new Date().toISOString().slice(0, 10)}`;
       const arr = JSON.parse(localStorage.getItem(key) ?? "[]");
       arr.push(log);
       localStorage.setItem(key, JSON.stringify(arr.slice(-50))); // 每日最多留 50 条
     } catch { /* 日志失败不影响功能 */ }
-  }, [mainAction, mainConfidence, aiVerdict, verdict?.votes, mainline, gatedDowngrade]);
+  }, [mainAction, mainConfidence, aiVerdict, verdict?.votes, mainline, gatedDowngrade, agent?.path, agent?.rounds, agent?.rateLimited]);
 
   if (!verdict && !aiVerdict) return null;
 
@@ -85,13 +90,22 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
 
   return (
     <div className={`rounded-xl border p-3 ${aiVerdict ? "border-amber-500/40 bg-amber-950/20" : "border-violet-500/30 bg-violet-950/15"}`}>
+      {/* v9.45（V5-1）：配额受限显式标注 —— 用户能一眼看出"这次不是 AI 主导" */}
+      {agent?.rateLimited && (
+        <div className="mb-2 rounded border border-rose-500/40 bg-rose-500/15 px-2 py-1.5 text-[11px] font-bold text-rose-200">
+          ⏸ AI 配额受限（服务端限速 30/min），本次为规则兜底，非 AI 主导
+        </div>
+      )}
       {/* ===== AI 主导结论（置顶大号） ===== */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-slate-200">
-            {aiVerdict ? "🤖 AI 决策（自动主导）" : "🧠 AI 终裁决（规则投票）"}
+            {aiVerdict ? "🤖 AI 决策（自动主导）" : agent?.rateLimited ? "🧠 规则决策（AI 配额受限）" : "🧠 AI 终裁决（规则投票）"}
           </span>
           {aiVerdict && <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">LLM 工具调研</span>}
+          {/* v9.45（V5-2）：Agent 路径徽标 —— 原生 tool_calls / JSON 协议 */}
+          {aiVerdict?.path === "native_toolcall" && <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">⚙ 原生 tool_calls</span>}
+          {aiVerdict?.path === "manual_json" && <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">🧩 JSON 协议</span>}
           {/* v9.43：AI 结论已计入因子健康度门控（finalize 强制扣置信） */}
           {aiVerdict && /因子健康度/.test(aiVerdict.reason || "") && (
             <span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">🧪 因子门控已计入</span>
@@ -139,7 +153,7 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
               {aiVerdict.critic}
             </div>
           )}
-          <div className="text-[9px] text-slate-600">证据包：{aiVerdict.evidence?.length ?? 0} 项工具结果{agent?.selfConsistency ? ` · 自洽一致 ${agent.selfConsistency}%` : ""}</div>
+          <div className="text-[9px] text-slate-600">证据包：{aiVerdict.evidence?.length ?? 0} 项工具结果{agent?.rounds ? ` · ${agent.rounds} 轮 ReAct` : ""}{agent?.toolsCalled?.length ? ` · 调 ${agent.toolsCalled.length} 工具` : ""}{agent?.selfConsistency ? ` · 自洽一致 ${agent.selfConsistency}%` : ""}</div>
         </div>
       ) : agent?.degraded ? (
         <div className="mt-1 text-[10px] text-slate-500">⚠ LLM 不可用，规则投票兜底{agent.reason ? `：${agent.reason}` : ""}</div>

@@ -561,7 +561,9 @@ export default function Dashboard({
   const [agentLoading, setAgentLoading] = useState(false);
   const agentLastRunRef = useRef(0); // 自动触发节流（5 分钟）
   const runAgent = async (auto = false) => {
-    const cands = battlePlan?.candidates?.slice(0, 3) ?? [];
+    // v9.45（V5-1）：自动触发只覆盖 Top-1（最强主线，把单周期 ~18 次调用降到 ~6）；
+    // 手动按钮才覆盖 Top-3 全量
+    const cands = battlePlan?.candidates?.slice(0, auto ? 1 : 3) ?? [];
     if (cands.length === 0 || agentLoading) return;
     // 自动触发节流：5 分钟内不重复跑（省配额）；手动按钮不受限
     if (auto) {

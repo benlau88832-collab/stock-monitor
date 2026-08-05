@@ -5,6 +5,7 @@
 // 复盘用途：看清每次裁决的 时间/主线/动作/置信/来源/门控/AI理由/Critic
 // ============================================================
 import { useState, useEffect, useMemo } from "react";
+import { computeDecisionHitrate, type HitrateResult } from "../lib/decisionAttribution";
 import DisclaimerTag from "./DisclaimerTag";
 
 interface DecisionLog {
@@ -18,6 +19,11 @@ interface DecisionLog {
   dissent?: string[];
   agentReason?: string;
   agentCritic?: string;
+  // v9.45（V5-2）：Agent 路径埋点
+  path?: "native_toolcall" | "manual_json" | "rule_fallback";
+  rounds?: number;
+  toolsCalled?: string[];
+  rateLimited?: boolean;
 }
 
 function loadLogs(days: number): Array<{ date: string; logs: DecisionLog[] }> {
@@ -42,16 +48,30 @@ const actionColor: Record<string, string> = {
 export default function DecisionAuditPanel() {
   const [days, setDays] = useState(1);
   const [data, setData] = useState<Array<{ date: string; logs: DecisionLog[] }>>([]);
+  const [hitrate, setHitrate] = useState<HitrateResult | null>(null);
 
   useEffect(() => { setData(loadLogs(days)); }, [days]);
 
+  // v9.45（V5-3）：决策器命中率对账（AI vs 规则，近 30 日，情绪延续标签）
+  useEffect(() => {
+    let alive = true;
+    computeDecisionHitrate(30).then(r => { if (alive) setHitrate(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   const stats = useMemo(() => {
     const all = data.flatMap(d => d.logs);
+    const withPath = all.filter(l => l.path);
+    const pathCount: Record<string, number> = { native_toolcall: 0, manual_json: 0, rule_fallback: 0 };
+    for (const l of withPath) if (l.path && l.path in pathCount) pathCount[l.path]++;
     return {
       total: all.length,
       ai: all.filter(l => l.source === "AI-Agent").length,
       veto: all.filter(l => l.action === "禁止").length,
       gated: all.filter(l => l.gatedDowngrade).length,
+      rateLimited: all.filter(l => l.rateLimited).length,
+      pathCount,
+      pathTotal: withPath.length,
     };
   }, [data]);
 
@@ -83,7 +103,40 @@ export default function DecisionAuditPanel() {
             <span>AI 主导 <b className="font-black text-amber-300">{stats.ai}</b></span>
             <span>禁止 <b className="font-black text-emerald-300">{stats.veto}</b></span>
             {stats.gated > 0 && <span>门控降档 <b className="font-black text-rose-300">{stats.gated}</b></span>}
+            {stats.rateLimited > 0 && <span>配额受限 <b className="font-black text-rose-300">{stats.rateLimited}</b></span>}
           </div>
+
+          {/* v9.45（V5-3）：决策器命中率 —— "凭什么信 AI"的证据（近30日 可上车→次日情绪延续） */}
+          {hitrate && hitrate.ai.total + hitrate.rule.total > 0 && (() => {
+            const aiBetter = (hitrate.ai.rate ?? 0) > (hitrate.rule.rate ?? 0);
+            return (
+              <div className={`rounded-lg border px-2.5 py-1.5 text-[11px] ${aiBetter ? "border-emerald-500/30 bg-emerald-500/10" : "border-amber-500/30 bg-amber-500/10"}`}>
+                🎯 可上车命中率（次日情绪延续）：<b className={hitrate.ai.rate != null ? (hitrate.ai.rate >= 55 ? "text-emerald-300" : "text-amber-300") : "text-slate-400"}>
+                  AI {hitrate.ai.rate != null ? hitrate.ai.rate + "%" : "样本不足"}（{hitrate.ai.total}）
+                </b> vs 规则 <b className={hitrate.rule.rate != null ? (hitrate.rule.rate >= 55 ? "text-emerald-300" : "text-amber-300") : "text-slate-400"}>
+                  {hitrate.rule.rate != null ? hitrate.rule.rate + "%" : "样本不足"}（{hitrate.rule.total}）
+                </b>
+                {hitrate.ai.rate != null && hitrate.rule.rate != null && (
+                  <span className="ml-1">{aiBetter
+                    ? <span className="text-emerald-300">✅ AI 优于规则</span>
+                    : <span className="text-amber-300">⚠ AI 未优于规则，建议人工复核</span>}</span>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* v9.45（V5-2）：Agent 路径占比 —— 验证 flash 真在用原生 tool_calls */}
+          {stats.pathTotal > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/5 bg-white/[0.03] px-2.5 py-1.5 text-[10px]">
+              <span className="text-slate-500">Agent 路径：</span>
+              <span className="text-emerald-300">⚙ 原生 tool_calls {Math.round(stats.pathCount.native_toolcall / stats.pathTotal * 100)}%（{stats.pathCount.native_toolcall}）</span>
+              <span className="text-sky-300">🧩 JSON 协议 {Math.round(stats.pathCount.manual_json / stats.pathTotal * 100)}%（{stats.pathCount.manual_json}）</span>
+              <span className="text-slate-400">⛔ 规则兜底 {Math.round(stats.pathCount.rule_fallback / stats.pathTotal * 100)}%（{stats.pathCount.rule_fallback}）</span>
+              {stats.pathCount.native_toolcall / Math.max(1, stats.pathTotal) < 0.5 && (
+                <span className="text-amber-300">⚠ 原生 tool_calls 占比 &lt;50%，flash 可能需换更稳定的调用约定</span>
+              )}
+            </div>
+          )}
 
           {/* 时间线 */}
           <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">

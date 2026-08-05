@@ -19,21 +19,28 @@ const TASK_ALLOW = new Set([
   "eventClassify", "eventDeepDive", "agentReason",
 ]);
 
-// ---------- 简单令牌桶：60 次/分钟 ----------
-// v9.26.5：10 → 60（页面一次刷新会并发触发 10+ 个 AI 任务，10/min 必然被打爆 → 429 降级）
-const RATE = 60;
+// ---------- v9.45（V5-1）：分级令牌桶（按任务优先级分桶，互不抢占） ----------
+// 原单一 60/min 桶被页面并发 10+ 任务打爆 → Agent 静默降级回规则（"AI 主导"名存实亡）。
+// 现在分三桶：Agent 决策类（agentReason）独占 30/min 最高优先级；
+// 分析类（情报/复盘/事件/预案）20/min；解释类（异动/快讯/个股）10/min。
 const PERIOD_MS = 60000;
-let tokens = RATE;
-let lastRefill = Date.now();
-function takeToken() {
+const BUCKETS = {
+  agent: { rate: 30, tokens: 30, lastRefill: Date.now() },
+  analysis: { rate: 20, tokens: 20, lastRefill: Date.now() },
+  explain: { rate: 10, tokens: 10, lastRefill: Date.now() },
+};
+/** 任务 → 桶映射（与前端 aiPrompts TASK_CONFIG 保持一致） */
+function bucketOf(task) {
+  if (task === "agentReason") return "agent"; // 决策 Agent（decideForMainline）独占最高优先桶
+  if (["eventExplain", "stockJudge", "stockNewsScore", "themeNewsScore", "leaderPredict", "riskRadar", "eventDeepDive", "supervisor"].includes(task)) return "explain";
+  return "analysis";
+}
+function takeToken(bucket) {
+  const b = BUCKETS[bucket];
   const now = Date.now();
-  const elapsed = now - lastRefill;
-  if (elapsed >= PERIOD_MS) {
-    tokens = RATE;
-    lastRefill = now;
-  }
-  if (tokens <= 0) return false;
-  tokens -= 1;
+  if (now - b.lastRefill >= PERIOD_MS) { b.tokens = b.rate; b.lastRefill = now; }
+  if (b.tokens <= 0) return false;
+  b.tokens -= 1;
   return true;
 }
 
@@ -70,8 +77,10 @@ module.exports = function aiRoutes(app) {
         return res.status(400).json({ error: "server AI key not configured (.env AI_API_KEY)" });
       }
       // v9.26.10：Key 校验后才扣令牌（未配 Key 时白名单请求不消耗配额）
-      if (!takeToken()) {
-        return res.status(429).json({ error: `server rate limited (${RATE}/min)` });
+      // v9.45（V5-1）：按任务分桶扣令牌；429 带 rateLimited 标识（前端显式标注"配额受限"，不再静默降级）
+      const bucket = bucketOf(task);
+      if (!takeToken(bucket)) {
+        return res.status(429).json({ error: `rate limited (${BUCKETS[bucket].rate}/min, bucket=${bucket})`, rateLimited: true, bucket });
       }
 
       const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";

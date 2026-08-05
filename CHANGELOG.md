@@ -4,6 +4,37 @@
 
 ---
 
+## v9.45 — GLM5.2-V5：运维可靠性 + 可观测性 + 决策器命中率（"别掉链子"+"凭什么信它"）(2026-08-06)
+
+### V5-1（P0）：AI 调用分级限速 + 降级显式化 —— AI 不再静默退回规则
+- `server/routes/ai.js`：单一 60/min 桶 → **三桶分级**（Agent 决策 30/min 最高优先 / 分析类 20/min / 解释类 10/min，互不抢占）
+  - Agent 桶不再被页面并发 10+ 任务打爆 → 高峰期"AI 主导"不名存实亡
+  - 429 响应带 `rateLimited:true + bucket`（显式标识）
+- `ai.ts callAgentChat`：429 时返回 `rateLimited` 标识（不再静默 null → 误判"服务端不可用"）
+- `aiAgent.ts`：配额受限 → 显式 `rateLimited` 降级（reason="AI 配额受限，规则投票兜底"）
+- `DecisionVerdictCard`：**配额受限横幅**"⏸ AI 配额受限，本次为规则兜底，非 AI 主导"+ 标题改"🧠 规则决策（AI 配额受限）"——用户一眼看出这次不是 AI
+- `Dashboard`：自动触发只跑 **Top-1**（最强主线，单周期 ~18→~6 次调用）；手动按钮才覆盖 Top-3
+
+### V5-2（P1）：Agent 路径埋点 —— 验证 flash 真在用原生 tool_calls
+- `aiAgent.ts`：AgentVerdict 新增 `path(native_toolcall|manual_json|rule_fallback)/rounds/toolsCalled`（首个成功协议 + 轮数 + 去重工具清单）
+- `DecisionVerdictCard`：AI 行加协议徽标（⚙ 原生 tool_calls / 🧩 JSON 协议）+ 轮数/工具数；落库 decision_log 带埋点
+- `DecisionAuditPanel`：**Agent 路径占比条**（近 N 日 原生/JSON/规则 比例，原生 <50% 时警示"flash 可能需换调用约定"）
+
+### V5-3（P1）：决策器命中率回测闭环 —— "凭什么信 AI"的终极证据
+- 新建 `src/lib/decisionAttribution.ts`：读 decision_log（AI/规则"可上车"裁决）→ 与次日情绪延续对账（口径与 factorLib 一致）
+  - `nextTradingDay`（跳周末）/ `loadDecisionLogs` / `computeDecisionHitrate`（AI vs 规则胜率）
+- `DecisionAuditPanel`：**可上车命中率对比条**（近 30 日 AI X% vs 规则 Y%，AI 不优于规则时标"⚠ 建议人工复核"）
+- 注：第一版用宏观情绪延续代理"主线涨跌"；主线级对账待 zt_snapshot 全量接口
+
+### V5-4（P2）：https-proxy-agent 依赖 —— 核查确认已声明（^9.1.0，两处一致 + node_modules 已装），无需改动
+
+### V5-5（P2）：022_ 旧版入仓 —— **有冲突不执行**（commit 866afe4 是用户明确要求的"补全历史欠账"，
+非意外倒退；如需隔离到 archive 分支待用户确认）
+
+### 单测 91 → 95 全绿（新增 4 例 decisionAttribution：交易日推算/非法日期/本地读取容错）
+
+---
+
 ## v9.44 — 复盘三件套：决策审计时间线 + 信号净值曲线 + 因子自动处置 (2026-08-06)
 
 ### ② 决策过程审计面板（DecisionAuditPanel）
