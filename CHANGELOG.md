@@ -4,6 +4,24 @@
 
 ---
 
+## v9.26.21 — 资金流向图 K 线拉取限流修复 (2026-08-05)
+
+### 用户反馈
+"并没有展示 深度复盘 一并排除是否还有其他问题" — 截图里"今日行业资金流入走势"只显示 2-3 条线，远少于预期的 20+ 条
+
+### 深度复盘根因
+1. **接口被 ban**：东财 push2his 对非浏览器 IP 持续 `socket hang up`（机房 IP 屏蔽）
+2. **并发过大**：`Promise.all(40 板块)` 触发东财限流 99% 失败，只有 2-3 个能拿到
+3. **secid 缺市场前缀**：`industryBoards` 返回的 code 是 `BK1201` 不带 `90.`，K 线接口要 `90.BK1201`
+
+### 修复
+- `boardFundFlow.ts` `fetchBoardKlineFlow`：secid 加 90. 前缀（行业板块 code 自动转换）
+- `boardFundFlow.ts` `fetchBoardFundCurves`：5/批分批串行 + 失败重试 1 次 + Promise.allSettled 单条失败不阻塞其他
+- 批间 100ms 延迟降低被 ban 风险
+- export 修复（之前函数没 export 导致 tsc 警告）
+
+---
+
 ## v9.26.20 — 资金流向图去硬编码（按实际数据为准） (2026-08-05)
 
 ### 用户反馈

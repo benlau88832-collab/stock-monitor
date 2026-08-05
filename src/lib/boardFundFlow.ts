@@ -28,7 +28,10 @@ export interface BoardFundCurve {
  *  v9.26.17：必须传 end=20500101 才返回全字段数据；返回字段 [0]时间 [1]开 [2]高 [3]低 [4]收 [5]成交量 [6]成交额 [7]振幅 [8]涨跌幅 [9]主力净额(万)
  */
 export async function fetchBoardKlineFlow(secid: string, lmt = 240): Promise<BoardKlinePoint[]> {
-  const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60&klt=1&fqt=1&end=20500101&lmt=${lmt}`;
+  // v9.26.21：行业板块 code 形如 BK1201（无前缀），K 线接口需 90.BKxxxx 市场前缀
+  const s = String(secid ?? "").trim();
+  const prefixed = /^BK\d+$/.test(s) ? `90.${s}` : s;
+  const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${encodeURIComponent(prefixed)}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60&klt=1&fqt=1&end=20500101&lmt=${lmt}`;
   try {
     const r = await fetch(url, { headers: { Referer: "https://quote.eastmoney.com/" } });
     if (!r.ok) return [];
@@ -48,17 +51,34 @@ export async function fetchBoardKlineFlow(secid: string, lmt = 240): Promise<Boa
   }
 }
 
-/** 拉多个板块并计算累计资金曲线（并行） */
+// 拉多个板块并计算累计资金曲线（分批串行 + 失败降级）
+// v9.26.21：push2his 限流严格，Promise.all 并发 40+ 会被 ban 致大部分失败
+// → 改为 5 个/批串行，单个失败不阻塞其他
 export async function fetchBoardFundCurves(
   boards: Array<{ code: string; name: string }>,
 ): Promise<BoardFundCurve[]> {
-  const results = await Promise.all(
-    boards.map(async b => {
-      const pts = await fetchBoardKlineFlow(b.code);
-      let cum = 0;
-      const cumCurve = pts.map(p => { cum += p.mainNetWan; return { t: p.t, cumWan: cum }; });
-      return { boardCode: b.code, boardName: b.name, cumCurve, totalWan: cum };
-    }),
-  );
+  const BATCH = 5; // 每批并发数（push2his 较严，5 个稳）
+  const results: BoardFundCurve[] = [];
+  for (let i = 0; i < boards.length; i += BATCH) {
+    const chunk = boards.slice(i, i + BATCH);
+    const chunkResults = await Promise.allSettled(
+      chunk.map(async b => {
+        let pts = await fetchBoardKlineFlow(b.code);
+        // v9.26.21：失败重试一次（push2his 偶发 socket hang up）
+        if (pts.length === 0) {
+          await new Promise(r => setTimeout(r, 300));
+          pts = await fetchBoardKlineFlow(b.code);
+        }
+        let cum = 0;
+        const cumCurve = pts.map(p => { cum += p.mainNetWan; return { t: p.t, cumWan: cum }; });
+        return { boardCode: b.code, boardName: b.name, cumCurve, totalWan: cum };
+      })
+    );
+    for (const r of chunkResults) {
+      if (r.status === "fulfilled") results.push(r.value);
+    }
+    // 批间小延迟降低被 ban 风险
+    if (i + BATCH < boards.length) await new Promise(r => setTimeout(r, 100));
+  }
   return results;
 }
