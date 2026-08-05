@@ -10,6 +10,8 @@ import {
 } from "../lib/themeLadder";
 import { saveZTSnapshot, loadPrevZTSnapshot } from "../lib/ztSnapshot";
 import { tradeDateStr } from "../lib/api";
+// v9.33（缺口5）：题材生命周期日历标注
+import { buildThemeCalendar, type ThemeLifecycle } from "../lib/themeCalendar";
 
 // ============== 高度渐变色 ==============
 function heightBadge(h: number): { bg: string; text: string } {
@@ -38,6 +40,17 @@ export default function ThemeLadder({ rawZTPool }: ThemeLadderProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [brokenBoards, setBrokenBoards] = useState<BrokenBoardItem[]>([]);
   const [hasYesterdaySnapshot, setHasYesterdaySnapshot] = useState(true);
+  // v9.33（缺口5）：题材生命周期日历
+  const [calendar, setCalendar] = useState<Map<string, ThemeLifecycle>>(new Map());
+
+  // 题材生命周期日历（本地部署才可用，线上静默跳过）
+  useEffect(() => {
+    let alive = true;
+    buildThemeCalendar(7).then((list) => {
+      if (alive && list) setCalendar(new Map(list.map((t) => [t.theme, t])));
+    }).catch(() => { /* 非本地部署静默 */ });
+    return () => { alive = false; };
+  }, []);
 
   // 类型断言：rawZTPool 来自 fetchLimitPoolSummary 返回的 any[]
   const pool: ZTPoolItem[] = useMemo(() => {
@@ -128,6 +141,7 @@ export default function ThemeLadder({ rawZTPool }: ThemeLadderProps) {
           <ThemeRow
             key={g.theme}
             group={g}
+            lifecycle={calendar.get(g.theme)}
             isExpanded={expanded.has(g.theme)}
             onToggle={() => toggleExpand(g.theme)}
           />
@@ -140,15 +154,27 @@ export default function ThemeLadder({ rawZTPool }: ThemeLadderProps) {
 // ============== 单行题材 ==============
 function ThemeRow({
   group,
+  lifecycle,
   isExpanded,
   onToggle,
 }: {
   group: ThemeGroup;
+  lifecycle?: ThemeLifecycle;
   isExpanded: boolean;
   onToggle: () => void;
 }) {
   const hb = heightBadge(group.height);
   const earlyBird = group.pioneer && isEarlyBird(group.pioneer.firstBoardTime);
+
+  // v9.33（缺口5）：生命周期徽标（第 N 天 · 阶段），≥4 天加"接近分歧"提示
+  const lc = lifecycle;
+  const stageColor =
+    lc?.currentStage === "启动期" ? "bg-sky-500/20 text-sky-300"
+    : lc?.currentStage === "发酵期" ? "bg-amber-500/20 text-amber-300"
+    : lc?.currentStage === "高潮期" ? "bg-rose-500/20 text-rose-300"
+    : lc?.currentStage === "分歧期" ? "bg-violet-500/20 text-violet-300"
+    : lc?.currentStage === "退潮期" ? "bg-emerald-500/20 text-emerald-300"
+    : "bg-slate-500/20 text-slate-400";
 
   return (
     <div className={group.height >= 3 ? "border-l-2 border-amber-400" : ""}>
@@ -171,6 +197,20 @@ function ThemeRow({
         <span className={`rounded px-1.5 py-0.5 text-[11px] font-black shrink-0 ${hb.bg} ${hb.text}`}>
           {group.height}板高度
         </span>
+
+        {/* v9.33（缺口5）：生命周期徽标（第 N 天 · 阶段） */}
+        {lc && (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold shrink-0 ${stageColor}`}
+            title={`首现 ${lc.firstSeenDate} · 连续涨停 ${lc.consecutiveZtDays} 天 · 历史最高 ${lc.maxHeight} 板`}>
+            第{lc.daysActive}天·{lc.currentStage}
+          </span>
+        )}
+        {lc && lc.daysActive >= 4 && (
+          <span className="rounded px-1.5 py-0.5 text-[10px] font-bold shrink-0 bg-violet-500/25 text-violet-300"
+            title="题材运行≥4天，历史经验接近分歧/退潮窗口">
+            ⚠ 接近分歧
+          </span>
+        )}
 
         {/* 梯队 X/Y/Z */}
         <span className="flex gap-1 shrink-0">

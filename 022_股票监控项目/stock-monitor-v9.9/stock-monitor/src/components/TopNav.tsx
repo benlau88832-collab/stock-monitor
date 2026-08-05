@@ -29,9 +29,11 @@ interface Props {
   onToggleAutoRefresh: () => void;
   onRefreshNow: () => void;
   countdown: number;
+  /** v9.26.10：下次自动刷新时间戳（App 不再每秒 setState 导致全树重渲染） */
+  nextRefreshAt?: number;
 }
 
-export default function TopNav({ active, onChange, loading, autoRefresh, onToggleAutoRefresh, onRefreshNow, countdown }: Props) {
+export default function TopNav({ active, onChange, loading, autoRefresh, onToggleAutoRefresh, onRefreshNow, countdown, nextRefreshAt }: Props) {
   const [soundOn, _setSoundOn] = useState(isSoundOn);
   const [notifyOn, _setNotifyOn] = useState(isNotifyOn);
   const [showBell, setShowBell] = useState(false);
@@ -64,6 +66,20 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
     if (next) requestNotifyPermission();
   };
 
+  // v9.26.10：本地每秒计算剩余秒数（不触发 App 重渲染）
+  const [remainSec, setRemainSec] = useState(countdown);
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const tick = () => {
+      if (nextRefreshAt != null) setRemainSec(Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000)));
+      else setRemainSec(countdown);
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [autoRefresh, nextRefreshAt, countdown]);
+  const displaySec = nextRefreshAt != null ? remainSec : countdown;
+
   return (
     <>
       <nav className="sticky top-0 z-50 border-b border-white/10 bg-[#0b0f1a]/95 backdrop-blur-md">
@@ -91,8 +107,8 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
               return (
                 <>
                   <span className="text-[11px] text-slate-600 hidden sm:inline">{session.label}</span>
-                  {autoRefresh && countdown > 0 && (
-                    <span className="text-slate-500">{countdown}s</span>
+                  {autoRefresh && displaySec > 0 && (
+                    <span className="text-slate-500">{displaySec}s</span>
                   )}
                 </>
               );

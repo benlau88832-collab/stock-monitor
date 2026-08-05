@@ -110,8 +110,14 @@ export async function runAttribution(today: string): Promise<void> {
     }
   }
 
-  saveRecords(all);
-  markAttributedToday(today);
+  // v9.26.10：仅全部处理完才标记今日（>50 只时未处理 code 留待下次回填，原逻辑截断后无条件标记 → 永不回填）
+  if ([...codesToFetch].length <= 50) {
+    saveRecords(all);
+    markAttributedToday(today);
+  } else {
+    saveRecords(all); // 保存已回填部分，但不标记 → 下次继续
+  }
+  return;
 }
 
 // ============== 命中率统计 ==============
@@ -150,4 +156,47 @@ export function getHitRateForPrompt(): string {
   if (stats.total < 5) return "推荐样本不足，暂无统计";
   const avg = stats.avgT1 ?? 0;
   return `近${Math.min(stats.total, 20)}次推荐统计：T+1上涨率${stats.directionHitRate}%，平均T+1收益${avg}%（样本${stats.total}条）`;
+}
+
+// ============== P1：推荐卡命中率徽标（按板块/个股维度） ==============
+// 给"今日推荐"标注该标的的历史表现——让用户知道这个信号以前准不准。
+// 维度说明：theme 用板块名匹配（板块推荐历史上被推过的命中率），
+//           stock 用个股代码匹配。样本<3 视为无历史（不显示徽标）。
+
+export interface RecHitBadge {
+  label: string;
+  hitRate: number | null; // null = 样本不足
+  color: "good" | "mid" | "bad" | "none";
+}
+
+/** 查询某板块历史推荐命中率（近30天，最多取20条样本） */
+export function getBoardHitBadge(board: string): RecHitBadge {
+  const all = loadRecords();
+  const rows = all
+    .filter(r => r.type === "theme" && r.board === board && r.pctT1 != null)
+    .slice(0, 20);
+  if (rows.length < 3) return { label: `${board}`, hitRate: null, color: "none" };
+  const hits = rows.filter(r => (r.pctT1 ?? 0) > 0).length;
+  const rate = Math.round(hits / rows.length * 100);
+  return {
+    label: `历史${rows.length}推${hits}中`,
+    hitRate: rate,
+    color: rate >= 60 ? "good" : rate >= 40 ? "mid" : "bad",
+  };
+}
+
+/** 查询某个股历史推荐命中率（近30天） */
+export function getStockHitBadge(code: string): RecHitBadge {
+  const all = loadRecords();
+  const rows = all
+    .filter(r => r.type === "stock" && r.code === code && r.pctT1 != null)
+    .slice(0, 20);
+  if (rows.length < 3) return { label: code, hitRate: null, color: "none" };
+  const hits = rows.filter(r => (r.pctT1 ?? 0) > 0).length;
+  const rate = Math.round(hits / rows.length * 100);
+  return {
+    label: `历史${rows.length}推${hits}中`,
+    hitRate: rate,
+    color: rate >= 60 ? "good" : rate >= 40 ? "mid" : "bad",
+  };
 }

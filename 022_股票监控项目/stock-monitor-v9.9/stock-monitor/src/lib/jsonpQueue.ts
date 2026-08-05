@@ -13,7 +13,9 @@ type QueueItem = {
   maxRetries: number;
 };
 
-const MAX_INFLIGHT = 2;
+// v9.28（P1-8）：并发 2 → 3 —— 本地部署大部分接口走 /api/proxy（不受本队列限制），
+// 线上 GitHub Pages 直连 JSONP 场景放宽一档，减少"一轮 60s 内抓不完"的概率
+const MAX_INFLIGHT = 3;
 const inflightMap = new Map<string, Promise<any>>();
 const queue: QueueItem[] = [];
 let inflight = 0;

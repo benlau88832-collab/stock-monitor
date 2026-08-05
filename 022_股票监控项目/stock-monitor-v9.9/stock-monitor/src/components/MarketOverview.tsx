@@ -1,6 +1,7 @@
 import { fmtPct, fmtMoney, pctColor } from "../lib/format";
 import { indexRealUrl, marketBreadthUrl } from "../lib/realLinks";
 import type { OverviewData, SentimentFactors } from "../App";
+import FreshnessTag from "./FreshnessTag";
 
 // ============== 五级色阶 ==============
 function sentimentColor(value: number): string {
@@ -179,6 +180,7 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
   return (
     <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_320px]">
       <div className="space-y-3">
+        <div className="flex items-center text-[11px] text-slate-500">📊 市场概览 <FreshnessTag type="realtime" /></div>
         {/* 指数卡片 */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {indices.length === 0 && (
@@ -249,7 +251,7 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
       </div>
 
       {/* 右侧：情绪温度计（升级版） */}
-      <SentimentGauge value={sentiment} label={sentimentLabel} factors={sentimentFactors} yesterday={sentimentYesterday} premiumAvg={premiumAvg} promotionRate={promotionRate} maxBoardHeight={maxBoardHeight} />
+      <SentimentGauge value={sentiment ?? 0} label={sentimentLabel} factors={sentimentFactors} yesterday={sentimentYesterday} premiumAvg={premiumAvg} promotionRate={promotionRate} maxBoardHeight={maxBoardHeight} />
     </section>
   );
 }

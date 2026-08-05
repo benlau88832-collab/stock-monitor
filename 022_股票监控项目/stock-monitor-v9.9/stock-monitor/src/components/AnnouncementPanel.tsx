@@ -4,6 +4,8 @@ import { callAI, parseAIJSON } from "../lib/ai";
 import type { AnnItem } from "../lib/llmNewsIntelligence";
 import { upsertAnnouncements } from "../lib/dataStore";
 import { getIndustryByCode, matchBoardsByText } from "../lib/boardMap";
+// v9.32.1（缺口7）：公告类型聚类标签
+import { clusterAnnouncement, ANN_CATEGORY_META } from "../lib/annCluster";
 
 // ============== AI 公告归因结果 ==============
 interface AnnAIScore {
@@ -164,6 +166,9 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
   const aiTriggeredRef = useRef(false);
   const dailyFallbackRef = useRef(false);
   const lastCallbackHash = useRef("");
+  // v9.26.10：items ref 镜像（loadAnnouncements 闭包 [] 依赖内读最新值）
+  const itemsRef = useRef(items);
+  useEffect(() => { itemsRef.current = items; }, [items]);
 
   // 向父组件回调 Top12 利好公告（含 AI 评分）
   useEffect(() => {
@@ -325,8 +330,8 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
         };
       }));
     } catch {
-      // 接口失败时显示"待接入"
-      if (items.length === 0) {
+      // 接口失败时显示"待接入"（v9.26.10：读 ref 最新值，闭包旧值判断失效）
+      if (itemsRef.current.length === 0) {
         setError("待接入");
       }
       // 有缓存数据时保留显示
@@ -575,6 +580,10 @@ function AnnRow({
 
       {/* 标签 */}
       <span className="shrink-0 flex gap-0.5">
+        {/* v9.32.1（缺口7）：公告类型聚类标签 */}
+        <span className={`rounded px-1 py-0.5 text-[10px] font-bold ${ANN_CATEGORY_META[clusterAnnouncement(item.title, item.columnName)].color}`}>
+          {ANN_CATEGORY_META[clusterAnnouncement(item.title, item.columnName)].short}
+        </span>
         {item.goodTags.map((t) => (
           <span
             key={t}

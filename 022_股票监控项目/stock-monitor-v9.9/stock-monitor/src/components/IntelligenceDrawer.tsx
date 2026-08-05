@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getFeed, type AlertEvent } from "../lib/alertBus";
-import { callAI, getApiKey, type AIResult } from "../lib/ai";
+import { callAI, hasAvailableAI, hasAIOptimistic, type AIResult } from "../lib/ai";
 import { loadDailyMemo } from "../lib/newsMemoStore";
 import { fetchStockNews, fetchStockAnnouncements } from "../lib/api";
 import { getAllSince, getAllOnDate } from "../lib/dataStore";
@@ -295,7 +295,10 @@ export default function IntelligenceDrawer({ open, onClose }: Props) {
     setTimeout(() => sendMessage(question), 100);
   }, [sendMessage]);
 
-  const noKey = !getApiKey();
+  // v9.26.9：AI 可用性（浏览器 Key 或服务端中转均可），不再误判"未配置 Key"
+  const [aiAvailable, setAiAvailable] = useState<boolean>(hasAIOptimistic());
+  useEffect(() => { hasAvailableAI().then(setAiAvailable); }, []);
+  const noAI = !aiAvailable;
 
   return (
     <>
@@ -353,10 +356,10 @@ export default function IntelligenceDrawer({ open, onClose }: Props) {
         {/* Tab B: 作战督导会话 */}
         {tab === "chat" && (
           <div className="flex flex-col" style={{ height: "calc(100vh - 100px)" }}>
-            {/* 无 Key 提示 */}
-            {noKey && (
+            {/* AI 不可用提示（v9.26.9：文案准确） */}
+            {noAI && (
               <div className="px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 text-[11px] text-amber-300">
-                请在右上角 ⚙️ 设置配置 API Key 后使用督导会话
+                ⚠️ AI 暂不可用：浏览器未填 Key 且服务端 AI 中转未启用（检查 ⚙️ 设置 或 server/.env 的 AI_API_KEY）
               </div>
             )}
 
@@ -400,10 +403,10 @@ export default function IntelligenceDrawer({ open, onClose }: Props) {
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); } }}
                   placeholder="输入问题（支持「昨天/7.30/7月28日」自动识别日期）…"
-                  disabled={noKey}
+                  disabled={noAI}
                   className="flex-1 rounded bg-black/30 border border-white/10 px-3 py-2 text-xs text-slate-200 placeholder-slate-600 outline-none focus:border-violet-400/50 disabled:opacity-40"
                 />
-                <button onClick={() => sendMessage(input)} disabled={loading || noKey || !input.trim()}
+                <button onClick={() => sendMessage(input)} disabled={loading || noAI || !input.trim()}
                   className="rounded px-3 py-2 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 disabled:opacity-40">
                   发送
                 </button>

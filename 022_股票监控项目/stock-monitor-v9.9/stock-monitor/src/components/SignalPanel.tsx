@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { getSignalStats, getLedger, loadDiaries, saveDiary, exportAllData, importAllData } from "../lib/signalLedger";
+import { getSignalStats, getLedger, loadDiaries, saveDiary, exportAllData, importAllData, runSignalBackfill, markBackfilledToday } from "../lib/signalLedger";
 import { localDateStr } from "../lib/format";
 
 // 信号命中率卡片 + 复盘日记 + 数据导出
@@ -10,6 +10,8 @@ function todayStr(): string { return localDateStr(); }
 export default function SignalPanel() {
   const [showLedger, setShowLedger] = useState(false);
   const [showDiary, setShowDiary] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState("");
 
   // 日记状态
   const today = todayStr();
@@ -23,6 +25,23 @@ export default function SignalPanel() {
   const ledger = getLedger();
   const totalSignals = ledger.length;
   const backfilled = ledger.filter(e => e.backfilled).length;
+
+  // P1：手动补全回填（三保险之一，配合 App 首载 + 定时）
+  const handleBackfill = async () => {
+    if (backfilling) return;
+    setBackfilling(true);
+    try {
+      const n = await runSignalBackfill();
+      markBackfilledToday();
+      setBackfillMsg(n > 0 ? `✅ 回填 ${n} 条信号收益率` : "无需回填（无到期未回填信号）");
+    } catch {
+      setBackfillMsg("❌ 回填失败（网络/接口异常）");
+    } finally {
+      setBackfilling(false);
+      // 触发本组件重渲染以刷新统计
+      setShowLedger(prev => prev);
+    }
+  };
 
   const handleSaveDiary = () => {
     saveDiary({ date: today, actions, followedSignal: followed, selfScore: score });
@@ -58,12 +77,19 @@ export default function SignalPanel() {
         <div className="flex items-center justify-between">
           <div className="text-sm font-bold text-slate-200">📊 信号命中率</div>
           <div className="flex gap-2">
+            {/* P1：手动补全回填按钮 */}
+            <button onClick={handleBackfill} disabled={backfilling}
+              className="text-[11px] text-sky-300 hover:text-sky-200 disabled:opacity-40">
+              {backfilling ? "回填中…" : "🔄 补全回填"}
+            </button>
             <button onClick={() => setShowLedger(v => !v)}
               className="text-[11px] text-amber-300 hover:text-amber-200">
               {showLedger ? "收起" : `台账(${totalSignals}条)`}
             </button>
           </div>
         </div>
+
+        {backfillMsg && <div className="text-[11px] text-slate-400">{backfillMsg}</div>}
 
         {stats.length === 0 ? (
           <div className="text-xs text-slate-500">
@@ -77,6 +103,7 @@ export default function SignalPanel() {
                 <th className="px-2 py-1 text-right">样本数</th>
                 <th className="px-2 py-1 text-right">T+5均收益</th>
                 <th className="px-2 py-1 text-right">T+5胜率</th>
+                <th className="px-2 py-1 text-right">健康度</th>
               </tr></thead>
               <tbody>
                 {stats.map(s => (
@@ -87,6 +114,12 @@ export default function SignalPanel() {
                       {s.avgReturnT5 != null ? `${s.avgReturnT5 > 0 ? "+" : ""}${s.avgReturnT5}%` : "—"}
                     </td>
                     <td className="px-2 py-1 text-right text-slate-300">{s.winRateT5 != null ? `${s.winRateT5}%` : "—"}</td>
+                    <td className="px-2 py-1 text-right">
+                      {s.health === "healthy" && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-300">有效</span>}
+                      {s.health === "warning" && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300">一般</span>}
+                      {s.health === "suspect" && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-rose-500/20 text-rose-300" title="胜率<45%，信号可信度存疑，建议降低权重">存疑</span>}
+                      {s.health === "insufficient" && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-slate-500/20 text-slate-400">样本不足</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

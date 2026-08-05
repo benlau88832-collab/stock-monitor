@@ -1,9 +1,12 @@
-// 存储抽象层（localStorage 现版）
+// 存储抽象层（localStorage 现版 + v9.25-local 云端双写）
 // PostgreSQL 后续替换此处：把读写换成 fetch('/api/news') 等，上层零改动。
 // 去重 + summary 截断 + 30天滚动淘汰 + FIFO 硬上限 6000 条
+// v9.25-local：本地部署时写 localStorage 的同时异步同步到 PostgreSQL（/api/db），
+//             启动时从 PG 拉取合并（多浏览器一致、跨日数据不空洞）
 
 import type { NewsItem, AnnItem } from "./llmNewsIntelligence";
 import { localDateStrOffset } from "./format";
+import { isLocalServer, pushNewsCloud, pushAnnsCloud, fetchNewsCloud, fetchAnnsCloud } from "./cloudStore";
 
 const NEWS_KEY = "ds_news";
 const ANN_KEY = "ds_ann";
@@ -59,6 +62,10 @@ export function upsertNews(items: NewsItem[]): void {
     const budget = Math.max(100, HARD_LIMIT - annCount);
     const trimmed = filtered.length > budget ? filtered.slice(-budget) : filtered;
     saveArr(NEWS_KEY, trimmed);
+    // v9.25-local：异步双写到 PostgreSQL（fire-and-forget，不阻塞）
+    if (isLocalServer() && changed) {
+      pushNewsCloud(trimmed.slice(-Math.min(items.length * 2, 200))).catch(() => {});
+    }
   } catch { /* 静默 */ }
 }
 
@@ -81,7 +88,68 @@ export function upsertAnnouncements(items: AnnItem[]): void {
     const budget = Math.max(100, HARD_LIMIT - newsCount);
     const trimmed = filtered.length > budget ? filtered.slice(-budget) : filtered;
     saveArr(ANN_KEY, trimmed);
+    // v9.25-local：异步双写到 PostgreSQL
+    if (isLocalServer() && changed) {
+      pushAnnsCloud(trimmed.slice(-Math.min(items.length * 2, 200))).catch(() => {});
+    }
   } catch { /* 静默 */ }
+}
+
+// ============== v9.25-local：云端拉取合并（启动/定时调用） ==============
+/** 从 PostgreSQL 拉取近 N 天 news/ann，合并进 localStorage（补齐空洞、多设备一致） */
+export async function syncNewsFromCloud(days = 3): Promise<void> {
+  if (!isLocalServer()) return;
+  try {
+    const since = localDateStrOffset(days);
+    const [cloudNews, cloudAnns] = await Promise.all([
+      fetchNewsCloud(since),
+      fetchAnnsCloud(since),
+    ]);
+    if (Array.isArray(cloudNews) && cloudNews.length > 0) upsertNews(cloudNews as NewsItem[]);
+    if (Array.isArray(cloudAnns) && cloudAnns.length > 0) upsertAnnouncements(cloudAnns as AnnItem[]);
+    console.log(`[cloud] syncNews: news=${cloudNews?.length ?? 0} ann=${cloudAnns?.length ?? 0}`);
+  } catch { /* 网络失败静默，下次再试 */ }
+}
+
+// ============== v9.26.8：分析数据直接读 PostgreSQL（本地部署，突破 localStorage 5MB） ==============
+/** 返回类型：全量快讯/公告 + 统计（供全栈情报分析等直接使用） */
+export interface CloudAnalysisData {
+  news: NewsItem[];
+  ann: AnnItem[];
+  newsCount: number;
+  annCount: number;
+  totalCount: number;
+  oldestDate: string | null;
+  fromCloud: boolean;
+}
+
+/**
+ * 本地部署时直接从 PG 拉取分析数据（绕过 localStorage，无 5MB 上限）。
+ * 线上 GitHub Pages 返回 null（组件回退 localStorage 数据源）。
+ */
+export async function fetchAnalysisDataFromCloud(sinceDays = 30): Promise<CloudAnalysisData | null> {
+  if (!isLocalServer()) return null;
+  try {
+    const since = localDateStrOffset(sinceDays);
+    const [cloudNews, cloudAnns] = await Promise.all([
+      fetchNewsCloud(since),
+      fetchAnnsCloud(since),
+    ]);
+    const news = Array.isArray(cloudNews) ? (cloudNews as NewsItem[]) : [];
+    const ann = Array.isArray(cloudAnns) ? (cloudAnns as AnnItem[]) : [];
+    const allTimes = [...news.map(n => n.time), ...ann.map(a => a.time)].filter(Boolean).sort();
+    return {
+      news,
+      ann,
+      newsCount: news.length,
+      annCount: ann.length,
+      totalCount: news.length + ann.length,
+      oldestDate: allTimes.length > 0 ? allTimes[0].slice(0, 10) : null,
+      fromCloud: true,
+    };
+  } catch {
+    return null; // 网络失败 → 回退 localStorage
+  }
 }
 
 /** 按板块查新闻（板块名模糊匹配 boards 数组） */

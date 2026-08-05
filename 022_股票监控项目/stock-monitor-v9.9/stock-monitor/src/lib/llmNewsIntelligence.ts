@@ -1,7 +1,7 @@
 // Agnes 深度情报中枢 v2
 // 代码统计 + 模型研判 + 来源溯源 + 分段/终盘写盘
 
-import { callAI, parseAIJSON, getApiKey } from "./ai";
+import { callAI, parseAIJSON, hasAvailableAI } from "./ai";
 import { saveDailyMemo, saveSegmentMemo, getRecentMemos, type DailyNewsMemo, type IntelSlot } from "./newsMemoStore";
 import { computeStats, formatStatsForPrompt, formatMarketBlock, pickTopSourced } from "./intelStats";
 
@@ -51,8 +51,8 @@ export interface IntelligenceInput {
 // ============== 核心函数 ==============
 
 export async function generateDailyIntelligence(input: IntelligenceInput): Promise<DailyNewsMemo | null> {
-  // 无 API Key → null（UI 显示友好提示）
-  if (!getApiKey()) return null;
+  // v9.26.9：AI 可用性（浏览器 Key 或服务端中转均可）——之前只看 getApiKey()，服务端模式下误判不可用
+  if (!(await hasAvailableAI())) return null;
   // news + ann 都空 → null（UI 显示"数据不足"）
   if (input.news.length === 0 && input.announcements.length === 0) return null;
 
@@ -74,7 +74,7 @@ export async function generateDailyIntelligence(input: IntelligenceInput): Promi
   ).join("\n");
 
   // ④ 构造 Prompt
-  const result = await callAI("stockJudge", {
+  const result = await callAI("dailyIntel", {
     prompt: `你是A股顶级独立游资，擅长从消息流中提炼主线脉络。
 
 重要规则：
@@ -168,7 +168,7 @@ function buildFallback(input: IntelligenceInput, stats: ReturnType<typeof comput
       title: a.title, stars: a.score && a.score >= 4 ? 3 : 2,
       impact: "规则版", source: a.title, sourceUrl: a.url,
     })),
-    directionAdvice: "AI暂不可用，请配置 API Key 后重试",
+    directionAdvice: "AI 暂不可用（LLM 调用失败或超时），本次为规则版速览，请稍后重新分析",
     rawSummary: `规则版（${stats.boardStats.length}个板块、${stats.eventStructure.policy}条政策、${stats.eventStructure.company}条公司）`,
     updatedAt: Date.now(),
   };

@@ -17,8 +17,17 @@ interface ZTStock {
 interface ZBStock {
   code: string; name: string; price: number; pct: number;
   amount: number; industry: string;
-  firstBoardTime: string; lastBoardTime: string;
-  blastCount: number; sealFund: number;
+  firstBoardTime: string;
+  /** v9.26.18：炸板次数（zbc 字段，ZBPool 真实数据） */
+  blastCount: number;
+  /** v9.26.18：炸板幅度% (zf)，用于排序 */
+  blastPct: number;
+  /** v9.26.18：原连板数 (zttj.ct) — 炸板前涨停过几次 */
+  prevBoards: number;
+  /** 兼容旧字段：涨停破板前累计封单（ZBPool 无此字段，恒 0） */
+  sealFund: number;
+  /** 兼容旧字段：最后封板时间（ZBPool 无此字段 = 首封时间） */
+  lastBoardTime: string;
   theme: string;
 }
 
@@ -123,9 +132,10 @@ async function fetchZTPool(date?: string): Promise<{ stocks: ZTStock[]; qdate: s
   } catch { return { stocks: [], qdate: null }; }
 }
 
+// v9.26.18：sort 必须用 fbt:asc（fund:asc/lbc:desc/fund:desc 都返回空）
 async function fetchZBPool(date?: string): Promise<ZBStock[]> {
   const d = date || todayStr();
-  const url = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
+  const url = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
   try {
     const json = await jsonpReq<any>(url);
     const pool: any[] = json?.data?.pool ?? [];
@@ -134,8 +144,11 @@ async function fetchZBPool(date?: string): Promise<ZBStock[]> {
       price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
       amount: s.amount ?? 0, industry: String(s.hybk ?? ""),
       firstBoardTime: formatTime(s.fbt ?? 0),
-      lastBoardTime: formatTime(s.lbt ?? 0),
-      blastCount: s.zbc ?? 0, sealFund: s.fund ?? 0,
+      lastBoardTime: formatTime(s.fbt ?? 0), // ZBPool 无 lbt，fallback 到 fbt
+      blastCount: s.zbc ?? 0,
+      blastPct: s.zf ?? 0,
+      prevBoards: s.zttj?.ct ?? 0,
+      sealFund: 0, // ZBPool 无 fund
       theme: matchTheme(String(s.n ?? ""), String(s.hybk ?? "")),
     }));
   } catch { return []; }
@@ -143,7 +156,7 @@ async function fetchZBPool(date?: string): Promise<ZBStock[]> {
 
 async function fetchDTPool(date?: string): Promise<DTStock[]> {
   const d = date || todayStr();
-  const url = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
+  const url = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
   try {
     const json = await jsonpReq<any>(url);
     const pool: any[] = json?.data?.pool ?? [];

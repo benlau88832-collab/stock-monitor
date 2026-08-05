@@ -4,17 +4,51 @@
 import { type AITask, type AITaskPayload, FALLBACKS, buildPrompt, TASK_CONFIG } from "./aiPrompts";
 import { loadSettings, saveSettings } from "./aiSettings";
 import { localDateStr } from "./format";
+import { isLocalServer } from "./cloudStore";
 
 // ============== Agnes 备用域名（仅 provider=agnes 时作 fallback） ==============
+// v9.26.2：官方公告国际站用户改 Endpoint 为 .cn 继续用原 Key（apihub.agnes-ai.cn 是国际站镜像端点）
 export const AGNES_ENDPOINTS = [
   "https://apihub.agnes-ai.cn/v1/chat/completions",
-  "https://apihub.agnes-ai.com/v1/chat/completions",
 ] as const;
 
+// v9.26.2：按用户要求用回 agnes-2.5-flash（免费模型；agnes-2.5-pro 需付费）
 export const AGNES_MODEL = "agnes-2.5-flash";
 
 // ============== API Key 读写（兼容旧调用方签名） ==============
 export const APIKEY_STORAGE_KEY = "llm_api_key";
+
+// ============== v9.26.7：可用 AI 检测（浏览器 Key 或服务端中转均可） ==============
+let serverAICached: { ok: boolean; ts: number } | null = null;
+const SERVER_CHECK_TTL = 30_000; // 30 秒缓存，避免每次渲染都 fetch
+/**
+ * 是否存在可用的 AI 通道：
+ *   ① 浏览器 localStorage 有 apiKey（浏览器直连模式）
+ *   ② 本地服务端已配置 AI_API_KEY（服务端中转模式）
+ * 用于前端组件判断"立即分析"按钮是否可点、是否显示"请配置 Key"提示
+ */
+export async function hasAvailableAI(): Promise<boolean> {
+  // 浏览器有 Key 直接可用
+  if (loadSettings().apiKey) return true;
+  // 服务端模式：fetch /api/ai/config 看是否 enabled
+  if (!isLocalServer()) return false;
+  if (serverAICached && Date.now() - serverAICached.ts < SERVER_CHECK_TTL) return serverAICached.ok;
+  try {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 5000);
+    const resp = await fetch("/api/ai/config", { signal: ctrl.signal });
+    clearTimeout(t);
+    const j = await resp.json();
+    serverAICached = { ok: Boolean(j?.enabled), ts: Date.now() };
+    return serverAICached.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 同步估算（用于初始渲染占位，不阻塞）：有浏览器 Key 立即 true，否则假定服务端可用给乐观状态 */
+export function hasAIOptimistic(): boolean {
+  return Boolean(loadSettings().apiKey) || isLocalServer();
+}
 
 export function getApiKey(): string { return loadSettings().apiKey; }
 export function setApiKey(key: string): void {
@@ -104,20 +138,36 @@ function pruneCache(): void {
   } catch { /* 静默 */ }
 }
 
-// ============== 分钟限速（滑动窗口） ==============
-const recentCalls: number[] = []; // timestamps of real API calls
+// ============== 分钟限速（滑动窗口，v9.26 F-04：预留-释放模型） ==============
+// 旧版：请求开始前检查+失败不占配额 → 并发可超限、失败不计数
+// 新版：请求开始时先占位（reserveSlot），失败时释放（releaseSlot）—— 只有真实成功才占配额
+// v9.26.9：修复双计数（成功不再重复 push）+ 按时间戳精确释放（并发安全）
+// v9.26.10：token 模型 —— reserveSlot 返回唯一 token，releaseSlot(token) 精确释放自己（并发错配修复）
+const recentCalls: number[] = []; // timestamps of reserved API calls
 
-function isRateLimited(): boolean {
+/** 占位成功返回 token（时间戳+序号），失败返回 null */
+function reserveSlot(): number | null {
   const now = Date.now();
   // 清除 1 分钟前的记录
   while (recentCalls.length > 0 && recentCalls[0] < now - 60_000) {
     recentCalls.shift();
   }
-  return recentCalls.length >= AI_RATE_PER_MIN;
+  if (recentCalls.length >= AI_RATE_PER_MIN) return null;
+  const token = now * 1000 + (recentCalls.length % 1000); // 时间戳+序号，保证唯一
+  recentCalls.push(token);
+  return token;
 }
 
+/** 失败时释放自己占的槽位（按 token 精确删除，并发安全） */
+function releaseSlot(token: number | null): void {
+  if (token == null) return;
+  const idx = recentCalls.indexOf(token);
+  if (idx >= 0) recentCalls.splice(idx, 1);
+}
+
+/** 统计成功调用（不再往 recentCalls 加第二次 —— 避免双计数） */
 function recordCall(): void {
-  recentCalls.push(Date.now());
+  // 占位已由 reserveSlot 记录，这里仅推进统计计数（stats 用）
 }
 
 // ============== 每日统计 ==============
@@ -202,25 +252,90 @@ export function callAI<T extends AITask>(
   return promise;
 }
 
+// ============== v9.26 F-03：服务端 AI 中转（本地部署时 Key 只存服务端 .env） ==============
+async function callAIviaServer(
+  task: AITask,
+  system: string,
+  user: string,
+  config: { temperature: number; maxTokens: number; thinking: boolean },
+): Promise<{ text: string; error?: string } | null> {
+  if (!isLocalServer()) return null;
+  // v9.26.5：加 35s 超时（服务端 postJSON 30s 超时兜底；避免 fetch 无限等待拖垮页面）
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 35_000);
+  try {
+    const resp = await fetch("/api/ai/call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task,
+        system,
+        user,
+        temperature: config.temperature,
+        maxTokens: config.maxTokens,
+        thinking: config.thinking,
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!resp.ok) {
+      // v9.26.5：429/403 等错误透传给上层（不再静默 return null 导致误判"服务端不可用"去走本地Key降级）
+      let errMsg = `服务端拒绝(HTTP ${resp.status})`;
+      try { const j = await resp.json(); if (j?.error) errMsg = j.error; } catch { /* keep */ }
+      return { text: "", error: errMsg };
+    }
+    const j = await resp.json();
+    if (j.error) return { text: "", error: j.error };
+    return { text: j.text ?? "" };
+  } catch (e) {
+    clearTimeout(timer);
+    if (e instanceof DOMException && e.name === "AbortError") return { text: "", error: "服务端超时(35s)" };
+    return null; // 网络错误 → 回退本地
+  }
+}
+
 async function executeAI<T extends AITask>(
   task: T,
   payload: AITaskPayload[T],
   ck: string,
 ): Promise<AIResult> {
+  let slotToken: number | null = null; // v9.26.10：try 外声明，catch/finally 可访问
   try {
-    // 限速检查
-    if (isRateLimited()) {
+    // v9.26 F-04：请求预留限速（失败路径 releaseSlot 释放配额）
+    slotToken = reserveSlot(); // v9.26.10：token 模型，失败精确释放自己
+    if (slotToken == null) {
       return degradeResult(task, payload, "每分钟限速");
     }
 
     const settings = loadSettings();
-    const apiKey = settings.apiKey;
-    if (!apiKey) {
-      return degradeResult(task, payload, "未配置API Key");
-    }
 
+    // v9.26 F-03：本地部署时优先走服务端中转（Key 在服务端，浏览器不持有）
     const { system, user } = buildPrompt(task, payload);
     const config = TASK_CONFIG[task];
+    const startTs = Date.now();
+    const serverR = await callAIviaServer(task, system, user, config);
+    if (serverR && !serverR.error && serverR.text) {
+      // v9.26.9：补缓存 + 统计（此前漏记 → 缓存永不生效、今日调用数恒 0）
+      const latency = Date.now() - startTs;
+      recordCall();
+      recordSuccess(latency);
+      setCache(ck, serverR.text);
+      return { text: serverR.text, fromCache: false, degraded: false, latencyMs: latency };
+    }
+    if (serverR?.error) {
+      console.warn("[AI] 服务端中转失败:", serverR.error);
+    }
+
+    const apiKey = settings.apiKey;
+    if (!apiKey) {
+      releaseSlot(slotToken); // 未真正调用模型 → 释放配额
+      // v9.26.5：服务端有明确错误（限速/超时/任务拒绝）时如实展示，不再误导为"未配置Key"
+      const reason = serverR?.error
+        ? `服务端AI失败(${serverR.error})`
+        : "未配置API Key（浏览器直连模式需在设置面板填写）";
+      return degradeResult(task, payload, reason);
+    }
+
     const effectiveMaxTokens = settings.maxTokens > 0 ? Math.min(settings.maxTokens, config.maxTokens) : config.maxTokens;
 
     // 构建请求 body（用设置中的模型名）
@@ -236,7 +351,10 @@ async function executeAI<T extends AITask>(
         stream: false,
       };
       // Thinking 开关：用户设置 ∧ 任务允许
-      if (thinking) {
+      // v9.26.1：agnes 系模型必须显式传 enable_thinking（false 也要传，否则默认思考 content 为空）
+      if (settings.provider === "agnes") {
+        body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
+      } else if (thinking) {
         body.chat_template_kwargs = { enable_thinking: true };
       }
       return body;
@@ -244,10 +362,12 @@ async function executeAI<T extends AITask>(
 
     const start = Date.now();
 
-    // 构建端点列表：settings.baseUrl 为主；agnes 厂商额外加备用域名
+    // 构建端点列表：settings.baseUrl 为主；agnes 厂商额外加备用域名（v9.24.2 已移除 .com 失效端点）
     const endpoints = [settings.baseUrl];
-    if (settings.provider === "agnes" && !endpoints.includes(AGNES_ENDPOINTS[1])) {
-      endpoints.push(AGNES_ENDPOINTS[1]);
+    if (settings.provider === "agnes") {
+      for (const ep of AGNES_ENDPOINTS) {
+        if (ep !== settings.baseUrl) endpoints.push(ep);
+      }
     }
 
     // 遍历端点 × thinking 模式，任一成功即返回
@@ -268,6 +388,7 @@ async function executeAI<T extends AITask>(
             lastError = result.error;
             // 4xx = 客户端错误(key/模型/参数)，直接降级不再重试
             if (result.status && result.status >= 400 && result.status < 500) {
+              releaseSlot(slotToken); // 4xx 未真正消耗模型配额 → 释放占位
               recordFailure();
               return degradeResult(task, payload, result.error);
             }
@@ -300,9 +421,15 @@ async function executeAI<T extends AITask>(
       }
     }
 
-    // 所有端点+模式都失败
+    // 所有端点+模式都失败（v9.26 F-04：失败释放配额）
     recordFailure();
+    releaseSlot(slotToken);
     return degradeResult(task, payload, lastError);
+  } catch (e) {
+    // v9.26.10：buildPrompt/内部异常 → 释放配额 + 降级（防 slot 泄漏 60s）
+    releaseSlot(slotToken);
+    const msg = e instanceof Error ? e.message : "未知错误";
+    return degradeResult(task, payload, msg);
   } finally {
     inflightMap.delete(ck);
   }
@@ -338,9 +465,14 @@ async function fetchWithTimeout(
       return { text: "", error: json.error.message || "API错误", status: resp.status };
     }
     const msg = json.choices?.[0]?.message ?? {};
-    // 思考模式下 agnes 把答案放 reasoning_content，content 为空；需 fallback 读取
-    const text = msg.content || msg.reasoning_content || "";
-    if (!msg.content) console.warn("[AI] content空 finish_reason=", json.choices?.[0]?.finish_reason, "raw=", json);
+    // F-06 修复：reasoning_content（思维链）不是业务答案，绝不能当 content 用
+    //（JSON 任务拿推理文本解析必失败）。content 为空 = 未生成最终答案 → 协议错误，
+    // 上层会重试 thinking=false 或跳到下一端点。
+    if (!msg.content) {
+      console.warn("[AI] content为空 finish_reason=", json.choices?.[0]?.finish_reason);
+      return { text: "", error: "empty content (reasoning only)", status: resp.status };
+    }
+    const text = msg.content;
     return { text, status: resp.status };
   } catch (err) {
     clearTimeout(timer);
@@ -413,6 +545,58 @@ export function parseAIJSON<T = unknown>(
 
     return parsed as T;
   } catch {
+    return null;
+  }
+}
+
+// ============================================================
+// v9.41（V4-A）：Agent 原生 tool_calls 通道（真·多轮 ReAct）
+// 不走 callAI 缓存体系（Agent 循环是动态多轮的，缓存无意义）。
+// 本地部署走 /api/ai/call（服务端透传 tools/tool_choice，返回 toolCalls）；
+// 线上 GitHub Pages 无后端 → 返回 null（调用方回退规则）。
+// ============================================================
+export interface AgentToolCall {
+  id: string;
+  name: string;
+  args: string; // JSON 字符串
+}
+export interface AgentChatResult {
+  text: string;
+  toolCalls?: AgentToolCall[];
+}
+
+/** 单轮 Agent 对话（带工具清单；LLM 可选择返回 tool_calls 或直接出文本） */
+export async function callAgentChat(
+  system: string,
+  user: string,
+  tools: Array<{ name: string; description: string }>,
+  opts?: { temperature?: number; maxTokens?: number },
+): Promise<AgentChatResult | null> {
+  if (!isLocalServer()) return null;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 35_000);
+  try {
+    const resp = await fetch("/api/ai/call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task: "agentReason",
+        system,
+        user,
+        temperature: opts?.temperature ?? 0.2,
+        maxTokens: opts?.maxTokens ?? 2000,
+        thinking: false,
+        tools,
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!resp.ok) return null;
+    const j = await resp.json();
+    if (j.error) return null;
+    return { text: j.text ?? "", toolCalls: j.toolCalls };
+  } catch {
+    clearTimeout(timer);
     return null;
   }
 }

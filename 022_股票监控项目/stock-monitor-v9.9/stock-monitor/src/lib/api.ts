@@ -274,28 +274,52 @@ const BOARD_FS: Record<string, string> = {
 export async function fetchBoardFundFlow(
   boardType: "industry" | "concept" | "region",
   limit = 15,
+  opts?: { all?: boolean },
 ): Promise<BoardFlowItem[]> {
   const fs = BOARD_FS[boardType];
   const fields = "f12,f14,f3,f62,f66,f72,f78,f84,f164,f165,f174,f175,f184";
+  const parse = (json: any): BoardFlowItem[] => {
+    const diff = normalizeDiff(json?.data?.diff);
+    return diff.map((d) => ({
+      code: String(d.f12 ?? ""),
+      name: String(d.f14 ?? ""),
+      pct: num(d.f3),
+      mainNet: num(d.f62),
+      extraLargeNet: num(d.f66),
+      largeNet: num(d.f72),
+      mediumNet: num(d.f78),
+      smallNet: num(d.f84),
+      mainNetPct: num(d.f184),
+      mainNet5d: num(d.f164),
+      mainNet5dPct: num(d.f165),
+      mainNet10d: num(d.f174),
+      mainNet10dPct: num(d.f175),
+      boardType,
+    }));
+  };
+
+  // v9.30.1：all=true 时用"双请求"拿全量（流入 po=1 降序 + 流出 po=0 升序），合并去重后本地 mainNet 降序。
+  // 修复：原实现仅 po=1 降序 + pz=limit —— 东财 t:2 行业细分远超 100 个，f62 降序前 100 全是正数，
+  //      流出行业被挤出结果集 → 资金走势图"主力净流出"永远为 0。
+  // 注意：不能靠 pz=500 拉全量 —— 东财对 pz 有上限（约100），且排序后仅返回头部。
+  if (opts?.all) {
+    const base = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=300&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
+    const [inflowRes, outflowRes] = await Promise.allSettled([
+      trackedJsonp<any>("板块资金流入", `${base}&po=1`),
+      trackedJsonp<any>("板块资金流出", `${base}&po=0`),
+    ]);
+    const merged = new Map<string, BoardFlowItem>();
+    for (const r of [inflowRes, outflowRes]) {
+      if (r.status === "fulfilled") {
+        for (const it of parse(r.value)) if (it.code) merged.set(it.code, it);
+      }
+    }
+    return [...merged.values()].sort((a, b) => b.mainNet - a.mainNet);
+  }
+
   const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
   const json = await trackedJsonp<any>("板块资金流", url);
-  const diff = normalizeDiff(json?.data?.diff);
-  return diff.map((d) => ({
-    code: String(d.f12 ?? ""),
-    name: String(d.f14 ?? ""),
-    pct: num(d.f3),
-    mainNet: num(d.f62),
-    extraLargeNet: num(d.f66),
-    largeNet: num(d.f72),
-    mediumNet: num(d.f78),
-    smallNet: num(d.f84),
-    mainNetPct: num(d.f184),
-    mainNet5d: num(d.f164),
-    mainNet5dPct: num(d.f165),
-    mainNet10d: num(d.f174),
-    mainNet10dPct: num(d.f175),
-    boardType,
-  }));
+  return parse(json);
 }
 
 // ============== 板块名称过滤（去除非真正概念板块的指数成分/风格标签） ==============
@@ -793,16 +817,39 @@ export interface LimitPoolSummary {
   totalBoardStocks: number; // 2连板及以上总数
   /** 涨停池原始数组（供题材梯队等下游模块复用，避免重复请求） */
   rawZTPool: any[];
+  /** v9.26.18：炸板池原始数据（字段：c/n/zdp/zbc 炸板次数/zf 炸板幅度/zttj.ct 连板数） */
+  rawZBPool?: any[];
   /** 接口返回的真实交易日（形如"20260729"），优先用于快照 key（兼容法定节假日） */
   qdate: string | null;
+  /** v9.26.10：当日池总数（节假日回退判定用） */
+  totalCount: number;
+  /** v9.26.10：是否交易日（穷尽回退后仍空则 false） */
+  isTradingDay?: boolean;
 }
 
 // 获取涨停池统计摘要（供多个模块共享）
+// v9.26.10：节假日/非交易日空池时自动回退最近交易日（最多 10 天）
 export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSummary> {
-  const d = date || tradeDateStr();
+  let d = date || tradeDateStr();
+  let last: LimitPoolSummary | null = null;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const summary = await fetchZTPoolForDate(d);
+    if (summary.totalCount > 0 || attempt === 9) {
+      return summary; // 有数据或穷尽回退 → 返回
+    }
+    // 空池（节假日）→ 往前一天再试
+    const prev = new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`);
+    prev.setDate(prev.getDate() - 1);
+    d = `${prev.getFullYear()}${String(prev.getMonth()+1).padStart(2,"0")}${String(prev.getDate()).padStart(2,"0")}`;
+  }
+  return last ?? { limitUpCount: 0, limitDownCount: 0, blastedCount: 0, blastedRate: 0, boardCounts: {}, totalBoardStocks: 0, rawZTPool: [], qdate: null, totalCount: 0, isTradingDay: false };
+}
+
+async function fetchZTPoolForDate(d: string): Promise<LimitPoolSummary> {
+  // v9.26.18：ZBPool/DT 改用 sort=fbt:asc（原 fund:asc 实际返回空数组，炸板率始终为 0）
   const ztUrl = `https://push2ex.eastmoney.com/getTopicZTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
-  const zbUrl = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
-  const dtUrl = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
+  const zbUrl = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
+  const dtUrl = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
 
   const [ztRes, zbRes, dtRes] = await Promise.allSettled([
     ztJsonp<any>(ztUrl), ztJsonp<any>(zbUrl), ztJsonp<any>(dtUrl),
@@ -832,7 +879,7 @@ export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSum
   const blastedRate = (limitUpCount + blastedCount) > 0 ? blastedCount / (limitUpCount + blastedCount) * 100 : 0;
   const totalBoardStocks = ztPool.filter((s: any) => (s.lbc ?? 1) >= 2).length;
 
-  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, qdate };
+  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, rawZBPool: zbPool, qdate, totalCount: ztPool.length + zbPool.length + dtPool.length };
 }
 
 // ============== 两市历史日成交额（用于量能对比）==============
@@ -964,6 +1011,9 @@ export interface PopularityItem {
 }
 
 export async function fetchPopularityRank(pageSize = 50): Promise<PopularityItem[]> {
+  // v9.31：实测 emappdata.eastmoney.com **支持 CORS**（OPTIONS 预检 200 + Allow-Origin 回显任意 Origin），
+  // 且不校验 Referer/Origin → **浏览器直连即可，线上线下均可用**。
+  // 之前的 proxy 中转反而失败（emappdata 对 proxy 的 nodejs https.request 做 TLS 指纹 ban → 12s socket hang up）。
   const url = "https://emappdata.eastmoney.com/stockrank/getAllCurrentList";
   const body = {
     appId: "appId01",
@@ -999,7 +1049,51 @@ export async function fetchPopularityRank(pageSize = 50): Promise<PopularityItem
     });
   } catch (err) {
     recordApiCall("人气榜", false, Date.now() - start);
-    throw new Error("人气榜接口不可用（可能 CORS 受限）");
+    throw new Error("人气榜接口不可用");
+  }
+}
+
+// ============== 同花顺人气榜（v9.31：与东财双榜交叉比对） ==============
+export interface THSPopularityItem {
+  code: string;
+  name: string;
+  /** 同花顺榜内排名 */
+  rank: number;
+  /** 涨跌幅 % */
+  riseAndFall: number;
+  /** 热度值（字符串，大=热） */
+  rate: string;
+  /** 排名变化 */
+  hotRankChg: number;
+  /** 概念标签（如 ["光纤概念","第三代半导体"]） */
+  concepts: string[];
+  /** 人气标签（如 "2天2板"） */
+  tag: string;
+}
+
+export async function fetchTHSPopularityRank(pageSize = 30): Promise<THSPopularityItem[]> {
+  // 实测 dq.10jqka.com.cn 支持 CORS（OPTIONS 204 + Allow-Methods:* + Origin 回显）且不校验 Referer → 浏览器直连可用
+  const url = "https://dq.10jqka.com.cn/fuyao/hot_list_data/out/hot_list/v1/stock?stock_type=a&type=hour&list_type=normal";
+  const start = Date.now();
+  try {
+    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    recordApiCall("同花顺人气榜", true, Date.now() - start);
+    const list: any[] = json?.data?.stock_list ?? [];
+    return list.slice(0, pageSize).map((s: any, i: number) => ({
+      code: String(s.code ?? ""),
+      name: String(s.name ?? ""),
+      rank: Number(s.order) || i + 1,
+      riseAndFall: num(s.rise_and_fall),
+      rate: String(s.rate ?? ""),
+      hotRankChg: num(s.hot_rank_chg),
+      concepts: Array.isArray(s.tag?.concept_tag) ? s.tag.concept_tag : [],
+      tag: String(s.tag?.popularity_tag ?? ""),
+    }));
+  } catch (err) {
+    recordApiCall("同花顺人气榜", false, Date.now() - start);
+    throw new Error("同花顺人气榜接口不可用");
   }
 }
 
@@ -1012,34 +1106,37 @@ export interface StockBrief {
   pct: number;
   amount: number; // 成交额(元)
   turnoverRate: number; // 换手率
+  volumeRatio?: number; // 量比（f10，v9.24-P1-4 异动分级用）
 }
 
 export async function fetchStockBriefBatch(codes: string[]): Promise<Map<string, StockBrief>> {
   if (codes.length === 0) return new Map();
-  // push2 的 ulist.np 支持批量 secids（逗号分隔），一次最多约100只
-  const secids = codes.map(c => toSecid(c)).join(",");
-  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f6,f8,f12,f14&secids=${secids}`;
-  try {
-    const json = await trackedJsonp<any>("人气榜行情", url, 10000);
-    const diff = normalizeDiff(json?.data?.diff);
-    const map = new Map<string, StockBrief>();
-    for (const d of diff) {
-      const code = String(d.f12 ?? "");
-      if (code) {
-        map.set(code, {
-          code,
-          name: String(d.f14 ?? ""),
-          price: num(d.f2),
-          pct: num(d.f3),
-          amount: num(d.f6),
-          turnoverRate: num(d.f8),
-        });
+  // push2 ulist.np 单次最多约 100 只 secids；v9.26.17 自动分批支持 > 100 只
+  const map = new Map<string, StockBrief>();
+  for (let i = 0; i < codes.length; i += 100) {
+    const chunk = codes.slice(i, i + 100);
+    const secids = chunk.map(c => toSecid(c)).join(",");
+    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f6,f8,f10,f12,f14&secids=${secids}`;
+    try {
+      const json = await trackedJsonp<any>("人气榜行情", url, 10000);
+      const diff = normalizeDiff(json?.data?.diff);
+      for (const d of diff) {
+        const code = String(d.f12 ?? "");
+        if (code) {
+          map.set(code, {
+            code,
+            name: String(d.f14 ?? ""),
+            price: num(d.f2),
+            pct: num(d.f3),
+            amount: num(d.f6),
+            turnoverRate: num(d.f8),
+            volumeRatio: num(d.f10),
+          });
+        }
       }
-    }
-    return map;
-  } catch {
-    return new Map();
+    } catch { /* 单批失败跳过 */ }
   }
+  return map;
 }
 
 /** 全市场 股票代码 -> 申万行业（f128=行业），分页拉取 */
@@ -1066,7 +1163,7 @@ export async function fetchStockIndustryMap(): Promise<Record<string, string>> {
 export async function fetchStockDailyCloses(code: string, days = 40): Promise<Map<string, number>> {
   try {
     const url = `${PUSH2HIS}/stock/kline/get?secid=${toSecid(code)}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55&klt=101&fqt=0&lmt=${days}&ut=${EM_UT}`;
-    const json = await jsonp(url, 10000);
+    const json = await jsonp<any>(url, 10000);
     const kl: string[] = json?.data?.klines ?? [];
     const m = new Map<string, number>();
     for (const line of kl) {

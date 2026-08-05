@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { generateDailyIntelligence, type NewsItem, type AnnItem } from "../lib/llmNewsIntelligence";
 import { getRecentMemos, loadDailyMemo, getSegmentMemos, type DailyNewsMemo, type IntelSlot } from "../lib/newsMemoStore";
-import { getAllSince, getAllOnDate, getChainItems, getStats } from "../lib/dataStore";
+import { getAllSince, getAllOnDate, getChainItems, getStats, fetchAnalysisDataFromCloud, type CloudAnalysisData } from "../lib/dataStore";
 import { getAllBoards } from "../lib/boardMap";
-import { getApiKey } from "../lib/ai";
+import { hasAvailableAI, hasAIOptimistic } from "../lib/ai";
 import { getCurrentSession } from "../lib/tradingSession";
 import { fetchLimitPoolSummary } from "../lib/api";
+import { isLocalServer } from "../lib/cloudStore";
 import type { MarketSnapshotForNews } from "./NewsPanel";
 
 // ============== 工具 ==============
@@ -73,6 +74,21 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
   // 指定日期分析：用户可选某一天，"📅 分析该日"时只取该天数据
   const [customDate, setCustomDate] = useState<string>("");
   const triggeredSlots = useRef<Set<IntelSlot>>(loadTrig(today));
+  // v9.26.8：本地部署时缓存 PG 全量数据（供分析直接用，绕过 localStorage 5MB 限制）
+  const cloudDataRef = useRef<CloudAnalysisData | null>(null);
+  const cloudLoadedRef = useRef(false);
+
+  // v9.26.8：分析取数统一入口 —— 本地部署优先 PG 全量；线上回退 localStorage
+  const getAnalysisData = useCallback(async (days: number) => {
+    if (isLocalServer() && !cloudLoadedRef.current) {
+      try {
+        cloudDataRef.current = await fetchAnalysisDataFromCloud(days);
+      } catch { cloudDataRef.current = null; }
+      cloudLoadedRef.current = true;
+    }
+    if (cloudDataRef.current) return cloudDataRef.current;
+    return null; // 线上 → 调用方用 localStorage
+  }, []);
 
   // 运行情报引擎（合并：limitPool + 智能窗口 + 手动全量 + 指定日期）
   const runIntelligence = useCallback(async (targetSlot: IntelSlot, scopeDaysArg?: number, customDateArg?: string) => {
@@ -86,25 +102,50 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
       };
 
       // 取数优先级：① customDate 精确单日 → ② scopeDays 近N天 → ③ 自动智能窗口
+      // v9.26.8：本地部署时优先 PG 全量（cloudData），线上用 localStorage
+      const cloudData = await getAnalysisData(Math.max(scopeDaysArg ?? 3, 30));
+      const pickFrom = (base: { news: NewsItem[]; ann: AnnItem[] }, cutoff: string) => {
+        if (!base) return { news: [], ann: [] };
+        return {
+          news: (base.news ?? []).filter((n: NewsItem) => (n.time ?? "").slice(0, 10) >= cutoff),
+          ann: (base.ann ?? []).filter((a: AnnItem) => (a.time ?? "").slice(0, 10) >= cutoff),
+        };
+      };
+      const localSince = (base: string, back: number) => {
+        const d = new Date(normDate(base)); d.setDate(d.getDate() - back);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      };
+      const isCloud = Boolean(cloudData);
+      const cloudBase = cloudData ? { news: cloudData.news, ann: cloudData.ann } : null;
+
       let accumulated;
       let label: string;
       if (customDateArg) {
-        // 指定日期：用 getAllOnDate 精确取该天（无范围模糊）
-        accumulated = getAllOnDate(customDateArg);
+        // 指定日期：精确取该天
+        if (isCloud && cloudBase) {
+          accumulated = {
+            news: (cloudBase.news ?? []).filter((n: NewsItem) => (n.time ?? "").slice(0, 10) === customDateArg),
+            ann: (cloudBase.ann ?? []).filter((a: AnnItem) => (a.time ?? "").slice(0, 10) === customDateArg),
+          };
+        } else {
+          accumulated = getAllOnDate(customDateArg);
+        }
         label = `指定·${customDateArg}`;
       } else if (scopeDaysArg != null) {
-        accumulated = getAllSince(minusDays(todayStore, scopeDaysArg - 1));
+        accumulated = isCloud
+          ? pickFrom(cloudBase!, localSince(todayStore, scopeDaysArg - 1))
+          : getAllSince(minusDays(todayStore, scopeDaysArg - 1));
         label = `手动·近${scopeDaysArg}天`;
       } else {
         let cutoff = todayStore;
-        accumulated = getAllSince(cutoff);
+        accumulated = isCloud ? pickFrom(cloudBase!, cutoff) : getAllSince(cutoff);
         let total = accumulated.news.length + accumulated.ann.length;
         for (let back = 1; back <= 3 && total < 25; back++) {
           cutoff = minusDays(todayStore, back);
-          accumulated = getAllSince(cutoff);
+          accumulated = isCloud ? pickFrom(cloudBase!, cutoff) : getAllSince(cutoff);
           total = accumulated.news.length + accumulated.ann.length;
         }
-        if (targetSlot === "final") accumulated = getAllSince(minusDays(todayStore, 1));
+        if (targetSlot === "final") accumulated = isCloud ? pickFrom(cloudBase!, minusDays(todayStore, 1)) : getAllSince(minusDays(todayStore, 1));
         label = SLOT_LABELS[targetSlot] ?? "";
       }
       const allNews = accumulated.news.length > 0 ? accumulated.news : news;
@@ -131,7 +172,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
       if (result) { setMemo(result); setLastUpdateTime(fmtTime()); }
     } catch { /* callAI 内部已降级 */ }
     finally { setLoading(false); }
-  }, [today, news, announcements, strongBoards, marketSnapshot]);
+  }, [today, news, announcements, strongBoards, marketSnapshot, getAnalysisData]);
 
   // 段末触发（持久化，刷新不重跑）
   useEffect(() => {
@@ -156,20 +197,39 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
     return () => clearInterval(t);
   }, [runIntelligence, news, announcements, today]);
 
-  // 产业链追溯
+  // 产业链追溯（v9.26.8：本地部署优先 PG 全量）
   useEffect(() => {
     if (!boardFilter) { setBoardItems([]); return; }
-    const { news: chainNews, ann: chainAnn } = getChainItems(boardFilter, 30);
-    const merged = [
-      ...chainNews.map(n => ({ title: n.title, time: n.time, url: n.url, tag: "新闻" as const })),
-      ...chainAnn.map(a => ({ title: `${a.stockName}：${a.title}`, time: a.time, url: a.url, tag: "公告" as const })),
-    ].sort((a, b) => b.time.localeCompare(a.time));
-    setBoardItems(merged);
+    const doChain = () => {
+      const { news: chainNews, ann: chainAnn } = getChainItems(boardFilter, 30);
+      const merged = [
+        ...chainNews.map(n => ({ title: n.title, time: n.time, url: n.url, tag: "新闻" as const })),
+        ...chainAnn.map(a => ({ title: `${a.stockName}：${a.title}`, time: a.time, url: a.url, tag: "公告" as const })),
+      ].sort((a, b) => b.time.localeCompare(a.time));
+      setBoardItems(merged);
+    };
+    if (isLocalServer() && cloudDataRef.current) {
+      // 用 PG 数据自建板块链（突破 localStorage 上限）
+      const c = cloudDataRef.current;
+      const kw = boardFilter;
+      const chainNews = (c.news ?? []).filter(n => (n.boards ?? []).some((b: string) => b.includes(kw) || kw.includes(b)));
+      const chainAnn = (c.ann ?? []).filter(a => (a.boards ?? []).some((b: string) => b.includes(kw) || kw.includes(b)));
+      const merged = [
+        ...chainNews.map(n => ({ title: n.title, time: n.time, url: n.url, tag: "新闻" as const })),
+        ...chainAnn.map(a => ({ title: `${a.stockName}：${a.title}`, time: a.time, url: a.url, tag: "公告" as const })),
+      ].sort((a, b) => b.time.localeCompare(a.time));
+      setBoardItems(merged);
+    } else {
+      doChain();
+    }
   }, [boardFilter]);
 
   const historyMemos = showHistory ? getRecentMemos(5) : [];
   const segments = showTimeline ? getSegmentMemos(today) : [];
-  const noKey = !getApiKey();
+  // v9.26.7：AI 可用性（浏览器 Key 或服务端中转均可），不再误判"未配置 Key"
+  const [aiAvailable, setAiAvailable] = useState<boolean>(hasAIOptimistic());
+  useEffect(() => { hasAvailableAI().then(setAiAvailable); }, []);
+  const noAI = !aiAvailable;
   const stageClass = memo ? (STAGE_COLORS[memo.cycleStage] ?? STAGE_COLORS["分歧期"]) : "";
   const stats = getStats();
 
@@ -195,7 +255,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
               <option value={7}>近7天</option>
               <option value={30}>近30天(全库)</option>
             </select>
-            <button onClick={() => runIntelligence("manual", scopeDays)} disabled={loading || noKey}
+            <button onClick={() => runIntelligence("manual", scopeDays)} disabled={loading || noAI}
               className="rounded bg-sky-600 px-3 py-1.5 text-xs hover:bg-sky-500 disabled:opacity-50">
               {loading ? "分析中…" : "🤖 立即分析"}
             </button>
@@ -220,19 +280,23 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
         </div>
       </div>
 
-      {/* 状态条 */}
+      {/* 状态条 + 存储说明（v9.26.8：本地部署显示 PG 存储状态） */}
       <div className="text-[11px] text-slate-600">
         本次基于 {sourceCount.news}条快讯+{sourceCount.ann}条公告 · {scopeLabel || SLOT_LABELS[slot ?? "afterclose"]} · 更新{lastUpdateTime || "—"}
-        {stats.totalCount > 0 && <span className="ml-2">累积库{stats.totalCount}条{stats.oldestDate ? `（最早${stats.oldestDate}）` : ""}</span>}
+        {isLocalServer()
+          ? <span className="ml-2">📀 数据已存本地 PostgreSQL · 可回溯至 {cloudDataRef.current?.oldestDate ?? stats.oldestDate ?? "—"}</span>
+          : stats.totalCount > 0 && <span className="ml-2">累积库{stats.totalCount}条{stats.oldestDate ? `（最早${stats.oldestDate}）` : ""}</span>}
       </div>
-      {/* 容量说明 */}
-      <div className="text-[11px] text-slate-700">
-        网页存储容量有限，仅保留近期数据；完整月级追溯请在本地部署后接入 PostgreSQL（存储抽象层已就绪）。
-      </div>
+      {/* 容量说明：本地部署已接入 PG → 提示自动消失；仅线上提示 */}
+      {!isLocalServer() && (
+        <div className="text-[11px] text-slate-700">
+          网页存储容量有限，仅保留近期数据；完整月级追溯请在本地部署后接入 PostgreSQL（存储抽象层已就绪）。
+        </div>
+      )}
 
-      {noKey && !memo && (
+      {noAI && !memo && (
         <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-[11px] text-amber-300">
-          请点击右上角 ⚙️ 设置配置 API Key（推荐 Agnes 2.5 Flash）后使用全栈情报分析
+          ⚠️ AI 暂不可用：浏览器未填 API Key 且本地服务端 AI 中转未启用。请检查：① 右上角 ⚙️ 设置（推荐 Agnes 2.5 Flash） ② 服务端 server/.env 是否配置 AI_API_KEY
         </div>
       )}
 

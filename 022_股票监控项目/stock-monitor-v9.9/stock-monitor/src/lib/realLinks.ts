@@ -46,6 +46,22 @@ export function boardRealUrl(boardCode: string, boardType: string): string {
   return "https://quote.eastmoney.com/center/boardlist.html#boards-BK06551";
 }
 
+// v9.26.13：ETF 详情页（code 形如 159819 → 跳东财基金详情页）
+export function etfRealUrl(code: string): string {
+  const c = String(code ?? "").trim();
+  if (!c) return "https://fund.eastmoney.com/";
+  // ETF 沪市 (5/51开头) / 深市 (1/15开头)
+  return `https://fund.eastmoney.com/${c}.html`;
+}
+
+// v9.26.13：按板块名搜 ETF/成分股（候选观察池点击：用板块名 → 同花顺板块详情页）
+export function boardNameRealUrl(boardName: string, boardType: "industry" | "concept" | "region" = "concept"): string {
+  const name = String(boardName ?? "").trim();
+  if (!name) return boardRealUrl("", boardType);
+  // 同花顺支持按板块名 URL 编码直查
+  return `https://q.10jqka.com.cn/thsft/api/v1/stock_industry/${encodeURIComponent(name)}`;
+}
+
 // 指数行情页
 export function indexRealUrl(code: string, name?: string): string {
   // 上证指数
@@ -108,4 +124,26 @@ export function northboundUrl(): string {
 // 涨跌统计页面
 export function marketBreadthUrl(): string {
   return "https://quote.eastmoney.com/center/gridlist.html#hs_a_board";
+}
+
+// ============== v9.32：游资实战"看到信号到下单<10秒" ==============
+// 券商下单 URL Scheme —— 需用户本地装了对应客户端才会跳转；浏览器会弹"打开 xxx 应用"确认
+// 同花顺：ths://chart?code=SH600519（支持 iOS/Android/PC 客户端）
+// 通达信：tdx://stock?code=600519&market=SH
+// 东方财富：dfcf://stock?code=SH600519
+export function orderUrl(code: string, broker: "ths" | "tdx" | "dfcf" = "ths"): string {
+  const c = String(code ?? "").trim();
+  if (!c) return "#";
+  // 6/5开头=沪市(SH)，0/3开头=深市(SZ)，4/8开头=北交所(沿用SH)
+  const prefix = c.startsWith("6") || c.startsWith("5") || c.startsWith("4") || c.startsWith("8") ? "SH" : "SZ";
+  switch (broker) {
+    case "ths": return `ths://chart?code=${prefix}${c}`;
+    case "tdx": return `tdx://stock?code=${c}&market=${prefix}`;
+    case "dfcf": return `dfcf://stock?code=${prefix}${c}`;
+  }
+}
+
+// 自选股一键导出（代码逗号串，可粘贴到券商批量下单/导入自选）
+export function exportWatchlist(codes: string[]): string {
+  return codes.filter(c => /^\d{6}$/.test(c)).join(",");
 }

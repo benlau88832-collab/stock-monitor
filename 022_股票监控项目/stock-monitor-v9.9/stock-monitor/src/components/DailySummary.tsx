@@ -1,8 +1,8 @@
-import { useState, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { fmtMoney, fmtPct, localDateStr } from "../lib/format";
 import type { OverviewData, FundStructureData } from "../App";
 import type { LimitPoolSummary } from "../lib/api";
-import { callAI, getApiKey } from "../lib/ai";
+import { callAI, hasAvailableAI, hasAIOptimistic } from "../lib/ai";
 
 const HISTORY_KEY = "daily_summary_history";
 
@@ -54,11 +54,15 @@ export default function DailySummary({ overview, fund }: {
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<SummaryRecord[]>(loadHistory);
   const [showHistory, setShowHistory] = useState(false);
-
-  const apiKey = getApiKey();
+  // v9.26.7：AI 可用性检测（浏览器 Key 或服务端中转均可），避免误判"未配置 Key"
+  const [aiAvailable, setAiAvailable] = useState<boolean>(hasAIOptimistic());
+  useEffect(() => { hasAvailableAI().then(setAiAvailable); }, []);
 
   const generate = useCallback(async () => {
-    if (!apiKey) { setContent("❌ 请先在「个股雷达」Tab 配置 API Key"); return; }
+    if (!aiAvailable) {
+      setContent("❌ AI 不可用：浏览器未配置 API Key 且本地服务端未启用 AI 中转（请在 ⚙️ 设置查看详情）");
+      return;
+    }
     setLoading(true); setContent(null);
     try {
       const prompt = buildSummaryPrompt(overview, fund, overview?.limitPool ?? null);
@@ -73,7 +77,7 @@ export default function DailySummary({ overview, fund }: {
     } catch (err) {
       setContent(`❌ ${err instanceof Error ? err.message : String(err)}`);
     } finally { setLoading(false); }
-  }, [apiKey, overview, fund, history]);
+  }, [aiAvailable, overview, fund, history]);
 
   return (
     <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-4 space-y-3">

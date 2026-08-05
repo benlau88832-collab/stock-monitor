@@ -149,7 +149,8 @@ export async function backfillSeatDay(date: string): Promise<void> {
         if (priceT1 != null) r.pctT1 = Math.round((priceT1 / base - 1) * 10000) / 100;
         if (priceT5 != null) r.pctT5 = Math.round((priceT5 / base - 1) * 10000) / 100;
         // 只要尝试过就标记回填，即使部分为 null（T+5 可能还没到）
-        if (daysSince >= 7 || priceT1 != null) r.backfilled = true;
+        // v9.26.10：T+1 有值才算完成（停牌股 priceT1 为 null 时留待下次，不再永久缺失）
+        if (priceT1 != null && (daysSince >= 7 || priceT5 != null)) r.backfilled = true;
       }
     } catch { /* 单股回填失败跳过，不阻塞 */ }
   }
@@ -228,6 +229,107 @@ export function buildSeatProfiles(maxDays = 120): SeatProfile[] {
   return profiles;
 }
 
+// ============== v9.13：单席位历史查询（席位画像 + 展开） ==============
+export interface SeatHistoryRow {
+  date: string;
+  stockCode: string;
+  stockName: string;
+  direction: "买" | "卖";
+  net: number;
+  pctT1: number | null;
+  pctT5: number | null;
+  backfilled: boolean;
+}
+
+/** 查某席位近 N 天所有上榜记录（按日期倒序） */
+export function buildSeatHistoryByDept(deptName: string, maxDays = 60): SeatHistoryRow[] {
+  const dates = getAllSeatDates().slice(0, maxDays);
+  const out: SeatHistoryRow[] = [];
+  for (const date of dates) {
+    const records = loadDayRecords(date);
+    for (const r of records) {
+      if (r.deptName !== deptName) continue;
+      out.push({
+        date, stockCode: r.stockCode, stockName: r.stockName,
+        direction: r.direction, net: r.net, pctT1: r.pctT1, pctT5: r.pctT5,
+        backfilled: r.backfilled,
+      });
+    }
+  }
+  out.sort((a, b) => b.date.localeCompare(a.date));
+  return out;
+}
+
+// ============== v9.14：按股票聚合（席位画像/连续动作 + 展开） ==============
+// 单只股票层面的聚合：每只股票上榜 N 次、累计净买入、最近一次 T+1
+export interface SeatStockAgg {
+  stockCode: string;
+  stockName: string;
+  /** 该席位对该股的总上榜次数（含买/卖） */
+  count: number;
+  buyCount: number;   // 上榜买入次数
+  sellCount: number;  // 上榜卖出次数
+  totalNet: number;   // 累计净买入（正=净流入，负=净流出）
+  totalBuy: number;
+  totalSell: number;
+  /** 最近一次上榜的 T+1 收益（已回填） */
+  lastDate: string;
+  lastPctT1: number | null;
+  /** 该股平均 T+1 收益（已回填样本） */
+  avgPctT1: number | null;
+  /** 方向："买"=净流入；"卖"=净流出；"买卖"=有进有出 */
+  direction: "买" | "卖" | "买卖";
+}
+
+/** 按股票聚合某席位近 N 天的上榜动作（按累计净额绝对值降序） */
+export function buildSeatStocksByDept(deptName: string, maxDays = 60): SeatStockAgg[] {
+  const dates = getAllSeatDates().slice(0, maxDays);
+  const agg = new Map<string, { stockCode: string; stockName: string; count: number; buyCount: number; sellCount: number; totalNet: number; totalBuy: number; totalSell: number; lastDate: string; lastPctT1: number | null; t1s: number[] }>();
+  for (const date of dates) {
+    const records = loadDayRecords(date);
+    for (const r of records) {
+      if (r.deptName !== deptName) continue;
+      const key = r.stockCode;
+      let entry = agg.get(key);
+      if (!entry) {
+        entry = { stockCode: r.stockCode, stockName: r.stockName, count: 0, buyCount: 0, sellCount: 0, totalNet: 0, totalBuy: 0, totalSell: 0, lastDate: "", lastPctT1: null, t1s: [] };
+        agg.set(key, entry);
+      }
+      entry.count++;
+      if (r.direction === "买") {
+        entry.buyCount++;
+        entry.totalBuy += Math.max(0, r.net);
+      } else {
+        entry.sellCount++;
+        entry.totalSell += Math.abs(Math.min(0, r.net));
+      }
+      entry.totalNet += r.net;
+      if (r.pctT1 != null) entry.t1s.push(r.pctT1);
+      if (date >= entry.lastDate) { entry.lastDate = date; entry.lastPctT1 = r.pctT1; }
+    }
+  }
+  const out: SeatStockAgg[] = [];
+  for (const e of agg.values()) {
+    out.push({
+      stockCode: e.stockCode,
+      stockName: e.stockName,
+      count: e.count,
+      buyCount: e.buyCount,
+      sellCount: e.sellCount,
+      totalNet: e.totalNet,
+      totalBuy: e.totalBuy,
+      totalSell: e.totalSell,
+      lastDate: e.lastDate,
+      lastPctT1: e.lastPctT1,
+      avgPctT1: e.t1s.length > 0 ? Math.round(e.t1s.reduce((s, v) => s + v, 0) / e.t1s.length * 100) / 100 : null,
+      direction: e.buyCount > 0 && e.sellCount > 0 ? "买卖" : e.buyCount > 0 ? "买" : "卖",
+    });
+  }
+  // 按累计净额绝对值降序
+  out.sort((a, b) => Math.abs(b.totalNet) - Math.abs(a.totalNet));
+  return out;
+}
+
 // ============== 合力/独食检测 ==============
 export interface StockSeatSignal {
   stockCode: string;
@@ -275,4 +377,62 @@ export function detectSeatSignals(
   }
 
   return signals;
+}
+
+// ============== P4 游资连续动作跟踪 ==============
+// 十年机构视角：单个游资对同一只票的反复操作（隔日回补/连续加仓/对倒）往往暗示
+// 该席位对该标的的长期意图。聚合近 N 天台账，找出"同席位同股票≥2次"的连续动作。
+export interface SeatRepeatAction {
+  deptName: string;
+  stockCode: string;
+  stockName: string;
+  count: number;        // 出现次数
+  dates: string[];      // 上榜日期
+  direction: "买" | "卖" | "买卖";
+  avgPctT1: number | null; // 平均 T+1 涨幅（回填后有效）
+  lastNet: number;      // 最近一次净额
+}
+
+/** 聚合近 N 天游资连续动作（同席位同股票 ≥2 次上榜） */
+export function buildSeatRepeatActions(maxDays = 60): SeatRepeatAction[] {
+  const dates = getAllSeatDates().slice(0, maxDays);
+  // key: deptName|stockCode
+  const agg = new Map<string, { deptName: string; stockCode: string; stockName: string; dates: string[]; buys: number; sells: number; t1s: number[]; lastNet: number; lastDate: string }>();
+
+  for (const date of dates) {
+    const records = loadDayRecords(date);
+    for (const r of records) {
+      const key = `${r.deptName}|${r.stockCode}`;
+      let entry = agg.get(key);
+      if (!entry) {
+        entry = { deptName: r.deptName, stockCode: r.stockCode, stockName: r.stockName, dates: [], buys: 0, sells: 0, t1s: [], lastNet: 0, lastDate: "" };
+        agg.set(key, entry);
+      }
+      entry.dates.push(date);
+      if (r.direction === "买") entry.buys++; else entry.sells++;
+      if (r.pctT1 != null) entry.t1s.push(r.pctT1);
+      // 记录最近一次净额（日期升序遍历，后覆盖前 → 最终为最新）
+      if (date >= entry.lastDate) { entry.lastNet = r.net; entry.lastDate = date; }
+    }
+  }
+
+  const actions: SeatRepeatAction[] = [];
+  for (const e of agg.values()) {
+    if (e.dates.length < 2) continue; // 只统计反复动作
+    const direction: SeatRepeatAction["direction"] = e.buys > 0 && e.sells > 0 ? "买卖" : e.buys > 0 ? "买" : "卖";
+    actions.push({
+      deptName: e.deptName,
+      stockCode: e.stockCode,
+      stockName: e.stockName,
+      count: e.dates.length,
+      dates: e.dates.sort().reverse(),
+      direction,
+      avgPctT1: e.t1s.length > 0 ? Math.round(e.t1s.reduce((s, v) => s + v, 0) / e.t1s.length * 100) / 100 : null,
+      lastNet: e.lastNet,
+    });
+  }
+
+  // 排序：次数多者优先，其次平均溢价高者优先
+  actions.sort((a, b) => b.count - a.count || (b.avgPctT1 ?? -99) - (a.avgPctT1 ?? -99));
+  return actions;
 }

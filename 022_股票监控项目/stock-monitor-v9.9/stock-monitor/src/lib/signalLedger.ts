@@ -1,6 +1,9 @@
 // 信号账本：记录系统触发的交易信号，并在之后回填 T+1/T+5 收益率
 // 用于"信号→验证→复盘"闭环
 
+import { fetchStockDailyCloses } from "./api";
+import { localDateStrOffset } from "./format";
+
 const LEDGER_KEY = "signal_ledger";
 const MAX_ENTRIES = 500;
 
@@ -51,9 +54,70 @@ export function getPendingBackfill(): SignalEntry[] {
   const now = Date.now();
   return entries.filter(e => {
     if (e.backfilled) return false;
-    const daysSince = Math.floor((now - new Date(e.date).getTime()) / 86400000);
+    const daysSince = Math.floor((now - new Date(e.date + "T00:00:00+08:00").getTime()) / 86400000);
     return daysSince >= 1 && daysSince <= 10;
   });
+}
+
+// ============== 自动回填（T+1/T+5 真实日K收盘价） ==============
+// P1 信号验证闭环核心：
+// 旧版只有 backfillEntry(id, ...) 手动回填，且 App 只在 post phase 触发一次。
+// 现在提供 runSignalBackfill() 批量自动回填，配合"首载+定时+手动按钮"三保险，
+// 确保不开页面也不丢 T+1/T+5 数据。
+const BACKFILL_DAY_KEY = "signal_backfill_day"; // 记录最近一次回填日期（防重复跑）
+
+/** 批量回填所有到期信号的 T+1/T+5 收益率（幂等，返回回填条数） */
+export async function runSignalBackfill(): Promise<number> {
+  const pending = getPendingBackfill();
+  const stockEntries = pending.filter(e => e.code !== "MARKET" && /^\d{6}$/.test(e.code));
+  if (stockEntries.length === 0) return 0;
+
+  // 按代码分组，一次日K覆盖多天信号
+  const codes = [...new Set(stockEntries.map(e => e.code))].slice(0, 50);
+  const closesByCode = new Map<string, Map<string, number>>();
+  for (const code of codes) {
+    try {
+      const closes = await fetchStockDailyCloses(code, 40);
+      if (closes.size > 0) closesByCode.set(code, closes);
+    } catch { /* 单只失败跳过 */ }
+  }
+
+  const entries = loadLedger();
+  let filled = 0;
+  for (const e of entries) {
+    if (e.backfilled || e.code === "MARKET") continue;
+    const closes = closesByCode.get(e.code);
+    if (!closes || closes.size === 0) continue;
+    const dates = [...closes.keys()].sort();
+    const idx = dates.indexOf(e.date);
+    if (idx < 0) continue; // 非交易日或未收录
+    const base = closes.get(dates[idx]);
+    if (!base || base <= 0) continue;
+
+    const priceT1 = idx + 1 < dates.length ? closes.get(dates[idx + 1]) : null;
+    const priceT5 = idx + 5 < dates.length ? closes.get(dates[idx + 5]) : null;
+    if (priceT1 != null) {
+      e.priceT1 = priceT1;
+      e.returnT1 = Math.round((priceT1 / base - 1) * 10000) / 100;
+    }
+    if (priceT5 != null) {
+      e.priceT5 = priceT5;
+      e.returnT5 = Math.round((priceT5 / base - 1) * 10000) / 100;
+    }
+    if (e.priceT1 != null && e.priceT5 != null) e.backfilled = true;
+    filled++;
+  }
+  if (filled > 0) saveLedger(entries);
+  return filled;
+}
+
+/** 是否今天已跑过自动回填（避免每次刷新都拉日K） */
+export function isBackfilledToday(): boolean {
+  try { return localStorage.getItem(BACKFILL_DAY_KEY) === localDateStrOffset(0); }
+  catch { return false; }
+}
+export function markBackfilledToday(): void {
+  try { localStorage.setItem(BACKFILL_DAY_KEY, localDateStrOffset(0)); } catch {}
 }
 
 /** 回填 T+1/T+5 价格和收益率 */
@@ -82,6 +146,8 @@ export interface SignalStats {
   count: number;
   avgReturnT5: number | null;
   winRateT5: number | null; // 胜率（T+5收益>0的比例）
+  /** P1 新增：信号源健康度。胜率<45% 标记为 "存疑"，用于 UI 打角标 + 推荐降权 */
+  health: "healthy" | "warning" | "suspect" | "insufficient";
 }
 
 export function getSignalStats(): SignalStats[] {
@@ -97,11 +163,18 @@ export function getSignalStats(): SignalStats[] {
     const returns = items.map(e => e.returnT5!);
     const avg = returns.reduce((s, r) => s + r, 0) / returns.length;
     const wins = returns.filter(r => r > 0).length;
+    const winRate = Math.round(wins / items.length * 100);
+    const health: SignalStats["health"] = items.length < 10
+      ? "insufficient"
+      : winRate >= 55 ? "healthy"
+      : winRate >= 45 ? "warning"
+      : "suspect";
     stats.push({
       typeLabel,
       count: items.length,
       avgReturnT5: Math.round(avg * 100) / 100,
-      winRateT5: Math.round(wins / items.length * 100),
+      winRateT5: winRate,
+      health,
     });
   }
   return stats;

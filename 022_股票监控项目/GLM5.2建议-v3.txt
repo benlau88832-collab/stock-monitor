@@ -1,0 +1,272 @@
+# 《A股实时监控终端》V3 审查报告与修改指令书
+## ——幻方量化深化 · AI 替代决策架构 · 多重交叉验证
+> **审查对象**：`benlau88832-collab/stock-monitor`（main 分支，HEAD `dddc288`，当前版本 **v9.36**）
+> **审查视角**：十年以上一线游资 / 龙头战法操盘手 + 量化策略工程双视角
+> **本轮重心（用户明确要求）**：① 加入幻方量化方法；② 100% 榨干 Agnes 2.5 Flash、从"纯数据展示"转向"替代决策"；③ 多重交叉验证避免错误方向；④ AI 自动检索新闻事件、做政策/行业/事件三级研判；⑤ 未尽事宜方向指引。
+> **审查范围**：全栈逐文件通读——后端 6 文件（cron 已重写，含 market_daily/policy/lhb 落库）、前端 lib **62 模块**（新增 `marketStateMachine / sealMonitor / signalBacktest / portfolioRisk / sysRiskGuard / stageModel / trapDetector / admissionGate / positionSizing / stockExit / extremeBoard / leaderContend / annCluster / fundStreak / themeCalendar / prevZtStats` 等）、组件 45 个（新增 `LhbCrossPanel / SignalEffectivenessPanel / AuctionStrengthPanel`）、`__tests__` 5 个单测、配置与文档全部。
+> **与 V1/V2 关系**：本报告为**全新独立文档**，不覆盖 V1/V2。V1/V2 建议已被团队大量落地（见第一节"已闭环清单"），V3 聚焦**下一阶段的质变方向**。
+---
+## 0. 一句话总评
+**这一版（v9.36）已经从"仪表精密的雷达"进化成"半自动作战参谋"——V1/V2 我提的决策引擎几乎全部落地，幻方三件套（状态机/封单衰减/信号回测）也像模像样。但离你要的"替代决策大脑"还差最关键的一跃：现在的 AI 仍然是"事后解说员"（单轮 prompt → 一段话），而不是"会自己查数据、会自我质疑、会多源投票做决断的智能体"。真正的幻方不是"加几个状态机"，而是"因子库 × 自适应 × 在线验证 × 集成投票"的闭环；真正的替代决策不是"让 AI 说一段话"，而是"让 AI 拿着工具链跑完调研—证伪—表决—出单"。这一跃需要三件事：① 把 Agnes 升级为带工具的 Agent；② 建一套多源交叉验证的共识层；③ 把所有信号接进回测门控。本报告就讲这三件事怎么做。**
+---
+## 一、V1/V2 建议 → v9.36 闭环情况（先认账）
+| V1/V2 编号 | 内容 | v9.36 状态 | 证据 |
+|---|---|---|---|
+| P0-2 | 硬编码 DB 密码 | ✅ 已修 | `db.js` 改读 `process.env.DATABASE_URL`，无则报错退出 |
+| P0-3 | 阶段判定六套口径打架 | ✅ 已修 | 新增 `stageModel.ts` 唯一词表+三入口，全局引用 |
+| P0-4 | 诱多识别空白 | ✅ 已修 | 新增 `trapDetector.ts`（诱多拉升/假封板/尾盘出货） |
+| P1-5 | 最终准入闸 | ✅ 已修 | 新增 `admissionGate.ts` 五重准入 |
+| P1-6 | 仓位定量化 | ✅ 已修 | 新增 `positionSizing.ts`（gate×强度×单票上限+分批+止损） |
+| P1-7 | 个股级离场 | ✅ 已修 | 新增 `stockExit.ts` |
+| P1-9 | LLM task 解耦 | ✅ 已修 | 拆出 `themeNewsScore/stockNewsScore/dailyIntel` 独立任务 |
+| P2-1 | 政策面主动采集 | ✅ 已修 | cron `fetchPolicyNews` + `POLICY_RE` 落库 |
+| P2-5 | 强催化公告用 LLM 评分 | ✅ 已修 | cron 优先 LLM 评分 + 扩展正则兜底 + 黑天鹅检测 |
+| —（新增） | 幻方 S1 封单衰减 | ✅ 新增 | `sealMonitor.ts` 相邻快照封单变化率 |
+| —（新增） | 幻方 S2 市场状态机 | ✅ 新增 | `marketStateMachine.ts` 五态+仓位系数 |
+| —（新增） | 幻方 S3 信号回测 | ✅ 新增 | `signalBacktest.ts` + `market_daily` 落库 |
+| —（新增） | 组合风险预算 | ✅ 新增 | `portfolioRisk.ts` CVaR 思想+连亏熔断 |
+| —（新增） | 系统性风险/卡位战/极端板/公告聚类/题材日历/资金连续性 | ✅ 新增 | `sysRiskGuard / leaderContend / extremeBoard / annCluster / themeCalendar / fundStreak` |
+**评价**：执行力和理解力都强——这不是"照着抄"，是"理解了再落地"。`portfolioRisk` 把幻方风险预算层和游资连亏熔断融在一起，`signalBacktest` 把"只信历史有效的因子"落地为"样本不足就不下结论"，都是对的。**这是值得肯定的质变基础。**
+---
+## 二、🔴 仍然存在的致命/重要问题（V3 必须先解决）
+### P0-A ❶ `https-proxy-agent` 仍是幽灵依赖 —— V1 报的 P0-1 至今未修，部署即崩
+**文件**：`server/package.json`、`server/routes/ai.js:9`、`server/cron.js:81`
+**现状**：`ai.js` 第 9 行、`cron.js` 第 81 行仍是**模块顶层** `const { HttpsProxyAgent } = require("https-proxy-agent")`，但 `server/package.json` 的 `dependencies` 里**仍然没有** `https-proxy-agent`（只有 cors/dotenv/express/node-cron/pg）。
+**后果**：干净环境 `npm install && npm start` → 加载 `routes/ai.js` 时 `MODULE_NOT_FOUND` → **整个服务端启动失败** → AI 中转、cron、policy/lhb 落库全部不可用。v9.36 新增的盘后自动复盘、风险雷达等 AI 任务在干净部署下**一个都跑不起来**。
+**修改指令**：
+1. `server/package.json` dependencies 加 `"https-proxy-agent": "^7.1.0"`。
+2. 把两处顶层 require 改为**惰性 + 容错**（抽公共 `server/lib/httpProxy.js`，`ai.js` 与 `cron.js` 复用，消除两份重复 `postJSON/callLLM`）。
+**验收**：`rm -rf node_modules && npm install && npm start` 成功监听 8080；`curl /api/ai/config` 返回 200。
+### P1-B ❷ `stageModel.classifyStage`（入口4·市场级阶段）是死代码
+**文件**：`src/lib/stageModel.ts:118`、`__tests__/stageModel.test.ts`
+**现状**：`classifyStage`（你按我 V1 P0-3 建议写的"市场级完整判定"）只在自身定义处和测试里出现，**没有任何业务组件/评分调用它**。实际阶段由 `stageOfFunds`/`stageOfStrength` 驱动，`classifyStage` 写了却没接进主线引擎。
+**后果**：最该用它的"主线阶段统一判定"反而没用上——`classifyStage` 里精心设计的退潮/分歧/高潮阈值白写了。
+**修改指令**：在 `App.tsx` 主线计算处，用 `classifyStage` 取代 `stageOfFunds` 作为主线 `stage` 来源（它综合了涨停环比/炸板率/晋级率/高度/资金，比纯资金维度更准），或明确标注它为"备用入口"并删除以免误导。
+**验收**：`classifyStage` 至少被 `App.tsx`/`mainlineScore` 调用，或从导出中移除。
+### P1-C ❸ 多引擎产出分散，缺"统一决策总线"
+**现状**：v9.36 新增了 16+ 个决策函数（admission/position/exit/trap/seal/stateMachine/portfolioRisk/sysRisk/contend/extreme/...），但它们**各自挂在不同组件里独立展示**，没有一个"汇总所有证据 → 出一个最终决断"的总线。
+**后果**：游资面对的是 10 张卡片各说各话（准入闸说可上车、封单衰减说黄色预警、组合风险说超限、龙虎榜交叉说加持），**最终"今天到底上不上、上多少"仍要人脑综合**。这正是"替代决策"没完成的标志。
+**修改指令**：见第三节——建 `decisionBus.ts`（多源共识层），把所有引擎产出汇聚成单一裁决。
+**验收**：首页出现一个"AI 终裁决"卡片，输入多源证据、输出唯一结论 + 置信度 + 反对意见。
+---
+## 三、🧠 核心方向一：从"数据展示+规则决策"升级到"AI 替代决策"
+> 你要的不是"再多一个 AI 解说框"，而是"AI 真正替你做调研、做证伪、做决断"。当前架构的硬约束：`ai.ts` 的 `callAI` 是**单轮 prompt→response**，没有工具调用、没有多步推理、没有自我审查。要把 Agnes 2.5 Flash 榨干，必须把它从"解说员"升级为"带工具的智能体（Agent）"。
+### 3.1 现状诊断：AI 的三个天花板
+| 天花板 | 现状 | 后果 |
+|---|---|---|
+| ① 单轮一次性 | `callAI(task,payload)` 一次进一次出 | AI 看到什么全靠前端喂，喂漏了就判断错（如没喂席位数据，AI 就看不到龙虎榜） |
+| ② 无工具调用 | AI 不能主动 `get_quote/get_seats/backtest` | AI 无法"自己查数据验证自己的假设"，等于闭眼判断 |
+| ③ 无自我审查 | 一次输出即最终结论 | 没有"换个角度再问一遍/让另一个 prompt 审一遍"，幻觉直接变成决策 |
+### 3.2 目标架构：ReAct Agent（推理-行动循环）落地 Agnes Flash
+**核心思路**：把"今天主线 X 该不该上车"拆成 AI 可以**逐步调用工具、逐步修正**的调研流程，而非一次性问答。
+```
+┌────────────── 决策 Agent 主循环（planner-executor）──────────────┐
+│ 用户意图："主线『低空经济』今天能上车吗？上多少？"            │
+│   ↓                                                              │
+│ ① Planner（Agnes）：拆解为子任务                                  │
+│    - 查主线强度？查阶段？查诱多？查梯队断档？查席位加持？         │
+│    - 查同板块历史回测胜率？查系统性风险？                         │
+│   ↓                                                              │
+│ ② Executor：逐个调用工具（tool-use），每步把结果回灌给 Agnes      │
+│    tools = {                                                     │
+│      getMainlineStrength(board),  // 规则引擎                    │
+│      classifyStage(...),          // 阶段模型                    │
+│      detectTrap(code),            // 诱多                        │
+│      detectSealDecay(pool),       // 封单衰减                    │
+│      getLhbCross(code),           // 龙虎榜交叉                  │
+│      getFundStreak(board),        // 资金连续性                  │
+│      backtestSignal(id),          // 信号回测（幻方门控）        │
+│      computePositionAdvice(...),  // 仓位                        │
+│      getNews(board, level),       // 三级新闻检索                │
+│    }                                                             │
+│   ↓                                                              │
+│ ③ Synthesizer（Agnes）：汇总工具结果 → 结构化裁决               │
+│    { action, confidence, evidence[], dissent[], position, exit } │
+│   ↓                                                              │
+│ ④ Critic（Agnes 换视角复核）：专挑反面证据，能推翻则回炉        │
+└──────────────────────────────────────────────────────────────────┘
+```
+**为什么用 Agnes 2.5 Flash 能做**：Flash 支持 OpenAI 兼容的 `tools`/`tool_calls`（你的 `apihub.agnes-ai.cn` 走 `/v1/chat/completions`，已验证可用）。它的强项是"快+便宜+JSON 稳定"，正好适合多轮工具调用（每轮开销低）。
+**榨干 Flash 的 5 个工程要点（避免烧钱/超时）**：
+1. **工具结果走规则引擎**（已实现）：Agent 调用的 `getMainlineStrength` 等是**纯函数**，不重复调 LLM——LLM 只负责"读数+推理"，数值计算交给规则。这是最省 token 的设计。
+2. **轮次预算**：单次决策 Agent 循环 ≤ 5 轮（`max_iterations`），每轮 ≤ 1500 token，超出强制进入 Synthesizer。Flash 5 轮 ≈ 一次 stockJudge 的成本。
+3. **工具结果缓存**：`get_quote`/`get_seats` 等复用现有 `jsonpQueue`/`cloudStore` 缓存，避免 Agent 把同一接口打爆。
+4. **早停**：任一工具返回强否决（系统性 red / 诱多 / 退潮），Agent 直接跳到 Synthesizer 出"禁止"，不再继续调研。
+5. **服务端执行**：Agent 主循环放 `server/routes/ai.js`（或新 `agent.js`），前端只拿最终裁决——既保护 Key，又避免浏览器并发风暴。
+### 3.3 修改指令清单（核心方向一）
+#### 【V3-1】建 Agent 工具注册表 `src/lib/agentTools.ts`
+- 文件：新建 `src/lib/agentTools.ts` + `src/lib/aiAgent.ts`
+- 改法：把现有 16 个决策/数据函数包成 `tools` 描述符（name/description/parameters/execute）。execute 直接调现有纯函数（getMainlineStrength/classifyStage/detectTrap/detectSealDecay/getLhbCross/getFundStreak/backtestSignal/computePositionAdvice/checkStockExit/classifyMarketState/computePortfolioRisk/checkSysRisk...）。
+- 验收：`tools` 列表 ≥ 12 个，每个 execute 返回 JSON 且不触发额外 LLM 调用。
+#### 【V3-2】Agent 主循环 `src/lib/aiAgent.ts`（ReAct）
+- 文件：新建 `src/lib/aiAgent.ts`
+- 改法：实现 `runDecisionAgent(question, context)`：①Agnes 输出 tool_calls → ②本地执行工具 → ③结果回灌 → ④循环至 Synthesizer 或达预算。复用 `callAI` 的缓存/限速/降级（新增 task `agentReason`）。
+- 验收：给定"低空经济能上车吗"，Agent 能自主调用 ≥3 个工具并给出带证据的裁决；超时降级到规则 `admissionGate+positionSizing`。
+#### 【V3-3】Critic 反向复核步骤
+- 改法：Agent 出结论后，用 `temperature=0.4` + 专用的"挑刺 prompt"再问一次 Agnes"以下结论哪里可能错"，能给出有效反对证据则降置信度或回炉。
+- 验收：构造一个有诱多特征的样本，Critic 能把"可上车"打成"观望/禁止"。
+---
+## 四、🛡️ 核心方向二：多重交叉验证体系（你最担心的"避免错误方向"）
+> 你说得对——替代决策最大的风险就是"AI 自信地指错路"。单一来源（不管规则还是 LLM）都不可信。**决策可信的唯一出路是"独立来源的收敛"**。下面是我为你设计的五层交叉验证，直接对标幻方"集成投票 + 因子门控"思想。
+### 4.1 五层交叉验证架构（`decisionBus.ts`）
+```
+                    ┌──────── 独立证据源（互不依赖）────────┐
+   视角1 规则引擎    │ admissionGate / trapDetector / seal  │ ── 证据 A
+   视角2 量化因子    │ signalBacktest 历史胜率 + 强度分      │ ── 证据 B
+   视角3 资金真金    │ 龙虎榜交叉 + 资金连续性 fundStreak    │ ── 证据 C
+   视角4 LLM 推理    │ aiAgent 裁决（多轮工具调研）         │ ── 证据 D
+   视角5 风控否决    │ sysRiskGuard + portfolioRisk          │ ── 证据 E（一票否决）
+                    └──────────────────┬───────────────────┘
+                                       ↓
+              ┌──── 共识层 decisionBus（加权投票 + 反向证伪）────┐
+              │ ① 硬否决：E 层任一 red（系统性风险/诱多/退潮）→ 直接"禁止" │
+              │ ② 软投票：A/B/C/D 各出{可上车,观望,禁止}+置信度           │
+              │    权重 = 各源历史胜率（signalBacktest 动态加权）          │
+              │    加权置信度 ≥ 阈值且 ≥K 票一致 → 放行                    │
+              │ ③ 分歧告警：各源结论不一致 → 标"多源分歧，人工复核"        │
+              │ ④ 自洽校验：LLM 对同一问用 N 次 temperature 自洽投票        │
+              └────────────────────┬─────────────────────────────┘
+                                   ↓
+              单一裁决：{action, confidence, votes{}, dissent[], evidence[]}
+```
+### 4.2 每一层为什么能防错（防错机理）
+| 层 | 防的是什么错 | 机理 |
+|---|---|---|
+| 硬否决层 | "黑天鹅/系统性杀跌中还在推主线" | 任一 red 信号直接否决，不进入投票（sysRiskGuard 已有，需接进总线） |
+| 量化门控 | "用了一个历史根本不灵的信号" | 信号必须过 `signalBacktest` 胜率门（样本≥6 且胜率≥60% 才计票；不达标降权）——幻方"只信历史有效因子" |
+| 多源投票 | "单一来源出错"（规则 bug / LLM 幻觉 / 数据源抽风） | 4 个独立来源投票，少数服从多数；任一源出错被多数压过 |
+| 加权融合 | "烂信号和好信号一票一票一样重" | 按历史胜率加权——胜率高的源说话更算数（幻方因子加权） |
+| 分歧告警 | "各源打架时硬选一个" | 不一致时不强行裁决，标"分歧"让人复核——宁可错过不可做错 |
+| LLM 自洽 | "LLM 一次抽风" | 同问题多温度问 N 次取多数（self-consistency），过滤单次幻觉 |
+| Critic 反向 | "确认偏误/集体一致但全错" | 专门派一个"挑刺者"找反面证据，能推翻就降级 |
+### 4.3 修改指令清单（核心方向二）
+#### 【V3-4】统一决策总线 `src/lib/decisionBus.ts`
+- 文件：新建 `src/lib/decisionBus.ts`
+- 改法：定义 `EvidenceSource` 接口（name/verdict/confidence/weight/reason），`runConsensus(sources[])` 实现硬否决→门控→加权投票→分歧告警。把 admissionGate/trapDetector/sealMonitor/sysRiskGuard/portfolioRisk/backtestSignal/aiAgent 全部适配成 EvidenceSource 接入。
+- 验收：单测覆盖——①有 red 否决时输出禁止；②多源一致时高置信放行；③各源打架时输出"分歧复核"。
+#### 【V3-5】回测门控（factor gating）
+- 改法：`decisionBus` 在计票前查 `signalBacktest`，对每个信号查历史胜率；胜率<45% 或样本不足的信号**不计票或降权 0.3**。
+- 验收：模拟一个历史胜率 30% 的信号，即使实时触发也不影响最终裁决（被门控）。
+#### 【V3-6】LLM 自洽投票
+- 改法：`aiAgent` 的 Synthesizer 步骤对关键判断（可上车/观望/禁止）用 `temperature ∈ {0.1,0.4,0.7}` 各跑一次，多数票为准（≥2/3 一致才高置信）。
+- 验收：构造边界样本，单次抽风被多数票纠正。
+#### 【V3-7】"AI 终裁决卡"组件
+- 文件：新建 `src/components/DecisionVerdictCard.tsx`
+- 改法：首页顶部常驻，展示 `decisionBus` 的单一裁决 + 各源投票明细 + 反对意见 + 置信度。**这是"替代决策"的用户可见终点**。
+- 验收：一屏看清"结论+凭什么+谁反对+多确信"。
+---
+## 五、🧪 核心方向三：深化幻方量化（当前只是入门级）
+> 现在的幻方落地（状态机/封单衰减/信号回测/风险预算）是**思想正确但深度不够**。幻方真正的护城河是"多因子 alpha + 在线学习 + 状态自适应集成 + 数据驱动风控"。下面是把它从"入门"推到"中级"的方向。
+### 5.1 现状 vs 幻方真本事对照
+| 幻方要素 | 现状 | 差距 |
+|---|---|---|
+| 因子库 | 散落十几个规则函数 | 缺统一因子注册表 + 标准化输出 + IC 评估 |
+| 因子验证 | `signalBacktest` 验证 5 个宏观信号 | 只验宏观情绪信号，没验个股/主线因子；样本积累慢（每日 1 条） |
+| 因子衰减 | 无 | 幻方核心：因子会失效，需在线监测 IC 衰减并降权（当前完全没做） |
+| 状态自适应 | `marketStateMachine` 五态切系数 | 有"切"但没"学"——系数是写死的，不随历史表现调整 |
+| 集成 | 各引擎独立 | 缺投票/Bagging 式集成（V3-4 decisionBus 补上） |
+| 风控 | `portfolioRisk` CVaR 思想 | 有连亏熔断，缺"波动率/相关性"维度（多票同板块的相关性风险） |
+### 5.2 修改指令清单（核心方向三）
+#### 【V3-8】因子注册表 + IC 评估 `src/lib/factorLib.ts`
+- 改法：把现有信号（封单衰减/梯队断档/晋级率/溢价/连板高度/席位加持/资金连续性...）注册成标准因子 `{id, compute(ctx)->zscore, expectedDir}`；每日盘后算每个因子对"次日主线是否延续"的 **IC（信息系数）**，落库 `factor_ic:日期`。
+- 验收：`factorLib` 统一管理 ≥10 因子；每个因子有滚动 IC 曲线。
+#### 【V3-9】因子衰减在线监测
+- 改法：跟踪每因子近 20 日 IC，IC 滑落至阈值以下（如 |IC|<0.05）→ 自动降权并 UI 标"⚠ 因子疑似失效"。这是幻方"因子会过期"的核心。
+- 验收：人为注入一个失效因子，系统 20 日内自动降权。
+#### 【V3-10】相关性风险（组合维度）
+- 文件：扩 `portfolioRisk.ts`
+- 改法：持仓若集中在同一主线/同一行业，按"同板块相关性高"上浮风险预算折扣（分散度不足 → 加扣仓位上限）。游资常见死法就是"看起来 5 只票其实全押同一主线"。
+- 验收：持仓 5 只全属"低空经济"，`computePortfolioRisk` 给出比 5 只分散持仓更低的 maxPositionPct。
+#### 【V3-11】加速回测样本积累
+- 改法：当前 `signalBacktest` 每日只积累 1 条（依赖盘后落库），14 天才 14 样本。建议：①cron 改为盘中每小时也落一次 `market_intraday` 快照（日内也能验证分钟级信号）；②接 zt_snapshot 历史回填更早数据。
+- 验收：回测可用样本量翻倍，因子结论更快收敛。
+---
+## 六、📡 核心方向四：AI 自动检索新闻 + 政策/行业/事件三级研判
+> 现状：新闻/政策由 cron **规则抓取**（关键词 `POLICY_RE` 过滤）→ LLM **批量消化**。你要的是"AI 主动检索、主动分级、主动和资金面对账"。差距在"主动性"和"分级闭环"。
+### 6.1 当前新闻/政策管线评估
+- ✅ 已做：cron 抓快讯/公告/政策落库；`annCluster` 公告聚类；`annRank` LLM 评分；`mainlineCatalyst` 催化聚合；黑天鹅检测；三级都有数据了。
+- ❌ 缺：①**主动检索**（AI 决定"这条新闻值得深挖吗"，而非全量消化）；②**政策→行业→个股的三级穿透闭环**（政策利好哪个细分、具体到哪几只龙头）；③**新闻与资金面的对账验证**（"政策说要利好 A，但 A 资金在流出 → 政策可能未兑现"）。
+### 6.2 目标管线：检索-分级-穿透-对账（RAG 化）
+```
+全量快讯/公告/政策流（cron 已落库）
+   ↓
+① 去重+聚类（annCluster 已有）→ 事件归并（同一事件多条合并）
+   ↓
+② AI 事件分级（新增 eventClassify task）：
+     政策级：国务院/央行/证监会 → 受益行业清单 + 力度打分
+     行业级：产业链事件 → 受益细分 + 龙头候选
+     事件级：个股催化 → 个股 + 时效
+   ↓
+③ AI 主动深挖（agentTool getNewsDeep）：仅对"政策级/高分事件"
+     调用 Agnes 检索关联历史/相似事件 → 推演影响路径（不是全量跑 LLM）
+   ↓
+④ 资金面对账（新增 fundNewsReconcile）：把"AI 判断利好"的板块，
+     与实时资金流/封单对账——利好但资金不进 = 提示"政策待兑现/可能是诱多"
+   ↓
+⑤ 注入决策总线：三级研判结果作为"消息面证据源"接入 decisionBus（§四 视角）
+```
+### 6.3 修改指令清单（核心方向四）
+#### 【V3-12】事件三级分类 task `eventClassify`
+- 文件：`aiPrompts.ts` 新增 task + `server/routes/ai.js` 白名单
+- 改法：输入去重后事件标题，输出 `{level:政策|行业|事件, beneficiaries:[板块], catalystScore, timeSensitivity}`。盘后 cron 批量跑一次（低成本，flash）。
+- 验收：一条"央行降准"新闻被分为政策级、beneficiaries 含银行/地产。
+#### 【V3-13】资金-消息对账引擎 `src/lib/fundNewsReconcile.ts`
+- 改法：对 AI 判定利好的板块，查 `fundStreak`/实时资金——利好+资金连日流出 → 标"⚠ 政策未兑现/疑似诱多"；利好+资金进场 → 升级可信度。这把"消息面"和"资金面"真正咬合（你明确要的"结合资金流向"）。
+- 验收：构造"政策利好但资金流出"样本，系统给出"未兑现"预警而非盲目看多。
+#### 【V3-14】AI 主动深挖（agentTool，非全量）
+- 改法：在 `agentTools` 加 `getNewsDeep(eventId)`，仅对政策级/高分事件触发 Agnes 检索关联信息（控制成本）。避免对所有快讯跑 LLM。
+- 验收：仅高分事件触发深挖，普通快讯不调 LLM（成本可控）。
+---
+## 七、⚖️ 合规与工程（决策替代后的红线）
+> 一旦 AI 真的"替代决策"，合规风险陡增。监管对"荐股型工具"零容忍。
+1. **措辞红线**：`aiPrompts SYSTEM_PREFIX` 已改成中性词（好），但 `DecisionVerdictCard` 的"可上车/禁止"等仍偏强。建议终裁决卡统一用"参考档位/风险偏高/关注度↑"中性强度词，并保留 `DisclaimerTag`。
+2. **可解释+可审计**：替代决策必须可回溯——每次终裁决落库 `decision_log:日期:时间`（含各源投票/置信度/最终结论），事后能复盘"为什么 AI 当时说可上车"。这是合规与改进的双重要求。
+3. **P0-A 依赖**（§二）：不修，干净部署 AI 全瘫——替代决策无从谈起。
+4. **Agent 成本护栏**：Agent 循环 + 自洽投票会让 LLM 调用量 ×3~5，必须上：轮次预算、结果缓存、规则优先（数值不调 LLM）、服务端执行。
+---
+## 八、修改指令总表（按优先级，可直接执行）
+### 🔴 P0（阻断替代决策，先修）
+| 编号 | 内容 | 文件 |
+|---|---|---|
+| V3-P0 | 修 `https-proxy-agent` 幽灵依赖（V1 遗留，从未修） | `server/package.json`、`ai.js`、`cron.js` |
+### 🟠 P1（替代决策骨架，本轮主线）
+| 编号 | 内容 | 关键产出 |
+|---|---|---|
+| V3-1 | Agent 工具注册表 | `agentTools.ts`（复用 16 个现有纯函数） |
+| V3-2 | ReAct Agent 主循环 | `aiAgent.ts`（带工具/预算/降级） |
+| V3-3 | Critic 反向复核 | Agent 出结论后挑刺 |
+| V3-4 | 统一决策总线 decisionBus | `decisionBus.ts`（硬否决+门控+加权投票+分歧告警） |
+| V3-5 | 回测门控（factor gating） | 信号必须过 signalBacktest 胜率门 |
+| V3-6 | LLM 自洽投票 | 多温度多数票 |
+| V3-7 | AI 终裁决卡 | `DecisionVerdictCard.tsx`（决策可见终点） |
+### 🟡 P2（幻方深化 + 新闻三级 + 工程收尾）
+| 编号 | 内容 |
+|---|---|
+| V3-8 | 因子注册表 + IC 评估 `factorLib.ts` |
+| V3-9 | 因子衰减在线监测（幻方核心） |
+| V3-10 | 组合相关性风险（同主线集中度扣仓位） |
+| V3-11 | 加速回测样本积累（盘中快照） |
+| V3-12 | 事件三级分类 task `eventClassify` |
+| V3-13 | 资金-消息对账引擎 `fundNewsReconcile.ts` |
+| V3-14 | AI 主动深挖（仅高分事件，控成本） |
+| V3-P1 | 接 `classifyStage` 或移除（消除死代码，§二 P1-B） |
+| V3-P2 | 决策日志落库（可审计，合规） |
+---
+## 九、落地路线图
+| 里程碑 | 内容 | 目标 |
+|---|---|---|
+| **v9.37（1 天）** | V3-P0 依赖修复 + classifyStage 接线/移除 | 干净部署不崩、消除死代码 |
+| **v9.38（3~4 天）** | V3-1/2/3 Agent 骨架 | Agnes 从"解说员"升级为"带工具调研员" |
+| **v9.39（3~4 天）** | V3-4/5/6/7 决策总线 + 终裁决卡 | **替代决策闭环：多源投票出单一裁决**（你这一轮的核心诉求） |
+| **v9.40（3~5 天）** | V3-8~14 幻方深化 + 新闻三级 + 资金对账 | 从"入门幻方"到"中级幻方"，消息面真正咬合资金面 |
+> **质变判断**：v9.39 完成后，系统第一次能"自己调研、自己证伪、自己投票出单"——这才是你要的"最强决策大脑"。v9.40 让它"越用越准"（因子 IC 在线学习）。
+---
+## 十、本报告审查覆盖（全栈，再次确认）
+- **后端**：`index.js / db.js / cron.js（重写·含 market_daily/policy/lhb/黑天鹅落库）/ routes/{ai,db,proxy}.js` + `server/package.json`（发现 P0 幽灵依赖）
+- **前端 lib（62）**：决策引擎族 `stageModel/trapDetector/admissionGate/positionSizing/stockExit`、幻方族 `marketStateMachine/sealMonitor/signalBacktest/portfolioRisk`、风险族 `sysRiskGuard`、新增辅助 `extremeBoard/leaderContend/annCluster/fundStreak/themeCalendar/prevZtStats`、AI 族 `ai/aiPrompts/llmSignals/llmNewsIntelligence/mainlineLLM`、数据族 `api/cloudStore/dataStore/jsonpQueue` 全部通读
+- **组件（45）**：新增 `LhbCrossPanel/SignalEffectivenessPanel/AuctionStrengthPanel` + 全部既有组件
+- **测试**：`__tests__` 5 个单测（trapDetector/stageModel/positionSizing/stockExit/newEngines）
+- **死代码确认**：`stageModel.classifyStage` 仅定义未接线（V3-P1）
+- **架构确认**：AI 全链路为单轮 `callAI`，**无 agent/工具调用/共识投票/自洽校验**（V3-1~6 的改造对象）
+---
+*本报告为独立 V3 文档，不覆盖 V1/V2。仅作代码审查与迭代需求书，不构成投资建议。*

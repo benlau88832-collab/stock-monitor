@@ -1,0 +1,20 @@
+{
+  "name": "stock-monitor-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "stock-monitor 本地部署服务端：静态托管 + 东财代理 + PostgreSQL 数据层 + 定时抓取/LLM分析",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "init-db": "node scripts/init-db.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "https-proxy-agent": "^9.1.0",
+    "node-cron": "^3.0.3",
+    "pg": "^8.13.1"
+  }
+}

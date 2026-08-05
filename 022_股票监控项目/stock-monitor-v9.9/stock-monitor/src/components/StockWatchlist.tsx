@@ -1,11 +1,15 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { fetchStockOne, fetchStockNews, fetchStockAnnouncements, fetchLiftBan, stockLimitPct, type StockNewsItem, type StockAnnouncement } from "../lib/api";
 import { fetchStockMargin, detectMarginSignal, marginSignalColor, type StockMarginInfo, type MarginSignal } from "../lib/margin";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 
 // ============== LLM 配置（引用 AI 中枢的统一常量） ==============
-import { callAI, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
+import { callAI, hasAvailableAI, hasAIOptimistic, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
+// v9.27（P1-7）：个股级离场引擎 + 纪律（持仓成本）
+import { checkStockExit, exitBadge } from "../lib/stockExit";
+import { loadDisciplineState } from "../lib/discipline";
+import StockDecisionCard from "./StockDecisionCard";
 
 // ============== 数据结构 ==============
 interface WatchStock {
@@ -19,6 +23,7 @@ interface WatchStock {
   healthTip: string; // 一句话提示
   llmDegraded?: boolean; // AI降级标识
 }
+export type { WatchStock };
 
 interface InfoItem {
   type: "news" | "announcement" | "fund";
@@ -28,31 +33,92 @@ interface InfoItem {
 
 interface ChatMsg { role: "user" | "assistant"; content: string }
 
-// ============== 个股融资信号卡 ==============
+// ============== 个股两融观察卡（v9.11 券商风格） ==============
+// 切换个股时一眼看清杠杆资金动向：余额/净买入/多窗口变化率/迷你资金流
 function MarginSignalCard({ info, stockName }: { info: StockMarginInfo | null; stockName: string }) {
   const sig: MarginSignal = detectMarginSignal(info);
   // 无数据（非两融标的或加载中）：不显示卡片，避免刷屏
   if (!info) return null;
 
-  const netColor = (v: number | null) => {
+  const colorOf = (v: number | null | undefined) => {
     if (v == null) return "text-slate-500";
     return v > 0 ? "text-rose-400" : v < 0 ? "text-emerald-400" : "text-slate-400";
   };
+  const signOf = (v: number | null | undefined) => v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+  const moneyOf = (v: number | null | undefined) => v == null ? "—" : fmtMoney(v);
+
+  // 多窗口变化率小柱（3/5/10日）—— 一眼看出加速/减速
+  const chgs = [info.chg3d, info.chg5d, info.chg10d];
+  const maxAbs = Math.max(1, ...chgs.filter(v => v != null).map(v => Math.abs(v!)));
+  const widthPct = (v: number | null) => v == null ? 0 : (Math.abs(v) / maxAbs) * 100;
+
   return (
-    <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+    <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-2.5 space-y-1.5">
+      {/* 头部：标的+信号徽章 */}
       <div className="flex items-center justify-between flex-wrap gap-1">
-        <div className="text-[11px] text-slate-500">融资融券 · {info.name || stockName}（{info.date.slice(5)}）</div>
+        <div className="text-[11px] text-violet-300 font-bold">📊 融资融券 · {info.name || stockName}（{info.date.slice(5)}）</div>
         <span className={`rounded border px-1.5 py-0.5 text-[11px] font-bold ${marginSignalColor(sig.level)}`}>{sig.label}</span>
       </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
-        <span className="text-slate-400">融资余额 <b className="text-slate-200">{fmtMoney(info.rzBalance)}</b></span>
-        <span className="text-slate-400">今日净买入 <b className={netColor(info.rzNet)}>{fmtMoney(info.rzNet)}</b></span>
-        <span className="text-slate-400">5日 <b className={netColor(info.chg5d)}>{info.chg5d != null ? `${info.chg5d > 0 ? "+" : ""}${info.chg5d.toFixed(1)}%` : "—"}</b></span>
-        <span className="text-slate-400">10日 <b className={netColor(info.chg10d)}>{info.chg10d != null ? `${info.chg10d > 0 ? "+" : ""}${info.chg10d.toFixed(1)}%` : "—"}</b></span>
-        {info.net5d != null && <span className="text-slate-400">5日净买入 <b className={netColor(info.net5d)}>{fmtMoney(info.net5d)}</b></span>}
+
+      {/* 4 指标卡：融资余额/融券余额/今日净买入/5日净买入 */}
+      <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-4">
+        <div className="rounded bg-black/30 px-2 py-1">
+          <div className="text-[10px] text-slate-500">融资余额</div>
+          <div className="text-xs font-bold text-rose-400">{fmtMoney(info.rzBalance)}</div>
+        </div>
+        <div className="rounded bg-black/30 px-2 py-1">
+          <div className="text-[10px] text-slate-500">融券余额</div>
+          <div className="text-xs font-bold text-sky-400">{fmtMoney(info.rqBalance)}</div>
+        </div>
+        <div className="rounded bg-black/30 px-2 py-1">
+          <div className="text-[10px] text-slate-500">今日融资净买入</div>
+          <div className={`text-xs font-bold ${colorOf(info.rzNet)}`}>{moneyOf(info.rzNet)}</div>
+        </div>
+        <div className="rounded bg-black/30 px-2 py-1">
+          <div className="text-[10px] text-slate-500">5日融资净买入</div>
+          <div className={`text-xs font-bold ${colorOf(info.net5d)}`}>{moneyOf(info.net5d)}</div>
+        </div>
       </div>
-      <div className="mt-1 text-[10px] text-slate-500">{sig.hint}</div>
-      <div className="mt-0.5 text-[10px] text-slate-600">融资余额 = 融资客借钱持有的市值；持续上升说明杠杆资金看多</div>
+
+      {/* 融资余额变化率多窗口对比（迷你柱状） */}
+      <div className="rounded bg-black/20 px-2 py-1.5">
+        <div className="text-[10px] text-slate-500 mb-1">融资余额变化率（3/5/10日）— 加速看多/看空</div>
+        <div className="space-y-0.5">
+          {[
+            { label: "3日", val: info.chg3d },
+            { label: "5日", val: info.chg5d },
+            { label: "10日", val: info.chg10d },
+          ].map(r => (
+            <div key={r.label} className="flex items-center gap-2 text-[10px]">
+              <span className="w-8 text-slate-400">{r.label}</span>
+              <div className="flex-1 h-2.5 bg-white/5 rounded overflow-hidden relative">
+                <div className="absolute left-1/2 top-0 bottom-0 w-px bg-slate-600" />
+                {r.val != null && (
+                  <div
+                    className={`absolute top-0 bottom-0 ${r.val >= 0 ? "bg-rose-500/70" : "bg-emerald-500/70"}`}
+                    style={{
+                      left: r.val >= 0 ? "50%" : `${50 - widthPct(r.val) / 2}%`,
+                      width: `${widthPct(r.val) / 2}%`,
+                    }}
+                  />
+                )}
+              </div>
+              <span className={`w-14 text-right font-mono ${colorOf(r.val)}`}>{signOf(r.val)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 净买入多窗口对比 */}
+      <div className="flex items-center justify-between flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-300">
+        <span>3日净买入 <b className={colorOf(info.net3d)}>{moneyOf(info.net3d)}</b></span>
+        <span>5日净买入 <b className={colorOf(info.net5d)}>{moneyOf(info.net5d)}</b></span>
+        <span>10日净买入 <b className={colorOf(info.net10d)}>{moneyOf(info.net10d)}</b></span>
+      </div>
+
+      {/* 一句话解释 */}
+      <div className="text-[10px] text-slate-500">{sig.hint}</div>
+      <div className="text-[10px] text-slate-600">融资余额 = 融资客借钱持有的市值；持续上升说明杠杆资金看多</div>
     </div>
   );
 }
@@ -79,6 +145,7 @@ function countAlerts(s: WatchStock): number {
 
 // ============== 否决条件引擎 ==============
 interface VetoItem { reason: string; color: string }
+export type { VetoItem };
 
 const VETO_PATTERNS: Array<{ re: RegExp; reason: string }> = [
   // 股东减持
@@ -188,7 +255,7 @@ ${newsContext || "无最新消息"}
 2.【消息面】结合上述消息，判断利好/利空/中性，说明可能影响
 3.【技术面】结合量比${stock.volumeRatio}和换手率${stock.turnoverRate}%等数字，判断量价关系
 4.【同类股对比】提及该股所属板块中1-2只代表性股票，判断该股是领涨、跟涨还是滞涨
-5.【操作建议】给出明确的短线操作建议（加仓/持有/减仓/回避），附加仓位建议
+5.【信号强度】给出该股当前信号强度参考（偏强/中性/偏弱），附历史统计依据，措辞中性，不给出绝对化的买卖指令
 6.【风险等级】一句话总结风险等级（低/中/高），并说明主要风险点`;
 }
 
@@ -224,7 +291,7 @@ function healthColor(score: number | null): string {
 }
 
 // ============== 主组件 ==============
-export default function StockWatchlist() {
+export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[] }) {
   const [codes, setCodes] = useState<string[]>(loadWatchlist);
   const [stocks, setStocks] = useState<Record<string, WatchStock>>({});
   const [selected, setSelected] = useState<string | null>(null);
@@ -240,12 +307,17 @@ export default function StockWatchlist() {
   const [llmResult, setLlmResult] = useState<string | null>(null);
   const [llmLoading, setLlmLoading] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
+  // v9.26.9：AI 可用性（浏览器 Key 或服务端中转均可）——功能门槛不再只看 apiKey
+  const [aiOk, setAiOk] = useState<boolean>(() => hasAIOptimistic());
+  useEffect(() => { hasAvailableAI().then(setAiOk); }, []);
   // 追问
   const [chatHistory, setChatHistory] = useState<ChatMsg[]>([]);
   const [followUp, setFollowUp] = useState("");
   const [followUpLoading, setFollowUpLoading] = useState(false);
   // 融资融券（按代码缓存展示，T+1 数据 5 分钟缓存）
   const [marginInfo, setMarginInfo] = useState<Record<string, StockMarginInfo | null>>({});
+  // v9.27（P1-7）：持仓纪律（成本止损用）；随行情刷新重读，保证成本最新
+  const disciplineState = useMemo(() => loadDisciplineState(), [stocks]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -353,12 +425,20 @@ export default function StockWatchlist() {
   // ⚠️ 修复：effect 只依赖 selected（代码值），不再依赖 loadInfo 引用。
   // 之前依赖 loadInfo（内部依赖 stocks，每 60s 刷新会重建）→ 每 60s 重跑 loadInfo
   // → setLlmResult(null)/setChatHistory([]) 把 AI 研判和追问清空。改为仅切换个股时加载。
+  // v9.26.10：loadInfoSeq 竞态护栏（快速切股 A→B 时，A 的慢响应不再覆盖 B）
+  const loadInfoSeq = useRef(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selected) loadInfo(selected); }, [selected]);
+  useEffect(() => {
+    if (!selected) return;
+    const seq = ++loadInfoSeq.current;
+    loadInfo(selected).then(() => {
+      if (seq !== loadInfoSeq.current) return; // 已有更新的请求 → 丢弃本结果
+    });
+  }, [selected]);
 
   // ---- 详细研判 ----
   const runDetailLLM = useCallback(async () => {
-    if (!apiKey || !selected) return;
+    if (!aiOk || !selected) return;
     const stock = stocks[selected];
     if (!stock) return;
     setLlmLoading(true); setLlmResult(null); setChatHistory([]);
@@ -376,11 +456,11 @@ export default function StockWatchlist() {
     } catch (err) {
       setLlmResult(`❌ ${err instanceof Error ? err.message : String(err)}`);
     } finally { setLlmLoading(false); }
-  }, [apiKey, selected, stocks, infoItems]);
+  }, [aiOk, selected, stocks, infoItems]);
 
   // ---- 追问 ----
   const handleFollowUp = useCallback(async () => {
-    if (!apiKey || !followUp.trim() || !selected) return;
+    if (!aiOk || !followUp.trim() || !selected) return;
     const stock = stocks[selected];
     if (!stock) return;
     setFollowUpLoading(true);
@@ -398,11 +478,11 @@ export default function StockWatchlist() {
     } catch (err) {
       setChatHistory([...newHistory, { role: "assistant", content: `❌ ${err instanceof Error ? err.message : String(err)}` }]);
     } finally { setFollowUpLoading(false); }
-  }, [apiKey, followUp, selected, stocks, chatHistory]);
+  }, [aiOk, followUp, selected, stocks, chatHistory]);
 
   // ---- 批量扫描 ----
   const runBatchScan = useCallback(async () => {
-    if (!apiKey) return;
+    if (!aiOk) return;
     setScanLoading(true);
     const newStocks = { ...stocks };
     for (const code of codes) {
@@ -420,7 +500,7 @@ export default function StockWatchlist() {
     }
     setStocks(newStocks);
     setScanLoading(false);
-  }, [apiKey, codes, stocks]);
+  }, [aiOk, codes, stocks]);
 
   // ---- 添加/删除 ----
   const addStock = () => {
@@ -443,7 +523,7 @@ export default function StockWatchlist() {
       <div className="mb-4 flex items-center justify-between flex-wrap gap-2">
         <h3 className="text-sm font-bold text-slate-200">📊 个股监控 · 实时信息流 + AI研判</h3>
         <div className="flex items-center gap-2">
-          {apiKey && (
+          {aiOk && (
             <button onClick={runBatchScan} disabled={scanLoading}
               className="rounded px-2 py-1 text-[11px] bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 disabled:opacity-40">
               {scanLoading ? "扫描中…" : "🤖 AI批量扫描"}
@@ -486,6 +566,15 @@ export default function StockWatchlist() {
             {sortedCodes.map(code => {
               const s = stocks[code];
               const isSel = selected === code;
+              // v9.27（P1-7）：个股离场信号（持仓股启用成本止损，监控股用资金/量价结构）
+              const pos = disciplineState.positions.find(p => p.code === code);
+              const exit = s ? checkStockExit({
+                code, name: s.name,
+                cost: pos?.cost ?? null, price: s.price, pct: s.pct,
+                mainNetPct: s.mainNetPct, retailNetPct: s.smallNet > 0 ? 1 : 0,
+                mainNet: s.mainNet, mainNet5d: s.mainNet5d, mainNet10d: s.mainNet10d,
+              }) : null;
+              const exitB = exit ? exitBadge(exit) : null;
               return (
                 <div key={code} onClick={() => setSelected(code)}
                   className={`relative rounded px-2 py-2 cursor-pointer transition text-xs ${
@@ -494,6 +583,13 @@ export default function StockWatchlist() {
                   {/* 异动角标 */}
                   {s && s.alertCount > 0 && (
                     <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[11px] font-bold text-white">{s.alertCount}</span>
+                  )}
+                  {/* v9.27（P1-7）：离场角标（红=立即离场，黄=减仓） */}
+                  {s && exit && exitB && exitB.label && (
+                    <span className={`absolute -top-1 -right-5 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold ${exit.level === "red" ? "bg-red-600 text-white" : "bg-amber-500 text-black"}`}
+                      title={`${exitB.label}：${exit.reasons.join("；")}`}>
+                      {exit.level === "red" ? "!" : "⚠"}
+                    </span>
                   )}
                   <div className="flex items-center justify-between">
                     <div>
@@ -534,7 +630,7 @@ export default function StockWatchlist() {
                 className="text-sm font-bold text-amber-300 hover:underline">
                 {stocks[selected].name}({selected}) →
               </a>
-              <button onClick={runDetailLLM} disabled={llmLoading || !apiKey}
+              <button onClick={runDetailLLM} disabled={llmLoading || !aiOk}
                 className="rounded px-3 py-1 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 disabled:opacity-40">
                 {llmLoading ? "分析中…" : "🤖 AI详细研判"}
               </button>
@@ -548,6 +644,12 @@ export default function StockWatchlist() {
                 <span key={i} className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${v.color}`}>⛔ {v.reason}</span>
               ))}
             </div>
+          )}
+
+          {/* v9.24-P1-2：个股决策卡（PRD C1，融资融券之上，先给结论再给数据） */}
+          {selected && stocks[selected] && (
+            <StockDecisionCard stock={stocks[selected]} vetoList={vetoList} mainlines={mainlines}
+              cost={disciplineState.positions.find(p => p.code === selected)?.cost ?? null} />
           )}
 
           {/* 融资融券信号卡（融资客动向） */}
@@ -582,7 +684,7 @@ export default function StockWatchlist() {
           )}
 
           {/* 追问输入框 */}
-          {llmResult && apiKey && (
+          {llmResult && aiOk && (
             <div className="flex gap-2">
               <input value={followUp} onChange={e => setFollowUp(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && !followUpLoading && handleFollowUp()}

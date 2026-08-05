@@ -31,7 +31,7 @@ export async function scoreThemeNews(
   // 调用 AI（走 callAI 中枢的缓存/限速/降级）
   // 注意：TASK_CONFIG 里 annRank 已是 t=0.1，复用其参数槽
   // 但我们构造自己的 prompt，直接用 stockJudge 任务透传
-  const result: AIResult = await callAI("stockJudge", {
+  const result: AIResult = await callAI("themeNewsScore", {
     prompt: `你是A股短线题材分析引擎，只输出JSON数组，不输出任何其他文字或markdown标记。
 
 评分纪律：
@@ -79,7 +79,7 @@ function parseLLMThemeResult(
   for (const item of arr) {
     const board = String(item.board ?? "");
     if (!board) continue;
-    const catalyst = Math.max(0, Math.min(100, Number(item.catalyst) || 50));
+    const catalyst = Math.max(0, Math.min(100, item.catalyst != null ? Number(item.catalyst) : 50));
     resultMap.set(board, {
       board,
       catalyst,
@@ -118,7 +118,7 @@ export async function scoreStockNews(
     news: s.news.slice(0, 6),
   }));
 
-  const result: AIResult = await callAI("stockJudge", {
+  const result: AIResult = await callAI("stockNewsScore", {
     prompt: `你是A股个股消息分析引擎，只输出JSON数组，不输出任何其他文字或markdown标记。
 
 评分：利好消息越重大越高(80-100为重大利好)，中性50，利空≤30。
@@ -159,7 +159,7 @@ function parseLLMStockResult(
     if (!code) continue;
     resultMap.set(code, {
       code,
-      msgScore: Math.max(0, Math.min(100, Number(item.msgScore) || 50)),
+      msgScore: Math.max(0, Math.min(100, item.msgScore != null ? Number(item.msgScore) : 50)),
       polarity: String(item.polarity ?? "中性"),
       invalidation: String(item.invalidation ?? "").slice(0, 20),
       fromLLM: true,

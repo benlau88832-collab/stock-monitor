@@ -4,6 +4,8 @@
 // 纯函数，不碰 DOM/localStorage/网络
 
 import { buildThemeLadder, type ZTPoolItem, type ThemeGroup } from "./themeLadder";
+// v9.27：阶段权重与分数映射收敛到 stageModel（单一权威，防止词表再次漂移）
+import { NEWS_WEIGHT_BY_STAGE, STAGE_SCORE_MAP } from "./stageModel";
 
 // ============== 梯队归并别名表（可维护：常见板块名↔hybk行业名映射） ==============
 const LADDER_ALIASES: Array<[string, string]> = [
@@ -45,14 +47,7 @@ const W_LADDER_BASE = 0.25;
 const W_STAGE_BASE = 0.20;
 const W_NEWS_BASE = 0.20;
 
-/** 消息维度按阶段浮动权重（可调）：启动期30%/发酵期20%/高潮期10% */
-const NEWS_WEIGHT_BY_STAGE: Record<string, number> = {
-  "启动期": 0.30,
-  "发酵期": 0.20,
-  "高潮期": 0.10,
-  "退潮期": 0.15,
-  "观察中": 0.20,
-};
+// 消息维度按阶段浮动权重（v9.27：来自 stageModel.NEWS_WEIGHT_BY_STAGE）
 
 /** 浮动时梯队权重被压缩到的值（可调） */
 const LADDER_COMPRESSED = 0.15;
@@ -156,13 +151,13 @@ export function computeThemeScores(
       const heightPart = lg.height * 18;
       const gapPenalty = lg.gapTiers.length * 15;
       const firstBonus = Math.min(lg.tiers.first * 5, 30);
-      const earlyPioneer = lg.pioneer && parseInt(lg.pioneer.firstBoardTime) < 100000 ? 10 : 0;
+      const earlyPioneer = lg.pioneer && lg.pioneer.firstBoardTime && String(lg.pioneer.firstBoardTime) < "10:00:00" ? 10 : 0;
       const bigBellwether = lg.bellwether && lg.bellwether.amount > 2e9 ? 10 : 0;
       ladderScore = clamp(heightPart - gapPenalty + firstBonus + earlyPioneer + bigBellwether);
     }
 
-    // -- stage --
-    const stageMap: Record<string, number> = { "启动期": 100, "发酵期": 80, "观察中": 50, "高潮期": 30, "退潮期": 0 };
+    // -- stage（v9.27：stageMap 收敛到 stageModel.STAGE_SCORE_MAP，含"分歧期"） --
+    const stageMap = STAGE_SCORE_MAP;
     let stageScore = stageMap[b.stage] ?? 50;
     if (hlSwitchPulseNew?.includes(b.name)) stageScore = clamp(stageScore + 10);
 
