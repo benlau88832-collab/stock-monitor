@@ -15,6 +15,8 @@ export interface IcHistoryPoint {
   ic: number;
   samples: number;
   decayed: boolean;
+  /** v9.42：方向反转（持续负 IC，需人工复核） */
+  reversed?: boolean;
 }
 
 export interface FactorIcHistory {
@@ -83,7 +85,7 @@ export async function loadFactorIcHistory(days = 30): Promise<FactorIcHistory> {
     for (const it of snap.items) {
       const name = String(it?.name ?? "");
       if (!name) continue;
-      const pt: IcHistoryPoint = { date: ds, ic: Number(it?.ic ?? 0), samples: Number(it?.samples ?? 0), decayed: Boolean(it?.decayed) };
+      const pt: IcHistoryPoint = { date: ds, ic: Number(it?.ic ?? 0), samples: Number(it?.samples ?? 0), decayed: Boolean(it?.decayed), reversed: Boolean(it?.reversed) };
       if (it.decayed) decayed++;
       (byFactor[name] ??= []).push(pt);
     }

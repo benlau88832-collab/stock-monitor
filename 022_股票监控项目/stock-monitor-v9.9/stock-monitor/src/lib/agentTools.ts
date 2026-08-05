@@ -3,6 +3,7 @@
 // 把现有 16+ 决策/数据函数包装成工具描述符（name/desc/execute）。
 // execute 直接调现有纯函数，不触发额外 LLM 调用（省 token 设计）。
 // 供 V3-2 aiAgent 主循环调用（"AI 调工具查数据，而不是闭眼判断"）
+// v9.43：+ factorHealth 工具 —— 幻方"因子会失效"喂给 AI
 // ============================================================
 
 export interface AgentTool<TResult = unknown> {
@@ -46,6 +47,71 @@ export interface ToolContext {
 
 // ---------- 工具定义（懒加载现有引擎，避免循环依赖） ----------
 let cachedTools: AgentTool[] | null = null;
+
+// ============================================================
+// v9.43：因子健康度评估（喂给 AI 的"因子失效"情报）
+// 数据源优先 PG 快照（server cron 落库 factor_ic:日期），无快照降级前端现算。
+// 输出含 penalty 建议（与 decisionBus 门控同规则：失效占比≥50%→-15 / ≥30%→-8），
+// 供 aiAgent 预注入 + finalize 强制扣置信（AI 跑不掉门控）。
+// ============================================================
+export interface FactorHealthReport {
+  date: string | null;
+  window: number;
+  items: Array<{ name: string; ic: number; samples: number; decayed: boolean; reversed: boolean }>;
+  decayedCount: number;
+  reversedCount: number;
+  total: number;
+  /** 按 decisionBus 规则：0 / 8 / 15 */
+  penalty: number;
+  summary: string;
+}
+
+export async function evaluateFactorHealth(): Promise<FactorHealthReport | null> {
+  try {
+    const { loadFactorIcHistory, loadFactorRows } = await import("./factorHistory");
+    const { FACTORS, markNextWin, evaluateFactorIcSeries } = await import("./factorLib");
+    let items: FactorHealthReport["items"] = [];
+
+    // 1. 主数据源：PG 快照（server cron 每日落库，含最新一天的 IC/失效/反转）
+    try {
+      const hist = await loadFactorIcHistory(30);
+      if (hist && hist.dates.length >= 1) {
+        const pts = new Map<string, { ic: number; samples: number; decayed: boolean; reversed?: boolean }>();
+        for (const f of FACTORS) {
+          const series = hist.byFactor[f.name];
+          const cur = series && series.length > 0 ? series[series.length - 1] : null;
+          if (cur) pts.set(f.name, { ic: cur.ic, samples: cur.samples, decayed: cur.decayed, reversed: cur.reversed });
+        }
+        if (pts.size > 0) {
+          items = FACTORS.map(f => {
+            const p = pts.get(f.name);
+            return { name: f.name, ic: p?.ic ?? 0, samples: p?.samples ?? 0, decayed: p?.decayed ?? false, reversed: p?.reversed ?? false };
+          });
+        }
+      }
+    } catch { /* 快照读取失败 → 降级 */ }
+
+    // 2. 降级：前端现算（market_daily + sentiment）
+    if (items.length === 0) {
+      const rows = await loadFactorRows(30);
+      const series = evaluateFactorIcSeries(markNextWin(rows), 10);
+      items = FACTORS.map(f => {
+        const cur = series[f.id]?.[series[f.id].length - 1];
+        return { name: f.name, ic: cur?.ic ?? 0, samples: cur?.samples ?? 0, decayed: cur?.decayed ?? false, reversed: cur?.reversed ?? false };
+      });
+    }
+
+    const total = items.length;
+    const decayedCount = items.filter(i => i.decayed).length;
+    const reversedCount = items.filter(i => !i.decayed && i.reversed).length;
+    const ratio = total >= 3 ? decayedCount / total : 0;
+    const penalty = ratio >= 0.5 ? 15 : ratio >= 0.3 ? 8 : 0;
+    const summary = `${total}因子中 ${decayedCount} 失效${reversedCount > 0 ? `、${reversedCount} 方向反转` : ""}（失效占比 ${Math.round(ratio * 100)}%）${penalty > 0 ? ` → 置信度应扣 ${penalty} 分` : "，未触发置信扣减"}`;
+    return { date: null, window: 10, items, decayedCount, reversedCount, total, penalty, summary };
+  } catch {
+    return null; // 数据层整体不可用（GitHub Pages / 无历史）→ 不影响 AI 主流程
+  }
+}
 
 export function getAgentTools(): AgentTool[] {
   if (cachedTools) return cachedTools;
@@ -284,6 +350,13 @@ export function getAgentTools(): AgentTool[] {
           fundStreakInflow: ctx.fundStreakInflow ?? false,
         });
       },
+    },
+    {
+      // v9.43：因子健康度 —— 幻方"因子会失效"喂给 AI（决策前必查：失效因子支撑的看好理由要打折）
+      name: "factorHealth",
+      description: "因子健康度：查全部因子近10交易日滚动IC → 失效/方向反转清单 + 置信扣分建议（失效占比≥50%扣15、≥30%扣8）。决策前建议调用：若支撑你'可上车'的因子正失效，应下调置信甚至观望。",
+      kind: "data",
+      execute: async () => evaluateFactorHealth(),
     },
   ];
   return cachedTools;

@@ -4,6 +4,26 @@
 
 ---
 
+## v9.43 — AI 闭环：因子健康度喂给 Agent（幻方"因子失效"成为 AI 决策依据）(2026-08-06)
+
+### 三层闭环（AI 看得见 + 跑不掉门控）
+- **① 预注入层**：runDecisionAgent 开头自动 evaluateFactorHealth → 把"x/y 因子失效、占比、置信扣分规则"注入第一轮 user 消息 → LLM 决策前必然看到（不依赖 LLM 自觉）
+- **② 工具层**：agentTools 新增 `factorHealth`（data 类）—— LLM 可主动深查全部因子近10日滚动 IC 明细（失效/反转清单）
+- **③ 强制门控层**：finalize 统一出口按 decisionBus 同规则强制扣置信（失效占比≥50%→-15、≥30%→-8；"可上车"置信不超 60），并写入 evidence"🧪 因子健康度门控：…" → AI 无论说什么，失效因子都会拉低置信
+- **降级路径**：规则兜底 runConsensus 补传 factorStats（此前缺失，现在降级也扣分）
+
+### 展示
+- DecisionVerdictCard：AI 理由自动带"（因子健康度 x/y 失效，置信-x）"+ 新增"🧪 因子门控已计入"徽标（检测到 reason 含因子健康度时显示）
+
+### 基础设施
+- agentTools 新增 `evaluateFactorHealth()`：优先读 PG 快照 factor_ic:日期（server cron 落库），无快照降级前端现算（market_daily+sentiment）
+- factorHistory IcHistoryPoint 补 reversed 字段
+- system 提示词规则 1 修正：detectTrap（不存在的工具）→ factorHealth
+
+### 单测 83/83 全绿（新增 2 例：factorHealth 工具注册 + evaluateFactorHealth 结构/penalty 规则）
+
+---
+
 ## v9.42 — 因子 IC/健康度可视化：幻方"哪些因子在失效"曲线闭环 (2026-08-06)
 
 ### 数据权威化：server cron 自动落库 factor_ic（不再依赖开页面）

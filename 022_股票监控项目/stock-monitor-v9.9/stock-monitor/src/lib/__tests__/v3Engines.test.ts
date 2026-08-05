@@ -143,13 +143,35 @@ describe("fundNewsReconcile 资金-消息对账", () => {
 });
 
 describe("agentTools 工具注册表", () => {
-  it("注册 ≥12 工具", () => {
-    expect(getAgentTools().length).toBeGreaterThanOrEqual(12);
+  it("注册 ≥13 工具", () => {
+    expect(getAgentTools().length).toBeGreaterThanOrEqual(13);
   });
 
   it("工具名唯一", () => {
     const names = getAgentTools().map(t => t.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("v9.43: 含 factorHealth 工具（data 类）", () => {
+    const t = getAgentTools().find(x => x.name === "factorHealth");
+    expect(t).toBeTruthy();
+    expect(t!.kind).toBe("data");
+    expect(String(t!.description)).toContain("因子");
+  });
+
+  it("v9.43: evaluateFactorHealth 返回结构完整（11 因子 + penalty 规则）", async () => {
+    const { evaluateFactorHealth } = await import("../agentTools");
+    const r = await evaluateFactorHealth();
+    expect(r).toBeTruthy();
+    expect(r!.items.length).toBeGreaterThanOrEqual(10);
+    expect(r!.total).toBe(r!.items.length);
+    // penalty 只可能是 0/8/15（decisionBus 同规则）
+    expect([0, 8, 15]).toContain(r!.penalty);
+    for (const it of r!.items) {
+      expect(typeof it.name).toBe("string");
+      expect(typeof it.ic).toBe("number");
+      expect(typeof it.decayed).toBe("boolean");
+    }
   });
 
   it("规则工具可执行且返回 JSON（不调 LLM）", async () => {

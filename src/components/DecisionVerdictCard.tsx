@@ -92,6 +92,10 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
             {aiVerdict ? "🤖 AI 决策（自动主导）" : "🧠 AI 终裁决（规则投票）"}
           </span>
           {aiVerdict && <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">LLM 工具调研</span>}
+          {/* v9.43：AI 结论已计入因子健康度门控（finalize 强制扣置信） */}
+          {aiVerdict && /因子健康度/.test(aiVerdict.reason || "") && (
+            <span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">🧪 因子门控已计入</span>
+          )}
           <DisclaimerTag />
         </div>
         <span className="max-w-[160px] truncate text-[10px] text-slate-500" title={mainline}>{mainline}</span>

@@ -6,9 +6,11 @@
 //   ③ Critic：Agnes 换"挑刺者"视角复核 → 有效反对则降置信/改判
 //   ④ 自洽：裁决用 temperature {0.1,0.4,0.7} 各一次多数票（开关，默认关省配额）
 // 降级：LLM 不可用 → 规则 decisionBus 裁决兜底
+// v9.43：因子健康度三层闭环 —— ①预注入（LLM 必见）②factorHealth 工具（可深查）
+//         ③finalize 强制扣置信（≥50%→-15 / ≥30%→-8，与 decisionBus 同规则，AI 跑不掉门控）
 // ============================================================
 import { callAI, parseAIJSON, callAgentChat } from "./ai";
-import { getAgentTools } from "./agentTools";
+import { getAgentTools, evaluateFactorHealth, type FactorHealthReport } from "./agentTools";
 import { runConsensus, type EvidenceSource } from "./decisionBus";
 import type { ToolContext } from "./agentTools";
 
@@ -120,6 +122,13 @@ export async function runDecisionAgent(
   const tools = getAgentTools();
   const mainline = ctx.mainline ?? "最强主线";
 
+  // ---------- v9.43：因子健康度预评估（预注入层 —— 保证"因子失效"必然进入 AI 视野） ----------
+  let fhReport: FactorHealthReport | null = null;
+  try { fhReport = await evaluateFactorHealth(); } catch { /* 数据层不可用 → 静默 */ }
+  const fhInject = fhReport && fhReport.total >= 3
+    ? `【因子健康度（幻方监测）】${fhReport.summary}\n失效因子：${fhReport.items.filter(i => i.decayed).map(i => i.name).join("、") || "无"}${fhReport.reversedCount > 0 ? `；方向反转：${fhReport.items.filter(i => i.reversed && !i.decayed).map(i => i.name).join("、")}` : ""}\n规则：失效占比≥50%→最终置信-15、≥30%→-8（与规则门控一致，AI 结论同样适用）。`
+    : null;
+
   // ---------- ① 真·ReAct：LLM 自主调工具（≤5 轮） ----------
   // 轮次预算 5（V3 工程要点 2）；任一工具强否决 → 早停直接"禁止"（V3 要点 4）
   const toolDefs = tools.map(t => ({
@@ -134,13 +143,14 @@ export async function runDecisionAgent(
 ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
 
 规则：
-1. 第一轮先调用 1-3 个最关键的检查工具（如 checkSysRisk 先看系统性风险、detectTrap 看诱多、getAdmissionVerdict 看准入）。
+1. 第一轮先调用 1-3 个最关键的检查工具（如 checkSysRisk 先看系统性风险、getAdmissionVerdict 看准入、factorHealth 看因子健康度）。
 2. 观察结果后再决定下一轮查什么（如"准入通过→查资金连续性/龙虎榜"）。
 3. 一旦发现硬风险（系统性风险red/诱多/封单崩落）→ 立即停止，输出最终裁决 action="禁止"。
 4. 每轮只输出严格JSON之一：
    调用工具：{"calls":[{"tool":"工具名","reason":"为什么查它"}]}
    最终裁决：{"final":{"action":"可上车|观望|禁止","confidence":0-100,"reason":"≤50字"}}
-5. 最多 5 轮工具调用后必须出最终裁决。`;
+5. 最多 5 轮工具调用后必须出最终裁决。
+6. 若用户消息中给了【因子健康度】且失效占比≥30%，你的最终置信度必须扣减（≥50%扣15、≥30%扣8），并在理由里说明。`;
 
   const toolByName = new Map(tools.map(t => [t.name, t]));
   let history: string[] = []; // 前几轮的工具调用与结果（回灌给 LLM）
@@ -148,15 +158,25 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
   let llmOk = true;
 
   // v9.41（V4-D）：final 后统一过 自洽投票（可选）+ Critic 挑刺（默认开）
+  // v9.43：+ 因子健康度强制门控（AI 结论同样适用 decisionBus 的失效因子扣分规则）
   const finalize = async (action: "可上车" | "观望" | "禁止", confidence: number, reason: string): Promise<AgentVerdict> => {
     let v: AgentVerdict = { action, confidence, reason, evidence: agentTrace, rawEvidence: [], critic: null, degraded: false };
+    if (fhReport && fhReport.penalty > 0 && fhReport.total >= 3) {
+      const cap = action === "可上车" ? 60 : 65; // 高失效环境可上车置信不超 60
+      v = {
+        ...v,
+        confidence: Math.max(20, Math.min(cap, v.confidence - fhReport.penalty)),
+        reason: `${v.reason}（因子健康度${fhReport.decayedCount}/${fhReport.total}失效，置信-${fhReport.penalty}）`,
+        evidence: [...v.evidence, `🧪 因子健康度门控：${fhReport.summary}`],
+      };
+    }
     if (opts?.selfConsistency) v = await selfConsistencyCheck(v);
     if (opts?.useCritic) v = await criticReview(v, ctx);
     return v;
   };
 
   for (let round = 0; round < 5; round++) {
-    const user = `主线：${mainline}\n强度${ctx.strengthScore ?? "?"}分·涨停${ctx.ztCount ?? "?"}只·高度${ctx.height ?? "?"}板·阶段${ctx.stage ?? "?"}\n\n${history.join("\n") || "（第一轮，开始调研）"}\n\n本轮请输出JSON（工具调用或最终裁决）：`;
+    const user = `主线：${mainline}\n强度${ctx.strengthScore ?? "?"}分·涨停${ctx.ztCount ?? "?"}只·高度${ctx.height ?? "?"}板·阶段${ctx.stage ?? "?"}\n${fhInject ? "\n" + fhInject + "\n" : ""}\n${history.join("\n") || "（第一轮，开始调研）"}\n\n本轮请输出JSON（工具调用或最终裁决）：`;
     const r = await callAgentChat(system, user, toolDefs, { temperature: 0.2 });
     if (!r) { llmOk = false; break; } // LLM/服务端不可用 → 降级
 
@@ -229,7 +249,9 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
 
   // ---------- ② 降级：LLM 不可用 / 轮次耗尽 → 回退 v9.40 全跑工具 + 规则投票 ----------
   const { votes, raw } = await collectToolEvidence(ctx);
-  const fb = votes.length > 0 ? runConsensus(votes) : runConsensus([{ name: "兜底", verdict: "观望", confidence: 50, weight: 1, reason: "无工具证据" }]);
+  // v9.43：降级路径也接入因子健康度门控（此前 runConsensus 未传 factorStats）
+  const factorStats = fhReport && fhReport.total >= 3 ? { decayed: fhReport.decayedCount, total: fhReport.total } : undefined;
+  const fb = votes.length > 0 ? runConsensus(votes, { factorStats }) : runConsensus([{ name: "兜底", verdict: "观望", confidence: 50, weight: 1, reason: "无工具证据" }], { factorStats });
   return {
     action: fb.action,
     confidence: fb.confidence,
