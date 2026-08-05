@@ -4,6 +4,28 @@
 
 ---
 
+## v9.41 — V4 里程碑：真·tool_calls Agent + 高置信自洽 + Top-3 主线覆盖 (2026-08-06)
+
+### V4-A：真·ReAct 多轮循环（AI 从"复读机"变"真智能体"）
+- server ai.js /api/ai/call 支持 tools/tool_choice 透传（OpenAI 兼容 {type:function,function:{...}} 包装层）
+- 实测：Agnes 原生接受 tools，且**自主返回 `{"calls":[{"tool":"checkSysRisk"},{"tool":"getAdmissionVerdict"}]}`** —— LLM 自己决定先查系统性风险再查准入
+- aiAgent runDecisionAgent 重写为 ≤5 轮 ReAct 循环：
+  - 第 1 轮 LLM 自主选 1-3 个关键工具 → 执行 → 结果回灌 → 观察后再选 → 循环
+  - 任一强否决工具（checkSysRisk/detectTrap/detectSealDecay/computePortfolioRisk 出禁止）→ 早停直接"禁止"
+  - 轮次耗尽/LLM 不可用 → 回退 v9.40 全跑工具 + 规则投票兜底
+- 兼容双协议：原生 toolCalls（Agnes 支持时）+ JSON calls/final（手动格式）
+
+### V4-D：Critic + 自洽投票
+- finalize 统一出口：final 后 自洽投票（可选，换温度 0.4/0.7 复核取多数）→ Critic 挑刺（默认开）
+
+### V4-E：Top-3 主线覆盖
+- Dashboard runAgent 循环 candidates.slice(0,3) 各出裁决（共享 5 分钟节流）
+- 裁决卡展示 Top1 完整 + Top-2/3 一行摘要（行动/置信/理由）
+
+### 单测 77 例全绿（ReAct 降级路径已被现有测试覆盖）
+
+---
+
 ## v9.40 — GLM5.2-V4 落地：AI 真独立推理 + 门控约束最终结论 + 分歧不静默 (2026-08-06)
 
 ### 审核 GLM5.2建议-v4.txt（基于 v9.39 实证核查）

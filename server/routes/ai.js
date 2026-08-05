@@ -16,7 +16,7 @@ const TASK_ALLOW = new Set([
   "mainlineClassify", "mainlineDiagnosis", "mainlineRank", "eventExplain",
   "themeNewsScore", "stockNewsScore", "dailyIntel",
   "dailyReviewAuto", "nextDayScenarios", "leaderPredict", "riskRadar",
-  "eventClassify", "eventDeepDive",
+  "eventClassify", "eventDeepDive", "agentReason",
 ]);
 
 // ---------- 简单令牌桶：60 次/分钟 ----------
@@ -60,7 +60,7 @@ module.exports = function aiRoutes(app) {
   app.post("/api/ai/call", async (req, res) => {
     if (!checkAuth(req, res)) return;
     try {
-      const { task, system, user, temperature, maxTokens, thinking } = req.body || {};
+      const { task, system, user, temperature, maxTokens, thinking, tools, toolChoice } = req.body || {};
 
       // 白名单校验
       if (!task || !TASK_ALLOW.has(task)) {
@@ -90,13 +90,23 @@ module.exports = function aiRoutes(app) {
       // 必须显式传 enable_thinking:false 才返回 content（JSON 任务尤其需要）。
       // 任务要求 thinking=true 时（复盘/周教练）才开启。
       body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
+      // v9.41（V4-A）：Agent 原生 tool_calls 透传（Agnes OpenAI 兼容 /v1/chat/completions）
+      if (Array.isArray(tools) && tools.length > 0) {
+        // OpenAI 格式要求 {type:"function", function:{name,description,parameters}} 包装层
+        body.tools = tools.map(t => ({ type: "function", function: t }));
+        if (toolChoice) body.tool_choice = toolChoice;
+      }
 
       const json = await postJSON(baseUrl, body, 30000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
       const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
-      if (!msg.content) {
+      // v9.41：Agent 需要 tool_calls（LLM 决定下一步调哪个工具）
+      const toolCalls = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0
+        ? msg.tool_calls.map(tc => ({ id: String(tc.id ?? ""), name: String(tc.function?.name ?? ""), args: tc.function?.arguments ?? "{}" }))
+        : undefined;
+      if (!msg.content && !toolCalls) {
         return res.json({ error: "empty content", finish_reason: json && json.choices && json.choices[0] ? json.choices[0].finish_reason : undefined });
       }
-      res.json({ text: msg.content });
+      res.json({ text: msg.content || "", toolCalls });
     } catch (e) {
       console.error("[ai] call failed:", e && e.message, "| proxy:", PROXY_URL);
       res.status(502).json({ error: (e && e.message) || "model call failed" });

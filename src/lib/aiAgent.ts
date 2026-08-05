@@ -7,7 +7,7 @@
 //   ④ 自洽：裁决用 temperature {0.1,0.4,0.7} 各一次多数票（开关，默认关省配额）
 // 降级：LLM 不可用 → 规则 decisionBus 裁决兜底
 // ============================================================
-import { callAI, parseAIJSON } from "./ai";
+import { callAI, parseAIJSON, callAgentChat } from "./ai";
 import { getAgentTools } from "./agentTools";
 import { runConsensus, type EvidenceSource } from "./decisionBus";
 import type { ToolContext } from "./agentTools";
@@ -55,42 +55,29 @@ export async function collectToolEvidence(ctx: ToolContext): Promise<{ votes: Ev
   return { votes, raw };
 }
 
-/** 单次裁决（temperature 保留参数：自洽投票复用不同温度）—— v9.40（V4-A）：喂原始盘面，AI 有独立信息源可推翻规则 */
-async function adjudicateOnce(ctx: ToolContext, votes: EvidenceSource[], raw: Array<{ name: string; data: unknown }>, _temperature: number): Promise<AgentVerdict> {
-  const voteText = votes.map(e => `- ${e.name}: ${e.verdict}（置信${Math.round(e.confidence)}%）${e.reason}`).join("\n");
-  const rawText = raw.map(r => {
-    try { return `- ${r.name}: ${JSON.stringify(r.data).slice(0, 200)}`; }
-    catch { return `- ${r.name}: (不可序列化)`; }
-  }).join("\n");
-  const mainline = ctx.mainline ?? "最强主线";
-  const prompt = `你是10年经验的A股龙头战法操盘手。对主线"${mainline}"做独立裁决。
-
-一、规则引擎投票（参考，不一定正确，可能有盲区）：
-${voteText || "（无投票证据）"}
-
-二、原始盘面数据（你的独立判断依据，可据此推翻规则结论）：
-${rawText || "（无原始数据）"}
-
-请独立分析：规则引擎哪里可能有盲区？原始数据支持还是反对"可上车"？
-输出严格JSON对象（只返回JSON）：
-{"action":"可上车|观望|禁止","confidence":0-100,"reason":"≤50字"}
-action 取值说明：可上车=证据强一致且无风险；观望=证据混杂或缺数据；禁止=存在硬风险。`;
-
-  const r = await callAI("dailyIntel", { prompt });
-  try {
-    const j = parseAIJSON<{ action: string; confidence: number; reason: string }>(r.text);
-    return {
-      action: j?.action === "可上车" || j?.action === "禁止" ? j.action : "观望",
-      confidence: Math.max(10, Math.min(95, Number(j?.confidence) || 50)),
-      reason: String(j?.reason ?? "").slice(0, 50),
-      evidence: votes.map(e => `${e.name}: ${e.verdict}`),
-      rawEvidence: raw,
-      critic: null,
-      degraded: false,
-    };
-  } catch {
-    return { action: "观望", confidence: 50, reason: "LLM 输出解析失败，降级观望", evidence: [], rawEvidence: raw, critic: null, degraded: true };
+/** v9.41（V4-D）：自洽投票 —— final 后换 temperature 再问 2 次纯裁决（无工具，轻量），多数票为准 */
+async function selfConsistencyCheck(prev: AgentVerdict): Promise<AgentVerdict> {
+  const temps = [0.4, 0.7];
+  const extras = await Promise.all(temps.map(async t => {
+    const r = await callAgentChat(
+      "你是A股龙头战法操盘手。只输出JSON。",
+      `对以下裁决独立复核一次（换温度重新判断，可改判）：\n动作=${prev.action} 置信=${prev.confidence}% 理由=${prev.reason}\n调研记录：${(prev.evidence ?? []).join("；").slice(0, 500)}\n\n输出：{"final":{"action":"可上车|观望|禁止","confidence":0-100,"reason":"≤40字"}}`,
+      [],
+      { temperature: t, maxTokens: 600 },
+    );
+    if (!r) return null;
+    const j = parseAIJSON<{ final?: { action: string; confidence: number; reason: string } }>(r.text);
+    return j?.final?.action ?? null;
+  }));
+  const tally: Record<string, number> = { [prev.action]: 1 };
+  for (const a of extras) if (a) tally[a] = (tally[a] ?? 0) + 1;
+  const winner = (Object.entries(tally) as Array<[string, number]>).sort((a, b) => b[1] - a[1])[0][0];
+  const consistency = Math.round((tally[winner] ?? 0) / (extras.filter(Boolean).length + 1) * 100);
+  const out: AgentVerdict = { ...prev, selfConsistency: consistency };
+  if (consistency < 66) {
+    return { ...out, action: "观望", confidence: Math.min(out.confidence, 60), reason: `自洽投票仅${consistency}%一致，降级观望` };
   }
+  return out;
 }
 
 /** Critic 挑刺：换视角找反面证据，能推翻则降级 */
@@ -121,7 +108,7 @@ canRefute=true 时 suggestAction 必须与 v.action 不同（降级）。`;
 }
 
 /**
- * 决策 Agent 主入口。
+ * 决策 Agent 主入口 —— v9.41（V4-A）真·ReAct 多轮循环（LLM 自主决定调哪些工具、观察中间结果）。
  * @param ctx 工具上下文（App/Dashboard 汇聚后传入）
  * @param opts.selfConsistency 开启则 temperature {0.1,0.4,0.7} 三票多数（配额×3）
  * @param opts.useCritic 开启 Critic 复核
@@ -130,44 +117,128 @@ export async function runDecisionAgent(
   ctx: ToolContext,
   opts?: { selfConsistency?: boolean; useCritic?: boolean },
 ): Promise<AgentVerdict> {
-  // ① 规则工具收集证据（0 次 LLM）—— 投票类归一 + 数据类原始盘面
+  const tools = getAgentTools();
+  const mainline = ctx.mainline ?? "最强主线";
+
+  // ---------- ① 真·ReAct：LLM 自主调工具（≤5 轮） ----------
+  // 轮次预算 5（V3 工程要点 2）；任一工具强否决 → 早停直接"禁止"（V3 要点 4）
+  const toolDefs = tools.map(t => ({
+    name: t.name,
+    description: t.description,
+    // v9.41：Agnes 原生 tool_calls 要求 function.parameters（JSON Schema）；宽松 schema 允许任意参数
+    parameters: { type: "object", properties: {}, additionalProperties: true },
+  }));
+  const system = `你是10年经验的A股龙头战法操盘手，正在用工具独立调研主线"${mainline}"是否可上车。
+
+你有以下工具可调用（自主决定调用顺序与次数，最多 5 轮）：
+${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
+
+规则：
+1. 第一轮先调用 1-3 个最关键的检查工具（如 checkSysRisk 先看系统性风险、detectTrap 看诱多、getAdmissionVerdict 看准入）。
+2. 观察结果后再决定下一轮查什么（如"准入通过→查资金连续性/龙虎榜"）。
+3. 一旦发现硬风险（系统性风险red/诱多/封单崩落）→ 立即停止，输出最终裁决 action="禁止"。
+4. 每轮只输出严格JSON之一：
+   调用工具：{"calls":[{"tool":"工具名","reason":"为什么查它"}]}
+   最终裁决：{"final":{"action":"可上车|观望|禁止","confidence":0-100,"reason":"≤50字"}}
+5. 最多 5 轮工具调用后必须出最终裁决。`;
+
+  const toolByName = new Map(tools.map(t => [t.name, t]));
+  let history: string[] = []; // 前几轮的工具调用与结果（回灌给 LLM）
+  let agentTrace: string[] = [];
+  let llmOk = true;
+
+  // v9.41（V4-D）：final 后统一过 自洽投票（可选）+ Critic 挑刺（默认开）
+  const finalize = async (action: "可上车" | "观望" | "禁止", confidence: number, reason: string): Promise<AgentVerdict> => {
+    let v: AgentVerdict = { action, confidence, reason, evidence: agentTrace, rawEvidence: [], critic: null, degraded: false };
+    if (opts?.selfConsistency) v = await selfConsistencyCheck(v);
+    if (opts?.useCritic) v = await criticReview(v, ctx);
+    return v;
+  };
+
+  for (let round = 0; round < 5; round++) {
+    const user = `主线：${mainline}\n强度${ctx.strengthScore ?? "?"}分·涨停${ctx.ztCount ?? "?"}只·高度${ctx.height ?? "?"}板·阶段${ctx.stage ?? "?"}\n\n${history.join("\n") || "（第一轮，开始调研）"}\n\n本轮请输出JSON（工具调用或最终裁决）：`;
+    const r = await callAgentChat(system, user, toolDefs, { temperature: 0.2 });
+    if (!r) { llmOk = false; break; } // LLM/服务端不可用 → 降级
+
+    // ① 原生 tool_calls（Agnes 支持时）
+    if (r.toolCalls && r.toolCalls.length > 0) {
+      let roundOut: string[] = [];
+      let hardVeto = false;
+      for (const tc of r.toolCalls) {
+        const tool = toolByName.get(tc.name);
+        if (!tool) { roundOut.push(`未知工具 ${tc.name}`); continue; }
+        let args = ctx;
+        try { args = { ...ctx, ...(JSON.parse(tc.args || "{}") as object) }; } catch { /* 参数解析失败用默认 ctx */ }
+        try {
+          const res = await tool.execute(args as never);
+          agentTrace.push(`${tc.name}(${tc.args.slice(0, 60)}) → ${JSON.stringify(res).slice(0, 120)}`);
+          roundOut.push(`${tc.name} 返回：${JSON.stringify(res).slice(0, 200)}`);
+          // 早停：强否决工具（系统性风险 red / 诱多 / 封单崩落）
+          if (tool.normalize && tool.kind === "vote") {
+            const n = tool.normalize(res);
+            if (n && n.verdict === "禁止" && ["checkSysRisk", "detectTrap", "detectSealDecay", "computePortfolioRisk"].includes(tc.name)) {
+              hardVeto = true;
+            }
+          }
+        } catch (e) { roundOut.push(`${tc.name} 执行失败`); }
+      }
+      if (hardVeto) {
+        return await finalize("禁止", 88, `Agent 调研中触发硬否决（${roundOut[0]?.slice(0, 60) ?? "强风险工具"}）`);
+      }
+      history.push(`第${round + 1}轮调用：\n${roundOut.join("\n")}`);
+      continue;
+    }
+
+    // ② LLM 手动 JSON（Agnes 不支持原生 tool_calls 时）：calls 或 final
+    const parsed = parseAIJSON<{ calls?: Array<{ tool: string; reason?: string }>; final?: { action: string; confidence: number; reason: string } }>(r.text);
+    if (parsed?.final) {
+      const f = parsed.final;
+      return await finalize(
+        f.action === "可上车" || f.action === "禁止" ? f.action : "观望",
+        Math.max(10, Math.min(95, Number(f.confidence) || 50)),
+        String(f.reason ?? "").slice(0, 50),
+      );
+    }
+    if (parsed?.calls && parsed.calls.length > 0) {
+      const roundOut: string[] = [];
+      let hardVeto = false;
+      for (const c of parsed.calls) {
+        const tool = toolByName.get(c.tool);
+        if (!tool) { roundOut.push(`未知工具 ${c.tool}`); continue; }
+        try {
+          const res = await tool.execute(ctx as never);
+          agentTrace.push(`${c.tool} → ${JSON.stringify(res).slice(0, 120)}`);
+          roundOut.push(`${c.tool} 返回：${JSON.stringify(res).slice(0, 200)}`);
+          if (tool.normalize && tool.kind === "vote") {
+            const n = tool.normalize(res);
+            if (n && n.verdict === "禁止" && ["checkSysRisk", "detectTrap", "detectSealDecay", "computePortfolioRisk"].includes(c.tool)) hardVeto = true;
+          }
+        } catch { roundOut.push(`${c.tool} 执行失败`); }
+      }
+      if (hardVeto) {
+        return await finalize("禁止", 88, `Agent 调研触发硬否决（${roundOut[0]?.slice(0, 60) ?? "强风险工具"}）`);
+      }
+      history.push(`第${round + 1}轮调用：\n${roundOut.join("\n")}`);
+      continue;
+    }
+    // ③ 输出无法解析 → 重试一次，仍失败降级
+    if (round === 0) { history.push("（上一轮输出无法解析，请直接给最终裁决）"); continue; }
+    llmOk = false;
+    break;
+  }
+
+  // ---------- ② 降级：LLM 不可用 / 轮次耗尽 → 回退 v9.40 全跑工具 + 规则投票 ----------
   const { votes, raw } = await collectToolEvidence(ctx);
-  if (votes.length === 0) {
-    // ② 无投票证据 → 纯规则 decisionBus 兜底（不入 LLM）
-    const fallback = runConsensus([{ name: "兜底", verdict: "观望", confidence: 50, weight: 1, reason: "无工具证据" }]);
-    return {
-      action: fallback.action,
-      confidence: fallback.confidence,
-      reason: "工具证据为空，规则兜底",
-      evidence: [],
-      rawEvidence: raw,
-      critic: null,
-      degraded: true,
-    };
-  }
-
-  // ③ 自洽投票（可选）：多温度多数票
-  if (opts?.selfConsistency) {
-    const temps = [0.1, 0.4, 0.7];
-    const votes3 = await Promise.all(temps.map(t => adjudicateOnce(ctx, votes, raw, t)));
-    const tally: Record<string, number> = {};
-    for (const v of votes3) tally[v.action] = (tally[v.action] ?? 0) + 1;
-    const winner = (Object.entries(tally) as Array<[string, number]>).sort((a, b) => b[1] - a[1])[0][0];
-    const consistency = Math.round((tally[winner] ?? 0) / votes3.length * 100);
-    const base = votes3.find(v => v.action === winner) ?? votes3[0];
-    let final: AgentVerdict = { ...base, selfConsistency: consistency };
-    if (consistency < 66) final = { ...final, action: "观望", confidence: Math.min(final.confidence, 60), reason: `自洽投票仅${consistency}%一致，降级观望` };
-    return opts.useCritic ? criticReview(final, ctx) : final;
-  }
-
-  // ④ 常规：单次裁决 + 可选 Critic
-  const verdict = await adjudicateOnce(ctx, votes, raw, 0.3);
-  if (verdict.degraded) {
-    // LLM 失败 → 规则 decisionBus 兜底
-    const fb = runConsensus(votes);
-    return { ...verdict, action: fb.action, confidence: fb.confidence, reason: "LLM 不可用，规则投票兜底", evidence: votes.map(e => `${e.name}: ${e.verdict}`), rawEvidence: raw, degraded: true };
-  }
-  return opts?.useCritic ? criticReview(verdict, ctx) : verdict;
+  const fb = votes.length > 0 ? runConsensus(votes) : runConsensus([{ name: "兜底", verdict: "观望", confidence: 50, weight: 1, reason: "无工具证据" }]);
+  return {
+    action: fb.action,
+    confidence: fb.confidence,
+    reason: llmOk ? `5轮调研后规则兜底（${agentTrace.length} 次工具调用）` : "LLM/服务端不可用，规则投票兜底",
+    evidence: votes.map(e => `${e.name}: ${e.verdict}`),
+    rawEvidence: raw,
+    critic: null,
+    degraded: true,
+  };
 }
 
 /** 便捷：直接给最强主线算裁决（Dashboard 用） */

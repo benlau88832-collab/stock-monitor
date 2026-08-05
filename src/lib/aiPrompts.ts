@@ -20,7 +20,9 @@ export type AITask =
   // v9.38（V3-12）：事件三级分类（政策/行业/事件）
   | "eventClassify"
   // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
-  | "eventDeepDive";
+  | "eventDeepDive"
+  // v9.41（V4-A）：Agent 原生 tool_calls 推理（真 ReAct，服务端透传 tools）
+  | "agentReason";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -54,6 +56,8 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   eventClassify:   { temperature: 0.1, maxTokens: 1500, thinking: false },
   // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
   eventDeepDive:   { temperature: 0.3, maxTokens: 800, thinking: false },
+  // v9.41（V4-A）：Agent 工具推理
+  agentReason:     { temperature: 0.2, maxTokens: 2000, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
@@ -106,6 +110,7 @@ export interface AITaskPayload {
   riskRadar: { prompt: string };
   eventClassify: { events: Array<{ title: string; source: string }> };
   eventDeepDive: { title: string; level: string; catalystScore: number; beneficiaries: string[] };
+  agentReason: { prompt: string };
 }
 
 // ============== Prompt 构建器 ==============
@@ -280,6 +285,7 @@ ${p.events.map(e => `- ${e.title} | ${e.source}`).join("\n") || "（无）"}
 catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业级 40-64 / 个股级 20-40
 只返回JSON数组，无其他文字。` }),
   // v9.38.1（V3-14）：单事件深挖（Agent 工具 getNewsDeep 用；仅高分事件触发）
+  agentReason: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
   eventDeepDive: (p) => ({ system: SYSTEM_PREFIX, user:
 `你是A股事件深挖分析师。对以下已分级事件做影响推演，回答三个问题并给结论。
 
@@ -371,6 +377,7 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
     }),
   ),
   // v9.38.1（V3-14）规则版：浅挖（关键词推受益方向）
+  agentReason: (_p) => JSON.stringify({ action: "观望", confidence: 50, reason: "规则版（LLM不可用）" }),
   eventDeepDive: (p) => JSON.stringify({
     chain: `规则版：${p.title.slice(0, 30)} 影响传导待 LLM 深挖`,
     targets: [{ name: (p.beneficiaries || []).join("、") || p.title.slice(0, 12), reason: "规则版推荐" }],

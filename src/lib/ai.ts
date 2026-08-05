@@ -548,3 +548,55 @@ export function parseAIJSON<T = unknown>(
     return null;
   }
 }
+
+// ============================================================
+// v9.41（V4-A）：Agent 原生 tool_calls 通道（真·多轮 ReAct）
+// 不走 callAI 缓存体系（Agent 循环是动态多轮的，缓存无意义）。
+// 本地部署走 /api/ai/call（服务端透传 tools/tool_choice，返回 toolCalls）；
+// 线上 GitHub Pages 无后端 → 返回 null（调用方回退规则）。
+// ============================================================
+export interface AgentToolCall {
+  id: string;
+  name: string;
+  args: string; // JSON 字符串
+}
+export interface AgentChatResult {
+  text: string;
+  toolCalls?: AgentToolCall[];
+}
+
+/** 单轮 Agent 对话（带工具清单；LLM 可选择返回 tool_calls 或直接出文本） */
+export async function callAgentChat(
+  system: string,
+  user: string,
+  tools: Array<{ name: string; description: string }>,
+  opts?: { temperature?: number; maxTokens?: number },
+): Promise<AgentChatResult | null> {
+  if (!isLocalServer()) return null;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 35_000);
+  try {
+    const resp = await fetch("/api/ai/call", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task: "agentReason",
+        system,
+        user,
+        temperature: opts?.temperature ?? 0.2,
+        maxTokens: opts?.maxTokens ?? 2000,
+        thinking: false,
+        tools,
+      }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    if (!resp.ok) return null;
+    const j = await resp.json();
+    if (j.error) return null;
+    return { text: j.text ?? "", toolCalls: j.toolCalls };
+  } catch {
+    clearTimeout(timer);
+    return null;
+  }
+}

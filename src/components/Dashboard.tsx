@@ -546,12 +546,13 @@ export default function Dashboard({
   const gate = battlePlan?.gate ?? null;
 
   // v9.38（V3-2/3）：Agent 深审 —— v9.39 起自动主导（5 分钟节流）+ 保留手动按钮
-  const [agentResult, setAgentResult] = useState<AgentVerdict | null>(null);
+  // v9.41（V4-E）：覆盖 Top-3 主线（每条一个 AI 裁决，共享节流）
+  const [agentResults, setAgentResults] = useState<Array<{ mainline: string; verdict: AgentVerdict }>>([]);
   const [agentLoading, setAgentLoading] = useState(false);
   const agentLastRunRef = useRef(0); // 自动触发节流（5 分钟）
   const runAgent = async (auto = false) => {
-    const top = battlePlan?.candidates?.[0];
-    if (!top || agentLoading) return;
+    const cands = battlePlan?.candidates?.slice(0, 3) ?? [];
+    if (cands.length === 0 || agentLoading) return;
     // 自动触发节流：5 分钟内不重复跑（省配额）；手动按钮不受限
     if (auto) {
       const now = Date.now();
@@ -559,16 +560,20 @@ export default function Dashboard({
       agentLastRunRef.current = now;
     }
     setAgentLoading(true);
-    if (!auto) setAgentResult(null);
-    try {
-      const r = await decideForMainline(
-        { mainline: top.mainline, strengthScore: top.strengthScore, ztCount: top.ztCount, height: top.height, exitSignal: top.exitSignal },
-        { trapFlagged: false, marketFactor: decisionSources.find(s => s.name === "市场状态")?.confidence ? 0.6 : 0.5 },
-        // v9.40（V4-D）：默认开 Critic 挑刺（多 1 次调用价值高）；自洽投票默认关省配额
-        { useCritic: true, selfConsistency: false },
-      );
-      setAgentResult(r);
-    } catch { /* 失败静默 */ }
+    if (!auto) setAgentResults([]);
+    const results: Array<{ mainline: string; verdict: AgentVerdict }> = [];
+    for (const top of cands) {
+      try {
+        const r = await decideForMainline(
+          { mainline: top.mainline, strengthScore: top.strengthScore, ztCount: top.ztCount, height: top.height, exitSignal: top.exitSignal },
+          { trapFlagged: false, marketFactor: decisionSources.find(s => s.name === "市场状态")?.confidence ? 0.6 : 0.5 },
+          // v9.40（V4-D）：默认开 Critic 挑刺；自洽投票默认关省配额
+          { useCritic: true, selfConsistency: false },
+        );
+        results.push({ mainline: top.mainline, verdict: r });
+      } catch { /* 单条失败不影响其他 */ }
+    }
+    setAgentResults(results);
     setAgentLoading(false);
   };
 
@@ -726,7 +731,7 @@ export default function Dashboard({
             <DecisionVerdictCard
               mainline={battlePlan?.candidates?.[0]?.mainline ?? "—"}
               sources={decisionSources}
-              agent={agentResult}
+              agent={agentResults[0]?.verdict ?? null}
               signalGates={signalGates}
               factorStats={factorStats ?? undefined}
             />
@@ -738,6 +743,23 @@ export default function Dashboard({
               </button>
               <span className="text-[9px] text-slate-600">自动每 5 分钟裁决一次；点击即时重审</span>
             </div>
+            {/* v9.41（V4-E）：Top-2/3 主线 AI 裁决摘要 */}
+            {agentResults.length > 1 && (
+              <div className="space-y-1 rounded-lg border border-white/5 bg-black/20 p-2">
+                {agentResults.slice(1).map(({ mainline, verdict }) => (
+                  <div key={mainline} className="flex items-center gap-2 text-[10px]">
+                    <span className="w-24 truncate text-slate-400" title={mainline}>{mainline}</span>
+                    <span className={`rounded px-1.5 py-0.5 font-bold ${
+                      verdict.action === "可上车" ? "bg-emerald-500/15 text-emerald-300"
+                      : verdict.action === "禁止" ? "bg-rose-500/15 text-rose-300"
+                      : "bg-amber-500/15 text-amber-300"
+                    }`}>{verdict.action}</span>
+                    <span className="text-slate-600">{verdict.confidence}%</span>
+                    <span className="flex-1 truncate text-slate-500">{verdict.reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <BattlePlan data={battlePlan ?? null} />
             {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
             {overview && (
