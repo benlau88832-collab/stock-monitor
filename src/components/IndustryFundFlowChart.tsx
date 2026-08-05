@@ -13,13 +13,11 @@ interface Props {
   boards: Array<{ code: string; name: string; mainNet?: number }>;
   /** 自动刷新（秒） */
   refreshSec?: number;
-  /** 流入最多显示 N（红色），流出最多显示 N（绿色） */
-  splitCount?: number;
 }
 
 function toYi(wan: number): number { return wan / 10000; }
 
-export default function IndustryFundFlowChart({ boards, refreshSec = 120, splitCount = 8 }: Props) {
+export default function IndustryFundFlowChart({ boards, refreshSec = 120 }: Props) {
   const [curves, setCurves] = useState<BoardFundCurve[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -67,18 +65,35 @@ export default function IndustryFundFlowChart({ boards, refreshSec = 120, splitC
   const yOf = (yi: number) => h - padB - ((yi - minYi) / yRange) * (h - padT - padB);
   const y0 = yOf(0);
 
-  // 排序：流入强→上、流出强→下（按 cum 末端值）
+  // v9.26.20：不再硬编码数量——全部有数据的行业曲线都绘制（不 slice）
   const sorted = [...curves].sort((a, b) => {
     const av = a.cumCurve.length > 0 ? toYi(a.cumCurve[a.cumCurve.length - 1].cumWan) : 0;
     const bv = b.cumCurve.length > 0 ? toYi(b.cumCurve[b.cumCurve.length - 1].cumWan) : 0;
     return bv - av; // 降序：流入最大在前
   });
-  const inflowCurves = sorted.filter(c => (c.cumCurve[c.cumCurve.length - 1]?.cumWan ?? 0) >= 0).slice(0, splitCount);
-  const outflowCurves = sorted.filter(c => (c.cumCurve[c.cumCurve.length - 1]?.cumWan ?? 0) < 0).reverse().slice(0, splitCount);
+  const inflowCurves = sorted.filter(c => (c.cumCurve[c.cumCurve.length - 1]?.cumWan ?? 0) >= 0);
+  const outflowCurves = sorted.filter(c => (c.cumCurve[c.cumCurve.length - 1]?.cumWan ?? 0) < 0).reverse();
 
-  // 颜色：流入（红系，强度梯度），流出（绿系，强度梯度）
-  const inflowColors = ["#f43f5e", "#fb7185", "#ef4444", "#f97316", "#fb923c", "#facc15", "#eab308", "#dc2626"];
-  const outflowColors = ["#10b981", "#34d399", "#22c55e", "#16a34a", "#059669", "#0d9488", "#0ea5e9", "#0284c7"];
+  // 颜色：流入（红系梯度），流出（绿系梯度）—— 不够自动循环
+  const inflowColors = ["#f43f5e", "#fb7185", "#ef4444", "#f97316", "#fb923c", "#facc15", "#eab308", "#dc2626", "#fda4af", "#fecaca", "#fcd34d", "#fdba74"];
+  const outflowColors = ["#10b981", "#34d399", "#22c55e", "#16a34a", "#059669", "#0d9488", "#0ea5e9", "#0284c7", "#6ee7b7", "#a7f3d0", "#67e8f9", "#7dd3fc"];
+
+  // v9.26.20：标签智能防重叠——按末端 y 排序后相邻间距不足时垂直错开
+  const labelGap = 16;
+  const allLabel = [...inflowCurves, ...outflowCurves].map(c => {
+    const last = c.cumCurve[c.cumCurve.length - 1];
+    const yi = toYi(last?.cumWan ?? 0);
+    return { c, yi, y: yOf(yi), isInflow: yi >= 0 };
+  }).sort((a, b) => a.y - b.y);
+  // 错位：从下往上排，间距不足则下移
+  for (let i = 1; i < allLabel.length; i++) {
+    if (allLabel[i].y - allLabel[i - 1].y < labelGap) {
+      allLabel[i].y = allLabel[i - 1].y + labelGap;
+    }
+  }
+  // 顶部/底部 clamp 到绘图区内
+  const yTop = padT + 4, yBottom = h - padB - 4;
+  for (const lb of allLabel) lb.y = Math.max(yTop, Math.min(yBottom, lb.y));
 
   return (
     <div className="rounded-xl border border-rose-500/20 bg-gradient-to-br from-black/40 to-rose-950/5 p-3 space-y-2">
@@ -118,31 +133,30 @@ export default function IndustryFundFlowChart({ boards, refreshSec = 120, splitC
             {t}
           </text>
         ))}
-        {/* 标签（曲线右端） */}
-        {[...inflowCurves, ...outflowCurves].map((c) => {
-          const last = c.cumCurve[c.cumCurve.length - 1];
+        {/* 标签（曲线右端，已按 y 错位防重叠） */}
+        {allLabel.map((lb) => {
+          const last = lb.c.cumCurve[lb.c.cumCurve.length - 1];
           if (!last) return null;
-          const yi = toYi(last.cumWan);
           const x = xOf(last.t) + 4;
-          const y = yOf(yi);
-          const isInflow = yi >= 0;
+          const y = lb.y;
           return (
-            <g key={`label-${c.boardCode}`}>
-              <line x1={x} y1={y} x2={x + 8} y2={y} stroke={isInflow ? "#f43f5e" : "#10b981"} strokeWidth="0.6" strokeDasharray="2 2" opacity="0.6" />
-              <text x={x + 12} y={y + 3} fontSize="10" fontWeight="600" fill={isInflow ? "#fca5a5" : "#86efac"}>
-                {c.boardName}
+            <g key={`label-${lb.c.boardCode}`}>
+              <line x1={x} y1={yOf(lb.yi)} y2={y} stroke={lb.isInflow ? "#f43f5e" : "#10b981"} strokeWidth="0.6" strokeDasharray="2 2" opacity="0.6" />
+              <line x1={x} y1={y} x2={x + 8} y2={y} stroke={lb.isInflow ? "#f43f5e" : "#10b981"} strokeWidth="0.6" strokeDasharray="2 2" opacity="0.6" />
+              <text x={x + 12} y={y + 3} fontSize="10" fontWeight="600" fill={lb.isInflow ? "#fca5a5" : "#86efac"}>
+                {lb.c.boardName}
               </text>
-              <text x={x + 12} y={y + 16} fontSize="9" fill={isInflow ? "#fca5a5" : "#86efac"} opacity="0.7">
-                {yi >= 0 ? "+" : ""}{yi.toFixed(2)}亿
+              <text x={x + 12} y={y + 16} fontSize="9" fill={lb.isInflow ? "#fca5a5" : "#86efac"} opacity="0.7">
+                {lb.yi >= 0 ? "+" : ""}{lb.yi.toFixed(2)}亿
               </text>
             </g>
           );
         })}
       </svg>
-      {/* 下方明细（流入榜 + 流出榜） */}
+      {/* 下方明细（流入榜 + 流出榜，按实际数据全量展示） */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
         <div>
-          <div className="text-[11px] font-bold text-rose-300 mb-1">🔥 主力净流入 TOP {inflowCurves.length}</div>
+          <div className="text-[11px] font-bold text-rose-300 mb-1">🔥 主力净流入（{inflowCurves.length} 行业）</div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
             {inflowCurves.map((c, i) => (
               <div key={c.boardCode} className="flex items-center justify-between text-[10px]">
@@ -156,7 +170,7 @@ export default function IndustryFundFlowChart({ boards, refreshSec = 120, splitC
           </div>
         </div>
         <div>
-          <div className="text-[11px] font-bold text-emerald-300 mb-1">🟢 主力净流出 TOP {outflowCurves.length}</div>
+          <div className="text-[11px] font-bold text-emerald-300 mb-1">🟢 主力净流出（{outflowCurves.length} 行业）</div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
             {outflowCurves.map((c, i) => (
               <div key={c.boardCode} className="flex items-center justify-between text-[10px]">
