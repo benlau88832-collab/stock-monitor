@@ -15,6 +15,8 @@ export interface PortfolioRiskInput {
   currentPositionValue: number;
   /** 基础总仓位预算（默认 70%） */
   basePct?: number;
+  /** v9.37（V3-10）：同主线集中度 0~1（持仓押注同一主线的市值占比） */
+  concentrationPct?: number;
 }
 
 export interface PortfolioRiskResult {
@@ -25,6 +27,7 @@ export interface PortfolioRiskResult {
   currentPct: number;       // 当前实际仓位 %
   overLimit: boolean;       // 是否超限
   lossStreak: number;       // 当前连亏天数
+  concentrationFactor: number; // v9.37：相关性集中度折扣（1.0=分散 / 0.6=高度押注）
   advice: string;           // 一句话建议
 }
 
@@ -62,7 +65,13 @@ export function computePortfolioRisk(input: PortfolioRiskInput): PortfolioRiskRe
   const lossStreak = lossStreakOf(input.positionPnlPcts);
   const lossFactor = lossFactorOf(lossStreak);
 
-  let maxPositionPct = Math.round(basePct * marketFactor * lossFactor);
+  // v9.37（V3-10）：相关性集中度折扣 —— 幻方"组合相关性风险"落地
+  // 游资常见死法：看起来 5 只票，其实全押同一主线（同涨同跌）。
+  // concentrationPct = 同主线持仓占比：>60% → 打 0.8 折；>80% → 打 0.6 折
+  const conc = input.concentrationPct ?? 0;
+  const concentrationFactor = conc > 0.8 ? 0.6 : conc > 0.6 ? 0.8 : 1.0;
+
+  let maxPositionPct = Math.round(basePct * marketFactor * lossFactor * concentrationFactor);
   // 下限 5%（空仓纪律），上限 85%（永不建议满仓借钱）
   maxPositionPct = Math.max(5, Math.min(85, maxPositionPct));
 
@@ -74,6 +83,8 @@ export function computePortfolioRisk(input: PortfolioRiskInput): PortfolioRiskRe
   let advice: string;
   if (lossStreak >= 3) {
     advice = `连续亏损${lossStreak}天，已熔断：总仓位压至≤${maxPositionPct}%（先空仓一天冷静）`;
+  } else if (conc > 0.6) {
+    advice = `持仓${Math.round(conc * 100)}%押注同一主线（相关性风险高），仓位上限降至${maxPositionPct}%，建议分散或减仓`;
   } else if (overLimit) {
     advice = `当前仓位${currentPct}% 超过预算${maxPositionPct}%（${input.marketState ?? "未知状态"}市），建议减仓${Math.round(currentPct - maxPositionPct)}%`;
   } else if (marketFactor >= 1) {
@@ -84,6 +95,6 @@ export function computePortfolioRisk(input: PortfolioRiskInput): PortfolioRiskRe
 
   return {
     basePct, marketFactor, lossFactor, maxPositionPct,
-    currentPct, overLimit, lossStreak, advice,
+    currentPct, overLimit, lossStreak, concentrationFactor, advice,
   };
 }

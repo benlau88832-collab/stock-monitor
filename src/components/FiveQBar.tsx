@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import type { BattlePlanData } from "./BattlePlan";
 import { STRENGTH_META } from "../lib/mainlineScore";
 import { evaluateAdmission } from "../lib/admissionGate";
-import { stageOfStrength } from "../lib/stageModel";
+import { stageOfStrength, classifyStage } from "../lib/stageModel";
 import DisclaimerTag from "./DisclaimerTag";
 // v9.34（S2）：市场状态机（幻方"状态自适应"思想落地）
 import { classifyMarketState, MARKET_STATE_META, type MarketStateResult } from "../lib/marketStateMachine";
@@ -45,6 +45,19 @@ export default function FiveQBar({ battlePlan, overview }: Props) {
   const topMainline = top?.mainline ?? "—";
   const topScore = top?.strengthScore ?? 0;
   const topStage = battlePlan?.marketStyle?.label ?? "—";
+
+  // v9.37（V3-P1）：市场级阶段（classifyStage 综合判定：涨停环比/炸板/晋级率/高度/资金）
+  // 消除 classifyStage 死代码 —— 比 marketStyle.label（风格）更贴近"当前市场处于什么阶段"
+  const marketStageVerdict = overview ? classifyStage({
+    ztCountToday: overview.limitPool?.limitUpCount ?? 0,
+    ztCountYesterday: null, // 昨日涨停数未回传，退潮判定退化为资金维度
+    heightToday: overview.maxBoardHeight ?? 0,
+    blastedRateToday: overview.limitPool?.blastedRate ?? null,
+    promotionRate: overview.promotionRate ?? null,
+    mainNetPct: overview.limitPool?.totalBoardStocks ? 1 : 0, // 资金占比由主线引擎单独判定
+    mainNet5dPct: 0,
+  }) : null;
+  const marketStageLabel = marketStageVerdict?.stage ?? topStage;
 
   // v9.28（P1-5）：操作徽章基于最终准入闸（强度×阶段×闸门×梯队×诱多）
   const admission = evaluateAdmission({
@@ -118,7 +131,7 @@ export default function FiveQBar({ battlePlan, overview }: Props) {
       {/* 2. 处于什么阶段 */}
       <div className="rounded-lg border border-white/10 bg-white/5 p-2">
         <div className="text-[9px] text-slate-500">2️⃣ 处于什么阶段</div>
-        <div className="mt-0.5 text-xs font-bold text-amber-300 truncate">{topStage}</div>
+        <div className="mt-0.5 text-xs font-bold text-amber-300 truncate">{marketStageLabel}</div>
         <div className="text-[9px] text-slate-500">{battlePlan?.gate?.label ?? "—"}</div>
       </div>
 

@@ -57,6 +57,18 @@ describe("portfolioRisk 组合风险预算", () => {
     const r = computePortfolioRisk({ marketState: "分歧震荡", positionPnlPcts: [1], totalCapital: 1e6, currentPositionValue: 5e5 });
     expect(r.overLimit).toBe(true);
   });
+
+  it("v9.37: 同主线集中度80% → 折扣0.8", () => {
+    const rDisp = computePortfolioRisk({ marketState: "局部主线", positionPnlPcts: [1], totalCapital: 1e6, currentPositionValue: 0 });
+    const rConc = computePortfolioRisk({ marketState: "局部主线", positionPnlPcts: [1], totalCapital: 1e6, currentPositionValue: 0, concentrationPct: 0.8 });
+    expect(rConc.concentrationFactor).toBe(0.8);
+    expect(rConc.maxPositionPct).toBeLessThan(rDisp.maxPositionPct);
+  });
+
+  it("v9.37: 集中度>80% → 折扣0.6", () => {
+    const r = computePortfolioRisk({ marketState: "局部主线", positionPnlPcts: [1], totalCapital: 1e6, currentPositionValue: 0, concentrationPct: 0.9 });
+    expect(r.concentrationFactor).toBe(0.6);
+  });
 });
 
 describe("lossStreakOf / lossFactorOf", () => {

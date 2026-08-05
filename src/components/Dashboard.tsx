@@ -13,6 +13,13 @@ import SignalEffectivenessPanel from "./SignalEffectivenessPanel";
 import AuctionStrengthPanel from "./AuctionStrengthPanel";
 // v9.36（A3）：龙虎榜×涨停池交叉
 import LhbCrossPanel from "./LhbCrossPanel";
+// v9.37（V3-4/7）：AI 终裁决（多源共识）
+import DecisionVerdictCard from "./DecisionVerdictCard";
+import { collectEvidence } from "../lib/decisionCollector";
+import { classifyMarketState } from "../lib/marketStateMachine";
+import { checkSysRisk } from "../lib/sysRiskGuard";
+import { evaluateAdmission } from "../lib/admissionGate";
+import { stageOfStrength } from "../lib/stageModel";
 import InstitutionFund from "./InstitutionFund";
 import Playbook from "./Playbook";
 import PopularityRadar from "./PopularityRadar";
@@ -506,12 +513,14 @@ interface DashboardProps {
   nextScenarios?: Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null;
   leaderPredict?: { predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null;
   riskRadarText?: string | null;
+  /** v9.34（S1）：封单衰减预警（终裁决证据源） */
+  sealAlerts?: Array<{ level: "yellow" | "red" }> | null;
 }
 
 export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
   phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, ztPool, yesterdayZt,
-  nextScenarios = null, leaderPredict = null, riskRadarText = null,
+  nextScenarios = null, leaderPredict = null, riskRadarText = null, sealAlerts = null,
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
   const phase: SessionPhase = phaseProp;
@@ -530,6 +539,56 @@ export default function Dashboard({
   const isPre = phase === "pre" || phase === "auction";
   const gate = battlePlan?.gate ?? null;
 
+  // v9.37（V3-4/7）：AI 终裁决 —— 多源证据汇聚
+  const decisionSources = useMemo(() => {
+    const top = battlePlan?.candidates?.[0];
+    const admission = evaluateAdmission({
+      strengthScore: top?.strengthScore ?? null,
+      stage: top ? stageOfStrength({ strengthScore: top.strengthScore, ztCount: top.ztCount, exitSignal: top.exitSignal }) : "观察中",
+      gateMode: battlePlan?.gate?.mode ?? "empty",
+      ztCount: top?.ztCount ?? 0,
+      height: top?.height ?? 0,
+    });
+    const ms = overview
+      ? classifyMarketState({
+          sentiment: overview.sentiment ?? 50,
+          ztCount: overview.limitPool?.limitUpCount ?? 0,
+          dtCount: overview.limitPool?.limitDownCount ?? 0,
+          blastedRate: overview.limitPool?.blastedRate ?? 0,
+          premiumAvg: overview.premiumAvg ?? null,
+          maxBoardHeight: overview.maxBoardHeight ?? null,
+        })
+      : null;
+    const sysRisk = overview
+      ? checkSysRisk({
+          hs300Pct: null, // 指数涨跌未在 overview 回传，降级为池指标
+          limitDownCount: overview.limitPool?.limitDownCount ?? 0,
+          blastedRate: overview.limitPool?.blastedRate ?? 0,
+          sentiment: overview.sentiment ?? null,
+        })
+      : { level: "none" as const, reasons: [], text: "" };
+    const sealRed = (sealAlerts ?? []).filter(a => a.level === "red").length;
+    const sealYellow = (sealAlerts ?? []).filter(a => a.level === "yellow").length;
+    return collectEvidence({
+      mainline: top?.mainline ?? "—",
+      admissionAction: admission.action,
+      admissionConfidence: admission.confidence,
+      admissionReason: admission.reasons?.[0] ?? admission.action,
+      marketState: ms?.state ?? "分歧震荡",
+      marketFactor: ms?.positionFactor ?? 0.5,
+      riskOverLimit: false, // 组合风险由 DisciplinePanel 独立展示（需持仓数据）
+      riskLossStreak: 0,
+      riskMaxPct: 70,
+      trapFlagged: false,
+      trapRate: 0,
+      sealRedCount: sealRed,
+      sealYellowCount: sealYellow,
+      sysRiskLevel: sysRisk.level,
+      lhbBoost: false,
+      fundStreakInflow: false,
+    });
+  }, [battlePlan, overview, sealAlerts]);
+
   return (
     <div className="space-y-2">
       {/* 指数光带（极薄通栏） */}
@@ -542,6 +601,11 @@ export default function Dashboard({
           <div className="space-y-2">
             {/* v9.23-3：游资五问条（驾驶舱顶部常驻） */}
             <FiveQBar battlePlan={battlePlan ?? null} overview={overview} />
+            {/* v9.37（V3-7）：AI 终裁决（多源共识，替代决策的可见终点） */}
+            <DecisionVerdictCard
+              mainline={battlePlan?.candidates?.[0]?.mainline ?? "—"}
+              sources={decisionSources}
+            />
             <BattlePlan data={battlePlan ?? null} />
             {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
             {overview && (
