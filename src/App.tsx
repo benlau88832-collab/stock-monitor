@@ -586,10 +586,10 @@ export default function App() {
         const newsItems: ThemeNewsItem[] = storeNews.map(n => ({ title: n.title, stars: n.stars ?? 0 }));
         const hlPulseNew: string[] = [];
 
-        // 行业频道新增一次拉取（零浪费：30只足够覆盖Top行业）
+        // 行业频道新增一次拉取（v9.30.1：all=true 拉全量含流出行业，资金走势图红绿双榜才完整）
         let industryBoards: typeof mlBoards = [];
         try {
-          const indRaw = await fetchBoardFundFlow("industry", 30);
+          const indRaw = await fetchBoardFundFlow("industry", 30, { all: true });
           industryBoards = indRaw.map(b => {
             const { stage } = stageOfFunds({ pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct });
             return { ...b, stage, stageReason: "", weight: "" };
@@ -1157,7 +1157,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.30 · build 08-05 23:55 · 数据源：东方财富</div>
+        <div className="text-slate-700">v9.30.1 · build 08-06 00:05 · 数据源：东方财富</div>
       </footer>
     </div>
   );

@@ -274,13 +274,18 @@ const BOARD_FS: Record<string, string> = {
 export async function fetchBoardFundFlow(
   boardType: "industry" | "concept" | "region",
   limit = 15,
+  opts?: { all?: boolean },
 ): Promise<BoardFlowItem[]> {
   const fs = BOARD_FS[boardType];
   const fields = "f12,f14,f3,f62,f66,f72,f78,f84,f164,f165,f174,f175,f184";
-  const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
+  // v9.30.1：all=true 拉全量（pz=500 覆盖行业全量约100个）→ 本地按 mainNet 降序返回全部。
+  // 修复：原实现 po=1(降序)+pz=limit 只返回 f62 最大的前 N 个 → 流出行业被截断，
+  //      资金走势图"主力净流出"永远为 0 的 bug。
+  const pz = opts?.all ? 500 : limit;
+  const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${pz}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
   const json = await trackedJsonp<any>("板块资金流", url);
   const diff = normalizeDiff(json?.data?.diff);
-  return diff.map((d) => ({
+  const items = diff.map((d) => ({
     code: String(d.f12 ?? ""),
     name: String(d.f14 ?? ""),
     pct: num(d.f3),
@@ -296,6 +301,8 @@ export async function fetchBoardFundFlow(
     mainNet10dPct: num(d.f175),
     boardType,
   }));
+  if (opts?.all) return items.sort((a, b) => b.mainNet - a.mainNet);
+  return items;
 }
 
 // ============== 板块名称过滤（去除非真正概念板块的指数成分/风格标签） ==============
