@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
+// v9.47（L3）：footer 版本号从常量读（去硬编码 v9.41）
+import { APP_VERSION, BUILD_DATE } from "./lib/version";
 import { saveTodaySentiment, loadPrevTradingDaySentiment, recordIntradaySentiment } from "./lib/sentimentStore";
 import TopNav, { type TabKey } from "./components/TopNav";
 import MainlineRanking from "./components/MainlineRanking";
@@ -1252,7 +1254,7 @@ export default function App() {
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>
         <div>资金结构 &gt; 涨跌幅 · 风险信号 &gt; 机会信号 · 阶段判断 &gt; 单一指标</div>
-        <div className="text-slate-700">v9.41 · build 08-06 04:00 · 数据源：东方财富</div>
+        <div className="text-slate-700">{APP_VERSION} · build {BUILD_DATE} · 数据源：东方财富</div>
       </footer>
     </div>
   );

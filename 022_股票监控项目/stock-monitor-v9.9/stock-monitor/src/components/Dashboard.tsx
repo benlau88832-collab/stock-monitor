@@ -29,6 +29,9 @@ import { classifyMarketState } from "../lib/marketStateMachine";
 import { checkSysRisk } from "../lib/sysRiskGuard";
 import { evaluateAdmission } from "../lib/admissionGate";
 import { stageOfStrength } from "../lib/stageModel";
+// v9.47（V6-L1）：决策证据接回真实数据 —— 组合风险从纪律持仓算、资金连续流入从 fundStreak 读
+import { computePortfolioRisk } from "../lib/portfolioRisk";
+import { loadDisciplineState } from "../lib/discipline";
 // v9.38（V3-2/3）：AI 决策 Agent（手动触发深审）
 import { decideForMainline, type AgentVerdict } from "../lib/aiAgent";
 import InstitutionFund from "./InstitutionFund";
@@ -639,6 +642,55 @@ export default function Dashboard({
     return () => { alive = false; };
   }, []);
 
+  // v9.47（V6-L1）：决策证据接回真实数据 —— lhb 加持 / 资金连续流入（异步读 kv，不再硬编码 false）
+  const [lhbBoost, setLhbBoost] = useState(false);
+  const [fundStreakInflow, setFundStreakInflow] = useState(false);
+  // v9.47（V6-L1）：异动事件流（诱多判定源 —— anomalyTier 已接入 detectTrap）
+  const [anomalyEvents, setAnomalyEvents] = useState<AnomalyEvent[]>(() => getAnomalies());
+  useEffect(() => {
+    const refresh = () => setAnomalyEvents([...getAnomalies()]);
+    refresh();
+    return subscribeAnomaly(refresh);
+  }, []);
+  useEffect(() => {
+    if (!isLocalServer()) return;
+    let alive = true;
+    (async () => {
+      // 1. 龙虎榜 × 涨停交叉（与 LhbCrossPanel 同口径：lhb:日期 净买 ∩ 今日涨停池）
+      try {
+        const ztCodes = new Set<string>(
+          (overview?.limitPool?.rawZTPool ?? []).map((s: any) => String(s.c || "").replace(/^[A-Z]{2}/, "")),
+        );
+        for (let i = 0; i < 3; i++) {
+          const d = new Date(); d.setDate(d.getDate() - i);
+          const key = `lhb:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          const r = await fetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
+          if (!r.ok) continue;
+          const v = await r.json();
+          const items = v?.value?.items;
+          if (Array.isArray(items) && items.length > 0) {
+            const crossed = items.filter((x: any) => ztCodes.has(String(x.code)));
+            if (alive) setLhbBoost(crossed.length > 0);
+            break;
+          }
+        }
+      } catch { /* 静默 */ }
+      // 2. 主线行业资金连续流入（buildFundStreaks → 主线匹配）
+      try {
+        const { buildFundStreaks } = await import("../lib/fundStreak");
+        const list = await buildFundStreaks();
+        const top = battlePlan?.candidates?.[0];
+        if (list && top && alive) {
+          const m = top.mainline;
+          const hit = list.find(s => m.includes(s.board.slice(0, 3)) || s.board.includes(m.slice(0, 3)));
+          setFundStreakInflow(Boolean(hit && hit.consecutiveInflowDays > 0));
+        }
+      } catch { /* 静默 */ }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overview?.limitPool?.rawZTPool, battlePlan?.candidates?.[0]?.mainline]);
+
   // 组装因子历史行（读 sentiment/market_daily 序列；v9.40 V4-G 补 4 因子输入字段）
   async function loadFactorRows(): Promise<Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }>> {
     const out: Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }> = [];
@@ -688,7 +740,10 @@ export default function Dashboard({
   }, []);
 
   // v9.37（V3-4/7）：AI 终裁决 —— 多源证据汇聚
-  const decisionSources = useMemo(() => {    const top = battlePlan?.candidates?.[0];
+  // v9.47（V6-L1/L2）：去掉硬编码中性证据 —— trap 从异动流筛、lhb/fundStreak 读真实数据、
+  // portfolioRisk 从纪律持仓算、hs300 从 overview.indices 取（决策准确性直接提升）
+  const decisionSources = useMemo(() => {
+    const top = battlePlan?.candidates?.[0];
     const admission = evaluateAdmission({
       strengthScore: top?.strengthScore ?? null,
       stage: top ? stageOfStrength({ strengthScore: top.strengthScore, ztCount: top.ztCount, exitSignal: top.exitSignal }) : "观察中",
@@ -706,9 +761,11 @@ export default function Dashboard({
           maxBoardHeight: overview.maxBoardHeight ?? null,
         })
       : null;
+    // V6-L2：真实沪深300涨跌（000300，系统性风险 red 信号不再失效）
+    const hs300Pct = overview?.indices?.find((i: any) => i.code === "000300")?.pct ?? null;
     const sysRisk = overview
       ? checkSysRisk({
-          hs300Pct: null, // 指数涨跌未在 overview 回传，降级为池指标
+          hs300Pct,
           limitDownCount: overview.limitPool?.limitDownCount ?? 0,
           blastedRate: overview.limitPool?.blastedRate ?? 0,
           sentiment: overview.sentiment ?? null,
@@ -716,6 +773,26 @@ export default function Dashboard({
       : { level: "none" as const, reasons: [], text: "" };
     const sealRed = (sealAlerts ?? []).filter(a => a.level === "red").length;
     const sealYellow = (sealAlerts ?? []).filter(a => a.level === "yellow").length;
+    // V6-L1：诱多 —— 从异动事件流筛（anomalyTier 已接入 detectTrap）
+    const trapHits = anomalyEvents.filter(e =>
+      (e.aiComment ?? "").includes("诱多") || (e.action ?? "").includes("诱多") || (e.reason ?? "").includes("诱多"));
+    const trapFlagged = trapHits.length > 0;
+    const trapRate = anomalyEvents.length > 0 ? Math.round(trapHits.length / anomalyEvents.length * 100) / 100 : 0;
+    // V6-L1：组合风险 —— 从纪律持仓算（与 DisciplinePanel 同口径，不再写死 false）
+    let riskOverLimit = false, riskLossStreak = 0, riskMaxPct = 70;
+    try {
+      const dstate = loadDisciplineState();
+      const totalValue = dstate.positions.reduce((s, p) => s + p.value, 0);
+      const pr = computePortfolioRisk({
+        marketState: ms?.state ?? null,
+        positionPnlPcts: dstate.positions.map(p => p.pnlPct),
+        totalCapital: dstate.settings.totalCapital,
+        currentPositionValue: totalValue,
+      });
+      riskOverLimit = pr.overLimit;
+      riskLossStreak = pr.lossStreak;
+      riskMaxPct = pr.maxPositionPct;
+    } catch { /* 持仓读取失败 → 保持中性 */ }
     return collectEvidence({
       mainline: top?.mainline ?? "—",
       admissionAction: admission.action,
@@ -723,19 +800,19 @@ export default function Dashboard({
       admissionReason: admission.reasons?.[0] ?? admission.action,
       marketState: ms?.state ?? "分歧震荡",
       marketFactor: ms?.positionFactor ?? 0.5,
-      riskOverLimit: false, // 组合风险由 DisciplinePanel 独立展示（需持仓数据）
-      riskLossStreak: 0,
-      riskMaxPct: 70,
-      trapFlagged: false,
-      trapRate: 0,
+      riskOverLimit,
+      riskLossStreak,
+      riskMaxPct,
+      trapFlagged,
+      trapRate,
       sealRedCount: sealRed,
       sealYellowCount: sealYellow,
       sysRiskLevel: sysRisk.level,
-      lhbBoost: false,
-      fundStreakInflow: false,
+      lhbBoost,
+      fundStreakInflow,
       policyEventCount,
     });
-  }, [battlePlan, overview, sealAlerts, policyEventCount]);
+  }, [battlePlan, overview, sealAlerts, policyEventCount, anomalyEvents, lhbBoost, fundStreakInflow]);
 
   return (
     <div className="space-y-2">
@@ -780,6 +857,13 @@ export default function Dashboard({
             ))}
           </div>
         )}
+      </div>
+
+      {/* ============== 风险信号流（v9.47 L6：跨相位保留 —— 午休/盘后不再消失） ============== */}
+      {/* 预警流水 + 龙虎榜×涨停交叉：任何阶段都渲染（无数据时组件自返 null） */}
+      <div className="space-y-2">
+        <AlertFeed />
+        <LhbCrossPanel overview={overview} />
       </div>
 
       {/* ============== 盘中布局 ============== */}
@@ -854,10 +938,7 @@ export default function Dashboard({
             <ReviewPanel />
             <GateGauge overview={overview} gate={gate} />
             <ImportantFeed />
-            <AlertFeed />
             <LadderMini overview={overview} onSwitchTab={() => onSwitchTab?.("dragon")} />
-            {/* v9.36（A3）：龙虎榜×涨停池交叉（席位加持） */}
-            <LhbCrossPanel overview={overview} />
           </div>
         </div>
       )}
@@ -928,10 +1009,6 @@ export default function Dashboard({
           className="rounded px-3 py-1 text-xs bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 border border-violet-500/20">
           {showAI ? "收起AI复盘" : "AI复盘总结"}
         </button>
-        <button onClick={() => setShowSignal(v => !v)}
-          className="rounded px-3 py-1 text-xs bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10">
-          {showSignal ? "收起信号/日记" : "信号账本/日记"}
-        </button>
         {/* v9.35（S3）：信号有效性回测面板 */}
         <button onClick={() => setShowSignalEffect(v => !v)}
           className="rounded px-3 py-1 text-xs bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border border-violet-500/30">
@@ -951,6 +1028,11 @@ export default function Dashboard({
         <button onClick={() => setShowEquity(v => !v)}
           className="rounded px-3 py-1 text-xs bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 border border-rose-500/30">
           {showEquity ? "收起净值" : "💰 信号净值"}
+        </button>
+        {/* v9.47（L7）：信号账本移到最后 —— 按钮顺序与渲染顺序一致 */}
+        <button onClick={() => setShowSignal(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10">
+          {showSignal ? "收起信号/日记" : "信号账本/日记"}
         </button>
       </div>
       {showAI && <DailySummary overview={overview} fund={fund} />}

@@ -4,6 +4,30 @@
 
 ---
 
+## v9.47 — GLM5.2-V6 P0：决策证据接回真实数据（修"规则裁决用残缺证据"的逻辑洞）(2026-08-06)
+
+### V6-L1（严重）：decisionSources 去掉 6 处硬编码中性值
+- **诱多 trapFlagged/trapRate**：从异动事件流筛（anomalyTier 已接入 detectTrap）→ 不再恒 false
+- **龙虎榜加持 lhbBoost**：读 kv lhb:日期 × 今日涨停池交叉（与 LhbCrossPanel 同口径）
+- **资金连续流入 fundStreakInflow**：buildFundStreaks → 主线行业匹配
+- **组合风险 riskOverLimit/lossStreak/maxPct**：loadDisciplineState（纪律持仓）+ computePortfolioRisk（与 DisciplinePanel 同口径）→ 不再写死 false/0/70
+
+### V6-L2：sysRisk 真实 hs300Pct
+- overview.indices 找 code=000300 的 pct 传入 checkSysRisk → 沪深300≤-2% 系统性杀跌 red 信号恢复触发（此前恒 null 永不触发）
+
+### V6-L6：异动/预警跨相位保留
+- AlertFeed + LhbCrossPanel 从盘中右栏提取到"风险信号流"（共用决策区之后）→ 午休/盘后不再消失
+
+### V6-L7：复盘按钮顺序与展开顺序对齐
+- 按钮顺序 = AI复盘 → 信号回测 → 因子健康 → 决策审计 → 信号净值 → 信号账本（与渲染顺序一致）
+
+### V6-L3：footer 版本号自动化
+- 新建 src/lib/version.ts（APP_VERSION/BUILD_DATE）→ App.tsx footer 引用，去硬编码 v9.41
+
+### 单测 95/95 全绿（无新增 —— 逻辑接线为主）
+
+---
+
 ## v9.46 — 决策驱动排版重构（"今日作战卡"靠前 + 信号不埋没）(2026-08-06)
 
 > **纯排版改动**：JSX 渲染顺序调整，不改任何组件内容与数据流
