@@ -4,6 +4,7 @@
 // 输出：每题材首现日 / 连续运行天数 / 历史最高连板 / 阶段判定
 // ============================================================
 import { isLocalServer } from "./cloudStore";
+import { getBJDate } from "./format";
 
 export interface ThemeLifecycle {
   theme: string;
@@ -37,7 +38,8 @@ async function loadDaySnapshot(date: string): Promise<ZTSnapshotPoolItem[]> {
 
 function recentTradeDates(n: number): string[] {
   const out: string[] = [];
-  const d = new Date();
+  // v9.60（V9-D3）：基于北京时间（getBJDate），替代本机 new Date() 时区偏移
+  const d = getBJDate();
   while (out.length < n) {
     const dow = d.getDay();
     if (dow !== 0 && dow !== 6) {

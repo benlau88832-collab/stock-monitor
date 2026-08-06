@@ -6,6 +6,8 @@
 // 前端事件流（内存+localStorage 会话级），未来可无缝接真实 tick 数据源
 // v9.27（P0-4）：接入诱多探测引擎 detectTrap —— S 级命中诱多 → 强制"禁止追高·疑似诱多"
 import { detectTrap } from "./trapDetector";
+// v9.62（V9-L1）：个股异动阈值统一引用 thresholds.ts
+import { PULSE_PCT_HIGH, PULSE_VR_HIGH, PULSE_VR_EXTREME, PULSE_TURNOVER_HIGH, PULSE_PCT_MID, PULSE_VR_MID, PULSE_TURNOVER_MID } from "./thresholds";
 
 export type AnomalyLevel = "S" | "A" | "B";
 
@@ -132,7 +134,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       mainlineHit: hit, mainlineName: name,
     };
   }
-  if (pct >= 7 && vr >= 3) {
+  if (pct >= PULSE_PCT_HIGH && vr >= PULSE_VR_HIGH) {
     if (trapHit.isTrap) {
       return {
         level: "S",
@@ -153,7 +155,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
 
   // A 级：量比>5 / 换手>15% / 拉升>7%
   // v9.26.11：主线内可轻仓参与；非主线仅观察
-  if (vr >= 5) {
+  if (vr >= PULSE_VR_EXTREME) {
     return {
       level: "A",
       reason: `量比${vr.toFixed(1)} 异常放量`,
@@ -162,7 +164,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       mainlineHit: hit, mainlineName: name,
     };
   }
-  if (turnoverRate >= 15) {
+  if (turnoverRate >= PULSE_TURNOVER_HIGH) {
     return {
       level: "A",
       reason: `换手${turnoverRate.toFixed(0)}% 高换手`,
@@ -171,7 +173,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       mainlineHit: hit, mainlineName: name,
     };
   }
-  if (pct >= 7) {
+  if (pct >= PULSE_PCT_HIGH) {
     return {
       level: "A",
       reason: `涨幅${pct.toFixed(1)}%`,
@@ -182,7 +184,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
   }
 
   // B 级：温和放量 / 换手抬升
-  if (pct >= 3 || vr >= 1.5 || turnoverRate >= 8) {
+  if (pct >= PULSE_PCT_MID || vr >= PULSE_VR_MID || turnoverRate >= PULSE_TURNOVER_MID) {
     return {
       level: "B",
       reason: `涨${pct.toFixed(1)}% 量比${vr.toFixed(1)} 换手${turnoverRate.toFixed(0)}%`,

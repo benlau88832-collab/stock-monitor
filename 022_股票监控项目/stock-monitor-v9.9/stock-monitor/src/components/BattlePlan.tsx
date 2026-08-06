@@ -59,7 +59,7 @@ function StyleBadge({ style }: { style: MarketStyleInfo }) {
 }
 
 // ============== 主线区块（含龙一龙二龙三 + v9.23 强度分/离场/诊断） ==============
-function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose, position, fundMissing }: {
+function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose, position, fundMissing, dataMissing }: {
   rank: number;
   name: string;
   ztCount: number;
@@ -67,6 +67,8 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
   mainNet: number;
   /** v9.56（V8-6）：资金匹配失败 → 显示"⚠数据未匹配"而非假 0 */
   fundMissing?: boolean;
+  /** v9.60（V9-D1）：板块资金字段缺失（东财改字段）→ 显示"⚠数据缺失"而非误导 0 */
+  dataMissing?: boolean;
   leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number; boardCount?: number; boardType?: "一字板" | "缩量板" | "换手板" }>;
   logic?: string;
   isPulse?: boolean;
@@ -154,9 +156,14 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
             跟风 <b className="text-slate-300">{Math.max(0, ztCount - (leaders.length > 0 ? 1 : 0))}</b>
           </span>
           {/* v9.56（V8-6）：区分"资金未匹配"（灰）与"真零资金"（红绿）—— 不再用假 0 误导 */}
+          {/* v9.60（V9-D1）：命中板块字段缺失（东财改字段）→ "⚠数据缺失"而非误导 0 */}
           {fundMissing ? (
             <span className="rounded bg-black/30 px-1.5 py-0.5 text-slate-500" title="LLM主线名/成分股行业均未匹配到板块资金数据">
               资金 ⚠数据未匹配
+            </span>
+          ) : dataMissing ? (
+            <span className="rounded bg-black/30 px-1.5 py-0.5 text-amber-400" title="命中板块资金字段缺失（东财接口字段变更），显示值可能为 0，非真实'无资金'">
+              资金 ⚠数据缺失
             </span>
           ) : (
             <span className={`rounded bg-black/30 px-1.5 py-0.5 ${mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}`} title="板块主力净流入">
@@ -300,6 +307,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   const display: Array<{
     board: string; ztCount: number; height: number; mainNet: number;
     fundMissing?: boolean; // v9.56（V8-6）
+    dataMissing?: boolean; // v9.60（V9-D1）：板块资金字段缺失
     leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number; boardCount?: number; boardType?: "一字板" | "缩量板" | "换手板" }>;
     logic?: string; isPulse?: boolean; caution?: string; llm?: boolean;
     strengthScore?: number; exitSignal?: boolean; exitSignalText?: string;
@@ -317,6 +325,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
       display.push({
         board: c.mainline, ztCount: c.ztCount, height: c.height, mainNet: c.mainNet,
         leaders: c.leaders,
+        dataMissing: c.dataMissing, // v9.60（V9-D1）
         strengthScore: c.strengthScore,
         exitSignal: c.exitSignal,
         exitSignalText: c.exitSignalText,
@@ -332,6 +341,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
     if (c) {
       d.ztCount = c.ztCount; d.height = c.height; d.mainNet = c.mainNet;
       d.fundMissing = c.fundMissing; // v9.56（V8-6）
+      d.dataMissing = c.dataMissing; // v9.60（V9-D1）
       // v9.23：强度分/离场信号从候选复制（LLM 精排不返回这些字段）
       if (d.strengthScore == null) d.strengthScore = c.strengthScore;
       if (d.exitSignal == null) d.exitSignal = c.exitSignal;
@@ -412,6 +422,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
               height={d.height}
               mainNet={d.mainNet}
               fundMissing={d.fundMissing}
+              dataMissing={d.dataMissing}
               leaders={d.leaders}
               logic={d.logic}
               isPulse={d.isPulse}

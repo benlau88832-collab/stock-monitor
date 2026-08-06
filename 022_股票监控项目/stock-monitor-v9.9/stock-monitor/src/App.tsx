@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 // v9.47（L3）：footer 版本号从常量读（去硬编码 v9.41）
 import { APP_VERSION, BUILD_DATE } from "./lib/version";
+// v9.62（V9-L1）：换手率拥挤阈值统一引用 thresholds.ts
+import { TURNOVER_CROWDED, TURNOVER_OVERHEAT } from "./lib/thresholds";
 import { saveTodaySentiment, loadPrevTradingDaySentiment, recordIntradaySentiment } from "./lib/sentimentStore";
 import TopNav, { type TabKey } from "./components/TopNav";
 import MainlineRanking from "./components/MainlineRanking";
@@ -558,9 +560,9 @@ export default function App() {
               const vetoReasons: string[] = [];
               if (s.mainNet < 0 && s.smallNet > 0) vetoReasons.push("主力净流出而散户净流入，结构不健康");
               if (s.pct >= stockLimitPct(s.code) - 0.2) vetoReasons.push("已涨停，短线博弈风险陡增");
-              if (s.turnoverRate > 25) vetoReasons.push("换手率过高（>25%），交易过度拥挤");
+              if (s.turnoverRate > TURNOVER_CROWDED) vetoReasons.push("换手率过高（>25%），交易过度拥挤");
               let crowding = "正常";
-              if (s.turnoverRate > 20 || s.volumeRatio > 3) crowding = "极度拥挤";
+              if (s.turnoverRate > TURNOVER_OVERHEAT || s.volumeRatio > 3) crowding = "极度拥挤";
               else if (s.turnoverRate > 10 || s.volumeRatio > 1.8) crowding = "偏高";
               potential.push({
                 code: s.code, name: s.name, price: s.price, pct: s.pct,

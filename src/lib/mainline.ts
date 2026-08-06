@@ -1,45 +1,8 @@
 // 主线作战引擎（v9.16 打破重建）
-// 三层：涨停潮检测 → 风格感知 → 主线排序
+// v9.61（V9-S1）：删除死代码 buildMainlineCandidates/determineLeaders/computeMainlineScore
+//   （实际走 stockToMainline + themeLadder，此文件仅保留市场风格感知 detectMarketStyle + ETF 偏好）
 // 数据源：涨停池(rawPool) + 板块资金流(boards) + 真实新闻(news)
-// 设计理念（机构+游资双视角）：
-//   - 机构看"资金持续性"（5日净流入、板块阶段）
-//   - 游资看"涨停潮爆发力"（涨停家数、连板高度、首封时间）
-// 二者融合成"主线强度分"，再经 LLM 精排输出最终作战卡。
-
-import { buildThemeLadder, buildThemeLadderByConcept, type ZTPoolItem, type ThemeGroup } from "./themeLadder";
-// v9.51（V7-7）：主线资金聚合用概念白名单（conceptGroupOf 折叠一致性），不再字符串沾边累加
-import { conceptGroupOf } from "./conceptGroups";
-
-// ============== 数据结构 ==============
-
-/** 主线内龙头（龙一/龙二/龙三） */
-export interface MainlineLeader {
-  code: string;
-  name: string;
-  boardCount: number;    // 连板数
-  firstBoardTime: string; // 首封时间 HH:MM:SS
-  sealFund: number;      // 封单资金(元)
-  amount: number;        // 成交额(元)
-  pct: number;           // 涨幅%
-  role: "龙一" | "龙二" | "龙三";
-  reason: string;        // 判定理由（如"最高板+最早封板"）
-}
-
-/** 单个主线候选（涨停潮板块） */
-export interface MainlineCandidate {
-  board: string;         // 板块名（hybk 行业名）
-  ztCount: number;       // 涨停家数
-  height: number;        // 最高连板
-  tiers: { first: number; second: number; thirdPlus: number };
-  mainNet: number;       // 板块主力净流入(元)
-  mainNet5d: number;     // 5日主力净流入
-  boardPct: number;      // 板块涨幅%
-  stage: string;         // 阶段
-  leaders: MainlineLeader[]; // 龙一龙二龙三
-  newsTitles: string[];  // 相关新闻标题（≤6条）
-  /** 规则机强度分 0-100（资金+涨停潮+梯队 融合） */
-  score: number;
-}
+import { RISK_APPETITE_ATTACK, RISK_APPETITE_DEFENSE, ZT_COUNT_BOOM, BLAST_RATE_DEFENSE } from "./thresholds";
 
 /** 市场风格 */
 export type MarketStyle = "attack" | "rotation" | "defense";
@@ -68,169 +31,6 @@ export interface BoardFlowLike {
 // ============== 工具 ==============
 function clamp(v: number, lo = 0, hi = 100): number {
   return Math.max(lo, Math.min(hi, v));
-}
-
-// ============== 涨停潮检测 + 龙头判定 ==============
-
-/**
- * 从涨停池构建主线候选
- * 涨停数 ≥2 或 高度 ≥2 的行业组进入候选；龙一龙二龙三按游资规则判定
- */
-export function buildMainlineCandidates(
-  rawPool: ZTPoolItem[],
-  boards: BoardFlowLike[],
-  newsItems: NewsInput[],
-  conceptOf?: (code: string) => string[] | null,
-): MainlineCandidate[] {
-  if (!rawPool || rawPool.length === 0) return [];
-
-  // v9.26.15 方案A：优先按概念聚类（与开盘啦/同花顺口径一致），无概念数据时回退 hybk
-  const ladder = conceptOf
-    ? buildThemeLadderByConcept(rawPool, conceptOf)
-    : buildThemeLadder(rawPool);
-  const boardMap = new Map<string, BoardFlowLike>();
-  for (const b of boards) boardMap.set(b.name, b);
-
-  const candidates: MainlineCandidate[] = [];
-
-  for (const g of ladder) {
-    // v9.17 修复：要求 ztCount ≥ 2 才能进主线（防单只孤峰如 9板独苗进第一主线）
-    // 即使 height≥9，1只涨停也不算"板块效应"，只能是孤峰/脉冲
-    if (g.count < 2) continue;
-
-    // 板块资金（v9.51 V7-7：精确名 + 概念白名单 —— 停止"双向子串+token 沾边"污染累加）
-    // 旧逻辑：name.includes(theme)||theme.includes(name) + 2字token 扫全表 → 名字沾边的无关板块资金全被累加
-    // 新逻辑：①精确名匹配 ②board 名经 conceptGroups 折叠成用户大类，与主线主题大类一致才算归属
-    const matchedFlows: BoardFlowLike[] = [];
-    // ① 精确名（boardMap 直接用行业/概念原名命中）
-    if (boardMap.has(g.theme)) matchedFlows.push(boardMap.get(g.theme)!);
-    // ② 概念白名单：仅聚合"概念上明确归属同大类"的板块（依赖 V7-4 修好的归类，不再字符串沾边）
-    const themeGroup = conceptGroupOf(g.theme) ?? g.theme;
-    for (const [name, b] of boardMap) {
-      if (matchedFlows.includes(b)) continue;
-      const bg = conceptGroupOf(name) ?? name;
-      if (bg === g.theme || bg === themeGroup) matchedFlows.push(b);
-    }
-    // 聚合：取 mainNet 绝对值最大的作为代表，mainNet5d/mainNet10d 累加（来源已白名单收敛）
-    let boardFlow: BoardFlowLike | null = matchedFlows[0] ?? null;
-    if (matchedFlows.length > 0) {
-      const best = matchedFlows.reduce((a, b) => Math.abs(b.mainNet ?? 0) > Math.abs(a.mainNet ?? 0) ? b : a);
-      boardFlow = {
-        ...best,
-        // 累加 5d/10d 资金：反映该主题的持续性
-        mainNet5d: matchedFlows.reduce((s, b) => s + (b.mainNet5d ?? 0), 0),
-        mainNet5dPct: matchedFlows.reduce<number>((s, b) => s + (b.mainNet5dPct ?? 0), 0) / matchedFlows.length,
-      };
-    }
-
-    // 新闻催化：标题含板块名
-    const newsTitles: string[] = [];
-    for (const n of newsItems) {
-      if (n.title.includes(g.theme)) {
-        newsTitles.push(n.title);
-        if (newsTitles.length >= 6) break;
-      }
-    }
-
-    // 龙头判定（游资规则：高度优先 → 封板时间 → 封单资金）
-    const leaders = determineLeaders(g);
-
-    candidates.push({
-      board: g.theme,
-      ztCount: g.count,
-      height: g.height,
-      tiers: g.tiers,
-      mainNet: boardFlow?.mainNet ?? 0,
-      mainNet5d: boardFlow?.mainNet5d ?? 0,
-      boardPct: boardFlow?.pct ?? 0,
-      stage: boardFlow?.stage ?? g.height >= 3 ? "高潮期" : g.height === 2 ? "发酵期" : "启动期",
-      leaders,
-      newsTitles,
-      score: 0, // 下面算
-    });
-  }
-
-  // 计算规则机强度分（0-100）
-  for (const c of candidates) {
-    c.score = computeMainlineScore(c);
-  }
-
-  // 排序：分数降序
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates;
-}
-
-/** 龙一龙二龙三判定（游资视角） */
-function determineLeaders(g: ThemeGroup): MainlineLeader[] {
-  const leaders: MainlineLeader[] = [];
-  if (!g.stocks || g.stocks.length === 0) return leaders;
-
-  // stocks 已按 连板数降序 + 成交额降序 排序
-  const byBoard = [...g.stocks].sort((a, b) => b.boardCount - a.boardCount || a.firstBoardTime.localeCompare(b.firstBoardTime));
-
-  // 龙一：最高板 + 最早封板
-  const top = byBoard[0];
-  const sameHeight = byBoard.filter(s => s.boardCount === top.boardCount);
-  const dragon1 = sameHeight.sort((a, b) => a.firstBoardTime.localeCompare(b.firstBoardTime) || b.sealFund - a.sealFund)[0];
-  leaders.push({
-    code: dragon1.code, name: dragon1.name,
-    boardCount: dragon1.boardCount, firstBoardTime: dragon1.firstBoardTime,
-    sealFund: dragon1.sealFund, amount: dragon1.amount, pct: dragon1.pct,
-    role: "龙一",
-    reason: `${dragon1.boardCount}板·最早封板${dragon1.firstBoardTime}·封单${(dragon1.sealFund / 1e8).toFixed(1)}亿`,
-  });
-
-  // 龙二：次高板（不同股票）中封单最大 或 同板但封单次大
-  const rest = byBoard.filter(s => s.code !== dragon1.code);
-  if (rest.length > 0) {
-    const dragon2 = [...rest].sort((a, b) => b.boardCount - a.boardCount || b.sealFund - a.sealFund)[0];
-    leaders.push({
-      code: dragon2.code, name: dragon2.name,
-      boardCount: dragon2.boardCount, firstBoardTime: dragon2.firstBoardTime,
-      sealFund: dragon2.sealFund, amount: dragon2.amount, pct: dragon2.pct,
-      role: "龙二",
-      reason: `${dragon2.boardCount}板·封单${(dragon2.sealFund / 1e8).toFixed(1)}亿`,
-    });
-  }
-
-  // 龙三：成交额最大（中军）≠ 龙一龙二
-  const rest2 = byBoard.filter(s => s.code !== dragon1.code && (leaders.length < 2 || s.code !== leaders[1].code));
-  const dragon3 = rest2.length > 0 ? [...rest2].sort((a, b) => b.amount - a.amount)[0] : null;
-  if (dragon3) {
-    leaders.push({
-      code: dragon3.code, name: dragon3.name,
-      boardCount: dragon3.boardCount, firstBoardTime: dragon3.firstBoardTime,
-      sealFund: dragon3.sealFund, amount: dragon3.amount, pct: dragon3.pct,
-      role: "龙三",
-      reason: `成交额${(dragon3.amount / 1e8).toFixed(1)}亿·中军`,
-    });
-  }
-
-  return leaders;
-}
-
-/** 主线强度分（资金 + 涨停潮 + 梯队 融合，0-100） */
-function computeMainlineScore(c: MainlineCandidate): number {
-  // 资金维度 35%：当日主力净流入 + 5日净流入
-  const fundToday = clamp(50 + c.mainNet / 2e8);      // 每 2亿 加 1 分（正流入）
-  const fund5d = clamp(50 + c.mainNet5d / 5e8);
-  const fundScore = 0.5 * fundToday + 0.5 * fund5d;
-
-  // 涨停潮维度 35%：涨停家数 + 高度
-  const ztScore = clamp(Math.min(c.ztCount / 8, 1) * 80 + c.height * 10);  // 8只涨停=80分封顶，高度每板+10
-
-  // 梯队维度 20%：梯队完整性（首板+二板+三板全 = 100）
-  const hasFirst = c.tiers.first > 0 ? 1 : 0;
-  const hasSecond = c.tiers.second > 0 ? 1 : 0;
-  const hasThird = c.tiers.thirdPlus > 0 ? 1 : 0;
-  const ladderScore = (hasFirst + hasSecond + hasThird) / 3 * 100;
-
-  // 板块涨幅 10%
-  const pctScore = clamp(50 + c.boardPct * 5);
-
-  return Math.round(
-    0.35 * fundScore + 0.35 * ztScore + 0.20 * ladderScore + 0.10 * pctScore,
-  );
 }
 
 // ============== 市场风格感知（进攻/轮动/防守） ==============
@@ -267,10 +67,10 @@ export function detectMarketStyle(args: {
   // 风格判定
   let style: MarketStyle;
   let label: string;
-  if (finalRisk >= 65 && ztCount >= 20 && maxBoardHeight >= 2) {
+  if (finalRisk >= RISK_APPETITE_ATTACK && ztCount >= ZT_COUNT_BOOM && maxBoardHeight >= 2) {
     style = "attack";
     label = "进攻日 · 情绪亢奋 · 涨停潮明确";
-  } else if (finalRisk <= 35 || blastedRate != null && blastedRate > 45) {
+  } else if (finalRisk <= RISK_APPETITE_DEFENSE || blastedRate != null && blastedRate > BLAST_RATE_DEFENSE) {
     style = "defense";
     label = "防守日 · 情绪低迷 · 涨停潮熄火";
   } else {

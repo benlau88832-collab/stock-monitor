@@ -64,3 +64,28 @@ export function localDateStrOffset(days: number, base: Date = new Date()): strin
   x.setDate(x.getDate() - days);
   return localDateStr(x);
 }
+
+// ============== 北京时间日期工具（v9.60 V9-D3：统一时区判周末/回看日期） ==============
+// 为什么：new Date().getDay() 用本机时区。服务器/客户端若非东八区（如部署在 UTC），
+// "今天"和周末判定偏移 → 回测样本日期、因子 IC 日期、推荐落盘日期全错位。
+// getBJDate() 返回一个"getFullYear/getMonth/getDate/getDay/getHours 等读取的正是北京时间字段"
+// 的 Date 对象 —— 任何本机时区下，这些方法的结果都等于北京时间。
+// 实现要点：Date.getTime() 返回的是 UTC epoch 毫秒（与时区无关），所以北京时间 = getTime() + 8h，
+// 再用 getUTC* 读北京字段、本地构造。注意【不能】加 getTimezoneOffset() —— 那会把 UTC 字段
+// 读成 UTC 小时（CST 机器上原 getBJTime 的 bug：返回 14 而非 22）。
+export function getBJDate(d: Date = new Date()): Date {
+  const bjMs = d.getTime() + 8 * 3600000; // 北京时间 epoch = UTC epoch + 8h
+  const bj = new Date(bjMs);
+  return new Date(bj.getUTCFullYear(), bj.getUTCMonth(), bj.getUTCDate(), bj.getUTCHours(), bj.getUTCMinutes(), bj.getUTCSeconds(), bj.getUTCMilliseconds());
+}
+
+/** 北京时间的星期几（0=周日，6=周六）—— 判周末/算周一用，替代 d.getDay() 的本机时区版 */
+export function getBJWeekday(d: Date = new Date()): number {
+  return getBJDate(d).getDay();
+}
+
+/** 北京时间的 YYYY-MM-DD（与 localDateStr 同格式，但按北京时间而非本机时区） */
+export function getBJDateStr(d: Date = new Date()): string {
+  const bj = getBJDate(d);
+  return `${bj.getFullYear()}-${String(bj.getMonth() + 1).padStart(2, "0")}-${String(bj.getDate()).padStart(2, "0")}`;
+}

@@ -9,6 +9,7 @@
 // ============================================================
 import { kvGet } from "./cloudStore";
 import type { FactorDayRow } from "./factorLib";
+import { getBJDate } from "./format";
 
 export interface IcHistoryPoint {
   date: string;
@@ -31,7 +32,8 @@ export interface FactorIcHistory {
 /** 最近 N 个自然日（跳过周六日，保留节假日——无数据自然跳过） */
 function recentDateKeys(days: number, offsetDays = 0): string[] {
   const out: string[] = [];
-  const d = new Date();
+  // v9.60（V9-D3）：基于北京时间（getBJDate），替代本机 new Date() 时区偏移
+  const d = getBJDate();
   d.setDate(d.getDate() - offsetDays);
   for (let i = days - 1; i >= 0; i--) {
     const t = new Date(d);

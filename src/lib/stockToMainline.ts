@@ -15,6 +15,13 @@ import { isRealConceptBoard } from "./boardTaxonomy";
 import { fetchStocksBoards } from "./stockBoards";
 import { foldConcepts, foldBoardFunds, conceptGroupOf } from "./conceptGroups";
 
+// v9.60（V9-D2）：Math.max(...空数组) 返回 -Infinity → 统一防空纯函数（红线 #6）
+// 为什么：height 为 -Infinity 会污染下游所有用到 height 的强度分/阶段判断。
+// 空数组时返回 0（"没有涨停股 = 高度 0"比 -Infinity 语义正确）。
+export function safeMax(values: number[]): number {
+  return values.length > 0 ? Math.max(...values) : 0;
+}
+
 // ============== 数据结构 ==============
 /** 单只涨停股的主线归类（LLM 输出 + 代码聚合） */
 export interface StockToMainline {
@@ -38,6 +45,8 @@ export interface MainlineGroup {
   mainNet5d: number;
   /** v9.56（V8-6）：资金匹配失败（折叠/LLM/模糊/hybk 全对不上）→ UI 显示"数据未匹配"而非假 0 */
   fundMissing?: boolean;
+  /** v9.60（V9-D1）：命中的板块资金字段缺失（东财改字段）→ UI 显示"数据缺失"而非误导 0 */
+  dataMissing?: boolean;
   boardPct: number;            // 板块涨幅
   newsTitles: string[];      // 相关新闻标题
   /** 板块效应评估：LLM 判断"是否真主线"（≥3只涨停 = 真主线；1-2只 = 弱主线/孤峰） */
@@ -101,7 +110,7 @@ export interface ClassifyResult {
 export interface ClassifyInput {
   rawPool: ZTPoolItem[];
   /** 板块资金流（按 hybk 名匹配）—— 用于补充 mainNet/boardPct */
-  boards: Array<{ name: string; pct: number; mainNet: number; mainNet5d?: number; mainNet5dPct?: number }>;
+  boards: Array<{ name: string; pct: number; mainNet: number; mainNet5d?: number; mainNet5dPct?: number; dataMissing?: boolean }>;
   /** 新闻标题（用于填充每条主线的 newsTitles） */
   newsItems: Array<{ title: string; stars: number }>;
 }
@@ -263,19 +272,22 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
       const llmGroup = parsedResult.groups.find(g => g.mainline === ml);
       // v9.26.16：资金匹配（foldBoardFunds 折叠优先 → LLM 组 → 模糊兜底）
       // v9.56（V8-6）：全部失败后加 hybk 兜底 + fundMissing 标记（不再静默假 0）
-      let mainNet = 0, mainNet5d = 0, boardPct = 0, fundMissing = false;
+      // v9.60（V9-D1）：资金来源板块字段缺失 → dataMissing 透传（UI 显示"数据缺失"而非误导 0）
+      let mainNet = 0, mainNet5d = 0, boardPct = 0, fundMissing = false, dataMissing = false;
       const fb = foldedBoards.get(ml);
-      if (fb) { mainNet = fb.mainNet; mainNet5d = fb.mainNet5d ?? 0; boardPct = fb.pct; }
+      if (fb) { mainNet = fb.mainNet; mainNet5d = fb.mainNet5d ?? 0; boardPct = fb.pct; dataMissing = Boolean(fb.dataMissing); }
       if (mainNet === 0 && !llmGroup) {
         for (const b of input.boards) {
           if (ml.includes(b.name) || b.name.includes(ml)) {
             mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
+            dataMissing = Boolean(b.dataMissing);
             break;
           }
         }
       }
       if (mainNet === 0 && llmGroup) {
         mainNet = llmGroup.mainNet; mainNet5d = llmGroup.mainNet5d ?? 0; boardPct = llmGroup.boardPct;
+        dataMissing = Boolean((llmGroup as any).dataMissing);
       }
       // v9.59（V8-7）：折叠 key 归一化 —— LLM 主线名"人工智能" vs 折叠 key"AI应用" 字面不同
       // → 用 conceptGroups 折叠大类做桥梁，匹配同一大类的板块资金
@@ -285,6 +297,7 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
           for (const [k, v] of foldedBoards) {
             if (k === mg || (conceptGroupOf(k) ?? k) === mg) {
               mainNet = v.mainNet; mainNet5d = v.mainNet5d ?? 0; boardPct = v.pct;
+              dataMissing = Boolean(v.dataMissing);
               break;
             }
           }
@@ -299,6 +312,7 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
           mainNet = hybkFunds.reduce((a, b) => a + (b.mainNet ?? 0), 0);
           mainNet5d = hybkFunds.reduce((a, b) => a + (b.mainNet5d ?? 0), 0);
           boardPct = hybkFunds[0].pct;
+          dataMissing = hybkFunds.some(b => b.dataMissing);
         } else {
           fundMissing = true; // 连 hybk 都对不上才标"数据未匹配"
         }
@@ -307,9 +321,11 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
         mainline: ml,
         ztCount: items.length,
         leaders,
-        height: Math.max(...items.map(i => i.lbc ?? 1)),
+        // v9.60（V9-D2）：Math.max(...空数组) 返回 -Infinity → safeMax 防空（红线 #6）
+        height: safeMax(items.map(i => i.lbc ?? 1)),
         mainNet, mainNet5d, boardPct,
         fundMissing,
+        dataMissing,
         newsTitles: input.newsItems.filter(n => n.title.includes(ml)).slice(0, 3).map(n => n.title),
         isPulse: llmGroup?.isPulse ?? items.length < 3,
         logic: llmGroup?.logic ?? `概念补充（LLM未覆盖，${items.length}只）`,
@@ -404,7 +420,7 @@ async function parseClassifyResult(raw: string, input: ClassifyInput): Promise<C
       mainline,
       ztCount,
       leaders,
-      height: leaders.length > 0 ? Math.max(...leaders.map(l => l.boardCount)) : 0,
+      height: safeMax(leaders.map(l => l.boardCount)),
       mainNet, mainNet5d, boardPct,
       fundMissing,
       newsTitles: input.newsItems.filter(n => n.title.includes(mainline) || mainline.includes(n.title.split(" ").slice(-1)[0] || "")).slice(0, 6).map(n => n.title),
@@ -503,10 +519,13 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
         let mainNet = fb?.mainNet ?? 0;
         let mainNet5d = fb?.mainNet5d ?? 0;
         let boardPct = fb?.pct ?? 0;
+        // v9.60（V9-D1）：资金来源字段缺失 → dataMissing 透传
+        let dataMissing = Boolean(fb?.dataMissing);
         if (mainNet === 0) {
           for (const b of input.boards) {
             if (ml.includes(b.name) || b.name.includes(ml)) {
               mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
+              dataMissing = Boolean(b.dataMissing);
               break;
             }
           }
@@ -515,8 +534,10 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
           mainline: ml,
           ztCount: items.length,
           leaders,
-          height: Math.max(...items.map(i => i.lbc ?? 1)),
+          // v9.60（V9-D2）：safeMax 防空（红线 #6）
+          height: safeMax(items.map(i => i.lbc ?? 1)),
           mainNet, mainNet5d, boardPct,
+          dataMissing,
           newsTitles: input.newsItems.filter(n => n.title.includes(ml)).slice(0, 3).map(n => n.title),
           isPulse: items.length < 3,
           logic: `降级模式（LLM失败）：个股概念聚合+词根折叠（${items.length}只）`,
@@ -613,19 +634,24 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
       const stockCodes = items.map(p => String(p.c));
       const leaders = pickLeaders(input.rawPool, stockCodes);
       let mainNet = 0, mainNet5d = 0, boardPct = 0;
+      // v9.60（V9-D1）：资金来源字段缺失 → dataMissing 透传
+      let dataMissing = false;
       // 优先用概念板块的资金/涨幅
       const matchedConcept = hot.find(c => c.name === ml);
       if (matchedConcept) {
         mainNet = matchedConcept.mainNet;
         mainNet5d = (matchedConcept as any).mainNet5d ?? 0;
         boardPct = matchedConcept.pct;
+        dataMissing = Boolean((matchedConcept as any).dataMissing);
       }
       result.push({
         mainline: ml,
         ztCount: items.length,
         leaders,
-        height: Math.max(...items.map(i => i.lbc ?? 1)),
+        // v9.60（V9-D2）：safeMax 防空（红线 #6）
+        height: safeMax(items.map(i => i.lbc ?? 1)),
         mainNet, mainNet5d, boardPct,
+        dataMissing,
         newsTitles: input.newsItems.filter(n => n.title.includes(ml)).slice(0, 3).map(n => n.title),
         isPulse: items.length < 3,
         logic: `降级模式（LLM失败）：按概念板块分组合计${items.length}只`,
@@ -680,16 +706,21 @@ function legacyFallbackByHybk(input: ClassifyInput): ClassifyResult {
     const stockCodes = items.map(p => String(p.c));
     const leaders = pickLeaders(input.rawPool, stockCodes);
     let mainNet = 0, mainNet5d = 0, boardPct = 0;
+    // v9.60（V9-D1）：资金来源字段缺失 → dataMissing 透传
+    let dataMissing = false;
     for (const b of input.boards) {
       if (hybk === b.name || b.name.includes(hybk)) {
         mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
+        dataMissing = Boolean(b.dataMissing);
         break;
       }
     }
     groups.push({
       mainline: hybk, ztCount: items.length, leaders,
-      height: Math.max(...items.map(i => i.lbc ?? 1)),
+      // v9.60（V9-D2）：safeMax 防空（红线 #6）
+      height: safeMax(items.map(i => i.lbc ?? 1)),
       mainNet, mainNet5d, boardPct,
+      dataMissing,
       newsTitles: input.newsItems.filter(n => n.title.includes(hybk)).slice(0, 3).map(n => n.title),
       isPulse: items.length < 3,
       logic: `终极兜底（LLM+概念均失败）：按 hybk 行业分组合计${items.length}只`,

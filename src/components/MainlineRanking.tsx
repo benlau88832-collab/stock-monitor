@@ -98,8 +98,11 @@ export default function MainlineRanking({ battlePlan, loading }: {
                   </td>
                   <td className="py-2 pr-2 text-right">
                     {/* v9.59-fix（V8-6）：资金匹配失败 → "⚠未匹配"而非假 0 */}
+                    {/* v9.60（V9-D1）：命中板块字段缺失 → "⚠数据缺失"而非误导 0 */}
                     {c.fundMissing ? (
                       <span className="text-slate-500" title="主线名/成分股行业未匹配到板块资金">⚠未匹配</span>
+                    ) : c.dataMissing ? (
+                      <span className="text-amber-400" title="命中板块资金字段缺失（东财接口字段变更），显示值可能为 0，非真实'无资金'">⚠数据缺失</span>
                     ) : (
                       <>
                         <span className={c.mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}>{fmtMoney(c.mainNet)}</span>

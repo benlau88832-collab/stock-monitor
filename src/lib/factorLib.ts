@@ -6,6 +6,7 @@
 //   - 每个因子对"次日主线延续"计算 IC（信息系数，Spearman 近似）
 //   - 滚动 20 日 IC：|IC| 滑落 < 0.05 → 标"⚠ 因子疑似失效"并自动降权
 // ============================================================
+import { BLAST_RATE_HIGH, BLAST_RATE_LOW, SENTI_EXTREME, SENTI_EXTREME_LOW } from "./thresholds";
 
 export interface FactorDef {
   id: string;
@@ -40,13 +41,14 @@ export interface FactorDayRow {
 
 /** 因子库（注册表） */
 export const FACTORS: FactorDef[] = [
-  { id: "blast_high", name: "炸板率偏高", desc: "炸板率≥35% 情绪分歧", expectedDir: -1, extract: r => r.blastedRate != null && r.blastedRate >= 35 ? 1 : 0 },
-  { id: "blast_low", name: "炸板率偏低", desc: "炸板率<20% 封板健康", expectedDir: 1, extract: r => r.blastedRate != null && r.blastedRate < 20 ? 1 : 0 },
+  // v9.62（V9-L1）：阈值统一引用 thresholds.ts（炸板率/情绪口径与 sysRiskGuard/marketStateMachine 一致）
+  { id: "blast_high", name: "炸板率偏高", desc: "炸板率≥35% 情绪分歧", expectedDir: -1, extract: r => r.blastedRate != null && r.blastedRate >= BLAST_RATE_HIGH ? 1 : 0 },
+  { id: "blast_low", name: "炸板率偏低", desc: "炸板率<20% 封板健康", expectedDir: 1, extract: r => r.blastedRate != null && r.blastedRate < BLAST_RATE_LOW ? 1 : 0 },
   { id: "zt_many", name: "涨停家数多", desc: "涨停≥50 普涨", expectedDir: 1, extract: r => r.ztCount != null ? r.ztCount : null },
   { id: "height_high", name: "连板高度强", desc: "最高板≥5", expectedDir: 1, extract: r => r.maxBoardHeight != null ? r.maxBoardHeight : null },
   { id: "premium_pos", name: "溢价为正", desc: "昨日涨停今日平均溢价>0", expectedDir: 1, extract: r => r.premiumAvg != null ? r.premiumAvg : null },
   { id: "promo_healthy", name: "晋级率健康", desc: "首板晋级率≥30%", expectedDir: 1, extract: r => r.promotionRate != null && r.promotionRate >= 0.3 ? 1 : 0 },
-  { id: "senti_extreme", name: "情绪极值", desc: "情绪≥70 或 ≤30", expectedDir: -1, extract: r => r.sentiment != null && (r.sentiment >= 70 || r.sentiment <= 30) ? 1 : 0 },
+  { id: "senti_extreme", name: "情绪极值", desc: "情绪≥70 或 ≤30", expectedDir: -1, extract: r => r.sentiment != null && (r.sentiment >= SENTI_EXTREME || r.sentiment <= SENTI_EXTREME_LOW) ? 1 : 0 },
   { id: "seal_decay", name: "封单衰减", desc: "盘中封单衰减预警数", expectedDir: -1, extract: r => r.sealDecayCount != null ? r.sealDecayCount : null },
   { id: "lhb_boost", name: "席位加持", desc: "涨停股龙虎榜净买数", expectedDir: 1, extract: r => r.lhbBoostCount != null ? r.lhbBoostCount : null },
   { id: "fund_streak", name: "资金连续流入", desc: "主线行业连续净流入天数", expectedDir: 1, extract: r => r.fundInflowStreak != null ? r.fundInflowStreak : null },

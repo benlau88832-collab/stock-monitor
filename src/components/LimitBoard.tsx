@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { fmtMoney, fmtPct, pctColor } from "../lib/format";
+import { fmtMoney, fmtPct, pctColor, getBJDate } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 
 // ============== 数据结构（东方财富涨停池/炸板池/跌停池真实字段） ==============
@@ -96,7 +96,8 @@ import { loadPrevZTSnapshot } from "../lib/ztSnapshot";
 import { fetchLimitPoolSummary } from "../lib/api";
 
 function todayStr(): string {
-  const d = new Date();
+  // v9.60（V9-D3）：周末判定用北京时间（getBJDate），替代本机 getDay() 时区偏移
+  const d = getBJDate();
   const day = d.getDay();
   // 周末取上周五
   if (day === 0) d.setDate(d.getDate() - 2);

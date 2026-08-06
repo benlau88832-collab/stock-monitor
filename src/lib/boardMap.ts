@@ -36,7 +36,10 @@ export async function ensureBoardMap(): Promise<void> {
     try {
       const indMapData = await fetchStockIndustryMap();
       const codeCount = Object.keys(indMapData).length;
-      console.log(`[boardMap] 行业映射已加载: ${codeCount}个股票`);
+      // v9.61（V9-S3）：非 debug 日志收敛到 ?debug=1
+      if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
+        console.log(`[boardMap] 行业映射已加载: ${codeCount}个股票`);
+      }
       const [ind, con] = await Promise.all([
         fetchBoardFundFlow("industry", 100),
         fetchBoardFundFlow("concept", 500),
@@ -44,7 +47,9 @@ export async function ensureBoardMap(): Promise<void> {
       const v = new Set<string>();
       ind.forEach(b => b.name && v.add(b.name));
       con.filter(b => isRealConceptBoard(b.name)).forEach(b => b.name && v.add(b.name));
-      console.log(`[boardMap] 板块词表已构建: ${v.size}个 (行业${ind.length}+概念${con.length})`);
+      if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
+        console.log(`[boardMap] 板块词表已构建: ${v.size}个 (行业${ind.length}+概念${con.length})`);
+      }
       saveJSON(MAP_KEY, indMapData);
       saveJSON(VOCAB_KEY, [...v]);
       saveJSON(DATE_KEY, todayStr());

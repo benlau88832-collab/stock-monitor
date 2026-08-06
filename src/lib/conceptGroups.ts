@@ -179,6 +179,8 @@ export interface BoardFund {
   mainNet: number;
   mainNet5d?: number;
   mainNet5dPct?: number;
+  /** v9.60（V9-D1）：该板块关键资金字段缺失（东财改字段）→ 折叠聚合后透传，UI 显示"数据缺失" */
+  dataMissing?: boolean;
 }
 
 /** 把 boards 按用户大类折叠聚合资金（同大类的所有细分概念资金累加） */
@@ -196,8 +198,10 @@ export function foldBoardFunds(boards: BoardFund[]): Map<string, BoardFund> {
       prev.pct = totalAbs > 0
         ? (prev.pct * Math.abs(prev.mainNet) + b.pct * Math.abs(b.mainNet)) / totalAbs
         : prev.pct;
+      // v9.60（V9-D1）：任一成员缺失 → 聚合结果也标缺失（不掩盖局部字段缺失）
+      if (b.dataMissing) prev.dataMissing = true;
     } else {
-      map.set(g, { name: g, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNet5dPct: b.mainNet5dPct });
+      map.set(g, { name: g, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNet5dPct: b.mainNet5dPct, dataMissing: b.dataMissing });
     }
   }
   return map;

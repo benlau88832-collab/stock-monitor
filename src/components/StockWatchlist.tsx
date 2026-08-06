@@ -24,6 +24,8 @@ interface WatchStock {
   healthScore: number | null; // AI健康度评分(1-100)
   healthTip: string; // 一句话提示
   llmDegraded?: boolean; // AI降级标识
+  /** v9.60（V9-D1）：个股资金字段缺失（东财改字段）→ UI 显示"数据缺失"而非误导 0 */
+  dataMissing?: boolean;
 }
 export type { WatchStock };
 
@@ -620,7 +622,12 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                   </div>
                   {s && (
                     <div className="mt-1 flex items-center justify-between">
-                      <span className={`text-[11px] ${pctColor(s.mainNet)}`}>主力{fmtMoney(s.mainNet)}</span>
+                      {/* v9.60（V9-D1）：个股资金字段缺失 → "⚠数据缺失"而非误导 0 */}
+                      {s.dataMissing ? (
+                        <span className="text-[11px] text-amber-400" title="个股资金字段缺失（东财接口字段变更），显示值可能为 0，非真实'无资金'">主力 ⚠数据缺失</span>
+                      ) : (
+                        <span className={`text-[11px] ${pctColor(s.mainNet)}`}>主力{fmtMoney(s.mainNet)}</span>
+                      )}
                       {s.healthScore != null && (
                         <span className={`rounded px-1 py-0.5 text-[11px] font-bold ${healthColor(s.healthScore)}`}>{s.healthScore}分</span>
                       )}

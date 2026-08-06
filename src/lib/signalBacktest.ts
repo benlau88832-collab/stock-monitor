@@ -10,6 +10,8 @@
 import { isLocalServer } from "./cloudStore";
 // v9.55（V7-19）：北京时间交易日历（周末+节假日统一判定，避免非东八区机器偏移）
 import { isTradingDay, bjDateStr } from "./tradeCalendar";
+// v9.62（V9-L1）：信号阈值统一引用 thresholds.ts
+import { SENTI_EXTREME, SENTI_EXTREME_LOW, BLAST_RATE_HIGH, ZT_COUNT_HOT, ZT_COUNT_EUPHORIA, ZT_COUNT_REVIVE } from "./thresholds";
 
 export interface SignalStat {
   id: string;
@@ -79,16 +81,17 @@ interface SignalDef {
 }
 
 const SIGNALS: SignalDef[] = [
+  // v9.62（V9-L1）：阈值统一引用 thresholds.ts
   {
     id: "senti_high", name: "情绪高位≥70",
     condition: "情绪分≥70（亢奋）",
-    trigger: r => r.sentiment != null && r.sentiment >= 70,
+    trigger: r => r.sentiment != null && r.sentiment >= SENTI_EXTREME,
     positive: (cur, n) => n.sentiment != null && n.sentiment >= cur.sentiment! - 10, // 次日不崩超10分
   },
   {
     id: "senti_low", name: "情绪冰点≤30",
     condition: "情绪分≤30（恐慌）",
-    trigger: r => r.sentiment != null && r.sentiment <= 30,
+    trigger: r => r.sentiment != null && r.sentiment <= SENTI_EXTREME_LOW,
     positive: (cur, n) => n.sentiment != null && n.sentiment > cur.sentiment!, // 次日回升
   },
   {
@@ -102,20 +105,20 @@ const SIGNALS: SignalDef[] = [
   {
     id: "blast_high", name: "炸板率≥35%",
     condition: "炸板率≥35%（封不住）",
-    trigger: r => r.blastedRate != null && r.blastedRate >= 35,
-    positive: (_cur, n) => n.blastedRate != null && n.blastedRate < 35, // 次日炸板回落
+    trigger: r => r.blastedRate != null && r.blastedRate >= BLAST_RATE_HIGH,
+    positive: (_cur, n) => n.blastedRate != null && n.blastedRate < BLAST_RATE_HIGH, // 次日炸板回落
   },
   {
     id: "zt_many", name: "涨停≥50只",
     condition: "涨停数≥50（普涨）",
-    trigger: r => r.ztCount != null && r.ztCount >= 50,
-    positive: (_cur, n) => n.ztCount != null && n.ztCount >= 40, // 次日维持活跃
+    trigger: r => r.ztCount != null && r.ztCount >= ZT_COUNT_HOT,
+    positive: (_cur, n) => n.ztCount != null && n.ztCount >= ZT_COUNT_EUPHORIA, // 次日维持活跃
   },
   {
     id: "zt_few", name: "涨停≤15只",
     condition: "涨停数≤15（冰点）",
-    trigger: r => r.ztCount != null && r.ztCount <= 15,
-    positive: (_cur, n) => n.ztCount != null && n.ztCount > 15, // 次日修复
+    trigger: r => r.ztCount != null && r.ztCount <= ZT_COUNT_REVIVE,
+    positive: (_cur, n) => n.ztCount != null && n.ztCount > ZT_COUNT_REVIVE, // 次日修复
   },
   {
     id: "height_6", name: "最高板≥6",

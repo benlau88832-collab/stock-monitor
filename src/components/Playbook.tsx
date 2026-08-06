@@ -3,7 +3,7 @@ import { callAI, type AIResult } from "../lib/ai";
 import type { OverviewData, GlobalData, MainlineData } from "../App";
 import { loadPrevTradingDaySentiment } from "../lib/sentimentStore";
 import { buildThemeLadder, type ZTPoolItem } from "../lib/themeLadder";
-import { localDateStr, localDateStrOffset } from "../lib/format";
+import { localDateStr, localDateStrOffset, getBJDate, getBJDateStr, getBJWeekday } from "../lib/format";
 
 // ============== 常量 ==============
 const LOCK_TIME = "09:30";
@@ -29,11 +29,12 @@ function emptyPlaybook(date: string): PlaybookData {
 // ============== 时间工具（北京时间） ==============
 // 修复：getBJNow 在 CST 时区等价于 new Date()，统一改用本地时间（避免 toISOString 漂移到 UTC 昨天）
 function getBJHHMM(): string {
-  const d = new Date();
+  const d = getBJDate();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
-function getBJDate(): string { return localDateStr(); }
-function isWeekend(): boolean { return new Date().getDay() === 0 || new Date().getDay() === 6; }
+function playbookDateStr(): string { return localDateStr(getBJDate()); }
+// v9.60（V9-D3）：周末判定用北京时间（getBJWeekday），替代本机 getDay() 时区偏移
+function isWeekend(): boolean { const w = getBJWeekday(); return w === 0 || w === 6; }
 
 // ============== localStorage ==============
 function loadPlaybook(date: string): PlaybookData {
@@ -56,7 +57,8 @@ function savePlaybook(data: PlaybookData) {
 }
 
 function getWeekPlaybooks(): PlaybookData[] {
-  const today = new Date();
+  // v9.60（V9-D3）：周一偏移用北京时间（getBJDate），替代本机 getDay() 时区偏移
+  const today = getBJDate();
   const mondayDaysAgo = today.getDay() === 0 ? 6 : today.getDay() - 1;
   const result: PlaybookData[] = [];
   for (let i = 0; i < 5; i++) {
@@ -81,7 +83,7 @@ function buildPreopenPayload(
   // 公告★★★种子：从 localStorage 读当日缓存
   let annSeeds = "";
   try {
-    const today = getBJDate();
+    const today = getBJDateStr(); // v9.60（V9-D3）：北京时间 YYYY-MM-DD
     const annRaw = localStorage.getItem(`ann:${today}`);
     if (annRaw) {
       try {
@@ -115,7 +117,7 @@ function buildPreopenPayload(
   }
 
   return {
-    date: getBJDate(),
+    date: playbookDateStr(),
     // tsc-fix: preopenPlan payload 的 sentiment 为 number，兜底 0
     sentiment: prev?.score ?? overview?.sentiment ?? 0,
     sentimentLabel: prev ? (prev.score >= 80 ? "极度贪婪" : prev.score >= 65 ? "贪婪" : prev.score >= 45 ? "中性" : prev.score >= 25 ? "恐慌" : "极度恐慌") : (overview?.sentimentLabel ?? (overview?.sentiment != null ? (overview.sentiment >= 80 ? "极度贪婪" : overview.sentiment >= 65 ? "贪婪" : overview.sentiment >= 45 ? "中性" : overview.sentiment >= 25 ? "恐慌" : "极度恐慌") : "数据不足")),
@@ -153,7 +155,7 @@ function buildClosePayload(
   } catch { /* 无则空 */ }
 
   return {
-    date: getBJDate(),
+    date: playbookDateStr(),
     planText,
     // tsc-fix: review payload 的 sentiment 为 number，兜底 0
     sentiment: overview?.sentiment ?? 0,
@@ -198,7 +200,7 @@ interface Props {
 }
 
 export default function Playbook({ sentiment, limitUpCount, blastedRate, overview, globalData, mainline }: Props) {
-  const today = getBJDate();
+  const today = playbookDateStr(); // v9.60（V9-D3）：北京时间 YYYY-MM-DD
   const [data, setData] = useState<PlaybookData>(() => loadPlaybook(today));
   const [showWeek, setShowWeek] = useState(false);
   const [editing, setEditing] = useState(false);

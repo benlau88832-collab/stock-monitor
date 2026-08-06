@@ -107,7 +107,10 @@ export async function syncNewsFromCloud(days = 3): Promise<void> {
     ]);
     if (Array.isArray(cloudNews) && cloudNews.length > 0) upsertNews(cloudNews as NewsItem[]);
     if (Array.isArray(cloudAnns) && cloudAnns.length > 0) upsertAnnouncements(cloudAnns as AnnItem[]);
-    console.log(`[cloud] syncNews: news=${cloudNews?.length ?? 0} ann=${cloudAnns?.length ?? 0}`);
+    // v9.61（V9-S3）：非 debug 日志收敛到 ?debug=1
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
+      console.log(`[cloud] syncNews: news=${cloudNews?.length ?? 0} ann=${cloudAnns?.length ?? 0}`);
+    }
   } catch { /* 网络失败静默，下次再试 */ }
 }
 

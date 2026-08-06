@@ -9,6 +9,12 @@
 
 const SYNC_INTERVAL = 5 * 60 * 1000; // 5 分钟增量同步
 
+// v9.61（V9-S3）：非 debug 的 console.log 收敛到 ?debug=1 开关 —— 生产静默，排查时开 debug 看
+function isDebug(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("debug") === "1";
+}
+
 /** 当前是否运行在本地服务（存在 /api/health 即视为本地） */
 let serverOk: boolean | null = null;
 export function isLocalServer(): boolean {
@@ -139,12 +145,12 @@ export async function syncLocalWithCloud(): Promise<void> {
             }
           }
         }
-        console.log(`[cloud] pull-back: 缺失 ${missing.length} 个 key 已从 PG 拉回`);
+        if (isDebug()) console.log(`[cloud] pull-back: 缺失 ${missing.length} 个 key 已从 PG 拉回`);
       }
     } catch (e) {
       console.warn("[cloud] pull-back failed:", e);
     }
-    console.log(`[cloud] sync done: uploaded=${uploaded} keys`);
+    if (isDebug()) console.log(`[cloud] sync done: uploaded=${uploaded} keys`);
   } catch (e) {
     console.warn("[cloud] sync failed:", e);
   }
@@ -155,7 +161,7 @@ export function startAutoSync(): void {
   if (!isLocalServer()) return;
   setInterval(() => {
     migrateLocalStorageToCloud().then(n => {
-      if (n > 0) console.log(`[cloud] auto-sync pushed ${n} keys`);
+      if (n > 0 && isDebug()) console.log(`[cloud] auto-sync pushed ${n} keys`);
     });
   }, SYNC_INTERVAL);
   // 页面卸载前也同步一次

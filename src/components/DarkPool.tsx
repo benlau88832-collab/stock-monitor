@@ -234,7 +234,12 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
                                 <span className={`text-xs ${pctColor(s.pct)}`}>{fmtPct(s.pct)}</span>
                               </div>
                               <div className="mt-1 flex items-center justify-between text-[11px]">
-                                <span className={pctColor(s.mainNet)}>主力: {fmtMoney(s.mainNet)}</span>
+                                {/* v9.60（V9-D1）：成分股资金字段缺失 → "数据缺失"而非误导 0 */}
+                                {s.dataMissing ? (
+                                  <span className="text-amber-400" title="个股资金字段缺失（东财接口字段变更），显示值可能为 0，非真实'无资金'">主力: ⚠数据缺失</span>
+                                ) : (
+                                  <span className={pctColor(s.mainNet)}>主力: {fmtMoney(s.mainNet)}</span>
+                                )}
                                 <span className="text-amber-300/70">→ 查看</span>
                               </div>
                             </a>

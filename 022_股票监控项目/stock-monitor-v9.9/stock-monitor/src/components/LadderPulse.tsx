@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { callAI, type AIResult } from "../lib/ai";
 import { getCurrentSession } from "../lib/tradingSession";
+import { getBJDate } from "../lib/format";
 import { buildThemeLadder, detectBrokenBoards, type ZTPoolItem } from "../lib/themeLadder";
 import type { OverviewData } from "../App";
 
@@ -38,7 +39,7 @@ export default function LadderPulse({ overview }: Props) {
     // 断板名单
     let brokenStr = "";
     try {
-      const d = new Date();
+      const d = getBJDate();
       const day = d.getDay();
       if (day === 0) d.setDate(d.getDate() - 2);
       else if (day === 6) d.setDate(d.getDate() - 1);

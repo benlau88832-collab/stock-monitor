@@ -4,6 +4,34 @@
 
 ---
 
+## v9.63 — GLM5.2-V9 全部落地（数据可靠性四件套 · 全栈工程卫生清扫）(2026-08-06)
+
+> V9 报告 12 条修改指令 100% 执行（v9.60→v9.63 四里程碑），单测 122→144 全绿，tsc 0 错误。
+
+### v9.60：数据可靠性三件套（V9-D1/D2/D3）
+- **D1 关键字段缺失检测**：`api.ts` 抽 `hasMissingKeyFields` 纯函数，`fetchMarketMainFund`/`fetchBoardFundFlow` 缺失检测从"仅 f62"扩展为全部资金/涨跌幅字段；`fetchBoardConstituents`/`fetchStockOne` 补上缺失标注；`foldBoardFunds` 折叠聚合透传 `dataMissing`（任一成员缺失不掩盖）；`MainlineGroup.dataMissing` 四条资金匹配路径透传；BattlePlan/MainlineRanking/StockWatchlist/DarkPool UI 显示"⚠数据缺失"（琥珀色）而非误导 0
+- **D2 Math.max 防空**：抽 `safeMax` 纯函数（空数组返回 0 而非 -Infinity），stockToMainline 5 处统一防空（红线 #6）
+- **D3 时区统一**：`format.ts` 新增 `getBJDate/getBJWeekday/getBJDateStr`；16 处 `getDay()` 判周末/回看日期统一按北京时间（LadderPulse/LimitBoard/Playbook/WeeklyCoach/api/factorHistory/fundStreak/themeCalendar/tradeCalendar/decisionAttribution/sentimentStore）
+- **D3+ 修复 v9.55 引入的时段 bug**：原 `getBJTime` 公式 `getTime()+getTimezoneOffset()*60000+8h` 在 CST 机器上 `bjMs==getTime()`，v9.55 改读 `getUTCHours()` 后返回 UTC 字段（北京 22 点判成 14 点"盘中"）→ 改用 `getBJDate`；`tradeCalendar.bjDateStr` 同样修复（北京凌晨跨天取错日期）
+
+### v9.61：死代码 + 仓库卫生（V9-S1/S2/S3/S4）
+- **S1 死代码**：删除 mainline.ts 的 `buildMainlineCandidates`/`determineLeaders`/`computeMainlineScore`（实际走 stockToMainline + themeLadder）；删除 extremeBoard.ts 整文件（零引用含测试）
+- **S2 仓库瘦身**：022_ 子目录 13 个杂项文件（GLM 报告/方案 md/图片）`git rm --cached` + .gitignore 规则（磁盘保留，交接文档/CLAUDE.md/代码双轨不动）
+- **S3 debug 收敛**：cloudStore/dataStore/boardMap 6 处非 debug console.log 收敛到 `?debug=1` 开关
+- **S4 已排空**：`https-proxy-agent@^9.1.0` 已在 server/package.json（V9 报告漏看）
+
+### v9.62：阈值集中 + 指标统一（V9-L1/L2）
+- **L1 thresholds.ts**：新建 `src/lib/thresholds.ts` 集中 32 个跨模块概念阈值（炸板率/情绪/涨停/跌停/换手/异动/大盘/强度分档），接入 sysRiskGuard/marketStateMachine/factorLib/mainline/sentimentStore/signalBacktest/anomalyTier/App.tsx 共 8 文件——同一概念统一口径（如"炸板率高"统一 35%、"情绪极值"统一 70/30）
+- **L2 指标统一**：核查结论——核心指标已是"App.tsx 算一次、下游只消费"（overview.limitPool/overview.sentiment 单点来源），v9.55 后无重复计算；LimitBoard 是独立数据源（复盘页自拉涨停池）非重复
+
+### v9.63：排版收尾（V9-P1/P2/D4/S3再扫）
+- **P1 指标去重**：核查结论——v9.48 已做一轮去重（EmotionCycleCard 移除），Dashboard 内"见顶部状态栏"标注，无同屏重复
+- **P2 AIConsole 响应式**：面板加 `max-w-[calc(100vw-2rem)]`（手机不占满屏）
+- **D4 TODO 标注**：FundStructure 两融"TODO 待接入"→ 显式"该指标开发中"；MarketOverview 已有"暂不可用"标注
+- **S3 再扫**：全部 console.log 已在 debug 保护内
+
+---
+
 ## v9.59-fix — V8 深度复盘补做（对照验收标准，补齐 7 处"做了但没做透"）(2026-08-06)
 
 > 上轮 V8 全部落地后，逐条对照验收标准复查数据流，发现并补齐以下遗漏（单测 121→122 全绿）：

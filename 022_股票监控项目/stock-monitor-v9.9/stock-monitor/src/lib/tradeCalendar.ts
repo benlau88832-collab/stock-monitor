@@ -4,6 +4,7 @@
 // 数据：内置 2026 年法定节假日休市区间（含周末调休；补班日 A 股仍开市但本表按"肯定休市"保守处理）
 // 注：权威交易日历未来可接东财 push2his qt 字段动态刷新
 // ============================================================
+import { getBJDate, getBJDateStr } from "./format";
 
 /** 2026 年 A 股休市区间（含区间两端；YY-MM-DD）—— 元旦/春节/清明/劳动/端午/中秋/国庆 */
 export const HOLIDAY_RANGES_2026: Array<[string, string]> = [
@@ -28,14 +29,17 @@ for (const [a, b] of HOLIDAY_RANGES_2026) {
 
 /** 日期 → YYYY-MM-DD（按北京时间） */
 export function bjDateStr(d: Date): string {
-  const utcMs = d.getTime() + d.getTimezoneOffset() * 60000;
-  const bj = new Date(utcMs + 8 * 3600000);
-  return `${bj.getUTCFullYear()}-${String(bj.getUTCMonth() + 1).padStart(2, "0")}-${String(bj.getUTCDate()).padStart(2, "0")}`;
+  // v9.60（V9-D3）：修复原公式 utcMs = d.getTime() + getTimezoneOffset()*60000 在 CST 机器
+  // 上等于 d.getTime() - 8h，+8h 后 bjMs == d.getTime()，getUTC* 读到的是 UTC 日期
+  // （北京凌晨 0-8 点会取到前一天）—— 统一走 format.getBJDateStr（getTime()+8h 正确基准）。
+  return getBJDateStr(d);
 }
 
 /** 是否交易日（非周末 + 非节假日） */
 export function isTradingDay(d: Date): boolean {
-  const dow = d.getDay();
+  // v9.60（V9-D3）：周末判定用北京时间（getBJDate），替代本机 getDay() 时区偏移
+  const bj = getBJDate(d);
+  const dow = bj.getDay();
   if (dow === 0 || dow === 6) return false;
   return !HOLIDAY_SET.has(bjDateStr(d));
 }
@@ -58,7 +62,9 @@ export function prevTradingDay(d: Date): Date {
 
 /** 休市原因（非交易日时给出人类可读说明；交易日返回 null） */
 export function marketHolidayLabel(d: Date): string | null {
-  if (d.getDay() === 0 || d.getDay() === 6) return "周末休市";
+  // v9.60（V9-D3）：周末判定用北京时间（getBJDate），替代本机 getDay() 时区偏移
+  const bj = getBJDate(d);
+  if (bj.getDay() === 0 || bj.getDay() === 6) return "周末休市";
   const ds = bjDateStr(d);
   if (!HOLIDAY_SET.has(ds)) return null;
   const names: Array<[string, string, string]> = [

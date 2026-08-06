@@ -5,6 +5,8 @@
 // 纯函数，不碰 DOM/localStorage/网络
 // ============================================================
 
+import { BLAST_RATE_EXTREME, BLAST_RATE_HIGH, DT_COUNT_PANIC, DT_COUNT_WARN, SENTI_ICEBERG, SENTI_EXTREME_GREED, HS300_CRASH, HS300_WARN } from "./thresholds";
+
 export interface SysRiskInput {
   /** 沪深300 涨跌幅 %（从 overview.indices 找 code=000300） */
   hs300Pct: number | null;
@@ -29,20 +31,20 @@ export function checkSysRisk(input: SysRiskInput): SysRiskVerdict {
   const yellowReasons: string[] = [];
 
   // ---- red 级（系统性杀跌，所有主线失效） ----
-  if (hs300Pct != null && hs300Pct <= -2) redReasons.push(`沪深300 ${hs300Pct.toFixed(2)}%（系统性杀跌）`);
-  if (limitDownCount >= 50) redReasons.push(`跌停 ${limitDownCount} 只（恐慌蔓延）`);
-  if (blastedRate >= 50) redReasons.push(`炸板率 ${blastedRate.toFixed(0)}%（极端分歧）`);
-  if (sentiment != null && sentiment <= 15) redReasons.push(`情绪 ${sentiment}（冰点）`);
+  if (hs300Pct != null && hs300Pct <= HS300_CRASH) redReasons.push(`沪深300 ${hs300Pct.toFixed(2)}%（系统性杀跌）`);
+  if (limitDownCount >= DT_COUNT_PANIC) redReasons.push(`跌停 ${limitDownCount} 只（恐慌蔓延）`);
+  if (blastedRate >= BLAST_RATE_EXTREME) redReasons.push(`炸板率 ${blastedRate.toFixed(0)}%（极端分歧）`);
+  if (sentiment != null && sentiment <= SENTI_ICEBERG) redReasons.push(`情绪 ${sentiment}（冰点）`);
 
   if (redReasons.length > 0) {
     return { level: "red", reasons: redReasons, text: `🔴 系统性风险预警：${redReasons.join("，")}，建议空仓观望` };
   }
 
   // ---- yellow 级（风险偏高，收缩战线） ----
-  if (hs300Pct != null && hs300Pct <= -1) yellowReasons.push(`沪深300 ${hs300Pct.toFixed(2)}%`);
-  if (limitDownCount >= 20) yellowReasons.push(`跌停 ${limitDownCount} 只`);
-  if (blastedRate >= 35) yellowReasons.push(`炸板率 ${blastedRate.toFixed(0)}%`);
-  if (sentiment != null && sentiment >= 85) yellowReasons.push(`情绪 ${sentiment}（极度贪婪）`);
+  if (hs300Pct != null && hs300Pct <= HS300_WARN) yellowReasons.push(`沪深300 ${hs300Pct.toFixed(2)}%`);
+  if (limitDownCount >= DT_COUNT_WARN) yellowReasons.push(`跌停 ${limitDownCount} 只`);
+  if (blastedRate >= BLAST_RATE_HIGH) yellowReasons.push(`炸板率 ${blastedRate.toFixed(0)}%`);
+  if (sentiment != null && sentiment >= SENTI_EXTREME_GREED) yellowReasons.push(`情绪 ${sentiment}（极度贪婪）`);
 
   if (yellowReasons.length > 0) {
     return { level: "yellow", reasons: yellowReasons, text: `🟡 风险偏高：${yellowReasons.join("，")}，建议收缩战线` };

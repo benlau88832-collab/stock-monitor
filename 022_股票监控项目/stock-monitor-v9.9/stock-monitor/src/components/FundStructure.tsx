@@ -310,7 +310,8 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
       <div className="text-[11px] text-slate-600 leading-relaxed">
         数据来源：东方财富push2资金流接口。主力=超大单+大单净额；散户=小单净额；游资=中单净额。
         分级预警：轻度(今日主力出) → 中度(主力出+散户进/5日持续出) → 重度(全面背离+持续多日)。
-        两融数据待接入全市场汇总接口(TODO)。
+        {/* v9.63（V9-D4）：两融数据未接入全市场汇总 → 显式标"开发中"（避免用户误以为 bug） */}
+        两融数据：该指标开发中（待全市场汇总接口）。
         <a href={fundFlowUrl()} target="_blank" rel="noopener noreferrer" className="text-amber-300 hover:underline ml-1">查看东方财富资金流向 →</a>
       </div>
     </div>

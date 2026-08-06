@@ -1,6 +1,7 @@
 // 情绪分按交易日冻结存储（替代旧的 prev_sentiment 每60秒覆盖bug）
 // P2 新增：日内轨迹采样（5分钟节流）+ 动量判断 + 仓位建议
-import { localDateStr, localDateStrOffset } from "./format";
+import { localDateStr, localDateStrOffset, getBJDate } from "./format";
+import { SENTI_EXTREME_GREED, SENTI_GREED, SENTI_NEUTRAL_HIGH, SENTI_FEAR } from "./thresholds";
 const PREFIX = "sentiment:";
 const INTRADAY_PREFIX = "sentiment_intraday:"; // sentiment_intraday:YYYY-MM-DD = [{t:"HH:MM", s:score}]
 
@@ -95,20 +96,21 @@ export function suggestPosition(
     return { positionPct: 0, label: "数据不足", hint: "情绪数据缺失，无法给出仓位建议" };
   }
   let base = 70; let label = "中性仓位"; let hint = "情绪中性，保持常规仓位";
-  if (sentiment >= 80) {
+  // v9.62（V9-L1）：情绪分档阈值统一引用 thresholds.ts
+  if (sentiment >= SENTI_EXTREME_GREED) {
     // v9.26.13：极度贪婪不再"禁新开仓"，而是"控仓兑现"（向确定性龙头集中）
     if (momentum === "heating") { base = 50; label = "控仓兑现"; hint = "情绪极度贪婪且升温，已重仓者分批兑现，轻仓者不追高"; }
     else if (momentum === "cooling") { base = 40; label = "减仓兑现"; hint = "情绪贪婪且降温，获利了结是上策"; }
     else { base = 50; label = "控仓兑现"; hint = "情绪极度贪婪，向确定性龙头集中，戒追高"; }
-  } else if (sentiment >= 65) {
+  } else if (sentiment >= SENTI_GREED) {
     if (momentum === "heating") { base = 90; label = "偏进攻"; hint = "情绪贪婪且升温，可适度加仓但严守纪律"; }
     else if (momentum === "cooling") { base = 60; label = "获利了结"; hint = "情绪贪婪但降温，注意兑现利润"; }
     else { base = 75; label = "偏进攻"; hint = "情绪贪婪但动量平稳，仓位适中偏高"; }
-  } else if (sentiment >= 45) {
+  } else if (sentiment >= SENTI_NEUTRAL_HIGH) {
     if (momentum === "heating") { base = 75; label = "偏进攻"; hint = "情绪中性偏多且升温，可适度加仓"; }
     else if (momentum === "cooling") { base = 50; label = "偏防守"; hint = "情绪中性但降温，收缩战线"; }
     else { base = 65; label = "中性"; hint = "情绪中性，按节奏操作"; }
-  } else if (sentiment >= 25) {
+  } else if (sentiment >= SENTI_FEAR) {
     // v9.26.13：恐慌+升温 = 反向机会（巴菲特"别人恐惧我贪婪"），不是被动空仓
     if (momentum === "heating") { base = 50; label = "反向试探"; hint = "情绪恐慌但升温，关注超跌反弹机会（龙头优先）"; }
     else if (momentum === "cooling") { base = 25; label = "防守仓位"; hint = "情绪低迷且继续降温，轻仓等待"; }
@@ -131,7 +133,9 @@ export function suggestPosition(
 export function loadPrevTradingDaySentiment(): { score: number; date: string } | null {
   for (let i = 1; i <= 10; i++) {
     const dateStr = localDateStrOffset(i);
-    const day = new Date(dateStr + "T00:00:00").getDay();
+    // v9.60（V9-D3）：周末判定用北京时间（getBJDate），替代本机 getDay() 时区偏移
+    const bj = getBJDate(new Date(dateStr + "T00:00:00"));
+    const day = bj.getDay();
     if (day === 0 || day === 6) continue;
     const val = localStorage.getItem(PREFIX + dateStr);
     if (val != null) {

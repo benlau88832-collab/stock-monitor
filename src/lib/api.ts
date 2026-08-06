@@ -2,6 +2,7 @@
 // 由于跨域限制，使用JSONP方式或通过公开push2接口获取数据
 
 import { recordApiCall } from "./apiHealth";
+import { getBJDate } from "./format";
 
 const PUSH2 = "https://push2.eastmoney.com/api/qt";
 const PUSH2HIS = "https://push2his.eastmoney.com/api/qt";
@@ -18,6 +19,14 @@ export function strictNum(v: unknown): number | null {
   if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+// v9.60（V9-D1）：关键字段缺失检测 —— 东财改字段时"可感知"而非静默 0
+// 为什么：红线 #5 —— 接口匹配失败 ≠ 数据真为 0。用 strictNum 语义（非有限数即缺失）
+// 判定一组关键资金/涨跌幅字段是否有任一缺失，命中则调用方应标 dataMissing/fundMissing，
+// UI 显示"数据缺失"而非误导 0。纯函数，便于单测。
+export function hasMissingKeyFields(d: Record<string, unknown>, keys: string[]): boolean {
+  return keys.some((k) => strictNum(d[k]) === null);
 }
 
 // 带遥测的 JSONP 包装：记录每次调用的成功/失败/耗时
@@ -241,7 +250,8 @@ export async function fetchMarketMainFund(): Promise<MarketFundData> {
   let missing = false;
   for (const d of diff) {
     // v9.53（V7-8）：字段缺失 → 不再静默当 0（缺失显式标注，UI 显示"数据缺失"）
-    if (d.f62 == null || d.f164 == null || d.f174 == null) missing = true;
+    // v9.60（V9-D1）：缺失检测从仅 f62/f164/f174 扩展为全部资金字段（f66/f72/f78/f84 任一缺失同样标注）
+    if (hasMissingKeyFields(d, ["f62", "f66", "f72", "f78", "f84", "f164", "f174"])) missing = true;
     agg.mainNet += num(d.f62);
     agg.extraLargeNet += num(d.f66);
     agg.largeNet += num(d.f72);
@@ -291,7 +301,8 @@ export async function fetchBoardFundFlow(
     const diff = normalizeDiff(json?.data?.diff);
     return diff.map((d) => {
       // v9.53（V7-8/9）：f62 为元；字段缺失标 dataMissing（UI 显示"数据缺失"而非误导 0）
-      const has62 = d.f62 != null && Number.isFinite(Number(d.f62));
+      // v9.60（V9-D1）：缺失检测从仅 f62 扩展为全部资金/涨跌幅关键字段
+      const dataMissing = hasMissingKeyFields(d, ["f3", "f62", "f66", "f72", "f78", "f84", "f164", "f165", "f174", "f175", "f184"]);
       return {
         code: String(d.f12 ?? ""),
         name: String(d.f14 ?? ""),
@@ -307,7 +318,7 @@ export async function fetchBoardFundFlow(
         mainNet10d: num(d.f174),
         mainNet10dPct: num(d.f175),
         boardType,
-        dataMissing: !has62,
+        dataMissing,
       };
     });
   };
@@ -444,6 +455,8 @@ export interface BoardStock {
   turnoverRate: number;
   pe: number;
   volumeRatio: number;
+  /** v9.60（V9-D1）：关键资金字段缺失（东财改字段）→ UI 显示"数据缺失"而非误导 0 */
+  dataMissing?: boolean;
 }
 
 export async function fetchBoardConstituents(boardCode: string, limit = 10): Promise<BoardStock[]> {
@@ -464,6 +477,7 @@ export async function fetchBoardConstituents(boardCode: string, limit = 10): Pro
     turnoverRate: num(d.f8),
     pe: num(d.f9),
     volumeRatio: num(d.f10),
+    dataMissing: hasMissingKeyFields(d, ["f3", "f62", "f184", "f66", "f78", "f84"]),
   }));
 }
 
@@ -515,6 +529,8 @@ export async function fetchStockOne(code: string) {
     turnoverRate: num(d.f8),
     pe: num(d.f9),
     volumeRatio: num(d.f10),
+    /** v9.60（V9-D1）：关键资金字段缺失（东财改字段）→ UI 显示"数据缺失"而非误导 0 */
+    dataMissing: hasMissingKeyFields(d, ["f3", "f62", "f184", "f164", "f174", "f66", "f72", "f78", "f84"]),
   };
 }
 
@@ -810,7 +826,8 @@ export async function fetchDragonTigerSeats(code: string, tradeDate: string): Pr
 const ZT_UT = "7eea3edcaed734bea9cbfc24409ed989";
 
 export function tradeDateStr(): string {
-  const d = new Date();
+  // v9.60（V9-D3）：周末判定用北京时间（getBJDate），替代本机 getDay() 时区偏移
+  const d = getBJDate();
   const day = d.getDay();
   if (day === 0) d.setDate(d.getDate() - 2);
   if (day === 6) d.setDate(d.getDate() - 1);

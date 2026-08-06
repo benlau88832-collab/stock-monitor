@@ -15,6 +15,7 @@
 // 周末（周六日）：全天等同盘后，仅展示缓存+标注日期
 // v9.54（V7-15）：法定节假日 → 全天等同"休市"（停刷 + UI 标"节假日休市"）
 import { marketHolidayLabel } from "./tradeCalendar";
+import { getBJDate } from "./format";
 
 export type SessionPhase =
   | "pre"       // 盘前静默
@@ -32,12 +33,14 @@ export interface SessionInfo {
 }
 
 function getBJTime(): { hour: number; minute: number; day: number } {
-  const now = new Date();
-  // 北京时间 = UTC+8（v9.26.10：用 getUTC* 读取避免本机非 UTC+8 时的二次偏移）
-  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
-  const bjMs = utcMs + 8 * 3600000;
-  const bj = new Date(bjMs);
-  return { hour: bj.getUTCHours(), minute: bj.getUTCMinutes(), day: bj.getUTCDay() };
+  // v9.60（V9-D3）：修复 v9.55 引入的时区 bug —— 原公式
+  //   utcMs = now.getTime() + now.getTimezoneOffset() * 60000 在 CST 机器上
+  //   （offset=-480）等于 now.getTime() - 8h，+8h 后 bjMs == now.getTime()，
+  //   再读 getUTCHours() 得到的是 UTC 小时（如北京 22 点读到 14），时段判断全错。
+  // 正确做法：getTime() 返回的本来就是 UTC epoch（与时区无关），北京 epoch = getTime() + 8h。
+  // 复用 format.getBJDate()（构造出 getHours/getDay 即北京时间字段的 Date），保证全站一致。
+  const bj = getBJDate();
+  return { hour: bj.getHours(), minute: bj.getMinutes(), day: bj.getDay() };
 }
 
 export function getCurrentSession(): SessionInfo {

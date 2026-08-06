@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { callAI, type AIResult } from "../lib/ai";
 import { getHitRateForPrompt } from "../lib/recTracker";
-import { localDateStrOffset } from "../lib/format";
+import { localDateStrOffset, getBJDate } from "../lib/format";
 
 // 周报教练：周五15:30后或周末首次打开触发
 // 存 weekly:YYYY-Www key，可回看历史
@@ -11,11 +11,12 @@ const WEEKLY_PREFIX = "weekly:";
 function getBJNow(): Date { return new Date(); }
 
 function getISOWeek(d: Date): string {
-  // ISO 周号计算
-  const jan1 = new Date(d.getFullYear(), 0, 1);
-  const days = Math.floor((d.getTime() - jan1.getTime()) / 86400000);
+  // ISO 周号计算（v9.60 V9-D3：jan1.getDay 用北京时间，避免非东八区机器周号偏移）
+  const bj = getBJDate(d);
+  const jan1 = getBJDate(new Date(bj.getFullYear(), 0, 1));
+  const days = Math.floor((bj.getTime() - jan1.getTime()) / 86400000);
   const weekNum = Math.ceil((days + jan1.getDay() + 1) / 7);
-  return `${d.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+  return `${bj.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
 }
 
 function weekKey(): string {
@@ -49,7 +50,7 @@ function getWeekPlaybookEntries(): Array<{
   date: string; plan: string; executed: string | null;
   aiHitRate: string; sentiment: number | null;
 }> {
-  const today = new Date();
+  const today = getBJDate(); // v9.60（V9-D3）：北京时间，避免本机时区周一偏移
   // 修复：直接用本地日期计算周一（toISOString 在 CST 凌晨会取到昨天，且 +86400000 在跨日时漂移）
   // 周一距今天数：周日为 6 天前，其他为 (周几-1) 天前
   const mondayDaysAgo = today.getDay() === 0 ? 6 : today.getDay() - 1;
@@ -82,7 +83,8 @@ function getWeekPlaybookEntries(): Array<{
 
 // 判断是否该触发
 function shouldTrigger(): boolean {
-  const d = new Date();
+  // v9.60（V9-D3）：北京时间（getBJDate），避免本机时区周末/时段偏移
+  const d = getBJDate();
   const day = d.getDay();
   const hhmm = d.getHours() * 100 + d.getMinutes();
   // 周五15:30后 或 周末
