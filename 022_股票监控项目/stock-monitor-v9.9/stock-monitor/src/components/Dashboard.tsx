@@ -535,16 +535,26 @@ export default function Dashboard({
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
   const phase: SessionPhase = phaseProp;
+  // v9.45.1：面板展开状态持久化 —— 刷新/重开页面保持用户上次展开的面板（不再"神秘消失"）
+  const PANEL_PREF_KEY = "dashboard_panels_pref";
+  const loadPanelPref = (): Record<string, boolean> => {
+    try { return JSON.parse(localStorage.getItem(PANEL_PREF_KEY) ?? "{}"); } catch { return {}; }
+  };
+  const [panelPref] = useState(loadPanelPref); // 惰性初始化，仅首帧读取
   // 修复：原代码只在组件首次挂载时算一次 phase，phase 改变时不会重新打开 AI 复盘
-  const [showAI, setShowAI] = useState(phase === "post");
-  const [showSignal, setShowSignal] = useState(false);
+  const [showAI, setShowAI] = useState(panelPref.showAI ?? phase === "post");
+  const [showSignal, setShowSignal] = useState(Boolean(panelPref.showSignal));
   // v9.35（S3）：信号有效性回测面板
-  const [showSignalEffect, setShowSignalEffect] = useState(false);
+  const [showSignalEffect, setShowSignalEffect] = useState(Boolean(panelPref.showSignalEffect));
   // v9.42：因子健康度面板（幻方"因子失效"IC 曲线）
-  const [showFactorHealth, setShowFactorHealth] = useState(false);
+  const [showFactorHealth, setShowFactorHealth] = useState(Boolean(panelPref.showFactorHealth));
   // v9.44（②/④）：决策审计 + 信号净值
-  const [showAudit, setShowAudit] = useState(false);
-  const [showEquity, setShowEquity] = useState(false);
+  const [showAudit, setShowAudit] = useState(Boolean(panelPref.showAudit));
+  const [showEquity, setShowEquity] = useState(Boolean(panelPref.showEquity));
+  // 任何 toggle 变化 → 写回 localStorage（跨刷新保持）
+  useEffect(() => {
+    try { localStorage.setItem(PANEL_PREF_KEY, JSON.stringify({ showAI, showSignal, showSignalEffect, showFactorHealth, showAudit, showEquity })); } catch { /* 静默 */ }
+  }, [showAI, showSignal, showSignalEffect, showFactorHealth, showAudit, showEquity]);
   useEffect(() => {
     // 当 phase 变到 post 时自动打开 AI 复盘（盘后场景）
     if (phase === "post") setShowAI(true);
@@ -881,50 +891,51 @@ export default function Dashboard({
         </div>
       )}
 
+      {/* ============== 复盘工具（全天可用：AI复盘/信号/回测/因子健康/决策审计/净值） ============== */}
+      {/* v9.45.1：从盘后布局提升为全天可见 —— 数据源为历史（PG/localStorage），任何时段可查 */}
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => setShowAI(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 border border-violet-500/20">
+          {showAI ? "收起AI复盘" : "AI复盘总结"}
+        </button>
+        <button onClick={() => setShowSignal(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10">
+          {showSignal ? "收起信号/日记" : "信号账本/日记"}
+        </button>
+        {/* v9.35（S3）：信号有效性回测面板 */}
+        <button onClick={() => setShowSignalEffect(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border border-violet-500/30">
+          {showSignalEffect ? "收起回测" : "🧪 信号有效性回测"}
+        </button>
+        {/* v9.42：因子健康度面板（幻方"因子失效"IC 曲线） */}
+        <button onClick={() => setShowFactorHealth(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/30">
+          {showFactorHealth ? "收起因子" : "📉 因子健康度"}
+        </button>
+        {/* v9.44（②）：决策审计时间线 */}
+        <button onClick={() => setShowAudit(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30">
+          {showAudit ? "收起审计" : "📜 决策审计"}
+        </button>
+        {/* v9.44（④）：信号净值曲线 */}
+        <button onClick={() => setShowEquity(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 border border-rose-500/30">
+          {showEquity ? "收起净值" : "💰 信号净值"}
+        </button>
+      </div>
+      {showAI && <DailySummary overview={overview} fund={fund} />}
+      {showSignalEffect && <SignalEffectivenessPanel />}
+      {/* v9.42：因子健康度（server cron 15:40 落库 factor_ic:日期） */}
+      {showFactorHealth && <FactorHealthPanel />}
+      {/* v9.44（②）：决策审计时间线（decision_log） */}
+      {showAudit && <DecisionAuditPanel />}
+      {/* v9.44（④）：信号净值曲线（signalLedger 等权复利） */}
+      {showEquity && <SignalEquityPanel />}
+      {showSignal && <SignalPanel />}
+
       {/* ============== 盘后/午休布局 ============== */}
       {(isPost || phase === "lunch") && (
         <>
-          {/* AI复盘和信号面板 */}
-          <div className="flex gap-2">
-            <button onClick={() => setShowAI(v => !v)}
-              className="rounded px-3 py-1 text-xs bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 border border-violet-500/20">
-              {showAI ? "收起AI复盘" : "AI复盘总结"}
-            </button>
-            <button onClick={() => setShowSignal(v => !v)}
-              className="rounded px-3 py-1 text-xs bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10">
-              {showSignal ? "收起信号/日记" : "信号账本/日记"}
-            </button>
-            {/* v9.35（S3）：信号有效性回测面板 */}
-            <button onClick={() => setShowSignalEffect(v => !v)}
-              className="rounded px-3 py-1 text-xs bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border border-violet-500/30">
-              {showSignalEffect ? "收起回测" : "🧪 信号有效性回测"}
-            </button>
-            {/* v9.42：因子健康度面板（幻方"因子失效"IC 曲线） */}
-            <button onClick={() => setShowFactorHealth(v => !v)}
-              className="rounded px-3 py-1 text-xs bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/30">
-              {showFactorHealth ? "收起因子" : "📉 因子健康度"}
-            </button>
-            {/* v9.44（②）：决策审计时间线 */}
-            <button onClick={() => setShowAudit(v => !v)}
-              className="rounded px-3 py-1 text-xs bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30">
-              {showAudit ? "收起审计" : "📜 决策审计"}
-            </button>
-            {/* v9.44（④）：信号净值曲线 */}
-            <button onClick={() => setShowEquity(v => !v)}
-              className="rounded px-3 py-1 text-xs bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 border border-rose-500/30">
-              {showEquity ? "收起净值" : "💰 信号净值"}
-            </button>
-          </div>
-          {showAI && <DailySummary overview={overview} fund={fund} />}
-          {showSignalEffect && <SignalEffectivenessPanel />}
-          {/* v9.42：因子健康度（server cron 15:40 落库 factor_ic:日期） */}
-          {showFactorHealth && <FactorHealthPanel />}
-          {/* v9.44（②）：决策审计时间线（decision_log） */}
-          {showAudit && <DecisionAuditPanel />}
-          {/* v9.44（④）：信号净值曲线（signalLedger 等权复利） */}
-          {showEquity && <SignalEquityPanel />}
-          {showSignal && <SignalPanel />}
-
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
             <div className="space-y-2">
               <BattlePlan data={battlePlan ?? null} />
