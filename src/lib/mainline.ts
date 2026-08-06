@@ -7,6 +7,8 @@
 // 二者融合成"主线强度分"，再经 LLM 精排输出最终作战卡。
 
 import { buildThemeLadder, buildThemeLadderByConcept, type ZTPoolItem, type ThemeGroup } from "./themeLadder";
+// v9.51（V7-7）：主线资金聚合用概念白名单（conceptGroupOf 折叠一致性），不再字符串沾边累加
+import { conceptGroupOf } from "./conceptGroups";
 
 // ============== 数据结构 ==============
 
@@ -96,26 +98,20 @@ export function buildMainlineCandidates(
     // 即使 height≥9，1只涨停也不算"板块效应"，只能是孤峰/脉冲
     if (g.count < 2) continue;
 
-    // 板块资金（hybk 行业名 → boardMap 匹配；概念板块用模糊匹配）
-    // v9.26.13：三级匹配（精确 → 包含 → 2字 token）—— 修复"机器人(行业) vs 机器人概念(概念)"对不上
-    // 同时聚合多个相关板块资金（更真实反映"该主题资金流入强度"）
+    // 板块资金（v9.51 V7-7：精确名 + 概念白名单 —— 停止"双向子串+token 沾边"污染累加）
+    // 旧逻辑：name.includes(theme)||theme.includes(name) + 2字token 扫全表 → 名字沾边的无关板块资金全被累加
+    // 新逻辑：①精确名匹配 ②board 名经 conceptGroups 折叠成用户大类，与主线主题大类一致才算归属
     const matchedFlows: BoardFlowLike[] = [];
-    // 精确
+    // ① 精确名（boardMap 直接用行业/概念原名命中）
     if (boardMap.has(g.theme)) matchedFlows.push(boardMap.get(g.theme)!);
-    // 包含
+    // ② 概念白名单：仅聚合"概念上明确归属同大类"的板块（依赖 V7-4 修好的归类，不再字符串沾边）
+    const themeGroup = conceptGroupOf(g.theme) ?? g.theme;
     for (const [name, b] of boardMap) {
       if (matchedFlows.includes(b)) continue;
-      if (name.includes(g.theme) || g.theme.includes(name)) matchedFlows.push(b);
+      const bg = conceptGroupOf(name) ?? name;
+      if (bg === g.theme || bg === themeGroup) matchedFlows.push(b);
     }
-    // token 级（拆 2 字以上片段）
-    const tokens = g.theme.split(/[·、,，\s]+/).filter(t => t.length >= 2);
-    for (const tok of tokens) {
-      for (const [name, b] of boardMap) {
-        if (matchedFlows.includes(b)) continue;
-        if (name.includes(tok)) matchedFlows.push(b);
-      }
-    }
-    // 聚合：取 mainNet 绝对值最大的作为代表，mainNet5d/mainNet10d 累加
+    // 聚合：取 mainNet 绝对值最大的作为代表，mainNet5d/mainNet10d 累加（来源已白名单收敛）
     let boardFlow: BoardFlowLike | null = matchedFlows[0] ?? null;
     if (matchedFlows.length > 0) {
       const best = matchedFlows.reduce((a, b) => Math.abs(b.mainNet ?? 0) > Math.abs(a.mainNet ?? 0) ? b : a);

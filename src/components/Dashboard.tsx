@@ -48,6 +48,8 @@ function actionColor(action: string): string {
 import LadderPulse from "./LadderPulse";
 import WeeklyCoach from "./WeeklyCoach";
 import BattlePlan, { type BattlePlanData } from "./BattlePlan";
+// v9.52（V7-3）：今日上车标的清单（决策区下方、BattlePlan 之后）
+import StockPickList from "./StockPickList";
 import GlobalSignals from "./GlobalSignals";
 import { fmtMoney, fmtPct, pctColor, localDateStrOffset } from "../lib/format";
 import { loadIntradaySeries, computeMomentum, suggestPosition } from "../lib/sentimentStore";
@@ -896,6 +898,17 @@ export default function Dashboard({
           {/* v9.48 D4：核心温度条提到决策区下方（盘中核心进阶指标，D2 已去 EmotionCycle 冗余） */}
           <LimitTempBar overview={overview} />
           <BattlePlan data={battlePlan ?? null} />
+          {/* v9.52（V7-1/3）：今日上车标的清单 —— "主线可上车"→"买这些"（决策区下方、作战计划之后） */}
+          <StockPickList
+            candidate={battlePlan?.candidates?.[0] ?? null}
+            rawPool={overview?.limitPool?.rawZTPool ?? []}
+            potential={mainline?.potential?.map(p => ({
+              code: p.code, name: p.name,
+              mainNetPct: p.mainNetPct ?? 0, mainNet5dPct: 0, // potential 无 5d 字段，增强仅用当日主力占比
+              vetoed: Boolean(p.vetoed), vetoReasons: p.vetoReasons ?? [],
+            }))}
+            gate={battlePlan?.gate ?? null}
+          />
           <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
           <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
           <MarketOverview data={overview} loading={loading} />
