@@ -742,46 +742,51 @@ export default function Dashboard({
       {/* 指数光带（极薄通栏） */}
       <IndexStrip overview={overview} />
 
+      {/* ============== 共用顶部决策区（v9.46：全阶段可见，决策靠前） ============== */}
+      {/* 驾驶舱 + 今日作战卡 + Agent 重审 + Top 摘要 —— 任何阶段（盘前/盘中/盘后/午休）都置顶 */}
+      <div className="space-y-2">
+        {/* v9.23-3：游资五问条（驾驶舱顶部常驻） */}
+        <FiveQBar battlePlan={battlePlan ?? null} overview={overview} />
+        {/* v9.37（V3-7）：AI 终裁决（多源共识，替代决策的可见终点） */}
+        <DecisionVerdictCard
+          mainline={battlePlan?.candidates?.[0]?.mainline ?? "—"}
+          sources={decisionSources}
+          agent={agentResults[0]?.verdict ?? null}
+          signalGates={signalGates}
+          factorStats={factorStats ?? undefined}
+        />
+        {/* v9.38（V3-2/3）：Agent 手动重审按钮（自动已每5分钟跑，手动可即时刷新） */}
+        <div className="flex items-center gap-2">
+          <button onClick={() => runAgent(false)} disabled={agentLoading}
+            className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50">
+            {agentLoading ? "🤖 Agent 调研中…" : "⚡ 立即重审（LLM）"}
+          </button>
+          <span className="text-[9px] text-slate-600">自动每 5 分钟裁决一次；点击即时重审</span>
+        </div>
+        {/* v9.41（V4-E）：Top-2/3 主线 AI 裁决摘要 */}
+        {agentResults.length > 1 && (
+          <div className="space-y-1 rounded-lg border border-white/5 bg-black/20 p-2">
+            {agentResults.slice(1).map(({ mainline, verdict }) => (
+              <div key={mainline} className="flex items-center gap-2 text-[10px]">
+                <span className="w-24 truncate text-slate-400" title={mainline}>{mainline}</span>
+                <span className={`rounded px-1.5 py-0.5 font-bold ${
+                  verdict.action === "可上车" ? "bg-emerald-500/15 text-emerald-300"
+                  : verdict.action === "禁止" ? "bg-rose-500/15 text-rose-300"
+                  : "bg-amber-500/15 text-amber-300"
+                }`}>{verdict.action}</span>
+                <span className="text-slate-600">{verdict.confidence}%</span>
+                <span className="flex-1 truncate text-slate-500">{verdict.reason}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* ============== 盘中布局 ============== */}
       {isTrading && (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_300px]">
-          {/* 左 2/3 */}
+          {/* 左 2/3 ——v9.46：顶部驾驶舱/裁决/重审/Top摘要 已提取到 Dashboard 共用顶部 —— BattlePlan 顶到第 1 位 */}
           <div className="space-y-2">
-            {/* v9.23-3：游资五问条（驾驶舱顶部常驻） */}
-            <FiveQBar battlePlan={battlePlan ?? null} overview={overview} />
-            {/* v9.37（V3-7）：AI 终裁决（多源共识，替代决策的可见终点） */}
-            <DecisionVerdictCard
-              mainline={battlePlan?.candidates?.[0]?.mainline ?? "—"}
-              sources={decisionSources}
-              agent={agentResults[0]?.verdict ?? null}
-              signalGates={signalGates}
-              factorStats={factorStats ?? undefined}
-            />
-            {/* v9.38（V3-2/3）：Agent 手动重审按钮（自动已每5分钟跑，手动可即时刷新） */}
-            <div className="flex items-center gap-2">
-              <button onClick={() => runAgent(false)} disabled={agentLoading}
-                className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50">
-                {agentLoading ? "🤖 Agent 调研中…" : "⚡ 立即重审（LLM）"}
-              </button>
-              <span className="text-[9px] text-slate-600">自动每 5 分钟裁决一次；点击即时重审</span>
-            </div>
-            {/* v9.41（V4-E）：Top-2/3 主线 AI 裁决摘要 */}
-            {agentResults.length > 1 && (
-              <div className="space-y-1 rounded-lg border border-white/5 bg-black/20 p-2">
-                {agentResults.slice(1).map(({ mainline, verdict }) => (
-                  <div key={mainline} className="flex items-center gap-2 text-[10px]">
-                    <span className="w-24 truncate text-slate-400" title={mainline}>{mainline}</span>
-                    <span className={`rounded px-1.5 py-0.5 font-bold ${
-                      verdict.action === "可上车" ? "bg-emerald-500/15 text-emerald-300"
-                      : verdict.action === "禁止" ? "bg-rose-500/15 text-rose-300"
-                      : "bg-amber-500/15 text-amber-300"
-                    }`}>{verdict.action}</span>
-                    <span className="text-slate-600">{verdict.confidence}%</span>
-                    <span className="flex-1 truncate text-slate-500">{verdict.reason}</span>
-                  </div>
-                ))}
-              </div>
-            )}
             <BattlePlan data={battlePlan ?? null} />
             {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
             {overview && (
@@ -891,8 +896,33 @@ export default function Dashboard({
         </div>
       )}
 
-      {/* ============== 复盘工具（全天可用：AI复盘/信号/回测/因子健康/决策审计/净值） ============== */}
-      {/* v9.45.1：从盘后布局提升为全天可见 —— 数据源为历史（PG/localStorage），任何时段可查 */}
+      {/* ============== 盘后/午休布局（v9.46：紧跟盘前/盘中布局，更早出现 —— 盘后核心数据靠前） ============== */}
+      {(isPost || phase === "lunch") && (
+        <>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
+            <div className="space-y-2">
+              <BattlePlan data={battlePlan ?? null} />
+              <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
+              <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
+              <MarketOverview data={overview} loading={loading} />
+              <PopularityRadar />
+            </div>
+            <div className="space-y-2">
+              <GateGauge overview={overview} gate={gate} />
+              <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
+                blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />
+              <InstitutionFund />
+              <LadderPulse overview={overview} />
+              <WeeklyCoach />
+            </div>
+          </div>
+          {/* v9.38.1（V3-12）：事件三级研判（政策/行业/事件 + 受益板块）—— 盘后独立全宽行（数据由 cron 15:40 落库） */}
+          <EventClassifyPanel />
+        </>
+      )}
+
+      {/* ============== 复盘工具（v9.46：移到全 Dashboard 末尾 —— "现在进行"在前，"复盘"在后） ============== */}
+      {/* 全天可见按钮（默认折叠，状态持久化到 localStorage）：AI复盘/信号/回测/因子健康/决策审计/净值 */}
       <div className="flex flex-wrap gap-2">
         <button onClick={() => setShowAI(v => !v)}
           className="rounded px-3 py-1 text-xs bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 border border-violet-500/20">
@@ -932,31 +962,6 @@ export default function Dashboard({
       {/* v9.44（④）：信号净值曲线（signalLedger 等权复利） */}
       {showEquity && <SignalEquityPanel />}
       {showSignal && <SignalPanel />}
-
-      {/* ============== 盘后/午休布局 ============== */}
-      {(isPost || phase === "lunch") && (
-        <>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
-            <div className="space-y-2">
-              <BattlePlan data={battlePlan ?? null} />
-              <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
-              <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
-              <MarketOverview data={overview} loading={loading} />
-              <PopularityRadar />
-            </div>
-            <div className="space-y-2">
-              <GateGauge overview={overview} gate={gate} />
-              <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
-                blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />
-              <InstitutionFund />
-              <LadderPulse overview={overview} />
-              <WeeklyCoach />
-            </div>
-          </div>
-          {/* v9.38.1（V3-12）：事件三级研判（政策/行业/事件 + 受益板块）—— 盘后独立全宽行（数据由 cron 15:40 落库） */}
-          <EventClassifyPanel />
-        </>
-      )}
     </div>
   );
 }
