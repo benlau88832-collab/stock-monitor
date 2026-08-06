@@ -30,7 +30,9 @@ export const CONCEPT_GROUPS: ConceptGroupDef[] = [
   },
   {
     group: "AI应用",
-    roots: ["AI应用", "AI智能体", "AI眼镜", "AI手机", "AI PC", "Copilot", "数字人", "智能体", "多模态", "AIGC", "大模型", "人工智能"],
+    // v9.59-fix（V8-7）：补"计算机/软件/互联网"等常见行业名 —— LLM 主线"AI应用"要能匹配到
+    // 东财行业板块"计算机/软件开发/互联网服务"的资金（V8-7 验收样例）
+    roots: ["AI应用", "AI智能体", "AI眼镜", "AI手机", "AI PC", "Copilot", "数字人", "智能体", "多模态", "AIGC", "大模型", "人工智能", "计算机", "软件", "互联网"],
   },
   {
     group: "算力",
@@ -140,6 +142,21 @@ export function ambiguousConcepts(conceptName: string): string[] | null {
     }
   }
   return groups.size >= 2 ? [...groups] : null;
+}
+
+// v9.59（V8-7）：主线名 → 板块资金名反向映射
+// LLM 起的主线名（"人工智能"）与 foldBoardFunds 折叠 key（"AI应用"）字面不同 → 匹配失败。
+// 该函数以"主线名折叠后的大类"为桥梁：返回 boards 中折叠归属同一大类的板块名，
+// 比纯模糊 includes 稳（"人工智能"→折叠"AI应用"→命中"AI应用/算力/服务器"等板块）。
+export function mainlineToBoardNames(mainline: string, boards: BoardFund[]): string[] {
+  if (!mainline || boards.length === 0) return [];
+  const mg = conceptGroupOf(mainline) ?? mainline;
+  return boards
+    .filter(b => {
+      const bg = conceptGroupOf(b.name) ?? b.name;
+      return bg === mainline || bg === mg || b.name === mainline;
+    })
+    .map(b => b.name);
 }
 
 /** 把一批概念名折叠成用户大类集合（含无法折叠的原名） */

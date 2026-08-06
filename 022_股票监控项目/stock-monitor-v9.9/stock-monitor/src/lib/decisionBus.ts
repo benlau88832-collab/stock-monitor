@@ -47,7 +47,7 @@ export function runConsensus(
     vetoSources?: Set<string>;
     signalGates?: Array<{ name: string; winRate: number | null; samples: number | null }>;
     /** v9.39（改造2）：因子健康度（factorLib 滚动 IC 评估结果）—— 失效因子占比高 → 全局降置信 */
-    factorStats?: { decayed: number; total: number };
+    factorStats?: { decayed: number; total: number; samples?: number | null };
   },
 ): DecisionVerdict {
   const vetoSet = opts?.vetoSources ?? VETO_SOURCES;
@@ -89,11 +89,17 @@ export function runConsensus(
 
   // ---- ②b 因子健康度（幻方"因子会过期"在线监测接入）----
   // factorLib 滚动 IC 评估出"疑似失效因子"占比高 → 全局下调置信（对"用历史无效信号投票"的惩罚）
+  // v9.57（V8-3）：样本 <30 交易日 → penalty 归零（不因不可靠 IC 扣置信）
   let factorHealthPenalty = 0;
   if (opts?.factorStats && opts.factorStats.total >= 3) {
     const ratio = opts.factorStats.decayed / opts.factorStats.total;
-    if (ratio >= 0.5) factorHealthPenalty = 15;
-    else if (ratio >= 0.3) factorHealthPenalty = 8;
+    if (opts.factorStats.samples != null && opts.factorStats.samples < 30) {
+      evidence.push(`🧪 因子样本仅${opts.factorStats.samples}天（<30，不具统计显著性），IC 不下调置信`);
+    } else if (ratio >= 0.5) {
+      factorHealthPenalty = 15;
+    } else if (ratio >= 0.3) {
+      factorHealthPenalty = 8;
+    }
     if (factorHealthPenalty > 0) {
       evidence.push(`🧪 因子健康度：${opts.factorStats.decayed}/${opts.factorStats.total} 因子疑似失效（|IC|<0.05），置信下调${factorHealthPenalty}%`);
     }

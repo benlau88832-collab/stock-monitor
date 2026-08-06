@@ -13,7 +13,7 @@ import type { ZTPoolItem } from "./themeLadder";
 import { fetchBoardFundFlow, fetchBoardConstituents } from "./api";
 import { isRealConceptBoard } from "./boardTaxonomy";
 import { fetchStocksBoards } from "./stockBoards";
-import { foldConcepts, foldBoardFunds } from "./conceptGroups";
+import { foldConcepts, foldBoardFunds, conceptGroupOf } from "./conceptGroups";
 
 // ============== 数据结构 ==============
 /** 单只涨停股的主线归类（LLM 输出 + 代码聚合） */
@@ -36,6 +36,8 @@ export interface MainlineGroup {
   height: number;            // 组内最高连板
   mainNet: number;            // 板块主力净流入（由 App.tsx 注入或默认 0）
   mainNet5d: number;
+  /** v9.56（V8-6）：资金匹配失败（折叠/LLM/模糊/hybk 全对不上）→ UI 显示"数据未匹配"而非假 0 */
+  fundMissing?: boolean;
   boardPct: number;            // 板块涨幅
   newsTitles: string[];      // 相关新闻标题
   /** 板块效应评估：LLM 判断"是否真主线"（≥3只涨停 = 真主线；1-2只 = 弱主线/孤峰） */
@@ -260,7 +262,8 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
       // 保留 LLM 组的 logic/caution/isPulse（若该主线 LLM 已评估），否则用概念补充
       const llmGroup = parsedResult.groups.find(g => g.mainline === ml);
       // v9.26.16：资金匹配（foldBoardFunds 折叠优先 → LLM 组 → 模糊兜底）
-      let mainNet = 0, mainNet5d = 0, boardPct = 0;
+      // v9.56（V8-6）：全部失败后加 hybk 兜底 + fundMissing 标记（不再静默假 0）
+      let mainNet = 0, mainNet5d = 0, boardPct = 0, fundMissing = false;
       const fb = foldedBoards.get(ml);
       if (fb) { mainNet = fb.mainNet; mainNet5d = fb.mainNet5d ?? 0; boardPct = fb.pct; }
       if (mainNet === 0 && !llmGroup) {
@@ -274,12 +277,39 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
       if (mainNet === 0 && llmGroup) {
         mainNet = llmGroup.mainNet; mainNet5d = llmGroup.mainNet5d ?? 0; boardPct = llmGroup.boardPct;
       }
+      // v9.59（V8-7）：折叠 key 归一化 —— LLM 主线名"人工智能" vs 折叠 key"AI应用" 字面不同
+      // → 用 conceptGroups 折叠大类做桥梁，匹配同一大类的板块资金
+      if (mainNet === 0 && foldedBoards.size > 0) {
+        const mg = conceptGroupOf(ml);
+        if (mg) {
+          for (const [k, v] of foldedBoards) {
+            if (k === mg || (conceptGroupOf(k) ?? k) === mg) {
+              mainNet = v.mainNet; mainNet5d = v.mainNet5d ?? 0; boardPct = v.pct;
+              break;
+            }
+          }
+        }
+      }
+      // hybk 兜底：LLM 主线名对不上折叠 key 时，用组内涨停股的 hybk 行业聚合资金（涨停股必有 hybk，比 LLM 起名可靠）
+      if (mainNet === 0 && items.length > 0) {
+        const hybkFunds = items
+          .map(s => input.boards.find(b => b.name === String(s.hybk ?? "")))
+          .filter((b): b is NonNullable<typeof b> => Boolean(b));
+        if (hybkFunds.length > 0) {
+          mainNet = hybkFunds.reduce((a, b) => a + (b.mainNet ?? 0), 0);
+          mainNet5d = hybkFunds.reduce((a, b) => a + (b.mainNet5d ?? 0), 0);
+          boardPct = hybkFunds[0].pct;
+        } else {
+          fundMissing = true; // 连 hybk 都对不上才标"数据未匹配"
+        }
+      }
       groups.push({
         mainline: ml,
         ztCount: items.length,
         leaders,
         height: Math.max(...items.map(i => i.lbc ?? 1)),
         mainNet, mainNet5d, boardPct,
+        fundMissing,
         newsTitles: input.newsItems.filter(n => n.title.includes(ml)).slice(0, 3).map(n => n.title),
         isPulse: llmGroup?.isPulse ?? items.length < 3,
         logic: llmGroup?.logic ?? `概念补充（LLM未覆盖，${items.length}只）`,
@@ -357,12 +387,26 @@ async function parseClassifyResult(raw: string, input: ClassifyInput): Promise<C
         }
       }
     }
+    // v9.59-fix（V8-6）：hybk 兜底 + fundMissing（与 LLM 路径同构，防假 0）
+    let fundMissing = false;
+    if (mainNet === 0 && stockCodes.length > 0) {
+      const groupStocks = input.rawPool.filter(p => stockCodes.includes(String(p.c ?? "")));
+      const hybkFunds = groupStocks.map(s => input.boards.find(b => b.name === String(s.hybk ?? ""))).filter((b): b is NonNullable<typeof b> => Boolean(b));
+      if (hybkFunds.length > 0) {
+        mainNet = hybkFunds.reduce((a, b) => a + (b.mainNet ?? 0), 0);
+        mainNet5d = hybkFunds.reduce((a, b) => a + (b.mainNet5d ?? 0), 0);
+        boardPct = hybkFunds[0].pct;
+      } else {
+        fundMissing = true;
+      }
+    }
     groups.push({
       mainline,
       ztCount,
       leaders,
       height: leaders.length > 0 ? Math.max(...leaders.map(l => l.boardCount)) : 0,
       mainNet, mainNet5d, boardPct,
+      fundMissing,
       newsTitles: input.newsItems.filter(n => n.title.includes(mainline) || mainline.includes(n.title.split(" ").slice(-1)[0] || "")).slice(0, 6).map(n => n.title),
       isPulse: Boolean(g.isPulse),
       logic: String(g.logic ?? "").slice(0, 60),

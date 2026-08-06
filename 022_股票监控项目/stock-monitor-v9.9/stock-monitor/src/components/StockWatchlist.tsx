@@ -3,6 +3,8 @@ import { fetchStockOne, fetchStockNews, fetchStockAnnouncements, fetchLiftBan, s
 import { fetchStockMargin, detectMarginSignal, marginSignalColor, type StockMarginInfo, type MarginSignal } from "../lib/margin";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
+// v9.58（V8-9）：AI 结论全站联动 store
+import { getStockAI } from "../lib/aiConclusionStore";
 
 // ============== LLM 配置（引用 AI 中枢的统一常量） ==============
 import { callAI, hasAvailableAI, hasAIOptimistic, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
@@ -593,7 +595,16 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                   )}
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="font-medium text-slate-100">{s?.name || code}</div>
+                      <div className="flex items-center gap-1 font-medium text-slate-100">
+                        {s?.name || code}
+                        {/* v9.58（V8-9）：AI 结论全站联动 —— 个股雷达旁标 AI 裁决（decideForStock 写入） */}
+                        {(() => {
+                          const ai = getStockAI(code);
+                          if (!ai) return null;
+                          const cls = ai.verdict === "可买" ? "bg-emerald-500/20 text-emerald-300" : ai.verdict === "回避" ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300";
+                          return <span className={`rounded px-1 py-px text-[9px] font-bold ${cls}`} title={`AI 研判：${ai.reason}`}>AI:{ai.verdict}</span>;
+                        })()}
+                      </div>
                       <div className="text-[11px] text-slate-500">{code}</div>
                     </div>
                     <div className="text-right">

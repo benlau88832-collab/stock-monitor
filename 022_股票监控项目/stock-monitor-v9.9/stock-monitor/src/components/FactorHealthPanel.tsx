@@ -46,9 +46,9 @@ function IcSpark({ points, factorName, overrideIc }: { points: FactorIcPoint[]; 
           <title>{`${factorName} ${p.date}\nIC=${p.ic} 样本=${p.samples}${p.decayed ? " 失效" : p.reversed ? " 方向反转" : ""}`}</title>
         </circle>
       ))}
-      {/* 当前点大圆 */}
-      <circle cx={lastX} cy={yOf(overrideIc != null ? overrideIc : last.ic)} r="3.5" fill={dispColor} stroke="#0f172a" strokeWidth="1.2">
-        <title>{`${factorName} ${last.date}\nIC=${last.ic} 样本=${last.samples}${last.decayed ? " 疑似失效" : last.reversed ? " 方向反转" : " 健康"}${overrideIc != null ? `\n自动反向后 IC=${overrideIc}` : ""}`}</title>
+      {/* 当前点大圆（v9.59-fix：数据缺失 → 灰色点+标注，不冒充失效） */}
+      <circle cx={lastX} cy={yOf(overrideIc != null ? overrideIc : last.ic)} r="3.5" fill={last.missing ? "#64748b" : dispColor} stroke="#0f172a" strokeWidth="1.2">
+        <title>{`${factorName} ${last.date}\nIC=${last.ic} 样本=${last.samples}${last.missing ? " 数据缺失（无数据源）" : last.decayed ? " 疑似失效" : last.reversed ? " 方向反转" : " 健康"}${overrideIc != null ? `\n自动反向后 IC=${overrideIc}` : ""}`}</title>
       </circle>
       {/* 右缘当前 IC 标签 */}
       <text x={W - PAD - 2} y={yOf(dispIc) - 4} textAnchor="end" fontSize="8.5" fill={dispColor} fontWeight="bold">
@@ -96,7 +96,7 @@ export default function FactorHealthPanel() {
       const m: Record<string, FactorIcPoint[]> = {};
       for (const f of FACTORS) {
         const pts = history.byFactor[f.name];
-        if (pts && pts.length >= 1) m[f.id] = pts.map(p => ({ date: p.date, ic: p.ic, samples: p.samples, decayed: p.decayed, reversed: (p as any).reversed }));
+        if (pts && pts.length >= 1) m[f.id] = pts.map(p => ({ date: p.date, ic: p.ic, samples: p.samples, decayed: p.decayed, reversed: (p as any).reversed, missing: (p as any).missing }));
       }
       return m;
     }
@@ -108,14 +108,17 @@ export default function FactorHealthPanel() {
     const ids = Object.keys(seriesMap);
     if (ids.length === 0) return null;
     const cur = (id: string) => seriesMap[id][seriesMap[id].length - 1];
-    const decayed = ids.filter(id => cur(id)?.decayed).length;
+    // v9.59-fix（V8-2）：数据缺失（missing）因子不计入 decayed/reversed，也不拉低健康分
+    const missing = ids.filter(id => cur(id)?.missing).length;
+    const decayed = ids.filter(id => cur(id)?.decayed && !cur(id)?.missing).length;
     const reversed = ids.filter(id => !cur(id)?.decayed && cur(id)?.reversed).length;
     const avgAbsIc = ids.reduce((s, id) => {
       const pts = seriesMap[id];
       return s + (pts.length ? Math.abs(pts[pts.length - 1].ic) : 0);
     }, 0) / ids.length;
-    const healthScore = Math.round((1 - (decayed + reversed) / ids.length) * 100);
-    return { total: ids.length, decayed, reversed, avgAbsIc, healthScore };
+    const effectiveTotal = ids.length - missing;
+    const healthScore = effectiveTotal > 0 ? Math.round((1 - (decayed + reversed) / effectiveTotal) * 100) : 100;
+    return { total: ids.length, decayed, reversed, missing, avgAbsIc, healthScore };
   }, [seriesMap]);
 
   // v9.44（③）：自动处置判定 —— 连续反转≥3日自动反向 / 连续真失效≥5日退役
@@ -155,6 +158,18 @@ export default function FactorHealthPanel() {
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-3">
+      {/* v9.57（V8-3）：样本不足 → 顶部红字降级（IC 结论不代表统计显著） */}
+      {(() => {
+        const sampleDays = history && history.dates.length >= 2 ? history.dates.length : (fallbackRows?.length ?? 0);
+        if (sampleDays < 30) {
+          return (
+            <div className="rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300">
+              ⚠ 因子样本仅 {sampleDays} 天（统计显著需 ≥30 个交易日），下方 IC 结论仅供参考，不代表统计显著
+            </div>
+          );
+        }
+        return null;
+      })()}
       <div className="flex items-center justify-between">
         <div className="text-sm font-bold text-slate-100">
           🧪 因子健康度 <span className="ml-1 text-[10px] text-slate-500 font-normal">幻方"因子会失效"监测 · 滚动窗口 IC 曲线</span>

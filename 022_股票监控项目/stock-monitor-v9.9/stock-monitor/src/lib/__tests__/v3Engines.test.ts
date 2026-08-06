@@ -22,12 +22,26 @@ describe("factorLib 因子注册表 + IC 评估", () => {
     expect(ic.samples).toBeGreaterThanOrEqual(3);
   });
 
-  it("markNextWin：次日情绪≥今日 → win=1", () => {
+  it("markNextWin（v9.57 V8-1）：次日涨停维持 ≥80% → win=1；骤降 → win=0", () => {
+    const marked = markNextWin([
+      { date: "d1", ztCount: 60 },
+      { date: "d2", ztCount: 55 }, // 维持（55 ≥ 48）→ 延续
+      { date: "d3", ztCount: 30 }, // 骤降（30 < 44）→ 未延续
+      { date: "d4", ztCount: 10 },
+    ]);
+    expect(marked[0].nextMainlineWin).toBe(1);
+    expect(marked[1].nextMainlineWin).toBe(0);
+    expect(marked[2].nextMainlineWin).toBe(0);
+    expect(marked[3].nextMainlineWin).toBeNull(); // 最后一行无次日
+  });
+
+  it("markNextWin：无涨停数（缺数据）→ win=null，不误判", () => {
     const marked = markNextWin([
       { date: "d1", sentiment: 50 },
       { date: "d2", sentiment: 65 },
     ]);
-    expect(marked[0].nextMainlineWin).toBe(1);
+    expect(marked[0].nextMainlineWin).toBeNull();
+    expect(marked[1].nextMainlineWin).toBeNull();
   });
 
   it("evaluateAllFactors 输出完整", () => {
@@ -49,9 +63,11 @@ describe("factorLib 因子注册表 + IC 评估", () => {
 
 // v9.42：滚动窗口 IC 序列（"因子失效曲线"数据源）
 describe("factorLib 滚动 IC 序列", () => {
-  // 完整字段行工厂（全因子有输入）：zt 高日 + sentiment 低日 → 次日情绪升（win=1）→ 正相关
+  // 完整字段行工厂（全因子有输入；v9.57 V8-1 标签=涨停维持）：
+  //   正相关：zt 高日 → 次日涨停维持（win=1）；负相关：zt 高日 → 次日骤降（win=0）
   const fullRow = (i: number, { neg = false } = {}) => {
     const ztHigh = i % 2 === 0;
+    const ztCount = ztHigh ? 60 + i : (neg ? 10 + i : 55 + i); // 维持(55≥48) vs 骤降(10<48)
     const senti = neg
       ? (ztHigh ? 50 + i : 30 + i)   // 负相关：zt高日→次日情绪降（win=0）
       : (ztHigh ? 30 + i : 50 + i);  // 正相关：zt高日→次日情绪升（win=1）
@@ -59,7 +75,7 @@ describe("factorLib 滚动 IC 序列", () => {
       date: `d${i}`,
       sentiment: senti,
       blastedRate: ztHigh ? 15 : 40,
-      ztCount: ztHigh ? 60 + i : 10 + i,
+      ztCount,
       maxBoardHeight: ztHigh ? 5 : 2,
       premiumAvg: ztHigh ? 2 : -2,
       promotionRate: ztHigh ? 0.4 : 0.15,
@@ -95,6 +111,7 @@ describe("factorLib 滚动 IC 序列", () => {
     const rows = markNextWin(Array.from({ length: 4 }, (_, i) => ({
       date: `d${i}`,
       sentiment: 40 + i,
+      ztCount: 50 + i,           // 维持 → win=1（v9.57 V8-1 标签）
       nuclearCount: i % 2 === 0 ? 1 : 3,
     })));
     const series = computeFactorIcSeries(f, rows, 10);

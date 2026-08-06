@@ -42,14 +42,39 @@ async function fetchMarketDaily(pool) {
     maxBoardHeight: maxBoard,
   };
   // v9.40（V4-G）：补齐 4 个因子输入字段（此前缺失 → factorLib 4 因子永远 decayed）
-  // sealDecayCount：封单衰减预警数（炸板 = 封单消失的直接结果，用当日炸板数代理）
-  try { md.sealDecayCount = zbPool.length; } catch { md.sealDecayCount = null; }
+  // v9.56（V8-2）：premiumAvg/promotionRate 补落库；sealDecayCount 改真实（无 seal 预警源 → null，不用炸板冒充）；fundInflowStreak 连续天数
+  // sealDecayCount：封单衰减预警数 —— server 无 sealMonitor 预警源，真实值缺失 → null（不再用 zbPool 炸板数代理）
+  md.sealDecayCount = null;
+  // premiumAvg（昨日涨停股今日平均涨幅）+ promotionRate（昨日首板今日继续涨停比例）
+  try {
+    const prevSnap = await pool.query(`SELECT data FROM zt_snapshot WHERE date < $1 ORDER BY date DESC LIMIT 1`, [date]);
+    let prevPool = [];
+    if (prevSnap.rows[0]?.data) {
+      try { prevPool = JSON.parse(prevSnap.rows[0].data).pool ?? []; } catch { prevPool = []; }
+    }
+    if (prevPool.length > 0) {
+      const todayCodes = new Set(ztPool.map(p => String(p.c)));
+      const prevFirst = prevPool.filter(p => Number(p.lbc ?? 1) === 1);
+      // 晋级率：昨日首板 → 今日仍涨停 占比
+      md.promotionRate = prevFirst.length > 0
+        ? Math.round(prevFirst.filter(p => todayCodes.has(String(p.c))).length / prevFirst.length * 1000) / 1000
+        : null;
+      // 溢价均值：昨日涨停股今日平均涨幅（push2delay ulist 批量拉 f3 涨跌幅；收盘后 = 溢价代理）
+      const codes = [...new Set(prevPool.map(p => String(p.c)))];
+      const secids = codes.map(c => (c.startsWith("6") ? "1." : "0.") + c).join(",");
+      const bj = await httpsGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f3,f12&secids=${secids}`);
+      const diff = bj?.data?.diff;
+      const rows = Array.isArray(diff) ? diff : (diff && typeof diff === "object" ? Object.values(diff) : []);
+      const pcts = rows.map(r => Number(r?.f3)).filter(v => Number.isFinite(v));
+      md.premiumAvg = pcts.length > 0 ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length * 100) / 100 : null;
+    } else { md.premiumAvg = null; md.promotionRate = null; }
+  } catch (e) { console.warn("[cron] premium/promotion 计算失败:", e?.message); md.premiumAvg = null; md.promotionRate = null; }
   // lhbBoostCount：龙虎榜净买入股票数（席位加持）
   try {
     const lhb = await fetchLhbDaily();
     md.lhbBoostCount = lhb.filter(x => x.netBuy > 0).length;
   } catch { md.lhbBoostCount = null; }
-  // fundInflowStreak：主线行业连续流入天数（读 fund_streak 历史）
+  // fundInflowStreak：主线行业连续流入天数（读 fund_streak 历史，往前数连续 mainNet>0）
   try {
     const funds = await fetchBoardFundServer();
     if (funds.length > 0) {
@@ -59,9 +84,21 @@ async function fetchMarketDaily(pool) {
          ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
         [`fund_streak:${fDateStr}`, JSON.stringify({ date: fDateStr, items: funds })],
       );
-      // 取流入最强势行业的连续天数作为整体信号
-      const topInflow = funds[0];
-      md.fundInflowStreak = topInflow && topInflow.mainNet > 0 ? 1 : -1;
+      // 连续流入天数：从今天往前数，主流入行业每日 mainNet>0
+      let streak = 0;
+      const d = new Date();
+      for (let i = 0; i < 10; i++) {
+        const dd = new Date(d); dd.setDate(dd.getDate() - i);
+        const key = `fund_streak:${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, "0")}-${String(dd.getDate()).padStart(2, "0")}`;
+        const r = await pool.query(`SELECT value FROM kv_store WHERE key=$1`, [key]).catch(() => ({ rows: [] }));
+        let items = [];
+        if (r.rows[0]?.value) { try { items = JSON.parse(r.rows[0].value).items ?? []; } catch { items = []; } }
+        const top = items[0];
+        if (top && top.mainNet > 0) streak++;
+        else if (i > 0) break; // 今天可能还没落库，从昨天开始断链即停
+        if (i === 0 && (!top || top.mainNet <= 0)) { streak = 0; break; }
+      }
+      md.fundInflowStreak = streak;
     } else md.fundInflowStreak = null;
   } catch { md.fundInflowStreak = null; }
   // nuclearCount：核按钮数（昨 ≥2 板 今跌 ≤-9%，退潮最强信号）

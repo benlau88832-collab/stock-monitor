@@ -621,7 +621,7 @@ export default function Dashboard({
 
   // v9.39（改造2）：幻方门控数据 —— 信号回测胜率（激活 V3-5 门控）+ 因子 IC 健康度（接入降权）
   const [signalGates, setSignalGates] = useState<Array<{ name: string; winRate: number | null; samples: number | null }>>([]);
-  const [factorStats, setFactorStats] = useState<{ decayed: number; total: number } | null>(null);
+  const [factorStats, setFactorStats] = useState<{ decayed: number; total: number; samples?: number | null } | null>(null);
   useEffect(() => {
     if (!isLocalServer()) return;
     let alive = true;
@@ -639,7 +639,8 @@ export default function Dashboard({
         if (rows.length >= 3 && alive) {
           const ics = evaluateAllFactors(markNextWin(rows));
           const decayed = ics.filter(i => i.decayed).length;
-          setFactorStats({ decayed, total: ics.length });
+          // v9.57-fix（V8-3）：传 samples（交易日数）→ decisionBus 样本<30 时不扣置信
+          setFactorStats({ decayed, total: ics.length, samples: rows.length });
           // 落库（供 SignalEffectivenessPanel/历史对比）
           const d = new Date();
           const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -720,10 +721,20 @@ export default function Dashboard({
           row.ztCount = md.ztCount ?? null;
           row.blastedRate = md.blastedRate ?? null;
           row.maxBoardHeight = md.maxBoardHeight ?? null;
+          // v9.56（V8-2）：premium/promotion 已由 server 落库 → 读进因子行（此前永远 null）
+          row.premiumAvg = md.premiumAvg ?? null;
+          row.promotionRate = md.promotionRate ?? null;
           row.sealDecayCount = md.sealDecayCount ?? null;
           row.lhbBoostCount = md.lhbBoostCount ?? null;
           row.fundInflowStreak = md.fundInflowStreak ?? null;
           row.nuclearCount = md.nuclearCount ?? null;
+        }
+        // v9.57（V8-1）：读次日 market_daily（ztCount/maxBoardHeight）→ "主线延续"标签数据
+        const nxt = new Date(t); nxt.setDate(nxt.getDate() + 1);
+        const nxtMd = await kvGet(`market_daily:${bjDateStr(nxt)}`) as any;
+        if (nxtMd) {
+          row.nextZtCount = nxtMd.ztCount ?? null;
+          row.nextHeight = nxtMd.maxBoardHeight ?? null;
         }
       } catch { /* 静默 */ }
       out.push(row);

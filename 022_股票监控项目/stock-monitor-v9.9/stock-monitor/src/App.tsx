@@ -46,6 +46,8 @@ import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 // v9.50（G2）：StatusBar 已并入 TopNav 顶部通栏，App 不再独立渲染
 import { auditLocalStorageQuota } from "./lib/storageQuota";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
+// v9.58（V8-8）：全局 AI 助手（右下角悬浮，所有 Tab 可见）
+import AIConsole from "./components/AIConsole";
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
 import { checkSysRisk } from "./lib/sysRiskGuard";
 import { appendSignal } from "./lib/signalLedger";
@@ -1289,6 +1291,18 @@ export default function App() {
           </Suspense>
         )}
       </main>
+
+      {/* v9.58（V8-8）：全局 AI 助手 —— 根层挂载，所有 Tab 可见；siteContext 打包当前页面状态 */}
+      <AIConsole siteContext={{
+        topMainline: battlePlan?.candidates?.[0]?.mainline ?? undefined,
+        topMainlineScore: battlePlan?.candidates?.[0]?.strengthScore ?? null,
+        topMainlineZtCount: battlePlan?.candidates?.[0]?.ztCount ?? 0,
+        topMainlineHeight: battlePlan?.candidates?.[0]?.height ?? 0,
+        sentiment: overview?.sentiment ?? null,
+        sentimentLabel: overview?.sentimentLabel ?? undefined,
+        marketNet: fundStructure?.structure?.today?.mainNet ?? 0,
+        watchStocks: watchStocks.map(s => s.name).slice(0, 20).join("、") || undefined,
+      }} />
 
       <footer className="mx-auto max-w-[1500px] px-4 py-4 text-center text-[11px] text-slate-600 space-y-1">
         <div>本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议</div>

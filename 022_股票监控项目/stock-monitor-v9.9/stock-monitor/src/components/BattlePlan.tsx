@@ -59,12 +59,14 @@ function StyleBadge({ style }: { style: MarketStyleInfo }) {
 }
 
 // ============== 主线区块（含龙一龙二龙三 + v9.23 强度分/离场/诊断） ==============
-function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose, position }: {
+function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose, position, fundMissing }: {
   rank: number;
   name: string;
   ztCount: number;
   height: number;
   mainNet: number;
+  /** v9.56（V8-6）：资金匹配失败 → 显示"⚠数据未匹配"而非假 0 */
+  fundMissing?: boolean;
   leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number; boardCount?: number; boardType?: "一字板" | "缩量板" | "换手板" }>;
   logic?: string;
   isPulse?: boolean;
@@ -151,9 +153,16 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
           <span className="rounded bg-black/30 px-1.5 py-0.5" title="涨停数-龙头数=跟风数（跟风越少说明梯队越紧凑）">
             跟风 <b className="text-slate-300">{Math.max(0, ztCount - (leaders.length > 0 ? 1 : 0))}</b>
           </span>
-          <span className={`rounded bg-black/30 px-1.5 py-0.5 ${mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}`} title="板块主力净流入">
-            资金 {fmtMoney(mainNet)}
-          </span>
+          {/* v9.56（V8-6）：区分"资金未匹配"（灰）与"真零资金"（红绿）—— 不再用假 0 误导 */}
+          {fundMissing ? (
+            <span className="rounded bg-black/30 px-1.5 py-0.5 text-slate-500" title="LLM主线名/成分股行业均未匹配到板块资金数据">
+              资金 ⚠数据未匹配
+            </span>
+          ) : (
+            <span className={`rounded bg-black/30 px-1.5 py-0.5 ${mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}`} title="板块主力净流入">
+              资金 {fmtMoney(mainNet)}
+            </span>
+          )}
           {/* v9.23-4：AI 结构化诊断按钮 */}
           {onDiagnose && (
             <button onClick={onDiagnose}
@@ -290,6 +299,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
   // LLM 精排结果 vs 规则机候选 合并展示
   const display: Array<{
     board: string; ztCount: number; height: number; mainNet: number;
+    fundMissing?: boolean; // v9.56（V8-6）
     leaders: Array<{ code: string; name: string; role: string; reason: string; popularRank?: number; sealFund?: number; amount?: number; boardCount?: number; boardType?: "一字板" | "缩量板" | "换手板" }>;
     logic?: string; isPulse?: boolean; caution?: string; llm?: boolean;
     strengthScore?: number; exitSignal?: boolean; exitSignalText?: string;
@@ -321,6 +331,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
     const c = candMap.get(d.board);
     if (c) {
       d.ztCount = c.ztCount; d.height = c.height; d.mainNet = c.mainNet;
+      d.fundMissing = c.fundMissing; // v9.56（V8-6）
       // v9.23：强度分/离场信号从候选复制（LLM 精排不返回这些字段）
       if (d.strengthScore == null) d.strengthScore = c.strengthScore;
       if (d.exitSignal == null) d.exitSignal = c.exitSignal;
@@ -400,6 +411,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
               ztCount={d.ztCount}
               height={d.height}
               mainNet={d.mainNet}
+              fundMissing={d.fundMissing}
               leaders={d.leaders}
               logic={d.logic}
               isPulse={d.isPulse}
