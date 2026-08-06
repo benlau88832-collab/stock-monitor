@@ -117,7 +117,7 @@ export function isBackfilledToday(): boolean {
   catch { return false; }
 }
 export function markBackfilledToday(): void {
-  try { localStorage.setItem(BACKFILL_DAY_KEY, localDateStrOffset(0)); } catch {}
+  try { localStorage.setItem(BACKFILL_DAY_KEY, localDateStrOffset(0)); } catch (e) { console.warn("[signalLedger] op failed", e); }
 }
 
 /** 回填 T+1/T+5 价格和收益率 */

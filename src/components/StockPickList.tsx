@@ -10,6 +10,7 @@ import type { MainlineGroup } from "../lib/stockToMainline";
 import type { ZTPoolItem, ThemeStock } from "../lib/themeLadder";
 import { pickStocks, type PickList } from "../lib/stockPicker";
 import { decideForStock, type StockVerdict } from "../lib/aiAgent";
+import { conceptGroupOf } from "../lib/conceptGroups";
 import DisclaimerTag from "./DisclaimerTag";
 
 const roleColor: Record<string, string> = {
@@ -58,13 +59,17 @@ interface Props {
 export default function StockPickList({ candidate, rawPool, potential, gate }: Props) {
   const pick: PickList | null = useMemo(() => {
     if (!candidate || !rawPool || rawPool.length === 0) return null;
-    // 归属该主线的涨停股：hybk 或概念归类(conceptGroups) 或名称包含 匹配主线名
+    // 归属该主线的涨停股：hybk 精确/包含 + conceptGroups 折叠大类 + 名称包含（V7-1 复盘补强：
+    // 主线名常为概念大类如"AI应用"，hybk 是细分行业名，直接子串匹配会漏 → 折叠后匹配）
     const pool: ThemeStock[] = rawPool
       .filter(s => {
         const hybk = String(s.hybk ?? "");
         const name = String(s.n ?? "");
         const g = candidate.mainline;
-        return hybk === g || hybk.includes(g) || g.includes(hybk) || name.includes(g) || g.includes(name);
+        const bg = conceptGroupOf(hybk); // hybk → 用户大类（V7-4 修好的归类）
+        return hybk === g || hybk.includes(g) || g.includes(hybk)
+          || (bg !== null && (bg === g || bg.includes(g) || g.includes(bg)))
+          || name.includes(g) || g.includes(name);
       })
       .map(toThemeStock);
     if (pool.length === 0) return null;
@@ -80,6 +85,8 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
   }, [candidate, rawPool, potential, gate]);
 
   // v9.53（V7-2/10）：AI 逐标的研判 —— 对首选/接力标的（≤3只）做轻量 LLM 研判
+  // v9.55-fix（复盘补做）：此前 pct/sealFund/amount/blastCount 全传 0 —— AI 看不到封单/成交/炸板，
+  //   研判形同虚设；现从 rawPool 取真实原始字段喂给 decideForStock
   const [aiMap, setAiMap] = useState<Map<string, StockVerdict>>(new Map());
   const [aiRateLimited, setAiRateLimited] = useState(false);
   useEffect(() => {
@@ -90,12 +97,22 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
     setAiMap(new Map());
     setAiRateLimited(false);
     (async () => {
-      const results = await Promise.all(targets.map(p =>
-        decideForStock(
-          { code: p.code, name: p.name, boardCount: p.boardCount, pct: 0, sealFund: 0, amount: 0, blastCount: 0, role: p.role },
+      const rawByCode = new Map<string, ZTPoolItem>();
+      for (const s of rawPool) rawByCode.set(String(s.c ?? ""), s);
+      const results = await Promise.all(targets.map(p => {
+        const raw = rawByCode.get(p.code);
+        return decideForStock(
+          {
+            code: p.code, name: p.name, boardCount: p.boardCount,
+            pct: raw?.zdp ?? 0,
+            sealFund: raw?.fund ?? 0,
+            amount: raw?.amount ?? 0,
+            blastCount: raw?.zbc ?? 0,
+            role: p.role,
+          },
           { mainline: pick.mainline, stage: pick.stage },
-        ).catch(() => null),
-      ));
+        ).catch(() => null);
+      }));
       if (!alive) return;
       const m = new Map<string, StockVerdict>();
       let rl = false;
@@ -107,7 +124,7 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pick?.mainline, pick?.stage, pick?.picks?.length]);
+  }, [pick?.mainline, pick?.stage, pick?.picks?.length, rawPool]);
 
   if (!pick || pick.picks.length === 0) return null;
 

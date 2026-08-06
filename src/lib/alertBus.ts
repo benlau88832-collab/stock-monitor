@@ -37,10 +37,10 @@ export function isNotifyOn(): boolean {
   try { return localStorage.getItem(NOTIFY_KEY) === "1"; } catch { return false; }
 }
 export function setSoundOn(on: boolean): void {
-  try { localStorage.setItem(SOUND_KEY, on ? "1" : "0"); } catch {}
+  try { localStorage.setItem(SOUND_KEY, on ? "1" : "0"); } catch (e) { console.warn("[alertBus] op failed", e); }
 }
 export function setNotifyOn(on: boolean): void {
-  try { localStorage.setItem(NOTIFY_KEY, on ? "1" : "0"); } catch {}
+  try { localStorage.setItem(NOTIFY_KEY, on ? "1" : "0"); } catch (e) { console.warn("[alertBus] op failed", e); }
 }
 
 // ============== WebAudio 蜂鸣（无音频文件） ==============

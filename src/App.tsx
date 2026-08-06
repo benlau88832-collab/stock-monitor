@@ -900,18 +900,22 @@ export default function App() {
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
     let nextAt = 0;
+    // v9.55-fix（V7-15 复盘补做）：refreshIntervalMs===0 表示休市（周末/节假日）→ 停刷，
+    //   原 `|| 60000` 把 0 退化成 60s，节假日仍空刷
     const computeIntervalMs = (): number => {
       const s = getCurrentSession();
-      return s.refreshIntervalMs || 60000;
+      return s.refreshIntervalMs; // 0 = 休市停刷
     };
     const arm = () => {
-      nextAt = Date.now() + computeIntervalMs();
+      const ms = computeIntervalMs();
+      if (ms <= 0) { nextAt = 0; setNextRefreshAt(0); return; } // 休市：不排下次刷新
+      nextAt = Date.now() + ms;
       setNextRefreshAt(nextAt);
     };
     arm();
     timer = setInterval(() => {
       if (cancelled) return;
-      if (Date.now() >= nextAt) {
+      if (nextAt > 0 && Date.now() >= nextAt) {
         arm(); // 先排下一次（防刷新耗时 > 周期时连刷）
         refreshAll();
       }

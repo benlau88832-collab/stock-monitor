@@ -59,6 +59,8 @@ import { getAllSince } from "../lib/dataStore";
 import { matchStocksToMainline, summarizeMatches } from "../lib/positionMatch";
 import type { OverviewData, FundStructureData, GlobalData, MainlineData } from "../App";
 import type { SessionPhase } from "../lib/tradingSession";
+// v9.55-fix（V7-19）：北京时间交易日历（loadFactorRows 回看日期）
+import { isTradingDay, bjDateStr } from "../lib/tradeCalendar";
 import type { GateResult } from "../lib/regimeGate";
 // v9.24-P1-4：异动捕捉引擎（S/A/B 分级 + 事件流）
 import { useRef } from "react";
@@ -698,14 +700,14 @@ export default function Dashboard({
   }, [overview?.limitPool?.rawZTPool, battlePlan?.candidates?.[0]?.mainline]);
 
   // 组装因子历史行（读 sentiment/market_daily 序列；v9.40 V4-G 补 4 因子输入字段）
+  // v9.55-fix（V7-19 复盘补做）：用北京时间交易日历判回看日期（原 getDay 本地时区会偏移）
   async function loadFactorRows(): Promise<Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }>> {
     const out: Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }> = [];
     const d = new Date();
     for (let i = 13; i >= 0; i--) {
       const t = new Date(d); t.setDate(t.getDate() - i);
-      const dow = t.getDay();
-      if (dow === 0 || dow === 6) continue;
-      const ds = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+      if (!isTradingDay(t)) continue; // 周末/节假日跳过（北京时间）
+      const ds = bjDateStr(t);
       const row: any = { date: ds, sentiment: null, blastedRate: null, ztCount: null, maxBoardHeight: null, premiumAvg: null, promotionRate: null, sealDecayCount: null, lhbBoostCount: null, fundInflowStreak: null, nuclearCount: null };
       try {
         const sv = await kvGet(`sentiment:${ds}`);

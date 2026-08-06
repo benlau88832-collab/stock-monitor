@@ -84,12 +84,16 @@ function buildPreopenPayload(
     const today = getBJDate();
     const annRaw = localStorage.getItem(`ann:${today}`);
     if (annRaw) {
-      const { items } = JSON.parse(annRaw);
-      const seeds = (items as any[]).filter(i => {
-        const t = String(i.title || "");
-        return /中标|涨价|投产|重组|实际控制人变更/.test(t);
-      }).slice(0, 5);
-      annSeeds = seeds.map((s: any) => `${s.stockName || ""}:${(s.title || "").slice(0, 25)}`).join("；") || "";
+      try {
+        const { items } = JSON.parse(annRaw);
+        // v9.55-fix（V7-18）：items 可能非数组/缺字段（存储损坏/结构变更）→ 兜底，防 .filter 崩
+        const annList: any[] = Array.isArray(items) ? items : [];
+        const seeds = annList.filter(i => {
+          const t = String(i.title || "");
+          return /中标|涨价|投产|重组|实际控制人变更/.test(t);
+        }).slice(0, 5);
+        annSeeds = seeds.map((s: any) => `${s.stockName || ""}:${(s.title || "").slice(0, 25)}`).join("；") || "";
+      } catch (e) { console.warn("[Playbook] 公告种子解析失败", e); }
     }
   } catch { /* 无则省略 */ }
 

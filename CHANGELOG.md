@@ -4,6 +4,24 @@
 
 ---
 
+## v9.55-fix — V7 复盘补做（详细复盘验收标准，补齐 6 处未做透项）(2026-08-06)
+
+> 上轮按指令做了 21 条，本轮逐条对照**验收标准**复盘，发现并补齐 6 处"做了但没做透"：
+
+| 复盘发现 | 严重度 | 补做 |
+|---|---|---|
+| **V7-2 AI 研判传参全 0**：`decideForStock` 收到 pct/sealFund/amount/blastCount 全是 0 —— AI 看不到封单/成交/炸板，研判形同虚设 | 🔴 严重 | StockPickList 从 rawPool 取真实原始字段（zdp/fund/amount/zbc）喂给 AI |
+| **V7-15 节假日仍空刷**：App 自动刷新 `s.refreshIntervalMs \|\| 60000` 把休市 0 退化成 60s —— 节假日照刷 | 🔴 严重 | 改为 0=停刷（nextAt 置 0，timer 跳过）；TopNav 显示休市 label（已有） |
+| **V7-19 Dashboard.loadFactorRows** 仍用本机 getDay() | 🟠 | 改北京时间交易日历（isTradingDay + bjDateStr） |
+| **V7-1 候选主线涨停池匹配漏**：主线名是概念大类（AI应用）而 hybk 是细分行业名，子串匹配不上 → 清单不显示 | 🟠 | 匹配加 conceptGroupOf(hybk) 折叠大类 |
+| **V7-17 剩余 3 文件空 catch**（alertBus/signalLedger/IntelligenceDrawer） | 🟡 | 补 console.warn；全仓 catch{} 清零 |
+| **V7-18 Playbook 公告 items 无数组保护**（存储损坏会 .filter 崩） | 🟡 | Array.isArray 兜底 + try/catch |
+
+**已达标复核**：V7-8 市场级"数据缺失"标注已接（FundStructure 顶部）；V7-9 单位注释已有；V7-14 采用报告选项①"显式标注示意曲线"；V7-6 歧义检测接口已提供（P2 可选，未来按需接 LLM）。
+单测 116/116 全绿；TSC clean。
+
+---
+
 ## v9.55 — GLM5.2-V7 全部落地（AI 逐标的研判 + 资金可信 + 数据诚实 + 工程健壮性）(2026-08-06)
 
 > V7 报告 21 条修改指令至此全部完成（v9.52 已做标的引擎+清单；本版收口 v9.53-55）。

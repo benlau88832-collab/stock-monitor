@@ -72,7 +72,7 @@ async function buildSupervisorPrompt(question: string): Promise<{ system: string
 
   // ===== 1. 市场盘面 =====
   let sentScore = "";
-  try { const s = localStorage.getItem(`sentiment:${dateLabel}`); if (s && Number(s) > 0) sentScore = `${s}分`; } catch {}
+  try { const s = localStorage.getItem(`sentiment:${dateLabel}`); if (s && Number(s) > 0) sentScore = `${s}分`; } catch (e) { console.warn("[intelli] op failed", e); }
   dataParts.push(`【市场盘面】情绪温度计：${sentScore || "暂缺"}`);
 
   // ===== 2. 市场整体行情 =====
