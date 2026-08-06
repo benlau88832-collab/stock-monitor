@@ -31,6 +31,18 @@ describe("V8-6/7 资金匹配", () => {
     expect(names).toContain("人工智能");
   });
 
+  it("V8-7 验收样例：LLM 主线'AI应用' 能匹配到'计算机'行业资金（词根已补）", () => {
+    expect(conceptGroupOf("计算机")).toBe("AI应用");
+    expect(conceptGroupOf("软件开发")).toBe("AI应用");
+    const boards = [
+      { name: "计算机", pct: 2, mainNet: 1e9 },
+      { name: "白酒", pct: -1, mainNet: -5e8 },
+    ];
+    const names = mainlineToBoardNames("AI应用", boards);
+    expect(names).toContain("计算机");
+    expect(names).not.toContain("白酒");
+  });
+
   it("歧义检测：构造歧义概念返回候选（V7-6 接口保持）", () => {
     expect(ambiguousConcepts("光模块服务器")).toBeTruthy();
   });

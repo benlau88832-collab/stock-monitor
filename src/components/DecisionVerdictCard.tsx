@@ -17,8 +17,8 @@ interface Props {
   sources?: EvidenceSource[];
   /** 信号回测门控（可选，命中后降权） */
   signalGates?: Array<{ name: string; winRate: number | null; samples: number | null }>;
-  /** v9.39：因子健康度（factorLib IC 评估：失效因子占比高 → 置信下调） */
-  factorStats?: { decayed: number; total: number };
+  /** v9.39：因子健康度（factorLib IC 评估：失效因子占比高 → 置信下调）；samples<30 时不扣（V8-3） */
+  factorStats?: { decayed: number; total: number; samples?: number | null };
   /** v9.39：Agent 裁决（LLM 工具调研结果，有则置顶为主结论） */
   agent?: AgentVerdict | null;
 }

@@ -30,7 +30,9 @@ export const CONCEPT_GROUPS: ConceptGroupDef[] = [
   },
   {
     group: "AI应用",
-    roots: ["AI应用", "AI智能体", "AI眼镜", "AI手机", "AI PC", "Copilot", "数字人", "智能体", "多模态", "AIGC", "大模型", "人工智能"],
+    // v9.59-fix（V8-7）：补"计算机/软件/互联网"等常见行业名 —— LLM 主线"AI应用"要能匹配到
+    // 东财行业板块"计算机/软件开发/互联网服务"的资金（V8-7 验收样例）
+    roots: ["AI应用", "AI智能体", "AI眼镜", "AI手机", "AI PC", "Copilot", "数字人", "智能体", "多模态", "AIGC", "大模型", "人工智能", "计算机", "软件", "互联网"],
   },
   {
     group: "算力",

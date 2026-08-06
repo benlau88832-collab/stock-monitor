@@ -97,9 +97,16 @@ export default function MainlineRanking({ battlePlan, loading }: {
                     {c.strengthFactors?.turnover != null ? `${c.strengthFactors.turnover}` : "—"}
                   </td>
                   <td className="py-2 pr-2 text-right">
-                    <span className={c.mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}>{fmtMoney(c.mainNet)}</span>
-                    <span className="text-slate-600"> / </span>
-                    <span className={c.mainNet5d >= 0 ? "text-rose-300/70" : "text-emerald-300/70"}>{fmtMoney(c.mainNet5d)}</span>
+                    {/* v9.59-fix（V8-6）：资金匹配失败 → "⚠未匹配"而非假 0 */}
+                    {c.fundMissing ? (
+                      <span className="text-slate-500" title="主线名/成分股行业未匹配到板块资金">⚠未匹配</span>
+                    ) : (
+                      <>
+                        <span className={c.mainNet >= 0 ? "text-rose-300" : "text-emerald-300"}>{fmtMoney(c.mainNet)}</span>
+                        <span className="text-slate-600"> / </span>
+                        <span className={c.mainNet5d >= 0 ? "text-rose-300/70" : "text-emerald-300/70"}>{fmtMoney(c.mainNet5d)}</span>
+                      </>
+                    )}
                   </td>
                   <td className="py-2 pr-2 text-slate-300">
                     {leader ? (

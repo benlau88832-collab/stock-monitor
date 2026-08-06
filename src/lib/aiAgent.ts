@@ -12,7 +12,7 @@
 import { callAI, parseAIJSON, callAgentChat, type AgentChatResult } from "./ai";
 import { getAgentTools, getStockAgentTools, evaluateFactorHealth, type FactorHealthReport } from "./agentTools";
 // v9.58（V8-9）：AI 结论全站联动 store
-import { setStockAI } from "./aiConclusionStore";
+import { setStockAI, pruneStockAI } from "./aiConclusionStore";
 import { runConsensus, type EvidenceSource } from "./decisionBus";
 import type { ToolContext } from "./agentTools";
 
@@ -274,7 +274,10 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
   // ---------- ② 降级：LLM 不可用 / 轮次耗尽 / 配额受限 → 回退 v9.40 全跑工具 + 规则投票 ----------
   const { votes, raw } = await collectToolEvidence(ctx);
   // v9.43：降级路径也接入因子健康度门控（此前 runConsensus 未传 factorStats）
-  const factorStats = fhReport && fhReport.total >= 3 ? { decayed: fhReport.decayedCount, total: fhReport.total } : undefined;
+  // v9.57-fix（V8-3）：补 samples（滚动窗口天数）→ 样本<30 时 decisionBus 不扣置信
+  const factorStats = fhReport && fhReport.total >= 3
+    ? { decayed: fhReport.decayedCount, total: fhReport.total, samples: fhReport.window ?? null }
+    : undefined;
   const fb = votes.length > 0 ? runConsensus(votes, { factorStats }) : runConsensus([{ name: "兜底", verdict: "观望", confidence: 50, weight: 1, reason: "无工具证据" }], { factorStats });
   return {
     action: fb.action,
@@ -406,7 +409,7 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
       const f = parsed.final;
       const v = f.verdict === "可买" || f.verdict === "回避" ? f.verdict : "谨慎";
       // v9.58（V8-9）：AI 结论写入全局 store（个股雷达等处可见，不再孤立）
-      try { setStockAI({ code: stock.code, verdict: v, reason: String(f.reason ?? "").slice(0, 40), ts: Date.now() }); } catch { /* 静默 */ }
+      try { pruneStockAI(); setStockAI({ code: stock.code, verdict: v, reason: String(f.reason ?? "").slice(0, 40), ts: Date.now() }); } catch { /* 静默 */ }
       return {
         code: stock.code, name: stock.name,
         verdict: v,

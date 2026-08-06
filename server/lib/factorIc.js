@@ -113,15 +113,23 @@ async function evaluateFactorIc({ pool, days = 30, window = 10 }) {
   }
   rows.sort((a, b) => a.date < b.date ? -1 : 1);
 
-  // 次日延续标签（次日情绪 ≥ 今日 → 1；与前端 markNextWin 一致）
+  // 次日主线延续标签（v9.59-fix V8-1：与前端 markNextWin 一致 —— 次日涨停数 ≥ 今日 80% = 延续；
+  //   弃情绪代理：主线退潮但大盘情绪涨会误判延续）
   const marked = rows.map((r, i) => {
     const next = rows[i + 1];
-    const win = (next?.sentiment != null && r.sentiment != null) ? (next.sentiment >= r.sentiment ? 1 : 0) : null;
+    const win = (r.ztCount != null && next?.ztCount != null)
+      ? (next.ztCount >= r.ztCount * 0.8 ? 1 : 0)
+      : null;
     return { ...r, nextMainlineWin: win };
   });
 
   // 每因子：取最近 window 个含有效样本的日 → 算滚动 IC
   const items = FACTORS.map(f => {
+    // v9.59-fix（V8-2）：数据源缺失（extract 全 null，如 sealDecay 无真实预警源）→ missing，不判失效
+    const hasData = marked.some(r => f.extract(r) != null);
+    if (!hasData) {
+      return { id: f.id, name: f.name, ic: 0, samples: 0, decayed: false, reversed: false, missing: true };
+    }
     const pairs = [];
     for (let i = marked.length - 1; i >= 0 && pairs.length < window; i--) {
       const r = marked[i];

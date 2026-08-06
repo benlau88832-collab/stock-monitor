@@ -621,7 +621,7 @@ export default function Dashboard({
 
   // v9.39（改造2）：幻方门控数据 —— 信号回测胜率（激活 V3-5 门控）+ 因子 IC 健康度（接入降权）
   const [signalGates, setSignalGates] = useState<Array<{ name: string; winRate: number | null; samples: number | null }>>([]);
-  const [factorStats, setFactorStats] = useState<{ decayed: number; total: number } | null>(null);
+  const [factorStats, setFactorStats] = useState<{ decayed: number; total: number; samples?: number | null } | null>(null);
   useEffect(() => {
     if (!isLocalServer()) return;
     let alive = true;
@@ -639,7 +639,8 @@ export default function Dashboard({
         if (rows.length >= 3 && alive) {
           const ics = evaluateAllFactors(markNextWin(rows));
           const decayed = ics.filter(i => i.decayed).length;
-          setFactorStats({ decayed, total: ics.length });
+          // v9.57-fix（V8-3）：传 samples（交易日数）→ decisionBus 样本<30 时不扣置信
+          setFactorStats({ decayed, total: ics.length, samples: rows.length });
           // 落库（供 SignalEffectivenessPanel/历史对比）
           const d = new Date();
           const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

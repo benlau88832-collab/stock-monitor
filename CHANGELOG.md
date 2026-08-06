@@ -4,6 +4,22 @@
 
 ---
 
+## v9.59-fix — V8 深度复盘补做（对照验收标准，补齐 7 处"做了但没做透"）(2026-08-06)
+
+> 上轮 V8 全部落地后，逐条对照验收标准复查数据流，发现并补齐以下遗漏（单测 121→122 全绿）：
+
+| 复盘发现 | 严重度 | 补做 |
+|---|---|---|
+| **V8-1 server 端仍用情绪代理标签**：`server/lib/factorIc.js` 的 win 判定还是 `次日情绪≥今日` —— 前端改了对、cron 落库的 factor_ic 快照没改，面板快照模式仍显示旧标签 IC | 🔴 严重 | server 同步"次日涨停维持 ≥80%"判据 |
+| **V8-2 seal_decay 数据源缺失被误判"失效"**：computeFactorIC 把 extract 全 null 当样本<5 → 永远 decayed（假惩罚 + 假"失效"） | 🔴 严重 | 新增 `missing` 标记：数据缺失 ≠ 失效；前端面板灰点"数据缺失"、不拉低健康分；server 端同步 |
+| **V8-3 factorStats 没传 samples**：Dashboard/aiAgent/DecisionVerdictCard 三处的 factorStats 类型与组装都缺 samples → decisionBus"样本<30 不扣置信"从未触发 | 🟠 | 三处补 samples（交易日数/滚动窗口） |
+| **V8-6 只修了 LLM 路径**：stockToMainline 另一条概念聚类路径（381 行）仍无 hybk 兜底 + fundMissing | 🟠 | 同构补上 |
+| **V8-6 MainlineRanking 也显示假 0**：资金主线页的资金列无 fundMissing 处理 | 🟠 | "⚠未匹配"（灰）替代假 0 |
+| **V8-7 验收样例不成立**：AI应用 词根表缺"计算机/软件/互联网" → LLM 主线"AI应用"匹配不到"计算机"行业资金 | 🟠 | 词根补充 + 测试锁定 |
+| **V8-9 pruneStockAI 未接入**：结论 store 无过期清理 | 🟡 | decideForStock 写入前 prune（24h） |
+
+---
+
 ## v9.59 — GLM5.2-V8 全部落地（因子真数据 · 个股AI变强 · 作战卡资金不骗人 · AI贯通全站）(2026-08-06)
 
 > V8 报告 10 条超详细指令 100% 执行（v9.56→v9.59 四里程碑一次完成），单测 117→121 全绿。

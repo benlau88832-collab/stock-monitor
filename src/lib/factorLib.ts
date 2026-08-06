@@ -65,6 +65,8 @@ export interface FactorIC {
   ic20d: number | null;
   /** 是否疑似失效（|IC20d| < 0.05 或样本<5） */
   decayed: boolean;
+  /** v9.59-fix（V8-2）：数据源缺失（extract 全 null，如 sealDecay 无真实预警源）—— 不是失效，不惩罚 */
+  missing?: boolean;
   /** 权重（未失效 1.0 / 失效 0.3） */
   weight: number;
 }
@@ -93,6 +95,22 @@ function spearman(xs: number[], ys: number[]): number {
 
 /** 计算单个因子 IC（按 expectedDir 对齐方向） */
 export function computeFactorIC(factor: FactorDef, rows: FactorDayRow[]): FactorIC {
+  // v9.59-fix（V8-2）：数据源缺失（该因子 extract 对全部行均 null，如 seal_decay 无真实预警源）
+  // → 标记 missing 而非 decayed（"没有数据" ≠ "因子失效"，不得用假惩罚/假"失效"误导）
+  const hasData = rows.some(r => factor.extract(r) != null);
+  if (!hasData) {
+    return {
+      factorId: factor.id,
+      factorName: factor.name,
+      expectedDir: factor.expectedDir,
+      samples: 0,
+      ic: 0,
+      ic20d: null,
+      decayed: false,
+      missing: true,
+      weight: 1.0,
+    };
+  }
   const pairs = rows
     .filter(r => r.nextMainlineWin != null)
     .map(r => ({ x: factor.extract(r), y: r.nextMainlineWin! }))
@@ -157,6 +175,8 @@ export interface FactorIcPoint {
   decayed: boolean;
   /** v9.42：方向反转（样本≥5 且 IC≤-0.05）—— 因子有预测力但方向反了，需人工复核/反向使用 */
   reversed?: boolean;
+  /** v9.59-fix（V8-2）：数据源缺失（extract 全 null）—— 非失效，UI 显示"数据缺失" */
+  missing?: boolean;
 }
 
 /** 取截至 rowIndex（含）的最近 window 个有有效样本的日，返回 [x,y] 对（时间升序） */
@@ -178,6 +198,11 @@ function windowPairs(factor: FactorDef, rows: FactorDayRow[], rowIndex: number, 
  * 供"因子失效曲线"展示：|IC| 持续低于 0.05 → 因子正在失效。
  */
 export function computeFactorIcSeries(factor: FactorDef, rows: FactorDayRow[], window = 10): FactorIcPoint[] {
+  // v9.59-fix（V8-2）：数据源缺失 → 单点 missing 标记（UI 显示"数据缺失"而非"失效"）
+  const hasData = rows.some(r => factor.extract(r) != null);
+  if (!hasData) {
+    return [{ date: rows[rows.length - 1]?.date ?? "", ic: 0, samples: 0, decayed: false, missing: true }];
+  }
   const out: FactorIcPoint[] = [];
   for (let i = 0; i < rows.length; i++) {
     const pairs = windowPairs(factor, rows, i, window);
