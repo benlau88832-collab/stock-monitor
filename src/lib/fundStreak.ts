@@ -4,7 +4,7 @@
 // 输出：每行业连续流入/流出天数、今日主力净额、昨日流入今日流出切换标记
 // ============================================================
 import { isLocalServer } from "./cloudStore";
-import { getBJDate } from "./format";
+import { getBJDate, getBJWeekday } from "./format";
 
 export interface FundStreak {
   board: string;              // 行业名
@@ -45,7 +45,8 @@ function recentTradeDates(n: number): string[] {
   const d = getBJDate();
   d.setDate(d.getDate() - 1); // 从昨日开始（当日数据可能未落库）
   while (out.length < n) {
-    const dow = d.getDay();
+    // v9.63-fix（V9-D3 补丁）：显式 getBJWeekday（d 已北京化，幂等）
+    const dow = getBJWeekday(d);
     if (dow !== 0 && dow !== 6) {
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, "0");

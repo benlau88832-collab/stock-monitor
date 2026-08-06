@@ -2,7 +2,7 @@
 // 由于跨域限制，使用JSONP方式或通过公开push2接口获取数据
 
 import { recordApiCall } from "./apiHealth";
-import { getBJDate } from "./format";
+import { getBJDate, getBJWeekday } from "./format";
 
 const PUSH2 = "https://push2.eastmoney.com/api/qt";
 const PUSH2HIS = "https://push2his.eastmoney.com/api/qt";
@@ -235,7 +235,8 @@ export async function fetchMarketMainFund(): Promise<MarketFundData> {
   // 精简请求字段：去掉 f69/f75/f81/f87/f165/f175/f184 等占比类冗余字段
   // 这些字段组合过多时东方财富服务端会返回 502 Bad Gateway
   // v9.53（V7-9）：单位口径 —— f62/f164/f174 均为"元"（不是万），聚合前不缩放
-  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f12,f62,f66,f72,f78,f84,f164,f174&secids=1.000001,0.399001`;
+  // v9.64（V2-P0-1）：补北交所 0.899050（此前缺北交 → 小盘资金失真）
+  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f12,f62,f66,f72,f78,f84,f164,f174&secids=1.000001,0.399001,0.899050`;
   const json = await trackedJsonp<any>("主力资金", url);
   const diff = normalizeDiff(json?.data?.diff);
   const agg: MarketFundData = {
@@ -827,8 +828,9 @@ const ZT_UT = "7eea3edcaed734bea9cbfc24409ed989";
 
 export function tradeDateStr(): string {
   // v9.60（V9-D3）：周末判定用北京时间（getBJDate），替代本机 getDay() 时区偏移
+  // v9.63-fix（补丁）：显式 getBJWeekday
   const d = getBJDate();
-  const day = d.getDay();
+  const day = getBJWeekday(d);
   if (day === 0) d.setDate(d.getDate() - 2);
   if (day === 6) d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;

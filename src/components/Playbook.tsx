@@ -58,8 +58,9 @@ function savePlaybook(data: PlaybookData) {
 
 function getWeekPlaybooks(): PlaybookData[] {
   // v9.60（V9-D3）：周一偏移用北京时间（getBJDate），替代本机 getDay() 时区偏移
+  // v9.63-fix（补丁）：显式 getBJWeekday
   const today = getBJDate();
-  const mondayDaysAgo = today.getDay() === 0 ? 6 : today.getDay() - 1;
+  const mondayDaysAgo = getBJWeekday(today) === 0 ? 6 : getBJWeekday(today) - 1;
   const result: PlaybookData[] = [];
   for (let i = 0; i < 5; i++) {
     const dateStr = localDateStrOffset(mondayDaysAgo - i, today);

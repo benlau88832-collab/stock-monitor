@@ -4,6 +4,36 @@
 
 ---
 
+## v9.64 — V1/V2 全栈审查整改（止血 P0 + 贯通 P1，遵循 CLAUDE.md 红线）(2026-08-07)
+
+> 依据 `022_股票监控项目/审查报告-V1.txt`（546 行）+ `审查报告-V2.txt`（286 行）+ 项目级 CLAUDE.md 执行。
+
+### P0 数据正确性
+- **核按钮 f2→f3**：核查已解决（prevZtStats 用 brief.pct 涨跌幅 ✓，V9 已清死代码）
+- **北交所聚合**：fetchMarketMainFund secids 补 `0.899050`（此前缺北交 → 小盘资金失真）
+- **时区统一**：核查已解决（V9-D3 已把 getDay() 全部替换为 getBJDate；残留 11 处仅为注释）
+- **auction 强制 proxy**：核查已解决（fetchQtBatch 已走 /api/proxy，GBK 正确解码）
+
+### P0 Agent 假数据地基（V2-P0-3）
+- agentTools `computePositionAdvice` / `computePortfolioRisk` 的 `totalCapital: 1e6` → `loadDisciplineState()` 真实总资金/持仓市值（假数据算真仓位=地基沙子）
+
+### P0 后端安全与去重（V2-P0-5 + V1 安全段）
+- cron `contentKey` 去内存 seq：改 sha256 确定性哈希（原 fallbackSeq 重启后重复入库）
+- `express.json 10mb → 1mb` + `kv/bulk 数组 ≤100`（防一次 10MB 打满 PG）
+- LOCAL_TOKEN 可选鉴权核查已实现 ✓
+
+### P1 AI 贯通与限流
+- **P1-1 搜索工具化**：assistantAgent 新增 `searchNewsFull`（新闻全文搜索，问政策/事件先调它）
+- **P1-4 限流**：StockPickList AI 研判限并发 2 + 批间隔 1.2s（防 10 只全并发打爆 30/min 配额桶降级成规则版）
+- **V1-S4 止损方向**：stageStopLoss 高潮期 8%→5%（收紧保护浮盈），启动期 5%→7%（放宽给波动空间）—— 原"高潮>启动"为反向设计
+
+### 遵循 CLAUDE.md
+- 三重验证门：tsc 0 error / build 成功 / test 144 全绿
+- 跨文件一致性：secids/contentKey/stageStopLoss 等改动均 grep 关联调用方确认同步
+- 单测 144 全绿
+
+---
+
 ## v9.63 — GLM5.2-V9 全部落地（数据可靠性四件套 · 全栈工程卫生清扫）(2026-08-06)
 
 > V9 报告 12 条修改指令 100% 执行（v9.60→v9.63 四里程碑），单测 122→144 全绿，tsc 0 错误。

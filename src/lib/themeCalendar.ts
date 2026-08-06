@@ -4,7 +4,7 @@
 // 输出：每题材首现日 / 连续运行天数 / 历史最高连板 / 阶段判定
 // ============================================================
 import { isLocalServer } from "./cloudStore";
-import { getBJDate } from "./format";
+import { getBJDate, getBJWeekday } from "./format";
 
 export interface ThemeLifecycle {
   theme: string;
@@ -41,7 +41,8 @@ function recentTradeDates(n: number): string[] {
   // v9.60（V9-D3）：基于北京时间（getBJDate），替代本机 new Date() 时区偏移
   const d = getBJDate();
   while (out.length < n) {
-    const dow = d.getDay();
+    // v9.63-fix（V9-D3 补丁）：显式 getBJWeekday（d 已北京化，幂等）
+    const dow = getBJWeekday(d);
     if (dow !== 0 && dow !== 6) {
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, "0");

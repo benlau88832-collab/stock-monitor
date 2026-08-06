@@ -127,13 +127,13 @@ export function computePositionAdvice(input: PositionSizingInput): PositionAdvic
 }
 
 // ============================================================
-// 阶段 → 止损档位（游资口径：启动/发酵期可给略宽，高位收紧）
+// 阶段 → 止损档位（v9.64 V1-S4：高潮期收紧防高位站岗，启动期放宽给波动空间；原 高潮8>启动5 反向）
 // ============================================================
 function stageStopLoss(stage: MainlineStage): number | null {
   switch (stage) {
-    case "启动期": return 5;
-    case "发酵期": return 7;
-    case "高潮期": return 8;   // 高位波动大，止损放宽防被扫
+    case "启动期": return 7;   // 刚点火：放宽防被正常洗盘扫损
+    case "发酵期": return 6;
+    case "高潮期": return 5;   // 高位：收紧止损保护浮盈（跌 5% 即走，利润回吐 8% 太疼）
     case "分歧期": return 5;   // 分歧期收紧
     case "退潮期": return 4;
     default: return 5;

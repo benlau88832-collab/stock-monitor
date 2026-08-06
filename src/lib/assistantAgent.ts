@@ -43,6 +43,20 @@ export async function runAssistantAgent(
         return d;
       } catch (e) { return { error: "资金查询失败:" + String(e) }; }
     },
+  }, {
+    // v9.64（V2-P1-1）：新闻全文搜索工具化 —— 用户问政策/公告/事件时，AI 可主动搜最新消息
+    name: "searchNewsFull",
+    description: '新闻全文搜索：按关键词拉最新消息标题/摘要/时间（回答"XX消息利好谁/有什么政策"时先调它）—— 传 keyword 参数如 {"keyword":"低空经济"}',
+    kind: "data",
+    execute: async (args: any) => {
+      try {
+        const { fetchStockNews } = await import("./api");
+        const items = await fetchStockNews(String(args?.keyword ?? ""), 15);
+        return items.slice(0, 15).map(n => ({
+          title: n.title, time: n.time, summary: (n as any).summary ?? "",
+        }));
+      } catch (e) { return { error: "新闻搜索失败:" + String(e) }; }
+    },
   }];
   const toolDefs = tools.map(t => ({
     name: t.name,

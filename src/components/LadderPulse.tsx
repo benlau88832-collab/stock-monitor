@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { callAI, type AIResult } from "../lib/ai";
 import { getCurrentSession } from "../lib/tradingSession";
-import { getBJDate } from "../lib/format";
+import { getBJDate, getBJWeekday } from "../lib/format";
 import { buildThemeLadder, detectBrokenBoards, type ZTPoolItem } from "../lib/themeLadder";
 import type { OverviewData } from "../App";
 
@@ -39,12 +39,13 @@ export default function LadderPulse({ overview }: Props) {
     // 断板名单
     let brokenStr = "";
     try {
+      // v9.63-fix（V9-D3 补丁）：显式 getBJWeekday（d 已北京化，幂等）
       const d = getBJDate();
-      const day = d.getDay();
+      const day = getBJWeekday(d);
       if (day === 0) d.setDate(d.getDate() - 2);
       else if (day === 6) d.setDate(d.getDate() - 1);
       d.setDate(d.getDate() - 1);
-      const nd = d.getDay();
+      const nd = getBJWeekday(d);
       if (nd === 0) d.setDate(d.getDate() - 2);
       else if (nd === 6) d.setDate(d.getDate() - 1);
       const yd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;

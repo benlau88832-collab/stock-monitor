@@ -60,7 +60,8 @@ module.exports = function dbRoutes(app) {
 
   app.post("/api/db/kv/bulk", async (req, res) => {
     try {
-      const items = Array.isArray(req.body) ? req.body : [];
+      // v9.64（V1 安全）：数组长度校验 ≤100 —— 防一次 10MB JSON 打满 PG（配合 index.js json limit 1mb）
+      const items = Array.isArray(req.body) ? req.body.slice(0, 100) : [];
       const client = await pool.connect();
       try {
         await client.query("BEGIN");

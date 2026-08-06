@@ -7,7 +7,7 @@
 // 局限：第一版用宏观情绪延续代理"主线实际涨跌"，主线级对账留待 zt_snapshot 全量接口。
 // ============================================================
 import { kvGet } from "./cloudStore";
-import { getBJDate } from "./format";
+import { getBJDate, getBJWeekday } from "./format";
 
 export interface HitrateBucket {
   hits: number;
@@ -56,8 +56,9 @@ export function nextTradingDay(ds: string): string | null {
     const t = new Date(d);
     t.setDate(t.getDate() + i);
     // v9.60（V9-D3）：周末判定用北京时间（getBJDate），替代本机 getDay() 时区偏移
+    // v9.63-fix（补丁）：显式 getBJWeekday
     const bj = getBJDate(t);
-    if (bj.getDay() !== 0 && bj.getDay() !== 6) {
+    if (getBJWeekday(bj) !== 0 && getBJWeekday(bj) !== 6) {
       return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
     }
   }

@@ -15,7 +15,7 @@
 // 周末（周六日）：全天等同盘后，仅展示缓存+标注日期
 // v9.54（V7-15）：法定节假日 → 全天等同"休市"（停刷 + UI 标"节假日休市"）
 import { marketHolidayLabel } from "./tradeCalendar";
-import { getBJDate } from "./format";
+import { getBJDate, getBJWeekday } from "./format";
 
 export type SessionPhase =
   | "pre"       // 盘前静默
@@ -40,7 +40,7 @@ function getBJTime(): { hour: number; minute: number; day: number } {
   // 正确做法：getTime() 返回的本来就是 UTC epoch（与时区无关），北京 epoch = getTime() + 8h。
   // 复用 format.getBJDate()（构造出 getHours/getDay 即北京时间字段的 Date），保证全站一致。
   const bj = getBJDate();
-  return { hour: bj.getHours(), minute: bj.getMinutes(), day: bj.getDay() };
+  return { hour: bj.getHours(), minute: bj.getMinutes(), day: getBJWeekday(bj) };
 }
 
 export function getCurrentSession(): SessionInfo {

@@ -1,6 +1,6 @@
 // 情绪分按交易日冻结存储（替代旧的 prev_sentiment 每60秒覆盖bug）
 // P2 新增：日内轨迹采样（5分钟节流）+ 动量判断 + 仓位建议
-import { localDateStr, localDateStrOffset, getBJDate } from "./format";
+import { localDateStr, localDateStrOffset, getBJDate, getBJWeekday } from "./format";
 import { SENTI_EXTREME_GREED, SENTI_GREED, SENTI_NEUTRAL_HIGH, SENTI_FEAR } from "./thresholds";
 const PREFIX = "sentiment:";
 const INTRADAY_PREFIX = "sentiment_intraday:"; // sentiment_intraday:YYYY-MM-DD = [{t:"HH:MM", s:score}]
@@ -134,8 +134,9 @@ export function loadPrevTradingDaySentiment(): { score: number; date: string } |
   for (let i = 1; i <= 10; i++) {
     const dateStr = localDateStrOffset(i);
     // v9.60（V9-D3）：周末判定用北京时间（getBJDate），替代本机 getDay() 时区偏移
+    // v9.63-fix（补丁）：显式 getBJWeekday
     const bj = getBJDate(new Date(dateStr + "T00:00:00"));
-    const day = bj.getDay();
+    const day = getBJWeekday(bj);
     if (day === 0 || day === 6) continue;
     const val = localStorage.getItem(PREFIX + dateStr);
     if (val != null) {

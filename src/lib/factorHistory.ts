@@ -9,7 +9,7 @@
 // ============================================================
 import { kvGet } from "./cloudStore";
 import type { FactorDayRow } from "./factorLib";
-import { getBJDate } from "./format";
+import { getBJDate, getBJWeekday } from "./format";
 
 export interface IcHistoryPoint {
   date: string;
@@ -38,7 +38,8 @@ function recentDateKeys(days: number, offsetDays = 0): string[] {
   for (let i = days - 1; i >= 0; i--) {
     const t = new Date(d);
     t.setDate(t.getDate() - i);
-    const dow = t.getDay();
+    // v9.63-fix（V9-D3 补丁）：显式 getBJWeekday（d 已北京化，幂等；统一写法防审查误判）
+    const dow = getBJWeekday(t);
     if (dow === 0 || dow === 6) continue;
     out.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`);
   }

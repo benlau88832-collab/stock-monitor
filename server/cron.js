@@ -11,13 +11,13 @@ const cron = require("node-cron");
 require("dotenv").config();
 
 const EM_UT = "7eea3edcaed734bea9cbfc24409ed989";
-// v9.26.10：主键兜底序号（模块顶部声明避免 TDZ；内容哈希作确定性 key 防重复入库）
-let fallbackSeq = 0;
-/** 内容哈希：title+time 生成确定性主键（同一数据多次抓取 → 同 key → ON CONFLICT 幂等） */
+// v9.64（V2-P0-5）：contentKey 去内存 seq —— 确定性 key（同一数据多次抓取 → 同 key → 幂等）；
+//   原 fallbackSeq 重启后重置，同一缺字段公告会生成不同 key 重复入库
+/** 内容哈希：title+time 生成确定性主键（sha256 前缀，无状态） */
 function contentKey(seed) {
-  let h = 5381;
-  for (let i = 0; i < seed.length; i++) h = ((h << 5) + h + seed.charCodeAt(i)) >>> 0;
-  return `fb_${h.toString(36)}_${fallbackSeq++}`;
+  const crypto = require("crypto");
+  const h = crypto.createHash("sha256").update(String(seed)).digest("hex").slice(0, 16);
+  return `fb_${h}`;
 }
 
 // ---------- v9.35（S3）：市场日指标落库（信号回测的数据源） ----------

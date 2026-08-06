@@ -181,12 +181,19 @@ export function getAgentTools(): AgentTool[] {
       normalize: (r) => r ? { verdict: r.action as Verdict, confidence: Math.min(90, 50 + (r.suggestedPct ?? 0) / 2), reason: "建议仓位" + (r.suggestedPct ?? 0) + "%·止损" + (r.stopLoss ?? 0) + "%" } : null,
       execute: async (ctx: ToolContext) => {
         const { computePositionAdvice } = await import("./positionSizing");
+        // v9.64（V2-P0-3）：真实资金地基 —— totalCapital 用 discipline 设置，不再硬编码 1e6（假数据算真仓位=地基沙子）
+        let totalCapital = 1000000;
+        try {
+          const { loadDisciplineState } = await import("./discipline");
+          const ds = loadDisciplineState();
+          if (ds.settings && ds.settings.totalCapital > 0) totalCapital = ds.settings.totalCapital;
+        } catch { /* 读不到设置时保持默认 */ }
         const r = computePositionAdvice({
           mainline: ctx.mainline ?? "—",
           strengthScore: ctx.strengthScore ?? null,
           stage: (ctx.stage ?? "观察中") as never,
           gate: { mode: (ctx.gateMode ?? "empty") as never, factor: ctx.marketFactor ?? 0.5, positionLimit: 100, riskLevel: "low", label: "Agent", reason: [] },
-          discipline: { maxSinglePct: 30, maxTotalPct: 100, maxNewPositionsPerDay: 3, totalCapital: 1e6, cooldownLossStreak: 3 },
+          discipline: { maxSinglePct: 30, maxTotalPct: 100, maxNewPositionsPerDay: 3, totalCapital, cooldownLossStreak: 3 },
           currentTotalPct: 0,
           todayNewPositions: ctx.todayNewPositions ?? 0,
           mainlineTrap: ctx.trapFlagged,
@@ -224,11 +231,19 @@ export function getAgentTools(): AgentTool[] {
       } : null,
       execute: async (ctx: ToolContext) => {
         const { computePortfolioRisk } = await import("./portfolioRisk");
+        // v9.64（V2-P0-3）：真实资金地基 —— 持仓市值/总资金来自 discipline，不再硬编码 0/1e6
+        let totalCapital = 1000000, currentPositionValue = 0;
+        try {
+          const { loadDisciplineState } = await import("./discipline");
+          const ds = loadDisciplineState();
+          if (ds.settings && ds.settings.totalCapital > 0) totalCapital = ds.settings.totalCapital;
+          currentPositionValue = ds.positions.reduce((s, p) => s + (p.value ?? 0), 0);
+        } catch { /* 读不到设置时保持默认 */ }
         const r = computePortfolioRisk({
           marketState: (ctx.marketState ?? null) as never,
           positionPnlPcts: [],
-          totalCapital: 1e6,
-          currentPositionValue: 0,
+          totalCapital,
+          currentPositionValue,
           concentrationPct: ctx.concentrationPct,
         });
         return { maxPositionPct: r.maxPositionPct, lossStreak: r.lossStreak, advice: r.advice };

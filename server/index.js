@@ -19,8 +19,9 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+// v9.64（V1 安全）：10mb → 1mb（配合 kv/bulk ≤100 条，防一次打满 PG）
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // ---------- 健康检查 ----------
 app.get("/api/health", async (req, res) => {

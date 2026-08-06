@@ -99,7 +99,8 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
     (async () => {
       const rawByCode = new Map<string, ZTPoolItem>();
       for (const s of rawPool) rawByCode.set(String(s.c ?? ""), s);
-      const results = await Promise.all(targets.map(p => {
+      // v9.64（V2-P1-4）：限并发 2 + 批间隔 1.2s —— 每只 ReAct ≤3 轮，10 只全并发会瞬间打爆 30/min 配额桶降级成规则版
+      const runOne = (p: { code: string; name: string; boardCount: number; role: string }) => {
         const raw = rawByCode.get(p.code);
         return decideForStock(
           {
@@ -112,7 +113,15 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
           },
           { mainline: pick.mainline, stage: pick.stage },
         ).catch(() => null);
-      }));
+      };
+      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+      const results: Array<StockVerdict | null> = [];
+      for (let i = 0; i < targets.length; i += 2) {
+        const batch = targets.slice(i, i + 2);
+        const batchRes = await Promise.all(batch.map(runOne));
+        results.push(...batchRes);
+        if (i + 2 < targets.length) await sleep(1200);
+      }
       if (!alive) return;
       const m = new Map<string, StockVerdict>();
       let rl = false;
