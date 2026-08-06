@@ -379,3 +379,68 @@ export function getAgentTools(): AgentTool[] {
   ];
   return cachedTools;
 }
+
+// ============== v9.57（V8-4）：个股级 Agent 工具集 ==============
+// decideForStock 升级 ReAct 用：资金面（fetchStockOne）+ 诱多（detectTrap）+ 离场（checkStockExit）
+// 真实数据注入（非 ctx），让个股 AI 与主线 AI 同深度
+export interface StockToolInput {
+  code: string; name: string; pct: number;
+  sealFund: number; amount: number; blastCount: number;
+  mainline: string; stage: string; boardCount: number;
+}
+
+export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
+  return [
+    {
+      name: "getStockFund",
+      description: "个股资金面：主力净流入(元/占比)/5日/10日/换手/量比（fetchStockOne 实时）",
+      kind: "data",
+      execute: async () => {
+        try {
+          const { fetchStockOne } = await import("./api");
+          const d = await fetchStockOne(stock.code);
+          if (!d) return { error: "个股行情获取失败" };
+          return {
+            code: d.code, name: d.name, price: d.price, pct: d.pct,
+            mainNet: d.mainNet, mainNetPct: d.mainNetPct,
+            mainNet5d: d.mainNet5d, mainNet5dPct: d.mainNet5dPct,
+            mainNet10d: d.mainNet10d,
+            turnoverRate: d.turnoverRate, volumeRatio: d.volumeRatio,
+            extraLargeNet: d.extraLargeNet, largeNet: d.largeNet, smallNet: d.smallNet,
+          };
+        } catch (e) { return { error: `资金查询失败:${e}` }; }
+      },
+    },
+    {
+      name: "detectStockTrap",
+      description: "个股诱多检测：封单/成交比、炸板次数、涨幅 → 是否诱多出货特征",
+      kind: "vote",
+      normalize: (r) => r && r.isTrap ? { verdict: "禁止", confidence: Math.round((r.confidence ?? 50) + 20), reason: `诱多特征(${r.type})` } : null,
+      execute: async () => {
+        const { detectTrap } = await import("./trapDetector");
+        const r = detectTrap({
+          code: stock.code, name: stock.name, pct: stock.pct,
+          sealFund: stock.sealFund, amount: stock.amount, blastCount: stock.blastCount,
+          isMainline: true,
+        });
+        return { isTrap: r.isTrap, type: r.type, confidence: r.confidence };
+      },
+    },
+    {
+      name: "checkStockExitSignal",
+      description: "个股离场信号：7 条规则（成本/主力结构/封单）→ red/yellow/none",
+      kind: "vote",
+      normalize: (r) => r ? { verdict: r.level === "red" ? "禁止" : r.level === "yellow" ? "观望" : "可上车", confidence: r.level === "red" ? 85 : r.level === "yellow" ? 60 : 50, reason: (r.reasons ?? []).join("；").slice(0, 50) } : null,
+      execute: async () => {
+        const { checkStockExit } = await import("./stockExit");
+        const r = checkStockExit({
+          code: stock.code, name: stock.name, cost: 10, price: 10,
+          pct: stock.pct, mainNetPct: 0, retailNetPct: 0, mainNet: 0, mainNet5d: 0, mainNet10d: 0,
+          sealFund: stock.sealFund, amount: stock.amount, leaderAlive: true, isLeader: stock.boardCount >= 2,
+          mainline: stock.mainline,
+        });
+        return { level: r.level, reasons: r.reasons };
+      },
+    },
+  ];
+}

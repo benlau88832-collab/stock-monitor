@@ -9,8 +9,10 @@
 // v9.43：因子健康度三层闭环 —— ①预注入（LLM 必见）②factorHealth 工具（可深查）
 //         ③finalize 强制扣置信（≥50%→-15 / ≥30%→-8，与 decisionBus 同规则，AI 跑不掉门控）
 // ============================================================
-import { callAI, parseAIJSON, callAgentChat } from "./ai";
-import { getAgentTools, evaluateFactorHealth, type FactorHealthReport } from "./agentTools";
+import { callAI, parseAIJSON, callAgentChat, type AgentChatResult } from "./ai";
+import { getAgentTools, getStockAgentTools, evaluateFactorHealth, type FactorHealthReport } from "./agentTools";
+// v9.58（V8-9）：AI 结论全站联动 store
+import { setStockAI } from "./aiConclusionStore";
 import { runConsensus, type EvidenceSource } from "./decisionBus";
 import type { ToolContext } from "./agentTools";
 
@@ -156,7 +158,8 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
    调用工具：{"calls":[{"tool":"工具名","reason":"为什么查它"}]}
    最终裁决：{"final":{"action":"可上车|观望|禁止","confidence":0-100,"reason":"≤50字"}}
 5. 最多 5 轮工具调用后必须出最终裁决。
-6. 若用户消息中给了【因子健康度】且失效占比≥30%，你的最终置信度必须扣减（≥50%扣15、≥30%扣8），并在理由里说明。`;
+6. 若用户消息中给了【因子健康度】且失效占比≥30%，你的最终置信度必须扣减（≥50%扣15、≥30%扣8），并在理由里说明。
+7. 【硬约束·v9.57 V8-5】最终裁决的 reason 必须引用至少 2 个具体数值（如"封单1.2亿/成交3亿=40%、主力净流入8000万"），禁止"资金较强/封单坚决"等无数字空话；数字只能来自工具返回，不得编造。`;
 
   const toolByName = new Map(tools.map(t => [t.name, t]));
   let history: string[] = []; // 前几轮的工具调用与结果（回灌给 LLM）
@@ -329,29 +332,106 @@ export interface StockVerdict {
   rateLimited?: boolean;
 }
 
-/** 对单只标的做一句话 AI 研判（标的清单每只显示） */
+// ============================================================
+// v9.57（V8-4）：decideForStock 升级为"精简 ReAct"—— LLM 自主调 ≥2 个股工具
+// （getStockFund 资金面 / detectStockTrap 诱多 / checkStockExitSignal 离场），
+// 让个股 AI 与主线 AI 同深度（不再是单轮、不再只凭 6 个涨停池字段）。
+// ============================================================
+
+/** 对单只标的做一句话 AI 研判（标的清单每只显示；ReAct ≤3 轮，配额友好） */
 export async function decideForStock(
   stock: { code: string; name: string; boardCount: number; pct: number; sealFund: number; amount: number; blastCount: number; role: string },
   mainlineCtx: { mainline: string; stage: string },
 ): Promise<StockVerdict> {
-  const prompt = "你是10年A股游资操盘手。对主线「" + mainlineCtx.mainline + "」（" + mainlineCtx.stage + "）中的候选标的做一句话研判：" +
-    "标的：" + stock.name + "（" + stock.code + "）· " + stock.boardCount + "板 · 涨幅" + stock.pct + "% · 封单" + fmtMoney(stock.sealFund) + " · 成交" + fmtMoney(stock.amount) + " · 炸板" + stock.blastCount + "次 · 角色=" + stock.role +
-    "\n\n判断：这只票值不值得上车？重点看：封单是否坚决（封单/成交比）、炸板次数、连板位置（龙头确认 or 追高）、板块阶段。" +
-    '输出严格JSON：{"verdict":"可买|谨慎|回避","reason":"≤40字","riskPoints":["风险1","风险2"],"keyLevel":"关键观察点（如：竞价封单>0.8亿且不炸）"}';
-  try {
-    const r = await callAI("dailyIntel", { prompt });
-    const j = parseAIJSON<{ verdict?: string; reason?: string; riskPoints?: string[]; keyLevel?: string }>(r?.text ?? "");
-    if (!j || !j.verdict) return { code: stock.code, name: stock.name, verdict: "谨慎", reason: "AI 输出无法解析，降级规则", riskPoints: [], keyLevel: "", degraded: true };
-    const v = j.verdict === "可买" || j.verdict === "回避" ? j.verdict : "谨慎";
-    return {
-      code: stock.code, name: stock.name,
-      verdict: v,
-      reason: String(j.reason ?? "").slice(0, 40),
-      riskPoints: Array.isArray(j.riskPoints) ? j.riskPoints.slice(0, 3) : [],
-      keyLevel: String(j.keyLevel ?? "").slice(0, 40),
-      degraded: false,
-    };
-  } catch {
-    return { code: stock.code, name: stock.name, verdict: "谨慎", reason: "AI 配额受限/失败，规则降级", riskPoints: [], keyLevel: "", degraded: true, rateLimited: true };
+  const tools = getStockAgentTools({
+    code: stock.code, name: stock.name, pct: stock.pct,
+    sealFund: stock.sealFund, amount: stock.amount, blastCount: stock.blastCount,
+    mainline: mainlineCtx.mainline, stage: mainlineCtx.stage, boardCount: stock.boardCount,
+  });
+  const toolDefs = tools.map(t => ({
+    name: t.name,
+    description: t.description,
+    parameters: { type: "object", properties: {}, additionalProperties: true },
+  }));
+  const system = `你是10年A股游资操盘手，正在用工具独立调研个股"${stock.name}(${stock.code})"是否值得上车。
+背景：主线「${mainlineCtx.mainline}」（${mainlineCtx.stage}）· 标的${stock.boardCount}板 · 角色=${stock.role} · 涨幅${stock.pct}% · 封单${fmtMoney(stock.sealFund)} · 成交${fmtMoney(stock.amount)} · 炸板${stock.blastCount}次。
+
+你有以下工具（自主决定调用顺序，最多 3 轮）：
+${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
+
+规则：
+1. 第一轮先调用 getStockFund（查真实主力资金）+ detectStockTrap（查诱多）。
+2. 拿到资金/诱多数据后，结合封单/炸板/连板位置做综合研判。
+3. 每轮只输出严格JSON之一：
+   调用工具：{"calls":[{"tool":"工具名","reason":"为什么查它"}]}
+   最终裁决：{"final":{"verdict":"可买|谨慎|回避","reason":"≤40字且必须引用≥1个具体数字（如'主力净流入8000万/封单比40%'），禁止'资金较强'类空话","riskPoints":["风险1","风险2"],"keyLevel":"关键观察点（如：竞价封单>0.8亿且不炸）"}}
+4. 最多 3 轮工具调用后必须出最终裁决。`;
+
+  const toolByName = new Map(tools.map(t => [t.name, t]));
+  let history: string[] = [];
+  let llmOk = true;
+  let rateLimitedFlag = false;
+  const fallback = (degraded: boolean, rateLimited?: boolean): StockVerdict => ({
+    code: stock.code, name: stock.name, verdict: "谨慎",
+    reason: "AI 配额受限/失败，规则降级", riskPoints: [], keyLevel: "", degraded, rateLimited,
+  });
+
+  for (let round = 0; round < 3; round++) {
+    const user = `个股数据：${stock.boardCount}板·涨幅${stock.pct}%·封单${fmtMoney(stock.sealFund)}·成交${fmtMoney(stock.amount)}·炸板${stock.blastCount}次·角色${stock.role}\n${history.join("\n") || "（第一轮，开始调研）"}\n\n本轮请输出JSON（工具调用或最终裁决）：`;
+    let r: AgentChatResult | null;
+    try { r = await callAgentChat(system, user, toolDefs, { temperature: 0.2 }); } catch { r = null; }
+    if (!r) { llmOk = false; break; }
+    if (r.rateLimited) { llmOk = false; rateLimitedFlag = true; break; }
+
+    // ① 原生 tool_calls
+    if (r.toolCalls && r.toolCalls.length > 0) {
+      const roundOut: string[] = [];
+      for (const tc of r.toolCalls) {
+        const tool = toolByName.get(tc.name);
+        if (!tool) { roundOut.push(`未知工具 ${tc.name}`); continue; }
+        let args: any = {};
+        try { args = JSON.parse(tc.args || "{}"); } catch { /* 默认空参数 */ }
+        try {
+          const res = await tool.execute(args);
+          roundOut.push(`${tc.name} 返回：${JSON.stringify(res).slice(0, 220)}`);
+        } catch { roundOut.push(`${tc.name} 执行失败`); }
+      }
+      history.push(`第${round + 1}轮调用：\n${roundOut.join("\n")}`);
+      continue;
+    }
+
+    // ② 手动 JSON：calls 或 final
+    const parsed = parseAIJSON<{ calls?: Array<{ tool: string }>; final?: { verdict?: string; reason?: string; riskPoints?: string[]; keyLevel?: string } }>(r.text);
+    if (parsed?.final?.verdict) {
+      const f = parsed.final;
+      const v = f.verdict === "可买" || f.verdict === "回避" ? f.verdict : "谨慎";
+      // v9.58（V8-9）：AI 结论写入全局 store（个股雷达等处可见，不再孤立）
+      try { setStockAI({ code: stock.code, verdict: v, reason: String(f.reason ?? "").slice(0, 40), ts: Date.now() }); } catch { /* 静默 */ }
+      return {
+        code: stock.code, name: stock.name,
+        verdict: v,
+        reason: String(f.reason ?? "").slice(0, 40),
+        riskPoints: Array.isArray(f.riskPoints) ? f.riskPoints.slice(0, 3) : [],
+        keyLevel: String(f.keyLevel ?? "").slice(0, 40),
+        degraded: false,
+      };
+    }
+    if (parsed?.calls && parsed.calls.length > 0) {
+      const roundOut: string[] = [];
+      for (const c of parsed.calls) {
+        const tool = toolByName.get(c.tool);
+        if (!tool) { roundOut.push(`未知工具 ${c.tool}`); continue; }
+        try {
+          const res = await tool.execute({});
+          roundOut.push(`${c.tool} 返回：${JSON.stringify(res).slice(0, 220)}`);
+        } catch { roundOut.push(`${c.tool} 执行失败`); }
+      }
+      history.push(`第${round + 1}轮调用：\n${roundOut.join("\n")}`);
+      continue;
+    }
+    // ③ 无法解析 → 继续下一轮或降级
+    history.push(`（第${round + 1}轮 LLM 输出无法解析）`);
   }
+  if (!llmOk) return fallback(true, rateLimitedFlag);
+  return fallback(true); // 3 轮未出裁决（LLM 输出异常）→ 规则降级
 }

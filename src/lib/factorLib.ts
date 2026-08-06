@@ -33,6 +33,9 @@ export interface FactorDayRow {
   lhbBoostCount?: number | null;    // 龙虎榜加持涨停数
   fundInflowStreak?: number | null; // 主线行业连续流入天数
   nuclearCount?: number | null;     // 核按钮数
+  /** v9.57（V8-1）：次日涨停数/最高板（loadFactorRows 从次日 market_daily 读取，供"主线延续"标签） */
+  nextZtCount?: number | null;
+  nextHeight?: number | null;
 }
 
 /** 因子库（注册表） */
@@ -122,11 +125,15 @@ export function evaluateAllFactors(rows: FactorDayRow[]): FactorIC[] {
 
 /** 判定"次日主线延续"（简版：次日情绪分 ≥ 今日 → 延续）。由调用方填 row.nextMainlineWin */
 export function markNextWin(rows: Array<Omit<FactorDayRow, "nextMainlineWin">>): FactorDayRow[] {
+  // v9.57（V8-1）：标签改"主线次日是否真延续"—— 用涨停数维持判定（次日 ≥ 今日 80% = 延续），
+  //   弃用"次日情绪 ≥ 今日情绪"代理（主线退潮但大盘情绪涨 → 旧标签误判延续）
   const out: FactorDayRow[] = [];
   for (let i = 0; i < rows.length; i++) {
     const cur = rows[i];
     const next = rows[i + 1];
-    const win = next?.sentiment != null && cur.sentiment != null ? (next.sentiment >= cur.sentiment ? 1 : 0) : null;
+    const win = (cur.ztCount != null && next?.ztCount != null)
+      ? (next.ztCount >= cur.ztCount * 0.8 ? 1 : 0) // 次日涨停数未萎缩>20% = 主线延续
+      : null;
     out.push({ ...cur, nextMainlineWin: win });
   }
   return out;

@@ -4,6 +4,32 @@
 
 ---
 
+## v9.59 — GLM5.2-V8 全部落地（因子真数据 · 个股AI变强 · 作战卡资金不骗人 · AI贯通全站）(2026-08-06)
+
+> V8 报告 10 条超详细指令 100% 执行（v9.56→v9.59 四里程碑一次完成），单测 117→121 全绿。
+
+### v9.56：作战卡资金真实化（V8-6/2）
+- **V8-6** 资金匹配链：折叠/LLM/模糊失败后 → **hybk 兜底**（组内涨停股行业聚合资金）；仍失败 → `fundMissing` 标记；BattlePlan 显示"资金 ⚠数据未匹配"（灰）而非假 0
+- **V8-2** market_daily 补字段：`premiumAvg`（昨日涨停股今日平均涨幅）+ `promotionRate`（昨日首板今日晋级率）由 server 收盘落库；`sealDecayCount` 改真实（无 seal 预警源 → null，不再用炸板冒充）；`fundInflowStreak` 存**连续流入天数**（读 fund_streak 历史）
+
+### v9.57：因子可信 + 个股 AI 变强（V8-1/3/4）
+- **V8-1** IC 标签弃情绪代理 → **"次日涨停维持 ≥80%"** 判主线延续（markNextWin + loadFactorRows 读次日 market_daily + nextZtCount/nextHeight）
+- **V8-3** 因子样本 <30 天 → FactorHealthPanel 顶部红字降级 + decisionBus **penalty 归零**（不因不靠谱 IC 扣置信）
+- **V8-4** decideForStock 升**精简 ReAct**（≤3 轮自主调工具）：新增个股工具集 getStockFund（真实资金面）/detectStockTrap（诱多）/checkStockExitSignal（离场），个股 AI 与主线 AI 同深度
+
+### v9.58：AI 贯通全站（V8-8/9/10）
+- **V8-8 全局 AI 助手**：`AIConsole.tsx` 右下角悬浮对话窗（所有 Tab 可见）+ `runAssistantAgent` 全站 ReAct（getAgentTools 全套 + getStockFundDetail），问"主线能不能上车/买谁/资金多少"→ 自动调工具 + 带数字连贯答复 + 工具轨迹
+- **V8-9** `aiConclusionStore`：decideForStock 结论写入全局 store → 个股雷达旁标"AI:可买/谨慎/回避"（一处结论处处可见）
+- **V8-10** 降级显式标注：AIConsole/裁决卡/标的清单统一"⏸ 本次为规则结果（AI 配额受限）"
+
+### v9.59：收尾（V8-5/7）
+- **V8-5** 主线 AI 裁决 reason 硬约束"引用 ≥2 个具体数字，禁止'资金较强'空话"
+- **V8-7** `mainlineToBoardNames` 反向映射 + stockToMainline 折叠 key 归一化匹配（LLM 名"人工智能"→折叠"AI应用"→命中板块资金）
+
+### 部署说明：server/cron.js 已更新（market_daily 补字段），pm2 重启后 15:40 起新字段落库
+
+---
+
 ## v9.55-fix — V7 复盘补做（详细复盘验收标准，补齐 6 处未做透项）(2026-08-06)
 
 > 上轮按指令做了 21 条，本轮逐条对照**验收标准**复盘，发现并补齐 6 处"做了但没做透"：

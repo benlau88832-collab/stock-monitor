@@ -720,10 +720,20 @@ export default function Dashboard({
           row.ztCount = md.ztCount ?? null;
           row.blastedRate = md.blastedRate ?? null;
           row.maxBoardHeight = md.maxBoardHeight ?? null;
+          // v9.56（V8-2）：premium/promotion 已由 server 落库 → 读进因子行（此前永远 null）
+          row.premiumAvg = md.premiumAvg ?? null;
+          row.promotionRate = md.promotionRate ?? null;
           row.sealDecayCount = md.sealDecayCount ?? null;
           row.lhbBoostCount = md.lhbBoostCount ?? null;
           row.fundInflowStreak = md.fundInflowStreak ?? null;
           row.nuclearCount = md.nuclearCount ?? null;
+        }
+        // v9.57（V8-1）：读次日 market_daily（ztCount/maxBoardHeight）→ "主线延续"标签数据
+        const nxt = new Date(t); nxt.setDate(nxt.getDate() + 1);
+        const nxtMd = await kvGet(`market_daily:${bjDateStr(nxt)}`) as any;
+        if (nxtMd) {
+          row.nextZtCount = nxtMd.ztCount ?? null;
+          row.nextHeight = nxtMd.maxBoardHeight ?? null;
         }
       } catch { /* 静默 */ }
       out.push(row);
