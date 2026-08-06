@@ -2,8 +2,11 @@ import { useState, useEffect } from "react";
 import HealthDot from "./HealthDot";
 import IntelligenceDrawer from "./IntelligenceDrawer";
 import SettingsModal from "./SettingsModal";
+// v9.50（G2）：StatusBar 并入 TopNav 顶部通栏（合成一个 sticky 头，减少首屏挤压）
+import StatusBar from "./StatusBar";
 import { getCurrentSession } from "../lib/tradingSession";
 import { getTodayCalls } from "../lib/ai";
+import type { OverviewData, FundStructureData } from "../App";
 import {
   isSoundOn, isNotifyOn, setSoundOn, setNotifyOn,
   resumeAudio, requestNotifyPermission, getUnreadCount, clearUnread, getFeed,
@@ -31,9 +34,12 @@ interface Props {
   countdown: number;
   /** v9.26.10：下次自动刷新时间戳（App 不再每秒 setState 导致全树重渲染） */
   nextRefreshAt?: number;
+  /** v9.50（G2）：并入顶部通栏的状态条数据 */
+  overview?: OverviewData | null;
+  fund?: FundStructureData | null;
 }
 
-export default function TopNav({ active, onChange, loading, autoRefresh, onToggleAutoRefresh, onRefreshNow, countdown, nextRefreshAt }: Props) {
+export default function TopNav({ active, onChange, loading, autoRefresh, onToggleAutoRefresh, onRefreshNow, countdown, nextRefreshAt, overview, fund }: Props) {
   const [soundOn, _setSoundOn] = useState(isSoundOn);
   const [notifyOn, _setNotifyOn] = useState(isNotifyOn);
   const [showBell, setShowBell] = useState(false);
@@ -176,6 +182,8 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
             <HealthDot />
           </div>
         </div>
+        {/* v9.50（G2）：状态条并入顶部通栏（指数/成交/情绪常驻，不再独立占一层） */}
+        <StatusBar overview={overview ?? null} fund={fund ?? null} />
       </nav>
 
       {/* AI 交易督导抽屉 */}

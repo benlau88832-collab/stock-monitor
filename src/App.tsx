@@ -16,6 +16,8 @@ import Dashboard, { type WatchStockBrief } from "./components/Dashboard";
 import ThemeLadder from "./components/ThemeLadder";
 import CommodityChain from "./components/CommodityChain";
 import MarginPanel from "./components/MarginPanel";
+// v9.49（N1）：事件三级研判（政策/行业/事件）从驾驶舱移到消息面 Tab（消息研判归消息面）
+import EventClassifyPanel from "./components/EventClassifyPanel";
 import { type BattlePlanData } from "./components/BattlePlan";
 import { detectHighLowSwitch, type ZTPoolItem } from "./lib/themeLadder";
 import { classifyBoard } from "./lib/boardTaxonomy";
@@ -41,7 +43,7 @@ import { computePrevZtStats } from "./lib/prevZtStats";
 import { fetchPopularityRank } from "./lib/api";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
-import StatusBar from "./components/StatusBar";
+// v9.50（G2）：StatusBar 已并入 TopNav 顶部通栏，App 不再独立渲染
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
 import { checkSysRisk } from "./lib/sysRiskGuard";
@@ -1148,10 +1150,8 @@ export default function App() {
         active={active} onChange={setActive} lastUpdated={lastUpdated} loading={loading}
         autoRefresh={autoRefresh} onToggleAutoRefresh={() => setAutoRefresh(v => !v)} onRefreshNow={refreshAll}
         countdown={countdown} nextRefreshAt={nextRefreshAt || undefined}
+        overview={overview} fund={fundStructure}
       />
-
-      {/* 常驻状态条（所有Tab可见） */}
-      <StatusBar overview={overview} fund={fundStructure} />
 
       {/* 三级警报横幅 */}
       <AlertBanner alerts={alerts} />
@@ -1171,50 +1171,66 @@ export default function App() {
             sealAlerts={sealAlerts} />
         )}
 
-        {/* ====== 资金主线（深潜：完整资金结构+明暗盘+全球信号+产业链） ====== */}
+        {/* ====== 资金主线（v9.49 F1 分组：强度榜首屏 → 资金结构组 → 外围组） ====== */}
         {active === "fundline" && (
           <>
-            {/* v9.24-P1-1：主线强度排行榜（PRD B1，页面首屏） */}
+            {/* 首屏独占：主线强度榜（PRD B1）+ 题材梯队（v9.49 R1：主线数据归主线 Tab） */}
             <MainlineRanking battlePlan={battlePlan} loading={loading} />
-            {/* v9.26.20：行业资金流向走势图（全部有数据的行业，组件按实际数量动态展示） */}
-            {topIndustryFund.length > 0 && (
-              <IndustryFundFlowChart boards={topIndustryFund} refreshSec={60} />
-            )}
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构详情</h3>
-              <FundStructure data={fundStructure} loading={loading} />
-            </div>
-            <DarkPool data={darkPool} loading={loading} />
-            <GlobalSignals data={globalData} loading={loading} />
-            {/* 两融观察：全市场融资余额/净买入/历史趋势（独立拉取，T+1 数据） */}
-            <MarginPanel />
-            {/* 产业链价格：板块联动列复用 mainline.boards 已有数据，零新增请求 */}
-            <CommodityChain boardPcts={(() => {
-              const map: Record<string, number> = {};
-              if (mainline?.boards) {
-                for (const b of mainline.boards) map[b.name] = b.pct;
-              }
-              // 也从 darkPool topBoards 补充（覆盖更多板块名称）
-              if (darkPool?.topBoards) {
-                for (const b of darkPool.topBoards) {
-                  if (!(b.name in map)) map[b.name] = b.pct;
-                }
-              }
-              return map;
-            })()} />
+            <ThemeLadder rawZTPool={overview?.limitPool?.rawZTPool ?? null} />
+            {/* 资金结构组（默认展开，可折叠） */}
+            <details className="rounded-xl border border-white/10 bg-white/5" open>
+              <summary className="cursor-pointer select-none px-4 py-2 text-sm font-bold text-slate-200 hover:text-slate-100">
+                💧 资金结构（行业流向 · 明暗盘 · 涨停盘）
+              </summary>
+              <div className="space-y-3 px-4 pb-4">
+                {/* v9.26.20：行业资金流向走势图（全部有数据的行业，组件按实际数量动态展示） */}
+                {topIndustryFund.length > 0 && (
+                  <IndustryFundFlowChart boards={topIndustryFund} refreshSec={60} />
+                )}
+                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                  <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构详情</h3>
+                  <FundStructure data={fundStructure} loading={loading} />
+                </div>
+                <DarkPool data={darkPool} loading={loading} />
+                {/* v9.49 R2：涨停盘从龙虎榜 Tab 移入（盘中主线数据归资金主线） */}
+                <Suspense fallback={<div className="text-slate-400 p-4">加载涨停盘…</div>}>
+                  <LimitBoard />
+                </Suspense>
+              </div>
+            </details>
+            {/* 外围组（默认折叠） */}
+            <details className="rounded-xl border border-white/10 bg-white/5">
+              <summary className="cursor-pointer select-none px-4 py-2 text-sm font-bold text-slate-200 hover:text-slate-100">
+                🌐 外围信号（全球 · 两融 · 产业链）
+              </summary>
+              <div className="space-y-3 px-4 pb-4">
+                <GlobalSignals data={globalData} loading={loading} />
+                {/* 两融观察：全市场融资余额/净买入/历史趋势（独立拉取，T+1 数据） */}
+                <MarginPanel />
+                {/* 产业链价格：板块联动列复用 mainline.boards 已有数据，零新增请求 */}
+                <CommodityChain boardPcts={(() => {
+                  const map: Record<string, number> = {};
+                  if (mainline?.boards) {
+                    for (const b of mainline.boards) map[b.name] = b.pct;
+                  }
+                  // 也从 darkPool topBoards 补充（覆盖更多板块名称）
+                  if (darkPool?.topBoards) {
+                    for (const b of darkPool.topBoards) {
+                      if (!(b.name in map)) map[b.name] = b.pct;
+                    }
+                  }
+                  return map;
+                })()} />
+              </div>
+            </details>
           </>
         )}
 
-        {/* ====== 龙虎榜复盘（lazy） ====== */}
+        {/* ====== 龙虎榜复盘（v9.49 R1/R2：只留席位画像，名副其实） ====== */}
         {active === "dragon" && (
-          <>
-            {/* 题材梯队：复用 App 已拉取的 ZTPool 数据，不重复请求 */}
-            <ThemeLadder rawZTPool={overview?.limitPool?.rawZTPool ?? null} />
-            <Suspense fallback={<div className="text-slate-400 p-6">加载龙虎榜模块…</div>}>
-              <DragonTiger />
-              <LimitBoard />
-            </Suspense>
-          </>
+          <Suspense fallback={<div className="text-slate-400 p-6">加载龙虎榜…</div>}>
+            <DragonTiger />
+          </Suspense>
         )}
 
         {/* ====== 个股雷达（lazy） ====== */}
@@ -1247,6 +1263,8 @@ export default function App() {
                 } : null}
               />
             </div>
+            {/* v9.49（N1）：事件三级研判（政策/行业/事件 + 受益板块）—— 消息研判归消息面 */}
+            <EventClassifyPanel />
           </Suspense>
         )}
       </main>

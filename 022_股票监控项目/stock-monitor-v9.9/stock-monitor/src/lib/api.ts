@@ -819,6 +819,8 @@ export interface LimitPoolSummary {
   rawZTPool: any[];
   /** v9.26.18：炸板池原始数据（字段：c/n/zdp/zbc 炸板次数/zf 炸板幅度/zttj.ct 连板数） */
   rawZBPool?: any[];
+  /** v9.49（L4）：跌停池原始数据（字段：c/n/zdp/oc 开板次数/days），供 LimitBoard 复用 */
+  rawDTPool?: any[];
   /** 接口返回的真实交易日（形如"20260729"），优先用于快照 key（兼容法定节假日） */
   qdate: string | null;
   /** v9.26.10：当日池总数（节假日回退判定用） */
@@ -879,7 +881,7 @@ async function fetchZTPoolForDate(d: string): Promise<LimitPoolSummary> {
   const blastedRate = (limitUpCount + blastedCount) > 0 ? blastedCount / (limitUpCount + blastedCount) * 100 : 0;
   const totalBoardStocks = ztPool.filter((s: any) => (s.lbc ?? 1) >= 2).length;
 
-  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, rawZBPool: zbPool, qdate, totalCount: ztPool.length + zbPool.length + dtPool.length };
+  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, rawZBPool: zbPool, rawDTPool: dtPool, qdate, totalCount: ztPool.length + zbPool.length + dtPool.length };
 }
 
 // ============== 两市历史日成交额（用于量能对比）==============

@@ -91,12 +91,9 @@ function formatTime(t: number): string {
 }
 
 // 走全局队列，不绕过并发控制
-import { queuedJsonp } from "../lib/jsonpQueue";
 import { loadPrevZTSnapshot } from "../lib/ztSnapshot";
-const jsonpReq = <T = any>(url: string, timeout = 6000) => queuedJsonp<T>(url, timeout, "cb", 2);
-
-// ============== 数据获取（东方财富涨停池/炸板池/跌停池 真实接口） ==============
-const ZT_UT = "7eea3edcaed734bea9cbfc24409ed989";
+// v9.49（L4）：复用 api.ts 涨停池统一实现（此前三套 fetch 重复，字段变更易口径漂移）
+import { fetchLimitPoolSummary } from "../lib/api";
 
 function todayStr(): string {
   const d = new Date();
@@ -107,67 +104,48 @@ function todayStr(): string {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 }
 
-async function fetchZTPool(date?: string): Promise<{ stocks: ZTStock[]; qdate: string | null }> {
+// ============== 数据获取（v9.49 L4：统一走 api.ts fetchLimitPoolSummary） ==============
+async function fetchPools(date?: string): Promise<{
+  zt: ZTStock[]; zb: ZBStock[]; dt: DTStock[]; qdate: string | null;
+}> {
   const d = date || todayStr();
-  const url = `https://push2ex.eastmoney.com/getTopicZTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
-  try {
-    const json = await jsonpReq<any>(url);
-    const pool: any[] = json?.data?.pool ?? [];
-    // 接口返回的真实交易日（如"20260731"），晋级率用它找昨日快照，天然兼容节假日
-    const qdate: string | null = json?.data?.qdate != null ? String(json.data.qdate) : null;
-    return {
-      qdate,
-      stocks: pool.map(s => ({
-        code: String(s.c), name: String(s.n),
-        price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
-        amount: s.amount ?? 0, boardCount: s.lbc ?? 1,
-        firstBoardTime: formatTime(s.fbt ?? 0),
-        lastBoardTime: formatTime(s.lbt ?? 0),
-        sealFund: s.fund ?? 0, blastCount: s.zbc ?? 0,
-        industry: String(s.hybk ?? ""),
-        ztDays: s.zttj?.days ?? 0, ztCt: s.zttj?.ct ?? 0,
-        theme: matchTheme(String(s.n ?? ""), String(s.hybk ?? "")),
-      })),
-    };
-  } catch { return { stocks: [], qdate: null }; }
-}
-
-// v9.26.18：sort 必须用 fbt:asc（fund:asc/lbc:desc/fund:desc 都返回空）
-async function fetchZBPool(date?: string): Promise<ZBStock[]> {
-  const d = date || todayStr();
-  const url = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
-  try {
-    const json = await jsonpReq<any>(url);
-    const pool: any[] = json?.data?.pool ?? [];
-    return pool.map(s => ({
-      code: String(s.c), name: String(s.n),
-      price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
-      amount: s.amount ?? 0, industry: String(s.hybk ?? ""),
-      firstBoardTime: formatTime(s.fbt ?? 0),
-      lastBoardTime: formatTime(s.fbt ?? 0), // ZBPool 无 lbt，fallback 到 fbt
-      blastCount: s.zbc ?? 0,
-      blastPct: s.zf ?? 0,
-      prevBoards: s.zttj?.ct ?? 0,
-      sealFund: 0, // ZBPool 无 fund
-      theme: matchTheme(String(s.n ?? ""), String(s.hybk ?? "")),
-    }));
-  } catch { return []; }
-}
-
-async function fetchDTPool(date?: string): Promise<DTStock[]> {
-  const d = date || todayStr();
-  const url = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
-  try {
-    const json = await jsonpReq<any>(url);
-    const pool: any[] = json?.data?.pool ?? [];
-    return pool.map(s => ({
-      code: String(s.c), name: String(s.n),
-      price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
-      amount: s.amount ?? 0, industry: String(s.hybk ?? ""),
-      sealFund: s.fund ?? 0, lastBoardTime: formatTime(s.lbt ?? 0),
-      openCount: s.oc ?? 0, days: s.days ?? 0,
-    }));
-  } catch { return []; }
+  const summary = await fetchLimitPoolSummary(d);
+  const mapZT = (s: any): ZTStock => ({
+    code: String(s.c), name: String(s.n),
+    price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
+    amount: s.amount ?? 0, boardCount: s.lbc ?? 1,
+    firstBoardTime: formatTime(s.fbt ?? 0),
+    lastBoardTime: formatTime(s.lbt ?? 0),
+    sealFund: s.fund ?? 0, blastCount: s.zbc ?? 0,
+    industry: String(s.hybk ?? ""),
+    ztDays: s.zttj?.days ?? 0, ztCt: s.zttj?.ct ?? 0,
+    theme: matchTheme(String(s.n ?? ""), String(s.hybk ?? "")),
+  });
+  const mapZB = (s: any): ZBStock => ({
+    code: String(s.c), name: String(s.n),
+    price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
+    amount: s.amount ?? 0, industry: String(s.hybk ?? ""),
+    firstBoardTime: formatTime(s.fbt ?? 0),
+    lastBoardTime: formatTime(s.fbt ?? 0), // ZBPool 无 lbt，fallback 到 fbt
+    blastCount: s.zbc ?? 0,
+    blastPct: s.zf ?? 0,
+    prevBoards: s.zttj?.ct ?? 0,
+    sealFund: 0, // ZBPool 无 fund
+    theme: matchTheme(String(s.n ?? ""), String(s.hybk ?? "")),
+  });
+  const mapDT = (s: any): DTStock => ({
+    code: String(s.c), name: String(s.n),
+    price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
+    amount: s.amount ?? 0, industry: String(s.hybk ?? ""),
+    sealFund: s.fund ?? 0, lastBoardTime: formatTime(s.lbt ?? 0),
+    openCount: s.oc ?? 0, days: s.days ?? 0,
+  });
+  return {
+    zt: (summary.rawZTPool ?? []).map(mapZT),
+    zb: (summary.rawZBPool ?? []).map(mapZB),
+    dt: (summary.rawDTPool ?? []).map(mapDT),
+    qdate: summary.qdate,
+  };
 }
 
 // ============== 统计卡片 ==============
@@ -296,19 +274,19 @@ export default function LimitBoard() {
     setLoading(true);
     const d = todayStr();
     setDateStr(d);
-    const [zt, zb, dt] = await Promise.all([fetchZTPool(d), fetchZBPool(d), fetchDTPool(d)]);
-    setQdate(zt.qdate);
+    const pools = await fetchPools(d);
+    setQdate(pools.qdate);
     // 如果今天没数据（非交易日/盘前），尝试前一天
-    if (zt.stocks.length === 0 && zb.length === 0 && dt.length === 0) {
+    if (pools.zt.length === 0 && pools.zb.length === 0 && pools.dt.length === 0) {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
       const yd = `${yesterday.getFullYear()}${String(yesterday.getMonth() + 1).padStart(2, "0")}${String(yesterday.getDate()).padStart(2, "0")}`;
       setDateStr(yd);
-      const [zt2, zb2, dt2] = await Promise.all([fetchZTPool(yd), fetchZBPool(yd), fetchDTPool(yd)]);
-      setQdate(zt2.qdate);
-      setZtStocks(zt2.stocks); setZbStocks(zb2); setDtStocks(dt2);
+      const pools2 = await fetchPools(yd);
+      setQdate(pools2.qdate);
+      setZtStocks(pools2.zt); setZbStocks(pools2.zb); setDtStocks(pools2.dt);
     } else {
-      setZtStocks(zt.stocks); setZbStocks(zb); setDtStocks(dt);
+      setZtStocks(pools.zt); setZbStocks(pools.zb); setDtStocks(pools.dt);
     }
     setLoading(false);
   }, []);

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import MarketOverview from "./MarketOverview";
-import EmotionCycleCard from "./EmotionCycleCard";
+// v9.48（D2）：EmotionCycleCard 移除 —— 情绪/涨停/炸板/溢价/晋级率已在温度条+总览+闸门多处展示，去冗余
 import DisciplinePanel from "./DisciplinePanel";
 import ReviewPanel from "./ReviewPanel";
 import AuctionBoard from "./AuctionBoard";
@@ -18,8 +18,7 @@ import SignalEquityPanel from "./SignalEquityPanel";
 import AuctionStrengthPanel from "./AuctionStrengthPanel";
 // v9.36（A3）：龙虎榜×涨停池交叉
 import LhbCrossPanel from "./LhbCrossPanel";
-// v9.38.1（V3-12）：事件三级研判面板
-import EventClassifyPanel from "./EventClassifyPanel";
+// v9.49（N1）：EventClassifyPanel 已移到"消息面"Tab（事件研判归消息面），Dashboard 不再引用
 // v9.38.1（V3-12）：读 kv 事件分级数据（决策消息面证据源）
 import { isLocalServer, kvGet, kvSet } from "../lib/cloudStore";
 // v9.37（V3-4/7）：AI 终裁决（多源共识）
@@ -98,16 +97,16 @@ function IndexStrip({ overview }: { overview: OverviewData | null }) {
 }
 
 // ============== 涨停温度计横条 ==============
+// 核心进阶温度条（v9.48 G1：涨停/跌停/炸板率已在 StatusBar 全局常驻，此处只留进阶指标：
+// 晋级率/溢价/最高板 —— 不再三处重复同一组数）
 function LimitTempBar({ overview }: { overview: OverviewData | null }) {
   if (!overview?.limitPool) return null;
   const lp = overview.limitPool;
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] overflow-x-auto">
-      <span className="text-rose-400">涨停<b>{lp.limitUpCount}</b></span>
-      <span className="text-emerald-400">跌停<b>{lp.limitDownCount}</b></span>
-      <span className="text-amber-400">炸板率<b>{lp.blastedRate.toFixed(1)}%</b></span>
+    <div className="flex items-center gap-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-1.5 text-[11px] overflow-x-auto">
+      <span className="text-slate-500 font-bold">📊 进阶指标</span>
       {overview.promotionRate != null && (
-        <span className="text-slate-300">晋级率<b>{(overview.promotionRate * 100).toFixed(1)}%</b></span>
+        <span className="text-slate-300">晋级率<b className="text-amber-300">{(overview.promotionRate * 100).toFixed(1)}%</b></span>
       )}
       {overview.premiumAvg != null && (
         <span className={pctColor(overview.premiumAvg)}>溢价<b>{overview.premiumAvg >= 0 ? "+" : ""}{overview.premiumAvg.toFixed(2)}%</b></span>
@@ -115,6 +114,10 @@ function LimitTempBar({ overview }: { overview: OverviewData | null }) {
       {overview.maxBoardHeight != null && (
         <span className="text-amber-300">最高<b>{overview.maxBoardHeight}板</b></span>
       )}
+      {lp.boardCounts && Object.keys(lp.boardCounts).length > 0 && (
+        <span className="text-slate-400">梯队<b className="text-amber-300">{Object.entries(lp.boardCounts).sort((a, b) => Number(b[0]) - Number(a[0])).slice(0, 3).map(([h, n]) => `${h}板×${n}`).join(" ")}</b></span>
+      )}
+      <span className="ml-auto text-[10px] text-slate-600">涨停{lp.limitUpCount} · 炸板{lp.blastedRate.toFixed(1)}%（见顶部状态栏）</span>
     </div>
   );
 }
@@ -554,17 +557,18 @@ export default function Dashboard({
   // v9.44（②/④）：决策审计 + 信号净值
   const [showAudit, setShowAudit] = useState(Boolean(panelPref.showAudit));
   const [showEquity, setShowEquity] = useState(Boolean(panelPref.showEquity));
+  // v9.48（D3）：盘后预演（风险雷达 + 明日三剧本 + 每日复盘）—— 盘中默认收起
+  const [showPreview, setShowPreview] = useState(Boolean(panelPref.showPreview));
   // 任何 toggle 变化 → 写回 localStorage（跨刷新保持）
   useEffect(() => {
-    try { localStorage.setItem(PANEL_PREF_KEY, JSON.stringify({ showAI, showSignal, showSignalEffect, showFactorHealth, showAudit, showEquity })); } catch { /* 静默 */ }
-  }, [showAI, showSignal, showSignalEffect, showFactorHealth, showAudit, showEquity]);
+    try { localStorage.setItem(PANEL_PREF_KEY, JSON.stringify({ showAI, showSignal, showSignalEffect, showFactorHealth, showAudit, showEquity, showPreview })); } catch { /* 静默 */ }
+  }, [showAI, showSignal, showSignalEffect, showFactorHealth, showAudit, showEquity, showPreview]);
   useEffect(() => {
     // 当 phase 变到 post 时自动打开 AI 复盘（盘后场景）
     if (phase === "post") setShowAI(true);
   }, [phase]);
 
-  const isTrading = phase === "trading";
-  const isPost = phase === "post";
+  // v9.48（D5）：单一布局收敛 —— 不再需要 isTrading/isPost 独立布局（相位只做强调点）
   const isPre = phase === "pre" || phase === "auction";
   const gate = battlePlan?.gate ?? null;
 
@@ -866,141 +870,53 @@ export default function Dashboard({
         <LhbCrossPanel overview={overview} />
       </div>
 
-      {/* ============== 盘中布局 ============== */}
-      {isTrading && (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_300px]">
-          {/* 左 2/3 ——v9.46：顶部驾驶舱/裁决/重审/Top摘要 已提取到 Dashboard 共用顶部 —— BattlePlan 顶到第 1 位 */}
-          <div className="space-y-2">
-            <BattlePlan data={battlePlan ?? null} />
-            {/* v9.18-F5：情绪周期雷达（温度计 2.0） */}
-            {overview && (
-              <EmotionCycleCard input={{
-                sentiment: overview.sentiment,
-                ztCount: overview.limitPool?.limitUpCount ?? 0,
-                ztCountYesterday: null, // 昨日涨停数暂未在 overview 中回传（可扩展）
-                maxBoardHeight: overview.limitPool?.boardCounts ? Math.max(0, ...Object.keys(overview.limitPool.boardCounts).map(Number)) : null,
-                maxBoardYesterday: null,
-                blastedRate: overview.limitPool?.blastedRate ?? null,
-                blastedRatePrev: null,
-                premiumAvg: overview.premiumAvg ?? null,
-                promotionRate: overview.promotionRate ?? null,
-              }}
-                // v9.32.1（缺口1）：溢价分布 4 档
-                premiumDist={overview.premiumDist} />
-            )}
-            <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
-            <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
-            <LimitTempBar overview={overview} />
-            <MarketOverview data={overview} loading={loading} />
-            <PopularityRadar />
-          </div>
-          {/* 右 1/3 */}
-          <div className="space-y-2">
-            {/* v9.19-F7：仓位与纪律面板 */}
-            <DisciplinePanel overview={overview} />
-            {/* v9.33（缺口3）：LLM 盘后三剧本 + 风险雷达（复盘区上方） */}
-            {(nextScenarios || riskRadarText) && (
-              <div className="space-y-2">
-                {riskRadarText && (
-                  <div className={`rounded-lg border px-3 py-2 text-xs ${
-                    riskRadarText.includes("[高]") ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
-                    : riskRadarText.includes("[中]") ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-                    : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
-                    🛡 {riskRadarText}
+      {/* ============== 主区（v9.48 D5：单一布局收敛 —— 相位只做强调点插值，不再三套布局整体跳变） ============== */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_300px]">
+        {/* 左 2/3：决策证据 + 数据详情 */}
+        <div className="space-y-2">
+          {/* 相位强调点：盘前/竞价台（仅 pre/auction 出现） */}
+          {isPre && (
+            <>
+              {/* v9.19-F2：竞价台（盘前/竞价场景核心） */}
+              {leaderPredict && leaderPredict.predictLeader && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+                  <div className="text-xs font-bold text-amber-200">
+                    🤖 AI 预判龙一：<span className="text-base">{leaderPredict.predictLeader.name}</span>
+                    <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
                   </div>
-                )}
-                {nextScenarios && nextScenarios.length > 0 && (
-                  <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                    <div className="text-[11px] font-bold text-slate-200 mb-2">🎬 明日三剧本（LLM 盘后推演）</div>
-                    <div className="space-y-1.5">
-                      {nextScenarios.map((s, i) => (
-                        <div key={i} className="rounded border border-white/5 bg-black/20 px-2 py-1.5">
-                          <div className="flex items-center justify-between">
-                            <span className={`text-[11px] font-bold ${i === 0 ? "text-amber-300" : i === 1 ? "text-slate-200" : "text-emerald-300"}`}>
-                              {i + 1}. {s.scenario}
-                            </span>
-                            <span className="text-[11px] font-mono text-slate-400">{s.probability}%</span>
-                          </div>
-                          {s.conditions.length > 0 && (
-                            <div className="mt-0.5 text-[10px] text-slate-500">触发：{s.conditions.join("；")}</div>
-                          )}
-                          {s.focus.length > 0 && (
-                            <div className="text-[10px] text-amber-200/70">关注：{s.focus.join("、")}</div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            {/* v9.19-F10：每日复盘 */}
-            <ReviewPanel />
-            <GateGauge overview={overview} gate={gate} />
-            <ImportantFeed />
-            <LadderMini overview={overview} onSwitchTab={() => onSwitchTab?.("dragon")} />
-          </div>
-        </div>
-      )}
-
-      {/* ============== 盘前/竞价布局 ============== */}
-      {isPre && (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
-          <div className="space-y-2">
-            {/* v9.19-F2：竞价台（盘前/竞价场景核心） */}
-            {leaderPredict && leaderPredict.predictLeader && (
-              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
-                <div className="text-xs font-bold text-amber-200">
-                  🤖 AI 预判龙一：<span className="text-base">{leaderPredict.predictLeader.name}</span>
-                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
+                  {leaderPredict.reason && <div className="mt-1 text-[11px] text-slate-300">理由：{leaderPredict.reason}</div>}
+                  {leaderPredict.watch && <div className="text-[11px] text-rose-300/80">⚠ 盯防：{leaderPredict.watch}</div>}
                 </div>
-                {leaderPredict.reason && <div className="mt-1 text-[11px] text-slate-300">理由：{leaderPredict.reason}</div>}
-                {leaderPredict.watch && <div className="text-[11px] text-rose-300/80">⚠ 盯防：{leaderPredict.watch}</div>}
-              </div>
-            )}
-            <AuctionBoard yesterdayZt={yesterdayZt} todayZt={ztPool} autoRefresh={false} />
-            {/* v9.36（A2）：竞价强度榜（昨日涨停池竞价涨幅 top12） */}
-            <AuctionStrengthPanel yesterdayZt={yesterdayZt} todayZt={ztPool} />
-            <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
-              blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />
-            {globalData && <GlobalSignals data={globalData} loading={loading} />}
-            <BattlePlan data={battlePlan ?? null} />
-            {/* v9.19-F7/F10：纪律+复盘（全天可用） */}
-            <DisciplinePanel overview={overview} />
-            <ReviewPanel />
-          </div>
-          <div className="space-y-2">
-            <GateGauge overview={overview} gate={gate} />
-            <LadderMini overview={overview} onSwitchTab={() => onSwitchTab?.("dragon")} />
-            <PopularityRadar />
-          </div>
+              )}
+              <AuctionBoard yesterdayZt={yesterdayZt} todayZt={ztPool} autoRefresh={false} />
+              {/* v9.36（A2）：竞价强度榜（昨日涨停池竞价涨幅 top12） */}
+              <AuctionStrengthPanel yesterdayZt={yesterdayZt} todayZt={ztPool} />
+            </>
+          )}
+          {/* v9.48 D4：核心温度条提到决策区下方（盘中核心进阶指标，D2 已去 EmotionCycle 冗余） */}
+          <LimitTempBar overview={overview} />
+          <BattlePlan data={battlePlan ?? null} />
+          <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
+          <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
+          <MarketOverview data={overview} loading={loading} />
+          <PopularityRadar />
         </div>
-      )}
-
-      {/* ============== 盘后/午休布局（v9.46：紧跟盘前/盘中布局，更早出现 —— 盘后核心数据靠前） ============== */}
-      {(isPost || phase === "lunch") && (
-        <>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_340px]">
-            <div className="space-y-2">
-              <BattlePlan data={battlePlan ?? null} />
-              <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
-              <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
-              <MarketOverview data={overview} loading={loading} />
-              <PopularityRadar />
-            </div>
-            <div className="space-y-2">
-              <GateGauge overview={overview} gate={gate} />
-              <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
-                blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />
-              <InstitutionFund />
-              <LadderPulse overview={overview} />
-              <WeeklyCoach />
-            </div>
-          </div>
-          {/* v9.38.1（V3-12）：事件三级研判（政策/行业/事件 + 受益板块）—— 盘后独立全宽行（数据由 cron 15:40 落库） */}
-          <EventClassifyPanel />
-        </>
-      )}
+        {/* 右 1/3：风控纪律 + 数据源（恒定，不再分阶段重复定义） */}
+        <div className="space-y-2">
+          {/* v9.19-F7：仓位与纪律面板 */}
+          <DisciplinePanel overview={overview} />
+          <GateGauge overview={overview} gate={gate} />
+          <ImportantFeed />
+          <LadderMini overview={overview} onSwitchTab={() => onSwitchTab?.("dragon")} />
+          <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
+            blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />
+          {globalData && <GlobalSignals data={globalData} loading={loading} />}
+          <InstitutionFund />
+          <LadderPulse overview={overview} />
+          <WeeklyCoach />
+        </div>
+      </div>
+      {/* v9.49（N1）：EventClassifyPanel 已移到"消息面"Tab（消息研判归消息面），驾驶舱不再渲染 */}
 
       {/* ============== 复盘工具（v9.46：移到全 Dashboard 末尾 —— "现在进行"在前，"复盘"在后） ============== */}
       {/* 全天可见按钮（默认折叠，状态持久化到 localStorage）：AI复盘/信号/回测/因子健康/决策审计/净值 */}
@@ -1016,12 +932,12 @@ export default function Dashboard({
         </button>
         {/* v9.42：因子健康度面板（幻方"因子失效"IC 曲线） */}
         <button onClick={() => setShowFactorHealth(v => !v)}
-          className="rounded px-3 py-1 text-xs bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/30">
+          className="rounded px-3 py-1 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 border border-violet-500/40">
           {showFactorHealth ? "收起因子" : "📉 因子健康度"}
         </button>
         {/* v9.44（②）：决策审计时间线 */}
         <button onClick={() => setShowAudit(v => !v)}
-          className="rounded px-3 py-1 text-xs bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30">
+          className="rounded px-3 py-1 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 border border-violet-500/40">
           {showAudit ? "收起审计" : "📜 决策审计"}
         </button>
         {/* v9.44（④）：信号净值曲线 */}
@@ -1031,11 +947,53 @@ export default function Dashboard({
         </button>
         {/* v9.47（L7）：信号账本移到最后 —— 按钮顺序与渲染顺序一致 */}
         <button onClick={() => setShowSignal(v => !v)}
-          className="rounded px-3 py-1 text-xs bg-white/5 text-slate-300 hover:bg-white/10 border border-white/10">
+          className="rounded px-3 py-1 text-xs bg-slate-500/20 text-slate-300 hover:bg-slate-500/30 border border-slate-500/40">
           {showSignal ? "收起信号/日记" : "信号账本/日记"}
+        </button>
+        {/* v9.48（D3）：盘后预演 —— 风险雷达 + 明日三剧本 + 每日复盘（盘中不显示，收起态） */}
+        <button onClick={() => setShowPreview(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 border border-violet-500/40">
+          {showPreview ? "收起预演" : "📋 盘后预演"}
         </button>
       </div>
       {showAI && <DailySummary overview={overview} fund={fund} />}
+      {/* v9.48（D3）：盘后预演折叠区（风险雷达/明日三剧本/每日复盘 —— 从盘中布局移出） */}
+      {showPreview && (
+        <div className="space-y-2">
+          {riskRadarText && (
+            <div className={`rounded-lg border px-3 py-2 text-xs ${
+              riskRadarText.includes("[高]") ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+              : riskRadarText.includes("[中]") ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+              : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
+              🛡 {riskRadarText}
+            </div>
+          )}
+          {nextScenarios && nextScenarios.length > 0 && (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="text-[11px] font-bold text-slate-200 mb-2">🎬 明日三剧本（LLM 盘后推演）</div>
+              <div className="space-y-1.5">
+                {nextScenarios.map((s, i) => (
+                  <div key={i} className="rounded border border-white/5 bg-black/20 px-2 py-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className={`text-[11px] font-bold ${i === 0 ? "text-amber-300" : i === 1 ? "text-slate-200" : "text-emerald-300"}`}>
+                        {i + 1}. {s.scenario}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-400">{s.probability}%</span>
+                    </div>
+                    {s.conditions.length > 0 && (
+                      <div className="mt-0.5 text-[10px] text-slate-500">触发：{s.conditions.join("；")}</div>
+                    )}
+                    {s.focus.length > 0 && (
+                      <div className="text-[10px] text-amber-200/70">关注：{s.focus.join("、")}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <ReviewPanel />
+        </div>
+      )}
       {showSignalEffect && <SignalEffectivenessPanel />}
       {/* v9.42：因子健康度（server cron 15:40 落库 factor_ic:日期） */}
       {showFactorHealth && <FactorHealthPanel />}
