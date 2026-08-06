@@ -501,9 +501,27 @@ async function fetchBlockTrades() {
 
 // ---------- 启动定时任务 ----------
 let cronBusy = false; // v9.26.10：防重叠执行（20min 任务与启动抓取/15:40 并发）
+// v9.54（V7-15）：A股交易日历 —— 节假日休市判定（2026 年法定休市区间；与前端 tradeCalendar.ts 口径一致）
+const HOLIDAY_RANGES_2026 = [
+  ["2026-01-01", "2026-01-02"], ["2026-02-16", "2026-02-22"], ["2026-04-04", "2026-04-06"],
+  ["2026-05-01", "2026-05-05"], ["2026-06-19", "2026-06-21"], ["2026-09-25", "2026-09-27"],
+  ["2026-10-01", "2026-10-07"],
+];
+function isTradingDayCN(d = new Date()) {
+  const day = d.getDay();
+  if (day === 0 || day === 6) return false;
+  // 北京时间日期串
+  const bj = new Date(d.getTime() + d.getTimezoneOffset() * 60000 + 8 * 3600000);
+  const ds = `${bj.getUTCFullYear()}-${String(bj.getUTCMonth() + 1).padStart(2, "0")}-${String(bj.getUTCDate()).padStart(2, "0")}`;
+  for (const [a, b] of HOLIDAY_RANGES_2026) {
+    if (ds >= a && ds <= b) return false;
+  }
+  return true;
+}
 function startCron({ pool }) {
-  // 交易日（周一到周五）15:40 收盘快照 + 分析
+  // 交易日（周一至周五且非节假日）15:40 收盘快照 + 分析
   cron.schedule("40 15 * * 1-5", async () => {
+    if (!isTradingDayCN()) { console.log("[cron] 15:40 非交易日（节假日），跳过抓取"); return; }
     console.log("[cron] 15:40 收盘快照 + 分析开始");
     if (cronBusy) { console.log("[cron] busy, skip 15:40"); return; }
     cronBusy = true;
@@ -580,6 +598,7 @@ function startCron({ pool }) {
 
   // 交易日每 20 分钟抓快讯+公告自动落库（9:00 - 16:40，v9.26.10 修正 */20 9-16 会在 16:40 触发却注释到 16:30）
   cron.schedule("*/20 9-16 * * 1-5", async () => {
+    if (!isTradingDayCN()) { console.log("[cron] 非交易日（节假日），跳过快讯抓取"); return; }
     if (cronBusy) { console.log("[cron] busy, skip 20min fetch"); return; }
     cronBusy = true;
     try {

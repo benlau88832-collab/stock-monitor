@@ -8,6 +8,8 @@
 // 方法：对每个信号找"触发日"，统计次日情绪分变化 / 指标修复 → 样本数/胜率/方向
 // ============================================================
 import { isLocalServer } from "./cloudStore";
+// v9.55（V7-19）：北京时间交易日历（周末+节假日统一判定，避免非东八区机器偏移）
+import { isTradingDay, bjDateStr } from "./tradeCalendar";
 
 export interface SignalStat {
   id: string;
@@ -29,16 +31,15 @@ interface DayRow {
   maxBoardHeight: number | null;
 }
 
-/** 读取最近 N 个交易日的数据序列（跳过周末；缺数据日为 null） */
+/** 读取最近 N 个交易日的数据序列（v9.55 V7-19：按北京时间交易日历，节假日/时区不再偏移） */
 async function loadHistory(days = 14): Promise<DayRow[]> {
   const out: DayRow[] = [];
   const d = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const t = new Date(d);
     t.setDate(t.getDate() - i);
-    const dow = t.getDay();
-    if (dow === 0 || dow === 6) continue; // 跳过周末
-    const ds = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    if (!isTradingDay(t)) continue; // 周末/节假日跳过
+    const ds = bjDateStr(t);
     const row: DayRow = { date: ds, sentiment: null, ztCount: null, dtCount: null, blastedRate: null, maxBoardHeight: null };
     try {
       const r = await fetch(`/api/db/kv?key=${encodeURIComponent(`sentiment:${ds}`)}`);

@@ -126,6 +126,22 @@ export function conceptGroupOf(conceptName: string): string | null {
   return best?.group ?? null;
 }
 
+// v9.55（V7-6，P2 轻量版）：歧义概念检测 —— 命中 ≥2 个不同大类的概念名
+// 供未来 LLM 二次确认（规则为主、LLM 兜底歧义）：命中歧义才调 Agnes，结果可缓存
+export function ambiguousConcepts(conceptName: string): string[] | null {
+  if (!conceptName) return null;
+  const groups = new Set<string>();
+  for (const def of CONCEPT_GROUPS) {
+    for (const root of def.roots) {
+      if (root.length >= 2 && conceptName.includes(root)) {
+        groups.add(def.group);
+        break;
+      }
+    }
+  }
+  return groups.size >= 2 ? [...groups] : null;
+}
+
 /** 把一批概念名折叠成用户大类集合（含无法折叠的原名） */
 export function foldConcepts(concepts: string[]): string[] {
   const seen = new Set<string>();

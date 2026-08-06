@@ -79,6 +79,8 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
   if (!data && loading) return <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-slate-400">正在加载资金结构…</div>;
   const structure = data?.structure;
   if (!structure) return <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-6 text-rose-300">资金结构数据获取失败</div>;
+  // v9.53（V7-8）：关键资金字段缺失（东财改字段）→ 显式标注，避免把 0 误读为"没资金"
+  const dataMissing = Boolean(data?.dataMissing);
 
   const alert = getAlertLevel(structure);
   const t = structure.today;
@@ -106,6 +108,12 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
 
   return (
     <div className="space-y-4">
+      {/* v9.53（V7-8）：资金字段缺失 → 显式标注（0 不代表"没资金"） */}
+      {dataMissing && (
+        <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+          ⚠ 部分资金字段缺失（东财接口变更），显示值可能为 0，非真实"无资金"
+        </div>
+      )}
       {/* 分级预警 */}
       <div className={`rounded-xl border p-4 ${alert.border} ${alert.bg} ${alert.flash ? "animate-pulse" : ""}`}>
         <div className={`text-base font-black ${alert.text}`}>{alert.label}</div>

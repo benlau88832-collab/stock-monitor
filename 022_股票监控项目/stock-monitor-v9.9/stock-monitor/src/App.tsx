@@ -44,6 +44,7 @@ import { fetchPopularityRank } from "./lib/api";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
 // v9.50（G2）：StatusBar 已并入 TopNav 顶部通栏，App 不再独立渲染
+import { auditLocalStorageQuota } from "./lib/storageQuota";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
 import { checkSysRisk } from "./lib/sysRiskGuard";
@@ -131,6 +132,8 @@ export interface OverviewData {
 }
 
 export interface FundStructureData {
+  /** v9.53（V7-8）：关键资金字段缺失（东财改字段）→ UI 显示"数据缺失"而非误导 0 */
+  dataMissing?: boolean;
   structure: {
     today: { mainNet: number; extraLargeNet: number; largeNet: number; mediumNet: number; smallNet: number };
     mainNet5d: number;
@@ -443,6 +446,7 @@ export default function App() {
           boardRank = await fetchBoardRankTopBottom("concept", 10);
         } catch { /* 板块排行获取失败不影响主数据 */ }
         setFundStructure({
+          dataMissing: Boolean(fm.dataMissing),
           structure: {
             today: { mainNet: fm.mainNet, extraLargeNet: fm.extraLargeNet, largeNet: fm.largeNet, mediumNet: fm.mediumNet, smallNet: fm.smallNet },
             mainNet5d: fm.mainNet5d, mainNet10d: fm.mainNet10d,
@@ -848,6 +852,19 @@ export default function App() {
   useEffect(() => { refreshAll(); }, [refreshAll]);
   // 每日构建板块映射表（数据驱动，零硬编码）
   useEffect(() => { ensureBoardMap().catch(e => console.warn("[boardMap] 首次构建失败:", e)); }, []);
+  // v9.55（V7-20）：localStorage 全局用量巡检（启动 + 每小时；超限自动淘汰低价值 key 并提示）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const audit = () => {
+      try {
+        const r = auditLocalStorageQuota();
+        if (r.message) console.warn(`[storageQuota] ${r.message}`);
+      } catch { /* 巡检失败不影响功能 */ }
+    };
+    audit();
+    const t = setInterval(audit, 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
 
   // ============ v9.28（P1-8）：盘中高频小通道 ============
   // 主刷新 60s 对"9:30:05 龙一直线封板"级爆发太慢；本通道独立 18s 一次，

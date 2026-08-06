@@ -8,6 +8,8 @@
 // 数据源：App.tsx 传入的 industryBoards（kind="industry"，30 个行业）
 //   —— 不依赖 push2his（东财持续 ban 导致分钟 K 线数据稀疏）；
 //   待 push2his 稳定后再换为真实分时曲线。
+// v9.54（V7-14）：数据诚实 —— 图内显式标注"示意曲线（非真实分时）"，
+//   避免用户把单点值插值误读为真实分时资金进出。
 // ============================================================
 
 import { useMemo, useEffect, useState } from "react";
@@ -125,6 +127,8 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
           <span className="text-rose-400">● 流入</span>
           <span className="text-emerald-400">● 流出</span>
           <span>· 截至 {minutesToLabel(asOfMinutes)} · {refreshSec}s 刷新</span>
+          {/* v9.54（V7-14）：数据诚实标注 —— 非真实分时，单点值插值示意 */}
+          <span className="rounded bg-slate-500/15 px-1.5 py-0.5 font-bold text-amber-300/90" title="受东财 push2his 持续 ban 影响，本图为当日累计净流入单点插值示意，非真实分时资金流；待真实分钟源恢复后自动替换">⚠ 示意曲线（非真实分时）</span>
         </div>
       </div>
       <svg viewBox={`0 0 ${w} ${h}`} className="w-full">

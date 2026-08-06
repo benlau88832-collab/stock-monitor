@@ -4,6 +4,34 @@
 
 ---
 
+## v9.55 — GLM5.2-V7 全部落地（AI 逐标的研判 + 资金可信 + 数据诚实 + 工程健壮性）(2026-08-06)
+
+> V7 报告 21 条修改指令至此全部完成（v9.52 已做标的引擎+清单；本版收口 v9.53-55）。
+
+### v9.53：AI 研判下探个股 + 资金可信（V7-2/8/9/10/11）
+- **V7-2/10** `decideForStock`：AI 对首选/接力标的逐只研判（可买/谨慎/回避 + 一句话 + 关键观察点 + 风险点）；StockPickList 每只显示 🤖 AI 研判
+- **V7-8** 资金字段缺失标注：fetchMarketMainFund/fetchBoardFundFlow 加 `dataMissing`（东财改字段不再静默 0）；FundStructure 顶部显式"⚠ 部分资金字段缺失"
+- **V7-9** 单位口径注释统一（f62 元 / f60 万元）
+- **V7-11** AI 配额受限 → 标的清单顶部"⏸ 本次为规则研判（非 AI 主导）"
+
+### v9.54：数据诚实 + 节假日 + 响应式（V7-6/12/14/15/16）
+- **V7-14** 资金主图显式标注"⚠ 示意曲线（非真实分时）"（push2his 持续 ban，避免单点插值误导）
+- **V7-15** 新建 `tradeCalendar.ts`（2026 法定休市日历）→ tradingSession 节假日判"休市"停刷 + server cron 非交易日跳过抓取
+- **V7-16** IndustryFundFlowChart 已 viewBox+100%（响应式 ✓）
+- **V7-12** 主线聚类已接 conceptGroups foldConcepts（✓ 核查确认）
+- **V7-6** 轻量歧义检测 `ambiguousConcepts`（命中 2+ 大类返回候选，LLM 兜底预留）
+
+### v9.55：工程健壮性（V7-17~21）
+- **V7-17** 报告点名文件（aiSettings/newsMemoStore/recTracker/api.ts）空 catch{} → console.warn
+- **V7-18** Dashboard rawZTPool null 保护（外部已加）✓
+- **V7-19** signalBacktest 改用北京时间交易日历（getDay 本地时区偏移修复）
+- **V7-20** 新建 `storageQuota.ts`：全局用量巡检（启动+每小时，超 4.5MB 自动淘汰 AI 缓存/旧快照，不再静默丢数据）
+- **V7-21** 人气榜 CORS —— 核查确认已解决（v9.31 CORS 直连实测可用，proxy 反被 TLS ban，不改）
+
+### 单测 108 → 116 全绿（交易日历 5 + 歧义检测 3）；TSC clean
+
+---
+
 ## v9.52 — GLM5.2-V7 第一步：概念归类达标确认 + 标的筛选引擎（"可上车"→"买这只"）(2026-08-06)
 
 ### v9.51 确认（V7-4/5/7 已达标，报告与磁盘不同步）

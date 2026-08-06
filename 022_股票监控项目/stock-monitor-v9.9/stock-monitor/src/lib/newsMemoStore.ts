@@ -50,7 +50,7 @@ export function getRecentMemos(days = 7): DailyNewsMemo[] {
   const keys = getAllKeys(MEMO_PREFIX);
   const memos: DailyNewsMemo[] = [];
   for (const key of keys.slice(0, days)) {
-    try { const r = localStorage.getItem(key); if (r) memos.push(JSON.parse(r)); } catch {}
+    try { const r = localStorage.getItem(key); if (r) memos.push(JSON.parse(r)); } catch (e) { console.warn("[newsMemo] op failed", e); }
   }
   memos.sort((a, b) => a.date.localeCompare(b.date));
   return memos;
@@ -75,7 +75,7 @@ export function getSegmentMemos(date: string): SegmentMemo[] {
     try {
       const raw = localStorage.getItem(`${SEG_PREFIX}${date}_${slot}`);
       if (raw) result.push(JSON.parse(raw));
-    } catch {}
+    } catch (e) { console.warn("[newsMemo] op failed", e); }
   }
   return result;
 }
@@ -110,7 +110,7 @@ function pruneOld(): void {
       const m = k.match(/intel_seg_(\d{8})_/);
       if (m && expiredDates.has(m[1])) localStorage.removeItem(k);
     }
-  } catch {}
+  } catch (e) { console.warn("[newsMemo] op failed", e); }
 }
 
 // ============== 导出/导入 ==============
@@ -118,7 +118,7 @@ export function exportMemoBackup(): void {
   const keys = [...getAllKeys(MEMO_PREFIX), ...getAllKeys(SEG_PREFIX)];
   const data: Record<string, unknown> = {};
   for (const key of keys) {
-    try { const r = localStorage.getItem(key); if (r) data[key] = JSON.parse(r); } catch {}
+    try { const r = localStorage.getItem(key); if (r) data[key] = JSON.parse(r); } catch (e) { console.warn("[newsMemo] op failed", e); }
   }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);

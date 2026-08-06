@@ -926,7 +926,7 @@ export async function fetchTurnoverHistory(days = 10): Promise<TurnoverDay[]> {
           for (const line of kl) { const p = line.split(","); const amt = Number(p[6]); if (p[0] && Number.isFinite(amt)) m.set(p[0], amt); }
           if (m.size) return m;
         }
-      } catch {}
+      } catch (e) { console.warn("[api] op failed", e); }
       await new Promise(r => setTimeout(r, 900 * (a + 1)));
     }
     return new Map();

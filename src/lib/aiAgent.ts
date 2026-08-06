@@ -309,3 +309,49 @@ export async function decideForMainline(
     ...extra,
   }, opts);
 }
+
+// ============================================================
+// v9.53（V7-2/10）：AI 逐标的研判 —— 让 AI 下探到个股层
+// 对"首选/接力"标的做一次轻量 LLM 研判（单次调用，配额友好，不跑 5 轮 ReAct），
+// 输出 可买/谨慎/回避 + 理由 + 风险点 + 关键观察点。
+// 降级：配额受限/LLM 失败 → degraded=true（前端显式标注"本次为规则筛选"V7-11）。
+// ============================================================
+import { fmtMoney } from "./format";
+
+export interface StockVerdict {
+  code: string;
+  name: string;
+  verdict: "可买" | "谨慎" | "回避";
+  reason: string;        // ≤40字
+  riskPoints: string[];  // 风险点
+  keyLevel: string;      // 关键观察点（封单/换手/竞价）
+  degraded: boolean;     // true = 规则兜底（配额受限/失败）
+  rateLimited?: boolean;
+}
+
+/** 对单只标的做一句话 AI 研判（标的清单每只显示） */
+export async function decideForStock(
+  stock: { code: string; name: string; boardCount: number; pct: number; sealFund: number; amount: number; blastCount: number; role: string },
+  mainlineCtx: { mainline: string; stage: string },
+): Promise<StockVerdict> {
+  const prompt = "你是10年A股游资操盘手。对主线「" + mainlineCtx.mainline + "」（" + mainlineCtx.stage + "）中的候选标的做一句话研判：" +
+    "标的：" + stock.name + "（" + stock.code + "）· " + stock.boardCount + "板 · 涨幅" + stock.pct + "% · 封单" + fmtMoney(stock.sealFund) + " · 成交" + fmtMoney(stock.amount) + " · 炸板" + stock.blastCount + "次 · 角色=" + stock.role +
+    "\n\n判断：这只票值不值得上车？重点看：封单是否坚决（封单/成交比）、炸板次数、连板位置（龙头确认 or 追高）、板块阶段。" +
+    '输出严格JSON：{"verdict":"可买|谨慎|回避","reason":"≤40字","riskPoints":["风险1","风险2"],"keyLevel":"关键观察点（如：竞价封单>0.8亿且不炸）"}';
+  try {
+    const r = await callAI("dailyIntel", { prompt });
+    const j = parseAIJSON<{ verdict?: string; reason?: string; riskPoints?: string[]; keyLevel?: string }>(r?.text ?? "");
+    if (!j || !j.verdict) return { code: stock.code, name: stock.name, verdict: "谨慎", reason: "AI 输出无法解析，降级规则", riskPoints: [], keyLevel: "", degraded: true };
+    const v = j.verdict === "可买" || j.verdict === "回避" ? j.verdict : "谨慎";
+    return {
+      code: stock.code, name: stock.name,
+      verdict: v,
+      reason: String(j.reason ?? "").slice(0, 40),
+      riskPoints: Array.isArray(j.riskPoints) ? j.riskPoints.slice(0, 3) : [],
+      keyLevel: String(j.keyLevel ?? "").slice(0, 40),
+      degraded: false,
+    };
+  } catch {
+    return { code: stock.code, name: stock.name, verdict: "谨慎", reason: "AI 配额受限/失败，规则降级", riskPoints: [], keyLevel: "", degraded: true, rateLimited: true };
+  }
+}

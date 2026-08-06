@@ -218,11 +218,14 @@ export interface MarketFundData {
   smallNet: number;
   mainNet5d: number;
   mainNet10d: number;
+  /** v9.53（V7-8）：关键字段缺失（f62/f164/f174）→ UI 显示"数据缺失"而非误导 0 */
+  dataMissing?: boolean;
 }
 
 export async function fetchMarketMainFund(): Promise<MarketFundData> {
   // 精简请求字段：去掉 f69/f75/f81/f87/f165/f175/f184 等占比类冗余字段
   // 这些字段组合过多时东方财富服务端会返回 502 Bad Gateway
+  // v9.53（V7-9）：单位口径 —— f62/f164/f174 均为"元"（不是万），聚合前不缩放
   const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f12,f62,f66,f72,f78,f84,f164,f174&secids=1.000001,0.399001`;
   const json = await trackedJsonp<any>("主力资金", url);
   const diff = normalizeDiff(json?.data?.diff);
@@ -235,7 +238,10 @@ export async function fetchMarketMainFund(): Promise<MarketFundData> {
     mainNet5d: 0,
     mainNet10d: 0,
   };
+  let missing = false;
   for (const d of diff) {
+    // v9.53（V7-8）：字段缺失 → 不再静默当 0（缺失显式标注，UI 显示"数据缺失"）
+    if (d.f62 == null || d.f164 == null || d.f174 == null) missing = true;
     agg.mainNet += num(d.f62);
     agg.extraLargeNet += num(d.f66);
     agg.largeNet += num(d.f72);
@@ -244,6 +250,7 @@ export async function fetchMarketMainFund(): Promise<MarketFundData> {
     agg.mainNet5d += num(d.f164);
     agg.mainNet10d += num(d.f174);
   }
+  agg.dataMissing = missing;
   return agg;
 }
 
@@ -263,6 +270,8 @@ export interface BoardFlowItem {
   mainNet10d: number;
   mainNet10dPct: number;
   boardType: string;
+  /** v9.53（V7-8）：f62 缺失（东财改字段）→ UI 显示"数据缺失" */
+  dataMissing?: boolean;
 }
 
 const BOARD_FS: Record<string, string> = {
@@ -280,22 +289,27 @@ export async function fetchBoardFundFlow(
   const fields = "f12,f14,f3,f62,f66,f72,f78,f84,f164,f165,f174,f175,f184";
   const parse = (json: any): BoardFlowItem[] => {
     const diff = normalizeDiff(json?.data?.diff);
-    return diff.map((d) => ({
-      code: String(d.f12 ?? ""),
-      name: String(d.f14 ?? ""),
-      pct: num(d.f3),
-      mainNet: num(d.f62),
-      extraLargeNet: num(d.f66),
-      largeNet: num(d.f72),
-      mediumNet: num(d.f78),
-      smallNet: num(d.f84),
-      mainNetPct: num(d.f184),
-      mainNet5d: num(d.f164),
-      mainNet5dPct: num(d.f165),
-      mainNet10d: num(d.f174),
-      mainNet10dPct: num(d.f175),
-      boardType,
-    }));
+    return diff.map((d) => {
+      // v9.53（V7-8/9）：f62 为元；字段缺失标 dataMissing（UI 显示"数据缺失"而非误导 0）
+      const has62 = d.f62 != null && Number.isFinite(Number(d.f62));
+      return {
+        code: String(d.f12 ?? ""),
+        name: String(d.f14 ?? ""),
+        pct: num(d.f3),
+        mainNet: num(d.f62),
+        extraLargeNet: num(d.f66),
+        largeNet: num(d.f72),
+        mediumNet: num(d.f78),
+        smallNet: num(d.f84),
+        mainNetPct: num(d.f184),
+        mainNet5d: num(d.f164),
+        mainNet5dPct: num(d.f165),
+        mainNet10d: num(d.f174),
+        mainNet10dPct: num(d.f175),
+        boardType,
+        dataMissing: !has62,
+      };
+    });
   };
 
   // v9.30.1：all=true 时用"双请求"拿全量（流入 po=1 降序 + 流出 po=0 升序），合并去重后本地 mainNet 降序。
@@ -912,7 +926,7 @@ export async function fetchTurnoverHistory(days = 10): Promise<TurnoverDay[]> {
           for (const line of kl) { const p = line.split(","); const amt = Number(p[6]); if (p[0] && Number.isFinite(amt)) m.set(p[0], amt); }
           if (m.size) return m;
         }
-      } catch {}
+      } catch (e) { console.warn("[api] op failed", e); }
       await new Promise(r => setTimeout(r, 900 * (a + 1)));
     }
     return new Map();

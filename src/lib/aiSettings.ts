@@ -26,12 +26,12 @@ function defaults(): AISettings {
 }
 export function loadSettings(): AISettings {
   const d = defaults();
-  try { const raw = localStorage.getItem(KEY); if (raw) return { ...d, ...JSON.parse(raw) }; } catch {}
+  try { const raw = localStorage.getItem(KEY); if (raw) return { ...d, ...JSON.parse(raw) }; } catch (e) { console.warn("[aiSettings] op failed", e); }
   // 迁移旧 key
-  try { const old = localStorage.getItem("llm_api_key"); if (old) { d.apiKey = old; saveSettings(d); return d; } } catch {}
+  try { const old = localStorage.getItem("llm_api_key"); if (old) { d.apiKey = old; saveSettings(d); return d; } } catch (e) { console.warn("[aiSettings] op failed", e); }
   return d;
 }
-export function saveSettings(s: AISettings): void { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} }
+export function saveSettings(s: AISettings): void { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { console.warn("[aiSettings] op failed", e); } }
 export function applyProvider(id: ProviderId): Partial<AISettings> {
   const p = PROVIDERS[id];
   return { provider: id, baseUrl: p.baseUrl, model: p.model, thinking: p.supportsThinking ? p.thinking : false };

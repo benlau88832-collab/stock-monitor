@@ -5,10 +5,11 @@
 // 每只：角色徽章(首选/接力/低吸) + 代码名 + 轻量评分 + 建议仓位 + 止损 + 买入逻辑 + 风险
 // v9.53（V7-2/10）：每只附 AI 一句话研判（decideForStock）
 // ============================================================
-import { useMemo } from "react";
+import { useMemo, useEffect, useState } from "react";
 import type { MainlineGroup } from "../lib/stockToMainline";
 import type { ZTPoolItem, ThemeStock } from "../lib/themeLadder";
 import { pickStocks, type PickList } from "../lib/stockPicker";
+import { decideForStock, type StockVerdict } from "../lib/aiAgent";
 import DisclaimerTag from "./DisclaimerTag";
 
 const roleColor: Record<string, string> = {
@@ -78,6 +79,36 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
     });
   }, [candidate, rawPool, potential, gate]);
 
+  // v9.53（V7-2/10）：AI 逐标的研判 —— 对首选/接力标的（≤3只）做轻量 LLM 研判
+  const [aiMap, setAiMap] = useState<Map<string, StockVerdict>>(new Map());
+  const [aiRateLimited, setAiRateLimited] = useState(false);
+  useEffect(() => {
+    if (!pick || pick.picks.length === 0) return;
+    let alive = true;
+    const targets = pick.picks.filter(p => p.role === "首选" || p.role === "接力").slice(0, 3);
+    if (targets.length === 0) return;
+    setAiMap(new Map());
+    setAiRateLimited(false);
+    (async () => {
+      const results = await Promise.all(targets.map(p =>
+        decideForStock(
+          { code: p.code, name: p.name, boardCount: p.boardCount, pct: 0, sealFund: 0, amount: 0, blastCount: 0, role: p.role },
+          { mainline: pick.mainline, stage: pick.stage },
+        ).catch(() => null),
+      ));
+      if (!alive) return;
+      const m = new Map<string, StockVerdict>();
+      let rl = false;
+      for (const r of results) {
+        if (r) { m.set(r.code, r); if (r.rateLimited) rl = true; }
+      }
+      setAiMap(m);
+      setAiRateLimited(rl);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pick?.mainline, pick?.stage, pick?.picks?.length]);
+
   if (!pick || pick.picks.length === 0) return null;
 
   return (
@@ -92,6 +123,13 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
           <DisclaimerTag />
         </div>
       </div>
+
+      {/* v9.53（V7-11）：AI 配额受限 → 显式标注"本次非 AI" */}
+      {aiRateLimited && (
+        <div className="mb-2 rounded border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-[10px] font-bold text-rose-200">
+          ⏸ AI 配额受限，标的研判为规则降级（非 AI 主导）
+        </div>
+      )}
 
       <div className="space-y-1.5">
         {pick.picks.map(p => (
@@ -108,6 +146,20 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
               <div className="mt-0.5 text-[10px] text-slate-400">
                 {p.buyLogic} · <span className="text-amber-200/70">{p.entryStrategy}</span>
               </div>
+              {/* v9.53（V7-2/10）：AI 一句话研判（逐标的） */}
+              {(() => {
+                const ai = aiMap.get(p.code);
+                if (!ai) return <div className="mt-0.5 text-[9px] text-slate-600">🤖 AI 研判中…</div>;
+                const vc = ai.verdict === "可买" ? "bg-emerald-500/20 text-emerald-300" : ai.verdict === "回避" ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300";
+                return (
+                  <div className="mt-0.5 text-[10px]">
+                    <span className={`mr-1 rounded px-1 py-px text-[9px] font-bold ${vc}`}>{ai.verdict}</span>
+                    <span className="text-violet-300/90">{ai.reason}</span>
+                    {ai.keyLevel && <span className="text-slate-500"> · 📌 {ai.keyLevel}</span>}
+                    {ai.riskPoints.length > 0 && <span className="text-rose-300/70"> · ⚠ {ai.riskPoints.join("、")}</span>}
+                  </div>
+                );
+              })()}
               {p.risks.length > 0 && (
                 <div className="mt-0.5 text-[9px] text-rose-300/70">⚠ {p.risks.join(" · ")}</div>
               )}

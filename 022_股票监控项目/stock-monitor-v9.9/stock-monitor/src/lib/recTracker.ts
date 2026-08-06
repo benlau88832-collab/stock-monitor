@@ -33,7 +33,7 @@ function loadRecords(): RecRecord[] {
 function saveRecords(recs: RecRecord[]): void {
   recs.sort((a, b) => b.date.localeCompare(a.date));
   if (recs.length > MAX_RECORDS) recs.length = MAX_RECORDS;
-  try { localStorage.setItem(REC_KEY, JSON.stringify(recs)); } catch {}
+  try { localStorage.setItem(REC_KEY, JSON.stringify(recs)); } catch (e) { console.warn("[recTracker] op failed", e); }
 }
 
 // ============== 落盘（每日首次） ==============
@@ -67,7 +67,7 @@ function markAttributedToday(today: string): void {
         localStorage.removeItem(k);
       }
     }
-  } catch {}
+  } catch (e) { console.warn("[recTracker] op failed", e); }
 }
 
 /** 盘后归因：对到期的 T+1/T+3 历史推荐批量取现价 */

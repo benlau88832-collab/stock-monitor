@@ -13,7 +13,8 @@
 // │ 盘后          │ 15:01 - 23:59（历史类拉一次，实时停刷）   │
 // └───────────────┴──────────────────────────────────────┘
 // 周末（周六日）：全天等同盘后，仅展示缓存+标注日期
-// 节假日：暂不处理（注释注明局限），视为普通工作日
+// v9.54（V7-15）：法定节假日 → 全天等同"休市"（停刷 + UI 标"节假日休市"）
+import { marketHolidayLabel } from "./tradeCalendar";
 
 export type SessionPhase =
   | "pre"       // 盘前静默
@@ -43,6 +44,12 @@ export function getCurrentSession(): SessionInfo {
   const { hour, minute, day } = getBJTime();
   const isWeekend = day === 0 || day === 6;
   const hhmm = hour * 100 + minute; // 0930 = 9:30
+
+  // v9.54（V7-15）：法定节假日 → 休市态（停刷，UI 标节假日名）
+  const holidayLabel = marketHolidayLabel(new Date());
+  if (holidayLabel) {
+    return { phase: "post", label: holidayLabel, shouldRefreshRealtime: false, refreshIntervalMs: 0, isWeekend: false };
+  }
 
   if (isWeekend) {
     return { phase: "post", label: "周末休市", shouldRefreshRealtime: false, refreshIntervalMs: 0, isWeekend: true };
