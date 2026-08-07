@@ -32,7 +32,12 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
     setBusy(true);
     setMsgs(m => [...m, { role: "ai", text: "🔍 正在调全站数据调研…" }]);
     try {
-      const r = await runAssistantAgent(q, siteContext);
+      // v9.66.1：传最近对话历史（清洗掉工具轨迹/系统标记）→ 深度调研"继续/深入"能衔接上文
+      const history = msgs
+        .filter(m => m.role === "user" || (m.role === "ai" && !m.text.startsWith("🔍")))
+        .slice(-8)
+        .map(m => ({ role: m.role === "user" ? "user" as const : "assistant" as const, content: m.text.slice(0, 800) }));
+      const r = await runAssistantAgent(q, siteContext, { history });
       setMsgs(m => m.slice(0, -1).concat({
         role: "ai",
         text: r.reply,

@@ -572,7 +572,12 @@ export async function callAgentChat(
   system: string,
   user: string,
   tools: Array<{ name: string; description: string }>,
-  opts?: { temperature?: number; maxTokens?: number },
+  opts?: {
+    temperature?: number;
+    maxTokens?: number;
+    /** v9.66.1：多轮对话历史（AIConsole 深度调研衔接上文） */
+    history?: Array<{ role: "user" | "assistant"; content: string }>;
+  },
 ): Promise<AgentChatResult | null> {
   if (!isLocalServer()) return null;
   const ctrl = new AbortController();
@@ -589,6 +594,7 @@ export async function callAgentChat(
         maxTokens: opts?.maxTokens ?? 2000,
         thinking: false,
         tools,
+        history: opts?.history ?? [],
       }),
       signal: ctrl.signal,
     });

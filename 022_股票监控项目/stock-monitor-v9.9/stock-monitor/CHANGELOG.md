@@ -4,6 +4,23 @@
 
 ---
 
+## v9.66-fix — AIConsole 深度调研多轮上下文修复（"继续/深入查询"不再断片）(2026-08-07)
+
+> 用户反馈：AIConsole 调研"深入查询/继续 Phase3"后回答串场（中天调研冒出亨通结论）、每轮从 Phase 0 重头来。
+> 根因：整个链路单轮无记忆 —— server 只发 system+user；AIConsole 不传对话历史；ReAct 5 轮上限跑不完五段式。
+
+### 修复
+- **server/routes/ai.js**：`/api/ai/call` 支持 `history` 数组（最近 8 条，角色清洗后插到 system 与 user 之间）
+- **src/lib/ai.ts**：`callAgentChat` 新增 `opts.history` 透传
+- **src/lib/assistantAgent.ts**：`runAssistantAgent` 新增 `opts.history`；检测"深度调研/深度分析/深入查询/继续"→ ReAct 轮数 5→**12**（跑得完五段式）；system 新增"多轮衔接"规则（读历史确认标的与进度，从上次停止处继续，不重复 Phase 0，标的切换才开新调研）
+- **src/components/AIConsole.tsx**：传最近 8 条对话历史（清洗掉工具轨迹/系统标记）
+
+### 验证
+- 三重验证门：tsc 0 / build 成功 / test 149 全绿
+- server ai.js 语法校验通过
+
+---
+
 ## v9.66 — 三 Skill 嵌入 + 个股盯价监控（全站 AI 调研 · PG 存储 · ±5% 强提示）(2026-08-07)
 
 > 依据 `022_股票监控项目/方案_调研嵌入与盯价监控.md` 执行。零硬编码：所有标的由用户经 AI 对话录入（price_watch 表），系统只做通用流程。

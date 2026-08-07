@@ -85,10 +85,15 @@ module.exports = function aiRoutes(app) {
 
       const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
       const model = process.env.AI_MODEL || "agnes-2.5-flash";
+      // v9.66.1：支持 history（多轮对话上下文）—— AIConsole 深度调研"继续/深入查询"类指令能衔接上文
+      const history = Array.isArray(req.body?.history)
+        ? req.body.history.slice(-8).map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content ?? "").slice(0, 1200) }))
+        : [];
       const body = {
         model,
         messages: [
           { role: "system", content: String(system || "") },
+          ...history,
           { role: "user", content: String(user || "") },
         ],
         max_tokens: Math.min(Number(maxTokens) || 1200, 8000),

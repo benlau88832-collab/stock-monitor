@@ -32,6 +32,10 @@ export interface AssistantSiteContext {
 export async function runAssistantAgent(
   question: string,
   siteContext: AssistantSiteContext = {},
+  opts?: {
+    /** v9.66.1：多轮对话历史（AIConsole 传最近对话，深度调研"继续/深入"能衔接上文） */
+    history?: Array<{ role: "user" | "assistant"; content: string }>;
+  },
 ): Promise<AssistantReply> {
   const tools = [...getAgentTools(), ...getResearchTools(), {
     name: "getStockFundDetail",
@@ -77,8 +81,11 @@ export async function runAssistantAgent(
     siteContext.watchStocks ? "用户自选股：" + siteContext.watchStocks : "",
   ].filter(Boolean).join("\n");
 
+  // v9.66.1：深度调研（含"深度调研/个股深度分析/深入查询/继续"）→ 轮数放宽到 12，能跑完五段式
+  const isDeepResearch = /深度调研|深度分析|个股深度|深入查询|继续.{0,6}(调研|Phase|阶段)/.test(question);
+  const maxRounds = isDeepResearch ? 12 : 5;
   const system = "你是这个A股实时监控终端的全站分析师助手（10年游资操盘手）。用户会问你任何关于主线/个股/资金/消息/席位/仓位的问题。\n\n"
-    + "你有以下工具（自主决定调用顺序与次数，最多 5 轮；查个股时用 getStockFundDetail 传 code）：\n"
+    + "你有以下工具（自主决定调用顺序与次数，最多 " + maxRounds + " 轮；查个股时用 getStockFundDetail 传 code）：\n"
     + toolDefs.map(t => "- " + t.name + ": " + t.description).join("\n")
     + "\n\n" + RESEARCH_SYSTEM + "\n\n"
     + "规则：\n"
@@ -87,19 +94,20 @@ export async function runAssistantAgent(
     + "3. 每轮输出严格JSON之一：\n"
     + "   调用工具：{\"calls\":[{\"tool\":\"工具名\",\"args\":{...可选},\"reason\":\"为什么查它\"}]}\n"
     + "   最终答复：{\"final\":{\"reply\":\"完整答复（≤300字，必须引用≥2个工具返回的具体数字，如'主力净流入8000万/封单比40%'；先说结论再说依据）\"}}\n"
-    + "4. 最多 5 轮后必须出最终答复。\n"
-    + "5. 不知道/数据不足就直说，禁止编造数字。";
+    + "4. 最多 " + maxRounds + " 轮后必须出最终答复。\n"
+    + "5. 不知道/数据不足就直说，禁止编造数字。\n"
+    + "6. 【多轮衔接 v9.66.1】系统会给你最近几轮对话历史。若用户说\"继续/深入查询\"：先读历史确认当前调研的标的与进度，从上次停止处继续推进（不要从头重复 Phase 0），完成剩余阶段后再评级；若历史中的标的与用户新提的标的不同，才切换新标的。";
 
   const userCtx = "【当前页面状态】\n" + ctxSummary + "\n\n【用户提问】" + question + "\n\n本轮请输出JSON（工具调用或最终答复）：";
-  let history: string[] = [];
+  let roundHistory: string[] = [];
   let llmOk = true;
   let rateLimitedFlag = false;
   const calledTools = new Set<string>();
 
-  for (let round = 0; round < 5; round++) {
-    const user = round === 0 ? userCtx : (history.join("\n") + "\n\n（继续，或直接给最终答复）：");
+  for (let round = 0; round < maxRounds; round++) {
+    const user = round === 0 ? userCtx : (roundHistory.join("\n") + "\n\n（继续，或直接给最终答复）：");
     let r: AgentChatResult | null;
-    try { r = await callAgentChat(system, user, toolDefs, { temperature: 0.2 }); } catch { r = null; }
+    try { r = await callAgentChat(system, user, toolDefs, { temperature: 0.2, history: opts?.history }); } catch { r = null; }
     if (!r) { llmOk = false; break; }
     if (r.rateLimited) { llmOk = false; rateLimitedFlag = true; break; }
 
@@ -117,7 +125,7 @@ export async function runAssistantAgent(
           roundOut.push(tc.name + " 返回：" + JSON.stringify(res).slice(0, 260));
         } catch { roundOut.push(tc.name + " 执行失败"); }
       }
-      history.push("第" + (round + 1) + "轮调用：\n" + roundOut.join("\n"));
+      roundHistory.push("第" + (round + 1) + "轮调用：\n" + roundOut.join("\n"));
       continue;
     }
 
@@ -137,10 +145,10 @@ export async function runAssistantAgent(
           roundOut.push(c.tool + " 返回：" + JSON.stringify(res).slice(0, 260));
         } catch { roundOut.push(c.tool + " 执行失败"); }
       }
-      history.push("第" + (round + 1) + "轮调用：\n" + roundOut.join("\n"));
+      roundHistory.push("第" + (round + 1) + "轮调用：\n" + roundOut.join("\n"));
       continue;
     }
-    history.push("（第" + (round + 1) + "轮 LLM 输出无法解析）");
+    roundHistory.push("（第" + (round + 1) + "轮 LLM 输出无法解析）");
   }
   return {
     reply: llmOk
