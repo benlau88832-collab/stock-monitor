@@ -41,7 +41,9 @@ export async function runAssistantAgent(
 ): Promise<AssistantReply> {
   // V13-3（P0）：妙想工具仅在用户消息包含"个股深度调研"六个字时加载（用户明确要求）
   // 其他任何问题（"今日消息""主线分析""某只票怎么样"）都不加载妙想工具 —— 只用本地数据工具 + LLM 推理
-  const isDeepResearch = question.includes("个股深度调研");
+  // 自检补漏（V13-3）：调研会话进行中（researchCtx 存在）→ 保留妙想工具（用户"继续/深入"不中断五段式，
+  //   六字只作启动触发，会话内持续可用）
+  const isDeepResearch = question.includes("个股深度调研") || opts?.researchCtx != null;
   const maxRounds = isDeepResearch ? 12 : 5;
   // V13-2/3（P0）：工具集条件加载 —— 本地工具始终有；妙想工具（researchQuote/researchData/researchSearch/searchNewsFull）仅深度调研时加入
   // 新增 getLocalNews（本地快讯/公告，秒回不调妙想）—— 用户问消息/新闻/政策/公告 MUST 用这个
