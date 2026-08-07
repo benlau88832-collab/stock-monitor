@@ -4,6 +4,31 @@
 
 ---
 
+## v9.65 — V1/V2 待办收尾（S1/S7/M2 + V2-P2 可观测化）(2026-08-07)
+
+> 承接 v9.64 的剩余待办，一次做掉四项，遵循 CLAUDE.md 自验证协议。
+
+### V1-S1 consecutiveDays 估算标注
+- BoardRankPanel 连续天数显示改"约 N 天流入/流出*"，title 注明"基于 5日/10日资金累比的估算值（非逐日真实落库）"——不再误导为真实连续天数
+
+### V1-S7 alertBus 冷却持久化
+- cooldownMap 持久化 localStorage（`alert_cooldown_map`，只载入未过期项）——原模块内存态刷新即清空，同一警报刷新后 15 分钟内重复报警
+
+### V1-M2 judgeFlowType 统一
+- App.tsx 删内联 judgeFlowType，统一 import `lib/stockScore`（文案升级为"共振流入（看多）"等含括号注释版），防三处口径 drift
+
+### V2-P2 可观测化
+- **OpsPanel**：新增运维面板（Dashboard 底部常驻）——数据源成功率/失败接口/慢接口 + AI 今日调用/失败/平均延迟 + JSONP 并发/排队 + 因子失效/缺失/样本
+- **dataSource.ts 双源熔断**：`fetchWithFallback` 工具层（主源→备源回退 + 连续失败 3 次熔断 10 分钟，内存+localStorage 双态，5 个单测）
+- **Dockerfile + docker-compose.yml**：PG16 + 服务端一键部署（server/ 目录 `docker compose up -d`，.dockerignore 已加）
+
+### 遵循 CLAUDE.md
+- 三重验证门：tsc 0 error / build 成功 / test 149 全绿（新增 dataSource 5 用例）
+- 跨文件一致性：judgeFlowType 两处引用点已确认统一；OpsPanel 数据源字段（ApiRecord.recentCalls/avgMs）已对齐
+- 单测 149 全绿
+
+---
+
 ## v9.64 — V1/V2 全栈审查整改（止血 P0 + 贯通 P1，遵循 CLAUDE.md 红线）(2026-08-07)
 
 > 依据 `022_股票监控项目/审查报告-V1.txt`（546 行）+ `审查报告-V2.txt`（286 行）+ 项目级 CLAUDE.md 执行。

@@ -125,8 +125,8 @@ export default function BoardRankPanel({ inflow, outflow }: Props) {
                 <td className="px-2 py-1.5 text-center">
                   <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${
                     b.consecutiveDays > 0 ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"
-                  }`}>
-                    {b.consecutiveDays > 0 ? `连续${b.consecutiveDays}天流入` : `连续${Math.abs(b.consecutiveDays)}天流出`}
+                  }`} title="基于 5日/10日资金累比的估算值（非逐日真实落库）">
+                    {b.consecutiveDays > 0 ? `约${b.consecutiveDays}天流入` : `约${Math.abs(b.consecutiveDays)}天流出`}*
                   </span>
                 </td>
               </tr>

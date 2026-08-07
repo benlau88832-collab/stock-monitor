@@ -21,7 +21,30 @@ const COOLDOWN_MS = 15 * 60 * 1000;
 const feed: AlertEvent[] = [];
 const MAX_FEED = 50;
 const listeners: Set<Listener> = new Set();
+// v9.65（V1-S7）：冷却持久化 —— 模块内存态刷新即清空，同一警报刷新后 15 分钟内重复报警
+const COOLDOWN_STORE_KEY = "alert_cooldown_map";
 const cooldownMap = new Map<string, number>(); // id → last trigger ts
+/** 载入持久化冷却（启动时） */
+function loadCooldown(): void {
+  try {
+    const raw = localStorage.getItem(COOLDOWN_STORE_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw) as Record<string, number>;
+    const now = Date.now();
+    for (const [id, ts] of Object.entries(obj)) {
+      if (now - ts < COOLDOWN_MS) cooldownMap.set(id, ts); // 只载入未过期的
+    }
+  } catch { /* 存储不可用/损坏 → 从空开始 */ }
+}
+/** 持久化冷却表 */
+function persistCooldown(): void {
+  try {
+    const obj: Record<string, number> = {};
+    for (const [id, ts] of cooldownMap) obj[id] = ts;
+    localStorage.setItem(COOLDOWN_STORE_KEY, JSON.stringify(obj));
+  } catch { /* 存储不可用 → 仅内存冷却 */ }
+}
+if (typeof localStorage !== "undefined") loadCooldown();
 let unreadCount = 0;
 let flashTimer: ReturnType<typeof setInterval> | null = null;
 const originalTitle = typeof document !== "undefined" ? document.title : "";
@@ -128,9 +151,12 @@ if (typeof document !== "undefined") {
 export function emit(evt: Omit<AlertEvent, "ts">): void {
   const now = Date.now();
   // 冷却去重（最前）：同 id 在窗口内 → 不入流水、不通知，彻底杜绝刷屏
+  // v9.65（V1-S7）：cooldown 持久化 localStorage —— 原模块内存态刷新页面即清空，
+  //   同一警报刷新后 15 分钟内又触发 → 重复报警
   const lastTrigger = cooldownMap.get(evt.id) ?? 0;
   if (now - lastTrigger < COOLDOWN_MS) return;
   cooldownMap.set(evt.id, now);
+  persistCooldown();
 
   const full: AlertEvent = { ...evt, ts: now };
   feed.unshift(full);

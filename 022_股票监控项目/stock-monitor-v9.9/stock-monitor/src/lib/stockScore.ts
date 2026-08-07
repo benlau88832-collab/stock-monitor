@@ -12,12 +12,12 @@ function clamp(v: number, lo = 0, hi = 100): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
-// ============== 四象限判断（从 App.tsx 提取为共享） ==============
+// ============== 四象限判断（全项目唯一来源，App.tsx/stockScore 共用，防口径 drift V1-M2） ==============
 export function judgeFlowType(openNet: number, darkNet: number): string {
-  if (openNet >= 0 && darkNet >= 0) return "共振流入";
-  if (openNet < 0 && darkNet < 0) return "共振流出";
-  if (openNet >= 0 && darkNet < 0) return "主力承接";
-  return "主力撤离";
+  if (openNet >= 0 && darkNet >= 0) return "共振流入（看多）";
+  if (openNet < 0 && darkNet < 0) return "共振流出（看空）";
+  if (openNet >= 0 && darkNet < 0) return "主力承接（分歧偏多）";
+  return "主力撤离（分歧偏空）";
 }
 
 // ============== 否决规则（复用现有全套） ==============

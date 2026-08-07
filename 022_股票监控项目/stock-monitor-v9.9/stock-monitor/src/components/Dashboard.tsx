@@ -11,6 +11,8 @@ import SignalPanel from "./SignalPanel";
 import SignalEffectivenessPanel from "./SignalEffectivenessPanel";
 // v9.42：因子健康度面板（幻方"因子失效"IC 曲线可视化）
 import FactorHealthPanel from "./FactorHealthPanel";
+// v9.65（V2-P2）：运维可观测面板
+import OpsPanel from "./OpsPanel";
 // v9.44（②/④）：决策审计时间线 + 信号净值曲线
 import DecisionAuditPanel from "./DecisionAuditPanel";
 import SignalEquityPanel from "./SignalEquityPanel";
@@ -1023,6 +1025,8 @@ export default function Dashboard({
       {showSignalEffect && <SignalEffectivenessPanel />}
       {/* v9.42：因子健康度（server cron 15:40 落库 factor_ic:日期） */}
       {showFactorHealth && <FactorHealthPanel />}
+      {/* v9.65（V2-P2）：运维可观测面板（数据源/AI配额/队列/因子） */}
+      <OpsPanel />
       {/* v9.44（②）：决策审计时间线（decision_log） */}
       {showAudit && <DecisionAuditPanel />}
       {/* v9.44（④）：信号净值曲线（signalLedger 等权复利） */}

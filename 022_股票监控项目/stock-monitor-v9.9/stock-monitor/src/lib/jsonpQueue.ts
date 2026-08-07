@@ -20,6 +20,11 @@ const inflightMap = new Map<string, Promise<any>>();
 const queue: QueueItem[] = [];
 let inflight = 0;
 
+// v9.65（V2-P2）：队列状态导出（OpsPanel 可观测用）
+export function getJsonpQueueState(): { inflight: number; queueLength: number } {
+  return { inflight, queueLength: queue.length };
+}
+
 function execJsonp(url: string, timeout: number, callbackParam: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const cbName = `jq_${Date.now()}_${Math.random().toString(36).slice(2)}`;

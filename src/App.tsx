@@ -25,6 +25,7 @@ import { detectHighLowSwitch, type ZTPoolItem } from "./lib/themeLadder";
 import { classifyBoard } from "./lib/boardTaxonomy";
 import { ensureBoardMap } from "./lib/boardMap";
 import { saveZTSnapshot, loadPrevZTSnapshot } from "./lib/ztSnapshot";
+import { judgeFlowType } from "./lib/stockScore"; // v9.65（V1-M2）：四象限唯一来源，防口径 drift
 import { computeGate } from "./lib/regimeGate";
 import { computeThemeScores, type NewsItem as ThemeNewsItem } from "./lib/themeScore";
 import { computeETFScores, ETF_POOL, type ETFQuote } from "./lib/etfScore";
@@ -476,12 +477,7 @@ export default function App() {
       // 明盘 = 超大单+大单（明面上的大资金行为）
       // 暗盘 = 中单+小单（看似散户，但可能包含主力拆单的隐蔽资金）
       // 四象限判断（f62≡f66+f72，totalFlow与openNet恒等，只有openNet与darkNet两个独立维度）
-      function judgeFlowType(openNet: number, darkNet: number): string {
-        if (openNet >= 0 && darkNet >= 0) return "共振流入（看多）";
-        if (openNet < 0 && darkNet < 0) return "共振流出（看空）";
-        if (openNet >= 0 && darkNet < 0) return "主力承接（分歧偏多）";
-        return "主力撤离（分歧偏空）";
-      }
+      // v9.65（V1-M2）：judgeFlowType 统一引用 lib/stockScore（原此处内联版与 lib 版文案 drift）
 
       try {
         const conceptBoards = await fetchBoardFundFlow("concept", 60);
