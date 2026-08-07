@@ -34,7 +34,7 @@ describe("V13-1 extractThemeHeat 主题热度抽取", () => {
 
 describe("V13-1 prompt 构建", () => {
   it("buildAnalysisPrompt 含主题与资金", () => {
-    const p = buildAnalysisPrompt([{ name: "AI应用", heat: 30, trend: "up", evidence: ["x"] }],
+    const p = buildAnalysisPrompt([{ name: "AI应用", heat: 30, trend: "up", evidence: [{ title: "x" }] }],
       [{ name: "AI应用", mainNet: 5e8, mainNet5d: 2e9, pct: 3.2 }]);
     expect(p).toContain("AI应用");
     expect(p).toContain("领涨龙头");

@@ -54,10 +54,8 @@ function ScoreBadge({ s }: { s: number }) {
   return <span className={`rounded px-1 py-0.5 text-[10px] font-bold ${cls}`} title={`催化 ${s} 分`}>{stars}</span>;
 }
 
-export default function EventClassifyPanel({ onOpenNews, onSwitchTab }: {
+export default function EventClassifyPanel({ onOpenNews }: {
   onOpenNews?: () => void;
-  /** v13-4（P0）：跳转 Tab（雷达/消息面）用 */
-  onSwitchTab?: (tab: string) => void;
 }) {
   const [items, setItems] = useState<ClassifiedEvent[] | null>(null);
   const [date, setDate] = useState("");
@@ -186,10 +184,16 @@ export default function EventClassifyPanel({ onOpenNews, onSwitchTab }: {
           </button>
         </div>
 
-        {/* TOP 主题（默认 3，全部可展开） */}
-        {showThemes.map((t: any) => (
+        {/* TOP 主题（默认 3，全部可展开）—— v13-6：整行点击展开/收起，展开显示新闻+选股+ETF */}
+        {showThemes.map((t: any) => {
+          const isExpanded = expanded === t.theme;
+          const hasDetail = (t.evidence?.length ?? 0) + (t.picks?.length ?? 0) + (t.etfs?.length ?? 0) > 0;
+          return (
           <div key={t.theme} className="rounded-lg border border-white/10 bg-black/20 p-2.5 space-y-1">
-            <div className="flex items-center gap-2 flex-wrap">
+            {/* 主行：点击展开/收起（始终可见） */}
+            <div className="flex items-center gap-2 flex-wrap cursor-pointer select-none"
+              onClick={() => hasDetail && setExpanded(isExpanded ? null : t.theme)}>
+              <span className="text-xs text-slate-500 w-3">{hasDetail ? (isExpanded ? "▾" : "▸") : ""}</span>
               <span className={`rounded px-1.5 py-0.5 text-xs font-black ${
                 t.verdict === "领涨龙头" ? "bg-rose-500/20 text-rose-300"
                 : t.verdict === "风险警示" ? "bg-red-500/20 text-red-300"
@@ -210,39 +214,87 @@ export default function EventClassifyPanel({ onOpenNews, onSwitchTab }: {
                 }`}>{t.delta}</span>
               )}
               <span className="text-xs text-slate-500">{t.fundAnalysis ?? ""}</span>
-            </div>
-            <div className="flex items-center justify-between flex-wrap gap-1">
-              <span className="text-xs text-amber-200/80">{t.action ?? ""}</span>
-              {/* 展开选股详情 */}
-              {t.picks && t.picks.length > 0 && (
-                <button onClick={() => setExpanded(expanded === t.theme ? null : t.theme)}
-                  className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-slate-400 hover:text-slate-200">
-                  🎯 {t.picks.length}只选股 {expanded === t.theme ? "▴" : "▾"}
-                </button>
+              {/* 角标：新闻/选股/ETF 数量（V13-6） */}
+              {(t.picks?.length ?? 0) > 0 && (
+                <span className="rounded bg-rose-500/10 px-1 py-0.5 text-xs text-rose-300">🎯{t.picks.length}</span>
+              )}
+              {(t.etfs?.length ?? 0) > 0 && (
+                <span className="rounded bg-cyan-500/10 px-1 py-0.5 text-xs text-cyan-300">📊{t.etfs.length}</span>
               )}
             </div>
-            {/* 选股详情（展开显示） */}
-            {expanded === t.theme && t.picks && (
-              <div className="space-y-1 border-t border-white/5 pt-1.5">
-                {t.picks.map((p: any) => (
-                  <div key={p.code} className="flex items-center gap-2 text-xs flex-wrap">
-                    <span className={`rounded px-1 py-0.5 font-bold ${
-                      p.aiVerdict === "可买" ? "bg-emerald-500/15 text-emerald-300"
-                      : p.aiVerdict === "回避" ? "bg-rose-500/15 text-rose-300" : "bg-amber-500/15 text-amber-300"
-                    }`}>{p.aiVerdict ?? "谨慎"}</span>
-                    <span className="text-slate-200 font-bold cursor-pointer hover:text-rose-300"
-                      title="跳转个股雷达"
-                      onClick={() => onSwitchTab?.("radar")}>{p.name}</span>
-                    <span className="text-slate-600">{p.code}</span>
-                    <span className="text-slate-500">买入: {p.buyTrigger}</span>
-                    <span className="text-emerald-400/70">止损: {p.stopLoss}</span>
-                    <span className="text-rose-300/70">风险: {p.risk}</span>
+            <div className="text-xs text-amber-200/80">{t.action ?? ""}</div>
+
+            {/* 展开区域（V13-6）：📰 新闻（可点击）+ 🎯 选股（可点击+关联%）+ 📊 ETF（可点击） */}
+            {isExpanded && (
+              <div className="mt-1.5 space-y-2 border-t border-white/5 pt-1.5">
+                {/* 📰 支撑新闻（可点击跳东财原文） */}
+                {t.evidence && t.evidence.length > 0 && (
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-bold text-slate-300">📰 支撑新闻</div>
+                    {t.evidence.map((ev: any, j: number) => (
+                      <div key={j} className="text-xs leading-snug">
+                        {ev.url ? (
+                          <a href={ev.url} target="_blank" rel="noopener noreferrer"
+                            className="text-sky-400 hover:text-sky-300 underline">
+                            • {ev.title}
+                          </a>
+                        ) : (
+                          <span className="text-slate-400">• {ev.title}</span>
+                        )}
+                        {ev.time && <span className="text-slate-600 ml-1">{String(ev.time).slice(11, 16)}</span>}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+
+                {/* 🎯 高关联标的（LLM 验证关联度，可点击跳东财个股） */}
+                {t.picks && t.picks.length > 0 && (
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-bold text-slate-300">🎯 高关联标的（LLM 验证）</div>
+                    {t.picks.map((p: any, j: number) => (
+                      <div key={j} className="flex items-center gap-2 text-xs flex-wrap">
+                        <span className={`rounded px-1 py-0.5 font-bold ${
+                          p.role === "首选" ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300"
+                        }`}>{p.role}</span>
+                        <a href={`https://quote.eastmoney.com/${String(p.code).startsWith("6") ? "sh" : "sz"}${p.code}.html`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="font-bold text-slate-100 hover:text-amber-300">
+                          {p.name}
+                        </a>
+                        <span className="text-slate-600">{p.code}</span>
+                        <span className="text-emerald-400">关联{Math.round((p.correlation ?? 0) * 100)}%</span>
+                        <span className={`rounded px-1 font-bold ${
+                          p.aiVerdict === "可买" ? "text-emerald-300" : p.aiVerdict === "回避" ? "text-rose-300" : "text-amber-300"
+                        }`}>{p.aiVerdict ?? "谨慎"}</span>
+                        <span className="text-slate-500 truncate flex-1 min-w-[120px]">{p.buyTrigger}</span>
+                        <span className="text-emerald-400/60">止损 {p.stopLoss}</span>
+                        <span className="text-rose-300/60">风险 {p.risk}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 📊 关联 ETF（可点击跳东财 ETF 详情） */}
+                {t.etfs && t.etfs.length > 0 && (
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-bold text-slate-300">📊 关联 ETF</div>
+                    {t.etfs.map((e: any, j: number) => (
+                      <div key={j} className="flex items-center gap-2 text-xs">
+                        <a href={`https://quote.eastmoney.com/${String(e.code).startsWith("5") ? "sh" : "sz"}${e.code}.html`}
+                          target="_blank" rel="noopener noreferrer"
+                          className="text-cyan-300 hover:text-cyan-200 underline">
+                          {e.name}({e.code})
+                        </a>
+                        <span className="text-slate-500">匹配{e.matchScore ?? e.score ?? 0}%</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {/* L3 折叠：全部主题 / 风险警示 */}
         <div className="flex items-center gap-2 flex-wrap text-xs">

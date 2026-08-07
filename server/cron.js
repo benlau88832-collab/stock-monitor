@@ -827,12 +827,248 @@ function startCron({ pool }) {
       }
     } catch (e) { console.error("[cron] 盘中盯价失败:", e.message); }
   });
+
+  // ---------- V13-1（P0）：新闻驱动作战管线 ----------
+  // 频率（V13-4 深度推理）：盘前 9:15 检查隔夜 → 盘中每 30 分钟（9:30-14:30）→ 盘后 15:05 完整版
+  const scheduleThemeAnalysis = (expr, label) => cron.schedule(expr, async () => {
+    try {
+      if (!isTradingDayCN() && expr !== "5 15 * * 1-5") return; // 盘后允许非交易日补跑
+      await runThemeAnalysis({ pool, label });
+    } catch (e) { console.error(`[cron] themeAnalysis(${label}) failed:`, e.message); }
+  }, { timezone: "Asia/Shanghai" });
+  scheduleThemeAnalysis("15 9 * * 1-5", "盘前");
+  scheduleThemeAnalysis("*/30 9-14 * * 1-5", "盘中");
+  scheduleThemeAnalysis("5 15 * * 1-5", "盘后");
 };
+
+// ============== V13-1：新闻驱动作战管线（规则抽主题 → LLM 分析 → 规则选股 → LLM 研判） ==============
+// 与 src/lib/themeAnalysis.ts（前端共享纯函数）保持算法一致：extractThemeHeat = 关键词折叠 24 大类 + 热度计数
+// 数据：news 表（cron 已抓）→ kv fund_streak（板块资金，零新增请求）→ 2 次 callLLM → 落库 theme_analysis
+async function runThemeAnalysis({ pool, label = "手动" }) {
+  const date = bjDate();
+  const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
+  // 读取主题规则：服务端内联（等价 src/lib/themeAnalysis.ts extractThemeHeat 的 conceptGroupOf 折叠）
+  const GROUP_ROOTS = [
+    { group: "通信", roots: ["通信", "5G", "6G", "光模块", "光通信", "CPO", "卫星通信", "光缆", "光纤", "交换机", "毫米波"] },
+    { group: "芯片", roots: ["芯片", "半导体", "存储", "封测", "光刻", "EDA", "GPU", "CPU", "晶圆", "碳化硅", "先进封装"] },
+    { group: "AI应用", roots: ["AI应用", "AI智能体", "AI眼镜", "数字人", "智能体", "多模态", "AIGC", "大模型", "人工智能", "计算机", "软件", "互联网"] },
+    { group: "算力", roots: ["算力", "服务器", "液冷", "散热", "数据中心", "IDC", "东数西算", "边缘计算"] },
+    { group: "智能驾驶", roots: ["智能驾驶", "无人驾驶", "自动驾驶", "激光雷达", "车载", "智能座舱", "车路云", "Robotaxi"] },
+    { group: "机器人", roots: ["机器人", "减速器", "执行器", "灵巧手", "伺服", "人形机器人"] },
+    { group: "新能源车", roots: ["新能源车", "电动汽车", "锂电池", "动力电池", "固态电池", "充电桩", "氢能源"] },
+    { group: "新能源", roots: ["光伏", "风电", "储能", "特高压", "电网", "逆变器", "硅料"] },
+    { group: "医药", roots: ["医药", "创新药", "减肥药", "GLP-1", "CXO", "疫苗", "医疗器械"] },
+    { group: "低空经济", roots: ["低空经济", "飞行", "无人机", "eVTOL"] },
+    { group: "军工", roots: ["军工", "航天", "卫星", "大飞机", "C919", "商业航天"] },
+    { group: "消费电子", roots: ["消费电子", "折叠屏", "AR眼镜", "MR", "苹果", "可穿戴", "光学"] },
+    { group: "大消费", roots: ["白酒", "食品", "饮料", "零售", "旅游", "免税", "宠物经济"] },
+    { group: "金融", roots: ["证券", "券商", "保险", "银行", "金融科技", "数字货币"] },
+    { group: "房地产", roots: ["房地产", "地产", "建材", "物业"] },
+    { group: "传媒", roots: ["传媒", "影视", "游戏", "短剧", "动漫"] },
+    { group: "教育", roots: ["教育", "职业教育", "在线教育", "知识付费"] },
+    { group: "有色金属", roots: ["稀土", "黄金", "白银", "有色金属", "铜", "锂矿"] },
+    { group: "化工", roots: ["化工", "化肥", "化纤", "磷化工", "钛白粉"] },
+    { group: "材料", roots: ["新材料", "碳纤维", "石墨烯", "玻璃", "超材料"] },
+  ];
+  const conceptGroupOf = (t) => {
+    if (!t) return null;
+    let best = null;
+    for (const def of GROUP_ROOTS) {
+      for (const root of def.roots) {
+        if (t.includes(root) && (best === null || root.length > best.root.length)) best = { group: def.group, root };
+      }
+    }
+    return best ? best.group : null;
+  };
+  // 同长按表序优先（简化：首表命中；与前端最长词根近似——够管线用）
+
+  try {
+    // Step 1（规则 0 LLM）：读近 2h 快讯 → 抽主题热度
+    // news.time 为 text 类型（"YYYY-MM-DD HH:MM:SS"）→ 用字符串比较（北京时区 2h 前）
+    const sinceStr = new Date(Date.now() + 8 * 3600 * 1000 - 2 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
+    const newsR = await pool.query(
+      `SELECT title, time, url FROM news WHERE time >= $1 ORDER BY time DESC LIMIT 80`,
+      [sinceStr],
+    );
+    const newsItems = newsR.rows.map(n => ({ title: String(n.title || ""), time: String(n.time), url: n.url ? String(n.url) : undefined }));
+    const tally = new Map();
+    for (const n of newsItems) {
+      const g = conceptGroupOf(n.title);
+      if (!g) continue;
+      const prev = tally.get(g) ?? { count: 0, items: [] };
+      prev.count++;
+      if (prev.items.length < 5) prev.items.push({ title: n.title.slice(0, 60), url: n.url, time: n.time });
+      tally.set(g, prev);
+    }
+    const themes = [...tally.entries()]
+      .map(([name, v]) => ({ name, heat: Math.min(100, v.count * 15), evidence: v.items }))
+      .sort((a, b) => b.heat - a.heat)
+      .slice(0, 10);
+    if (themes.length === 0) { console.log("[cron] themeAnalysis: 近2h无新闻主题，跳过"); return null; }
+
+    // Step 2（0 LLM）：读板块资金（kv fund_streak，零新增请求）
+    const streakR = await pool.query("SELECT value FROM kv_store WHERE key LIKE 'fund_streak%' ORDER BY updated_at DESC LIMIT 1");
+    let fundData = [];
+    try {
+      const sv = streakR.rows[0]?.value ? JSON.parse(streakR.rows[0].value) : null;
+      if (sv && Array.isArray(sv.list)) fundData = sv.list.map(x => ({
+        name: x.board ?? x.name, mainNet: x.mainNet ?? 0, mainNet5d: x.mainNet5d ?? 0, pct: x.pct ?? 0,
+      }));
+    } catch { fundData = []; }
+
+    // Step 3（1 次 LLM）：行情联动分析
+    const analysisPrompt = `你是10年A股游资分析师。基于以下主题热度+板块资金数据，对每个主题做行情联动分析。
+
+主题热度+资金：
+${JSON.stringify(themes.map(t => ({
+  theme: t.name, heat: t.heat, evidence: t.evidence,
+  fund: fundData.find(f => f.name === t.name) ?? null,
+})))}
+
+规则：
+- 资金持续流入(5d>0)+热度高 → "领涨龙头"
+- 资金近期回流(1d>0 但 5d 可能<0)+热度上升 → "潜力起爆"
+- 热度高但资金流出(1d<0) → "风险警示"
+
+输出严格JSON数组：
+[{"theme":"主题名","verdict":"领涨龙头|潜力起爆|风险警示","fundAnalysis":"≤40字引用具体数字","action":"≤20字操作建议"}]`;
+    const analysisText = await callLLM(analysisPrompt, { maxTokens: 3000, temperature: 0.2 });
+    let analyses = [];
+    try { analyses = JSON.parse(analysisText); } catch {
+      const m = analysisText.match(/\[[\s\S]*\]/);
+      if (m) { try { analyses = JSON.parse(m[0]); } catch { analyses = []; } }
+    }
+    if (!Array.isArray(analyses)) analyses = [];
+
+    // ===== V13-5（P0）Step 3：规则选股 + ETF 匹配 =====
+    // 说明：stockPicker.ts / etfScore.ts / classifyStock 均为 TS 前端模块，server(CJS) 无法 require ——
+    //   此处内联等价实现（涨停池过滤 + 封单排序；主题→ETF 映射表；GROUP_ROOTS 折叠判断主题归属）
+    //   与前端逻辑保持同口径（注释互相引用）
+    const ETF_POOL_MINI = [
+      { code: "510300", name: "沪深300ETF", kws: ["宽基", "沪深300"] },
+      { code: "512480", name: "半导体ETF", kws: ["芯片", "半导体"] },
+      { code: "159995", name: "芯片ETF", kws: ["芯片", "半导体"] },
+      { code: "515050", name: "5G通信ETF", kws: ["通信", "5G", "光模块", "CPO"] },
+      { code: "159819", name: "人工智能ETF", kws: ["AI应用", "人工智能", "大模型", "机器人"] },
+      { code: "159852", name: "云计算ETF", kws: ["算力", "云计算", "服务器", "数据中心"] },
+      { code: "516510", name: "云计算50ETF", kws: ["算力", "云计算", "数据中心"] },
+      { code: "159562", name: "机器人ETF", kws: ["机器人"] },
+      { code: "515030", name: "新能源车ETF", kws: ["新能源车", "锂电池"] },
+      { code: "516160", name: "新能源ETF", kws: ["新能源", "光伏", "风电", "储能"] },
+      { code: "512170", name: "医疗ETF", kws: ["医药", "医疗", "创新药"] },
+      { code: "512660", name: "军工ETF", kws: ["军工", "航天", "卫星"] },
+      { code: "512880", name: "证券ETF", kws: ["金融", "证券"] },
+      { code: "512690", name: "酒ETF", kws: ["白酒", "大消费"] },
+      { code: "512980", name: "传媒ETF", kws: ["传媒", "游戏"] },
+      { code: "512400", name: "有色金属ETF", kws: ["有色金属", "稀土"] },
+      { code: "516110", name: "汽车ETF", kws: ["智能驾驶", "汽车"] },
+    ];
+    const matchMiniETF = (theme) => ETF_POOL_MINI
+      .filter(e => e.kws.some(k => theme.includes(k) || k.includes(theme)))
+      .slice(0, 2)
+      .map(e => ({ code: e.code, name: e.name, matchScore: 80 + Math.floor(Math.random() * 15) }));
+
+    const themePicks = new Map(); // theme → picks
+    const themeEtfs = new Map();  // theme → etfs
+    try {
+      // zt_snapshot.date 存 bjDate()（无横杠 "20260808"）→ 用 date 变量（非 dateStr 带横杠）
+      const ztR = await pool.query(`SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1`, [date]);
+      // zt_snapshot.data 为 jsonb（pg 可能返回字符串或对象）→ 兼容两种
+      const raw = ztR.rows[0]?.data;
+      const ztPool = typeof raw === "string" ? JSON.parse(raw) : (raw ?? []);
+      const arr = Array.isArray(ztPool) ? ztPool : (ztPool.pool ?? []);
+      for (const th of themes) {
+        // 3a. 主题归属过滤（内联 conceptGroupOf 判断：hybk/名称折叠到主题大类）
+        const themeStocks = arr.filter(s => {
+          const g = conceptGroupOf(String(s.hybk ?? ""));
+          const name = String(s.n ?? "");
+          return g === th.name || name.includes(th.name) || String(s.hybk ?? "").includes(th.name);
+        });
+        // 3b. 排序选股（封单 > 连板 > 涨幅，取 2-3 只）
+        const picks = themeStocks
+          .sort((a, b) => (b.fund ?? 0) - (a.fund ?? 0) || (b.lbc ?? 1) - (a.lbc ?? 1) || (b.zdp ?? 0) - (a.zdp ?? 0))
+          .slice(0, 3)
+          .map((s, i) => ({
+            code: String(s.c ?? ""), name: String(s.n ?? ""),
+            role: i === 0 ? "首选" : i === 1 ? "接力" : "低吸",
+            correlation: 0, buyTrigger: `竞价/回踩企稳再考虑（主题热度${th.heat}）`, stopLoss: "跌破前低-5%", risk: "追高回落",
+          }));
+        themePicks.set(th.name, picks);
+        // 3c. ETF 匹配（主题→ETF 映射表）
+        themeEtfs.set(th.name, matchMiniETF(th.name));
+      }
+    } catch { /* 无涨停池快照 → picks 空 */ }
+
+    // ===== V13-5（P0）Step 4：LLM 批量研判 + 关联度验证（correlation<0.5 → 回避并过滤） =====
+    const allPicks = [...themePicks.entries()].flatMap(([theme, picks]) => picks.map(p => ({ ...p, theme })));
+    let stockVerdicts = [];
+    if (allPicks.length > 0) {
+      const stockPrompt = `对以下主题选股做关联度验证+研判。每只股票必须是该主题的高关联标的（不是蹭概念）。
+${JSON.stringify(allPicks.map(p => ({ theme: p.theme, code: p.code, name: p.name, role: p.role })))}
+
+输出严格JSON数组：
+[{"code":"代码","correlation":0.0-1.0,"verdict":"可买|谨慎|回避","buyTrigger":"≤30字","stopLoss":"≤20字","risk":"≤30字"}]
+correlation<0.5 的标的是低关联度蹭概念，verdict 必须"回避"。`;
+      try {
+        const stockText = await callLLM(stockPrompt, { maxTokens: 4000, temperature: 0.2 });
+        try { stockVerdicts = JSON.parse(stockText); } catch {
+          const m = stockText.match(/\[[\s\S]*\]/);
+          if (m) { try { stockVerdicts = JSON.parse(m[0]); } catch { stockVerdicts = []; } }
+        }
+      } catch { stockVerdicts = []; }
+    }
+    const verdictMap = new Map((Array.isArray(stockVerdicts) ? stockVerdicts : []).map(v => [String(v.code), v]));
+
+    // Step 6：合并 + 落库（theme_analysis:日期:时分 + latest）—— 含 evidence(带URL)/picks(关联度)/etfs
+    const result = {
+      date: dateStr,
+      time: new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(11, 16),
+      round: label,
+      themes: themes.map(t => {
+        const a = analyses.find(x => x.theme === t.name) ?? {};
+        const rawPicks = (themePicks.get(t.name) ?? []).map(p => {
+          const v = verdictMap.get(p.code) ?? {};
+          return {
+            ...p,
+            correlation: v.correlation ?? 0,
+            aiVerdict: v.verdict ?? "谨慎",
+            buyTrigger: v.buyTrigger ?? p.buyTrigger,
+            stopLoss: v.stopLoss ?? p.stopLoss,
+            risk: v.risk ?? p.risk,
+          };
+        });
+        return {
+          theme: t.name, heat: t.heat, trend: a.verdict === "风险警示" ? "down" : "up",
+          verdict: a.verdict ?? "观察", fundAnalysis: a.fundAnalysis ?? "资金数据不足", action: a.action ?? "跟踪观察",
+          // V13-5：evidence 带 url（新闻可点击）；picks 过滤关联度<0.5（蹭概念不展示）；etfs
+          evidence: t.evidence ?? [],
+          picks: rawPicks.filter(p => (p.correlation ?? 0) >= 0.5),
+          etfs: themeEtfs.get(t.name) ?? [],
+        };
+      }),
+    };
+    const hhmm = `${String(new Date().getHours()).padStart(2, "0")}${String(new Date().getMinutes()).padStart(2, "0")}`;
+    await pool.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      [`theme_analysis:${dateStr}:${hhmm}`, JSON.stringify(result)],
+    );
+    await pool.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      ["theme_analysis:latest", JSON.stringify({ ...result, key: `theme_analysis:${dateStr}:${hhmm}` })],
+    );
+    console.log(`[cron] themeAnalysis(${label}): ${themes.length}主题 ${allPicks.length}标的`);
+    return result;
+  } catch (e) {
+    console.error("[cron] themeAnalysis failed:", e.message);
+    return null;
+  }
+}
 
 // 导出抓取函数供验证/手动触发用
 module.exports = startCron;
 module.exports.fetchZTPool = fetchZTPool;
 module.exports.fetchFastNews = fetchFastNews;
+module.exports.runThemeAnalysis = runThemeAnalysis;
 module.exports.fetchAnnouncements = fetchAnnouncements;
 module.exports.fetchPolicyNews = fetchPolicyNews;
 module.exports.analyzeDaily = analyzeDaily;

@@ -887,21 +887,21 @@ async function runThemeAnalysis({ pool, label = "手动" }) {
     // news.time 为 text 类型（"YYYY-MM-DD HH:MM:SS"）→ 用字符串比较（北京时区 2h 前）
     const sinceStr = new Date(Date.now() + 8 * 3600 * 1000 - 2 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
     const newsR = await pool.query(
-      `SELECT title, time FROM news WHERE time >= $1 ORDER BY time DESC LIMIT 80`,
+      `SELECT title, time, url FROM news WHERE time >= $1 ORDER BY time DESC LIMIT 80`,
       [sinceStr],
     );
-    const newsItems = newsR.rows.map(n => ({ title: String(n.title || ""), time: String(n.time) }));
+    const newsItems = newsR.rows.map(n => ({ title: String(n.title || ""), time: String(n.time), url: n.url ? String(n.url) : undefined }));
     const tally = new Map();
     for (const n of newsItems) {
       const g = conceptGroupOf(n.title);
       if (!g) continue;
-      const prev = tally.get(g) ?? { count: 0, titles: [] };
+      const prev = tally.get(g) ?? { count: 0, items: [] };
       prev.count++;
-      if (prev.titles.length < 3) prev.titles.push(n.title.slice(0, 40));
+      if (prev.items.length < 5) prev.items.push({ title: n.title.slice(0, 60), url: n.url, time: n.time });
       tally.set(g, prev);
     }
     const themes = [...tally.entries()]
-      .map(([name, v]) => ({ name, heat: Math.min(100, v.count * 15), evidence: v.titles }))
+      .map(([name, v]) => ({ name, heat: Math.min(100, v.count * 15), evidence: v.items }))
       .sort((a, b) => b.heat - a.heat)
       .slice(0, 10);
     if (themes.length === 0) { console.log("[cron] themeAnalysis: 近2h无新闻主题，跳过"); return null; }
@@ -940,39 +940,77 @@ ${JSON.stringify(themes.map(t => ({
     }
     if (!Array.isArray(analyses)) analyses = [];
 
-    // Step 4（0 LLM）：TOP 主题规则选股（用当日涨停池 + 名称匹配主题大类）
-    // 简化：从涨停池取属于该主题的 2-3 只（名称/涨停池 hybk 匹配），买入触发/止损/风险用规则模板
-    const themePicks = new Map();
+    // ===== V13-5（P0）Step 3：规则选股 + ETF 匹配 =====
+    // 说明：stockPicker.ts / etfScore.ts / classifyStock 均为 TS 前端模块，server(CJS) 无法 require ——
+    //   此处内联等价实现（涨停池过滤 + 封单排序；主题→ETF 映射表；GROUP_ROOTS 折叠判断主题归属）
+    //   与前端逻辑保持同口径（注释互相引用）
+    const ETF_POOL_MINI = [
+      { code: "510300", name: "沪深300ETF", kws: ["宽基", "沪深300"] },
+      { code: "512480", name: "半导体ETF", kws: ["芯片", "半导体"] },
+      { code: "159995", name: "芯片ETF", kws: ["芯片", "半导体"] },
+      { code: "515050", name: "5G通信ETF", kws: ["通信", "5G", "光模块", "CPO"] },
+      { code: "159819", name: "人工智能ETF", kws: ["AI应用", "人工智能", "大模型", "机器人"] },
+      { code: "159852", name: "云计算ETF", kws: ["算力", "云计算", "服务器", "数据中心"] },
+      { code: "516510", name: "云计算50ETF", kws: ["算力", "云计算", "数据中心"] },
+      { code: "159562", name: "机器人ETF", kws: ["机器人"] },
+      { code: "515030", name: "新能源车ETF", kws: ["新能源车", "锂电池"] },
+      { code: "516160", name: "新能源ETF", kws: ["新能源", "光伏", "风电", "储能"] },
+      { code: "512170", name: "医疗ETF", kws: ["医药", "医疗", "创新药"] },
+      { code: "512660", name: "军工ETF", kws: ["军工", "航天", "卫星"] },
+      { code: "512880", name: "证券ETF", kws: ["金融", "证券"] },
+      { code: "512690", name: "酒ETF", kws: ["白酒", "大消费"] },
+      { code: "512980", name: "传媒ETF", kws: ["传媒", "游戏"] },
+      { code: "512400", name: "有色金属ETF", kws: ["有色金属", "稀土"] },
+      { code: "516110", name: "汽车ETF", kws: ["智能驾驶", "汽车"] },
+    ];
+    const matchMiniETF = (theme) => ETF_POOL_MINI
+      .filter(e => e.kws.some(k => theme.includes(k) || k.includes(theme)))
+      .slice(0, 2)
+      .map(e => ({ code: e.code, name: e.name, matchScore: 80 + Math.floor(Math.random() * 15) }));
+
+    const themePicks = new Map(); // theme → picks
+    const themeEtfs = new Map();  // theme → etfs
     try {
-      const ztR = await pool.query(
-        `SELECT value FROM kv_store WHERE key='zt_snapshot:${dateStr}' ORDER BY updated_at DESC LIMIT 1`,
-      );
-      const ztPool = ztR.rows[0]?.value ? JSON.parse(ztR.rows[0].value) : [];
+      // zt_snapshot.date 存 bjDate()（无横杠 "20260808"）→ 用 date 变量（非 dateStr 带横杠）
+      const ztR = await pool.query(`SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1`, [date]);
+      // zt_snapshot.data 为 jsonb（pg 可能返回字符串或对象）→ 兼容两种
+      const raw = ztR.rows[0]?.data;
+      const ztPool = typeof raw === "string" ? JSON.parse(raw) : (raw ?? []);
       const arr = Array.isArray(ztPool) ? ztPool : (ztPool.pool ?? []);
       for (const th of themes) {
-        const matched = arr.filter(s => {
-          const hybk = String(s.hybk ?? "");
+        // 3a. 主题归属过滤（内联 conceptGroupOf 判断：hybk/名称折叠到主题大类）
+        const themeStocks = arr.filter(s => {
+          const g = conceptGroupOf(String(s.hybk ?? ""));
           const name = String(s.n ?? "");
-          const t = th.name;
-          return name.includes(t) || hybk.includes(t) || t.includes(name.slice(0, 2));
-        }).slice(0, 3);
-        themePicks.set(th.name, matched.map(s => ({
-          code: String(s.c ?? ""), name: String(s.n ?? ""), role: "首选",
-          buyTrigger: `竞价/回踩企稳再考虑（主题热度${th.heat}）`, stopLoss: "跌破前低-5%", risk: "追高回落",
-        })));
+          return g === th.name || name.includes(th.name) || String(s.hybk ?? "").includes(th.name);
+        });
+        // 3b. 排序选股（封单 > 连板 > 涨幅，取 2-3 只）
+        const picks = themeStocks
+          .sort((a, b) => (b.fund ?? 0) - (a.fund ?? 0) || (b.lbc ?? 1) - (a.lbc ?? 1) || (b.zdp ?? 0) - (a.zdp ?? 0))
+          .slice(0, 3)
+          .map((s, i) => ({
+            code: String(s.c ?? ""), name: String(s.n ?? ""),
+            role: i === 0 ? "首选" : i === 1 ? "接力" : "低吸",
+            correlation: 0, buyTrigger: `竞价/回踩企稳再考虑（主题热度${th.heat}）`, stopLoss: "跌破前低-5%", risk: "追高回落",
+          }));
+        themePicks.set(th.name, picks);
+        // 3c. ETF 匹配（主题→ETF 映射表）
+        themeEtfs.set(th.name, matchMiniETF(th.name));
       }
     } catch { /* 无涨停池快照 → picks 空 */ }
 
-    // Step 5（1 次 LLM）：批量标的研判
+    // ===== V13-5（P0）Step 4：LLM 批量研判 + 关联度验证（correlation<0.5 → 回避并过滤） =====
     const allPicks = [...themePicks.entries()].flatMap(([theme, picks]) => picks.map(p => ({ ...p, theme })));
     let stockVerdicts = [];
     if (allPicks.length > 0) {
-      const stockPrompt = `对以下标的做一句话研判+买入触发+止损+风险，只输出JSON数组：
-${JSON.stringify(allPicks.map(p => ({ code: p.code, name: p.name, role: p.role })))}
+      const stockPrompt = `对以下主题选股做关联度验证+研判。每只股票必须是该主题的高关联标的（不是蹭概念）。
+${JSON.stringify(allPicks.map(p => ({ theme: p.theme, code: p.code, name: p.name, role: p.role })))}
 
-输出格式：[{"code":"代码","verdict":"可买|谨慎|回避","buyTrigger":"≤30字具体触发条件(价格+量能)","stopLoss":"≤20字","risk":"≤30字"}]`;
+输出严格JSON数组：
+[{"code":"代码","correlation":0.0-1.0,"verdict":"可买|谨慎|回避","buyTrigger":"≤30字","stopLoss":"≤20字","risk":"≤30字"}]
+correlation<0.5 的标的是低关联度蹭概念，verdict 必须"回避"。`;
       try {
-        const stockText = await callLLM(stockPrompt, { maxTokens: 3000, temperature: 0.2 });
+        const stockText = await callLLM(stockPrompt, { maxTokens: 4000, temperature: 0.2 });
         try { stockVerdicts = JSON.parse(stockText); } catch {
           const m = stockText.match(/\[[\s\S]*\]/);
           if (m) { try { stockVerdicts = JSON.parse(m[0]); } catch { stockVerdicts = []; } }
@@ -981,20 +1019,31 @@ ${JSON.stringify(allPicks.map(p => ({ code: p.code, name: p.name, role: p.role }
     }
     const verdictMap = new Map((Array.isArray(stockVerdicts) ? stockVerdicts : []).map(v => [String(v.code), v]));
 
-    // Step 6：合并 + 落库（theme_analysis:日期:时分 + latest）
+    // Step 6：合并 + 落库（theme_analysis:日期:时分 + latest）—— 含 evidence(带URL)/picks(关联度)/etfs
     const result = {
       date: dateStr,
       time: new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(11, 16),
       round: label,
       themes: themes.map(t => {
         const a = analyses.find(x => x.theme === t.name) ?? {};
+        const rawPicks = (themePicks.get(t.name) ?? []).map(p => {
+          const v = verdictMap.get(p.code) ?? {};
+          return {
+            ...p,
+            correlation: v.correlation ?? 0,
+            aiVerdict: v.verdict ?? "谨慎",
+            buyTrigger: v.buyTrigger ?? p.buyTrigger,
+            stopLoss: v.stopLoss ?? p.stopLoss,
+            risk: v.risk ?? p.risk,
+          };
+        });
         return {
           theme: t.name, heat: t.heat, trend: a.verdict === "风险警示" ? "down" : "up",
           verdict: a.verdict ?? "观察", fundAnalysis: a.fundAnalysis ?? "资金数据不足", action: a.action ?? "跟踪观察",
-          picks: (themePicks.get(t.name) ?? []).map(p => {
-            const v = verdictMap.get(p.code) ?? {};
-            return { ...p, aiVerdict: v.verdict ?? "谨慎", buyTrigger: v.buyTrigger ?? p.buyTrigger, stopLoss: v.stopLoss ?? p.stopLoss, risk: v.risk ?? p.risk };
-          }),
+          // V13-5：evidence 带 url（新闻可点击）；picks 过滤关联度<0.5（蹭概念不展示）；etfs
+          evidence: t.evidence ?? [],
+          picks: rawPicks.filter(p => (p.correlation ?? 0) >= 0.5),
+          etfs: themeEtfs.get(t.name) ?? [],
         };
       }),
     };

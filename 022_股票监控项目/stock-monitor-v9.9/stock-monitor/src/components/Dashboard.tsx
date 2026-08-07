@@ -882,8 +882,8 @@ export default function Dashboard({
           gate={battlePlan?.gate ?? null}
         />
         {/* v11-5（P1）：事件三级研判移回驾驶舱（决策区下方，裁决→选股→事件一气呵成） */}
-        {/* v13-4（P0）：管线视图支持选股点击跳雷达 */}
-        <EventClassifyPanel onOpenNews={() => onSwitchTab?.("news")} onSwitchTab={onSwitchTab} />
+        {/* v13-4/6（P0）：管线视图 + 展开/可点击（新闻/个股/ETF 东财外链） */}
+        <EventClassifyPanel onOpenNews={() => onSwitchTab?.("news")} />
         {/* v9.38（V3-2/3）：Agent 手动重审按钮（自动已每5分钟跑，手动可即时刷新） */}
         <div className="flex items-center gap-2">
           <button onClick={() => runAgent(false)} disabled={agentLoading}

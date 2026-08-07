@@ -4,6 +4,26 @@
 
 ---
 
+## v9.73 — GLM5.2-V13 补丁全部落地：选股/ETF 推荐 + LLM 关联验证 + 展开可点击（2/2 指令）(2026-08-08)
+
+> 依据 `022_股票监控项目/GLM5.2建议-v13补丁.txt`（1084 行）逐条执行（V13-1/2/3/4 已在 v9.72 完成）。
+> 核心：管线从"只有主题分析"升级为"主题+选股+ETF+关联验证"，驾驶舱事件面板可展开看新闻原文/个股/ETF。
+
+### 🔴 P0（V13-5 + V13-6）
+- **V13-5** 管线补全 Step 3-4：
+  - themeAnalysis.ts 类型增强（ThemeEvidence 带 url / ThemePick 带 correlation / ThemeETF）+ extractThemeHeat 保留 url（≤5 条）
+  - server cron Step 3：涨停池主题归属过滤（内联 conceptGroupOf）→ 封单/连板排序取 3 只（首选/接力/低吸）+ ETF 匹配（内联 ETF_POOL_MINI 17 只）
+  - server cron Step 4：LLM 批量关联度验证（correlation 0-1，**<0.5 → 回避并过滤**不展示蹭概念）
+  - 修复 3 处：zt_snapshot 独立表（非 kv_store）/ date 无横杠（bjDate）/ jsonb 类型防御
+- **V13-6** EventClassifyPanel：主题行整行点击展开/收起（▸/▾）+ 展开区 📰 支撑新闻（可点击跳东财原文）+ 🎯 高关联标的（可点击跳个股 + 关联% + 研判）+ 📊 关联 ETF（可点击 + 匹配%）
+
+### 遵循 CLAUDE.md 第十四节自验证协议
+- 每项：门1 tsc 0 / 门2 build 成功 / 门3 test 175 全绿
+- 阶段2 grep：V13-6 元素 7 处；onSwitchTab 未使用被 tsc 抓到 → 清理 props（改东财外链）
+- 冒烟：10 主题（芯片领涨龙头 + evidence 带 url + etfs 7 主题）；模拟"通信"主题涨停池匹配 4 只（picks 逻辑验证 ✓，凌晨时段新闻/涨停主题不重叠属正常）
+
+---
+
 ## v9.72 — GLM5.2-V13 全部落地：新闻驱动作战管线 + AIConsole 本地数据优先（4/4 指令）(2026-08-08)
 
 > 依据 `022_股票监控项目/GLM5.2建议-v13.txt`（605 行）逐条执行，4 条修改指令全部完成。
