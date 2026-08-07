@@ -856,6 +856,8 @@ export interface LimitPoolSummary {
   rawDTPool?: any[];
   /** 接口返回的真实交易日（形如"20260729"），优先用于快照 key（兼容法定节假日） */
   qdate: string | null;
+  /** v12-6（P1）：涨停池可能被截断的警告（返回长度恰为整数边界 100/200/300/400/500 时触发） */
+  truncated?: string;
   /** v9.26.10：当日池总数（节假日回退判定用） */
   totalCount: number;
   /** v9.26.10：是否交易日（穷尽回退后仍空则 false） */
@@ -914,7 +916,18 @@ async function fetchZTPoolForDate(d: string): Promise<LimitPoolSummary> {
   const blastedRate = (limitUpCount + blastedCount) > 0 ? blastedCount / (limitUpCount + blastedCount) * 100 : 0;
   const totalBoardStocks = ztPool.filter((s: any) => (s.lbc ?? 1) >= 2).length;
 
-  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, rawZBPool: zbPool, rawDTPool: dtPool, qdate, totalCount: ztPool.length + zbPool.length + dtPool.length };
+  // v12-6（P1）：截断校验 —— pagesize=500 但接口可能实际截断（100/200 整数边界）→ 标"⚠ 可能截断"
+  // push2ex/getTopicZTPool 与 clist/get 上限不同，运行时检测比注释靠谱
+  const TRUNC_EDGES = [100, 200, 300, 400, 500];
+  let truncated: string | undefined;
+  for (const edge of TRUNC_EDGES) {
+    if (ztPool.length === edge) {
+      truncated = `⚠ 涨停池恰好 ${edge} 条（接口分页边界），可能被截断，请人工核对涨停数`;
+      break;
+    }
+  }
+
+  return { limitUpCount, limitDownCount, blastedCount, blastedRate, boardCounts, totalBoardStocks, rawZTPool: ztPool, rawZBPool: zbPool, rawDTPool: dtPool, qdate, truncated, totalCount: ztPool.length + zbPool.length + dtPool.length };
 }
 
 // ============== 两市历史日成交额（用于量能对比）==============

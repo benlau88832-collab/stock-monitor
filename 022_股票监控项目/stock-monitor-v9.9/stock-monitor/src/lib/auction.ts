@@ -13,8 +13,10 @@ const QT_BASE = "https://qt.gtimg.cn/q=";
 export interface AuctionItem {
   code: string;
   name: string;
-  /** 今开（竞价结果） */
+  /** 今开（竞价结果）；v12-1：竞价未撮合时 fallback 到 currentPrice */
   openPrice: number;
+  /** v12-1（P0）：竞价未撮合标记（qt openPrice=0，已用 currentPrice 作虚拟参考价） */
+  auctionPending?: boolean;
   /** 昨收 */
   prevClose: number;
   /** 竞价涨幅 %（(今开-昨收)/昨收） */
@@ -140,17 +142,24 @@ export async function fetchAuctionBoard(
   const rows = await fetchQtBatch(codes);
   const items: AuctionItem[] = rows.map(r => {
     const zt = ztMap.get(r.code);
-    const auctionPct = r.prevClose > 0 ? (r.openPrice - r.prevClose) / r.prevClose * 100 : 0;
+    // v12-1（P0 数据根因）：竞价期间（9:15-9:25）qt 的 openPrice 可能为 0（未撮合）
+    //   → 原代码 (0-昨收)/昨收 = -100% 全错（所有股票显示跌停开盘假象）
+    //   → fallback 到 currentPrice（虚拟参考价），并打 auctionPending 标记供 UI 提示"竞价中"
+    const effectiveOpen = r.openPrice > 0 ? r.openPrice : r.currentPrice;
+    const auctionPct = r.prevClose > 0 && effectiveOpen > 0
+      ? (effectiveOpen - r.prevClose) / r.prevClose * 100
+      : 0;
     return {
       code: r.code,
       name: r.name,
-      openPrice: r.openPrice,
+      openPrice: r.openPrice > 0 ? r.openPrice : r.currentPrice, // 显示用 fallback 值
+      auctionPending: r.openPrice === 0, // 竞价未撮合标记（UI 可标"竞价中·虚拟参考价"）
       prevClose: r.prevClose,
       auctionPct: Math.round(auctionPct * 100) / 100,
       firstBoardTime: zt ? fmtFbt(zt.fbt) : null,
       boardCount: zt ? zt.lbc : null,
       strength: 0, // 下方统一计算
-      auctionLimitUp: r.openPrice > 0 && r.limitUpPrice > 0 && Math.abs(r.openPrice - r.limitUpPrice) < 0.02,
+      auctionLimitUp: effectiveOpen > 0 && r.limitUpPrice > 0 && Math.abs(effectiveOpen - r.limitUpPrice) < 0.02,
       auctionGapDown: auctionPct < -3,
       openAmountYi: Math.round((r.amountWan / 10000) * 100) / 100,
       volumeKilo: r.volumeKilo,

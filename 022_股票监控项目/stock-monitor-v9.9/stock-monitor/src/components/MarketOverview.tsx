@@ -69,9 +69,10 @@ function SentimentGauge({ value, label, factors, yesterday, premiumAvg, promotio
               </div>
             ))}
           </div>
-          {/* 历史分位数 (TODO: 接入250日历史数据后启用) */}
-          <div className="text-[11px] text-slate-700 mt-1">
-            历史分位数据接入中，暂不可用
+          {/* v12-7（P1）：历史分位数 —— 显式标注"开发中"（原暗色 text-slate-700 几乎不可见，用户误以为数据缺失异常） */}
+          <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
+            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-bold text-amber-300">开发中</span>
+            <span>历史分位数（接入 250 日历史数据后启用）</span>
           </div>
         </div>
       </div>
@@ -212,6 +213,12 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
                 <span className="text-emerald-400">下跌 <b>{breadth.down}</b></span>
                 <span className="text-slate-400">平盘 <b>{breadth.flat}</b></span>
                 <span className="text-rose-300">涨停 <b>{limitPool?.limitUpCount ?? 0}</b></span>
+                {/* v12-6（P1）：涨停池可能截断 → 显式警告 */}
+                {limitPool?.truncated && (
+                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-bold text-amber-300" title={limitPool.truncated}>
+                    ⚠ 可能截断
+                  </span>
+                )}
                 <span className="text-emerald-300">跌停 <b>{limitPool?.limitDownCount ?? 0}</b></span>
                 {limitPool && (
                   <>

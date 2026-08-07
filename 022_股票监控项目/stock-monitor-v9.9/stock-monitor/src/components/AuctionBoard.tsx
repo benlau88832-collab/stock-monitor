@@ -88,6 +88,10 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
                     it.auctionPct >= 0 ? "text-rose-400" : "text-emerald-400"
                   }`}>
                     {it.auctionPct >= 0 ? "+" : ""}{it.auctionPct.toFixed(2)}%
+                    {/* v12-1（P0）：竞价未撮合 → 标注"虚拟参考价"（openPrice=0 用 currentPrice 兜底，非真实开盘） */}
+                    {it.auctionPending && (
+                      <span className="ml-1 rounded bg-amber-500/15 px-1 text-[10px] font-bold text-amber-300" title="集合竞价未撮合（9:15-9:25），涨幅按当前价虚拟参考价计算">竞价中</span>
+                    )}
                   </td>
                   {/* v9.26.14：实时涨幅（当前价 vs 昨收） */}
                   <td className={`px-1 py-0.5 text-right font-mono font-bold ${
@@ -109,9 +113,9 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
                   <td className="px-1 py-0.5 text-center text-slate-400">{it.boardCount ? `${it.boardCount}板` : "—"}</td>
                   <td className="px-1 py-0.5 text-center">
                     {it.auctionLimitUp ? (
-                      <span className="rounded bg-rose-500/20 px-1 py-0.5 text-[9px] font-bold text-rose-300">⚡竞价涨停</span>
+                      <span className="rounded bg-rose-500/20 px-1 py-0.5 text-xs font-bold text-rose-300">⚡竞价涨停</span>
                     ) : it.auctionGapDown ? (
-                      <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-[9px] font-bold text-emerald-300">大幅低开</span>
+                      <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-xs font-bold text-emerald-300">大幅低开</span>
                     ) : (
                       <span className={`font-mono ${it.strength >= 70 ? "text-rose-300" : it.strength >= 40 ? "text-amber-300" : "text-slate-400"}`}>
                         {it.strength}
@@ -127,7 +131,7 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
         <div className="text-[10px] text-slate-500">{loading ? "加载中…" : "暂无竞价数据"}</div>
       )}
 
-      <div className="text-[9px] text-slate-600">仅用于早盘强度观察，非交易依据 · 竞价数据为开盘首笔近似</div>
+      <div className="text-xs text-slate-600">仅用于早盘强度观察，非交易依据 · 竞价数据为开盘首笔近似</div>
     </div>
   );
 }

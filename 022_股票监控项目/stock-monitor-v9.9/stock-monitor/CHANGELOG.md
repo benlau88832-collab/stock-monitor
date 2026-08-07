@@ -4,6 +4,29 @@
 
 ---
 
+## v9.71 — GLM5.2-V12 全部落地：竞价数据根因 + 分类贯通补齐 + 事件盘中实时（7/7 指令）(2026-08-08)
+
+> 依据 `022_股票监控项目/GLM5.2建议-v12.txt`（232 行）逐条执行，7 条修改指令全部完成。
+> 核心：V11-11 分类统一"下半场"补完（4 个下游消费方接 classifyStock）、竞价 openPrice=0 根因修复、事件研判盘中实时化。
+
+### 🔴 P0 数据根因 + 分类贯通（V12-1/2/3）
+- **V12-1** auction.ts：openPrice=0 守卫 + fallback currentPrice（竞价未撮合不再 -100% 全错）+ `auctionPending` 标记（UI"竞价中·虚拟参考价"）+ auctionLimitUp 同步
+- **V12-2** StockPickList:69：conceptGroupOf 旧路径 → classifyStock（选股与主线同口径）
+- **V12-3** positionMatch:51：getIndustryByCode → classifyStock（持仓匹配同口径）
+
+### 🟠 P1 事件盘中 + 数据收尾（V12-4/5/6/7）
+- **V12-4** stockToMainline 资金匹配：统一走 classifyStock 折叠 key（分类贯通 4/4，grep 验收 6 文件）
+- **V12-5** EventClassifyPanel：盘中 kv 未生成 → getAllSince 今日快讯轻量分级（政策★★★/行业★★/事件★，游资视角）+ 可点击（已有）
+- **V12-6** api.ts：涨停池长度整数边界（100/200/300/400/500）→ truncated 警告，MarketOverview 显示"⚠ 可能截断"
+- **V12-7** MarketOverview：历史分位数暗色 TODO → 显式"开发中"徽标（不再误以为数据异常）
+
+### 遵循 CLAUDE.md 第十四节自验证协议
+- 每项：门1 tsc 0 / 门2 build 成功 / 门3 test 170 全绿
+- 阶段2 grep：classifyStock 消费方 6 个达标；auctionPending/truncated 链路完整；残留 conceptGroupOf 仅注释
+- 阶段3 防漏：V12-4 mg 双调用优化为单次；App.tsx classifyStock 匹配为子串误报（确认非独立引用）
+
+---
+
 ## v9.70 — GLM5.2-V11 全部落地：级联根因 + 概念统一 + 因子门控（13/13 指令）(2026-08-07)
 
 > 依据 `022_股票监控项目/GLM5.2建议-v11.txt`（725 行）逐条执行，13 条修改指令全部完成。

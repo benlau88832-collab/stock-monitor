@@ -10,7 +10,8 @@ import type { MainlineGroup } from "../lib/stockToMainline";
 import type { ZTPoolItem, ThemeStock } from "../lib/themeLadder";
 import { pickStocks, type PickList } from "../lib/stockPicker";
 import { decideForStock, type StockVerdict } from "../lib/aiAgent";
-import { conceptGroupOf } from "../lib/conceptGroups";
+// v12-2（P0）：conceptGroupOf 旧路径 → 全站唯一分类器 classifyStock（V12-2）
+import { classifyStock } from "../lib/classifyStock";
 import DisclaimerTag from "./DisclaimerTag";
 
 const roleColor: Record<string, string> = {
@@ -61,12 +62,14 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
     if (!candidate || !rawPool || rawPool.length === 0) return null;
     // 归属该主线的涨停股：hybk 精确/包含 + conceptGroups 折叠大类 + 名称包含（V7-1 复盘补强：
     // 主线名常为概念大类如"AI应用"，hybk 是细分行业名，直接子串匹配会漏 → 折叠后匹配）
+    // v12-2（P0）：改用全站唯一分类器 classifyStock（V11-11 补全 2/4 消费方）——
+    //   上游归"通信"、此处按旧 conceptGroupOf 可能归"光通信" → 匹配不到主线不出标的（V12 报告做漏点）
     const pool: ThemeStock[] = rawPool
       .filter(s => {
         const hybk = String(s.hybk ?? "");
         const name = String(s.n ?? "");
         const g = candidate.mainline;
-        const bg = conceptGroupOf(hybk); // hybk → 用户大类（V7-4 修好的归类）
+        const bg = classifyStock(String(s.c ?? ""), [], hybk).mainline; // 唯一分类器（V12-2）
         return hybk === g || hybk.includes(g) || g.includes(hybk)
           || (bg !== null && (bg === g || bg.includes(g) || g.includes(bg)))
           || name.includes(g) || g.includes(name);

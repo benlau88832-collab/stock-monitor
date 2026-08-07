@@ -4,9 +4,11 @@
 //   再按催化强度 + 受益板块决定是否值得跟踪（对接 decisionBus 消息面证据源）。
 // 数据：kv event_classify:日期（cron 15:40 盘后 LLM 批量分级落库）
 // v11-5（P1）：移回驾驶舱（决策区下方）+ 增强 —— 可点击跳消息面 / 力度★ / 影响方向 / 受益个股数
+// v12-5（P1）：盘中实时化 —— 盘后 kv 未生成时，用本地快讯流（getAllSince 今日）关键词轻量分级，不等盘后 LLM
 // ============================================================
 import { useState, useEffect } from "react";
 import { isLocalServer, kvGet } from "../lib/cloudStore";
+import { getAllSince } from "../lib/dataStore";
 import DisclaimerTag from "./DisclaimerTag";
 
 interface ClassifiedEvent {
@@ -23,6 +25,18 @@ const LEVEL_META: Record<string, { label: string; color: string }> = {
   行业: { label: "🏭 行业级", color: "bg-amber-500/20 text-amber-300 border-amber-500/40" },
   事件: { label: "⚡ 事件级", color: "bg-sky-500/20 text-sky-300 border-sky-500/40" },
 };
+
+// ============== v12-5（P1）：盘中快讯轻量分级（游资视角，不等盘后 LLM） ==============
+// 政策级（红 ★★★）：国家部委 → 全市场；行业级（橙 ★★）：产业链/供需 → 板块；事件级（蓝 ★）：个股公告/业绩
+const POLICY_RE = /国务院|央行|证监会|发改委|财政部|国常会|工信部|商务部|税务总局|金融监管总局|中央|部委|政府工作/;
+const INDUSTRY_RE = /产业链|技术突破|供需|涨价|降价|景气|规划|峰会|出口|产量|开工|招标|落地|试点|方案|产业|行业|政策/;
+const EVENT_RE = /业绩|预增|预减|中标|签订|合同|增持|减持|回购|重组|收购|定增|公告|披露|新品|订单|投产|获批|涨停|异动/;
+function classifyLive(title: string): { level: "政策" | "行业" | "事件"; catalystScore: number } | null {
+  if (POLICY_RE.test(title)) return { level: "政策", catalystScore: 72 };
+  if (INDUSTRY_RE.test(title)) return { level: "行业", catalystScore: 52 };
+  if (EVENT_RE.test(title)) return { level: "事件", catalystScore: 38 };
+  return null;
+}
 
 // v11-5：影响方向推断（利好↑/利空↓/中性）—— 从标题关键词轻量判断（数据无 direction 字段）
 const BULL_RE = /利好|增长|提价|涨价|中标|获批|突破|加速|扩大|支持|加码|回购|增持|落地|提速|超预期/;
@@ -49,6 +63,7 @@ export default function EventClassifyPanel({ onOpenNews }: { onOpenNews?: () => 
     let alive = true;
     (async () => {
       try {
+        // ① 盘后 LLM 分级（kv event_classify:日期）—— 有则用
         for (let i = 0; i < 3; i++) {
           const d = new Date();
           d.setDate(d.getDate() - i);
@@ -59,7 +74,30 @@ export default function EventClassifyPanel({ onOpenNews }: { onOpenNews?: () => 
             return;
           }
         }
-        if (alive) setItems([]);
+        // ② v12-5（P1）：盘中 kv 未生成 → 用今日快讯流轻量分级（不等盘后 15:40）
+        const today = new Date();
+        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const { news } = getAllSince(todayStr);
+        const live: ClassifiedEvent[] = [];
+        for (const n of news) {
+          if (n.isOverseas) continue; // 海外快讯不参与事件分级
+          const cls = classifyLive(n.title ?? "");
+          if (cls) {
+            live.push({
+              title: n.title,
+              level: cls.level,
+              beneficiaries: Array.isArray(n.boards) ? n.boards.slice(0, 3) : [],
+              catalystScore: cls.catalystScore,
+              timeSensitivity: "盘中实时",
+              reason: "盘中快讯轻量分级（关键词匹配，盘后 LLM 分级将覆盖）",
+            });
+            if (live.length >= 18) break; // 最多 18 条
+          }
+        }
+        if (alive) {
+          if (live.length > 0) { setItems(live); setDate(`${todayStr}（盘中实时）`); }
+          else setItems([]);
+        }
       } catch { if (alive) setItems([]); }
     })();
     return () => { alive = false; };

@@ -4,6 +4,8 @@
 //             因为涨停票常因"光通信/AI算力"等小众概念发力，不在行业 top10 内
 
 import { getIndustryByCode } from "./boardMap";
+// v12-3（P0）：全站唯一分类器（V11-11 补全 3/4 消费方）
+import { classifyStock } from "./classifyStock";
 
 export type MatchStatus = "tailwind" | "isolated" | "headwind" | "concept_breakout" | "isolated_bear" | "unknown";
 
@@ -48,7 +50,10 @@ export function matchStockToMainline(
   pct: number,
   boards: BoardLike[],
 ): PositionMatch {
-  const ind = getIndustryByCode(code) ?? null;
+  // v12-3（P0）：改用全站唯一分类器 classifyStock（V11-11 补全 3/4 消费方）——
+  //   旧路径 getIndustryByCode 用申万行业（"电子"），与上游 classifyStock 归类（"芯片"）不一致
+  const cls = classifyStock(code);
+  const ind = cls.mainline !== "其他" ? cls.mainline : getIndustryByCode(code) ?? null;
 
   // 把 boards 转换为 (name → board) 索引，去重（同名按涨幅最高）
   const boardMap = new Map<string, BoardLike>();

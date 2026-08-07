@@ -14,6 +14,8 @@ import { fetchBoardFundFlow, fetchBoardConstituents } from "./api";
 import { isRealConceptBoard } from "./boardTaxonomy";
 import { fetchStocksBoards } from "./stockBoards";
 import { foldConcepts, foldBoardFunds, conceptGroupOf, CONCEPT_GROUPS } from "./conceptGroups";
+// v12-4（P1）：资金匹配统一走全站唯一分类器（与上游分类同口径）
+import { classifyStock } from "./classifyStock";
 
 // v11-12（P0）：LLM 归类硬约束 —— 主线名 MUST 从 conceptGroups 24 大类表选（禁止自创/事件主题）
 const LLM_GROUP_NAMES = CONCEPT_GROUPS.map(g => g.group).join("、");
@@ -317,8 +319,10 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
       // v9.60（V9-D1）：资金来源板块字段缺失 → dataMissing 透传（UI 显示"数据缺失"而非误导 0）
       let mainNet = 0, mainNet5d = 0, boardPct = 0, fundMissing = false, dataMissing = false;
       // v11-8 复查（自验证）：⚡ 事件主线前缀剥掉再匹配资金 —— 否则"⚡2026中报预增"永远匹配失败→fundMissing
+      // v12-4（P1）：资金匹配统一走 classifyStock 折叠（与全站唯一分类器同口径，V12-2/3/4 贯通完成）
       const mlKey = ml.replace(/^⚡/, "");
-      const fb = foldedBoards.get(mlKey) ?? foldedBoards.get(ml);
+      const clsKey = classifyStock(stockCodes[0] ?? "", [], mlKey).mainline; // 主线级分类（用组内首股 hybk 折叠）
+      const fb = foldedBoards.get(clsKey) ?? foldedBoards.get(mlKey) ?? foldedBoards.get(ml);
       if (fb) { mainNet = fb.mainNet; mainNet5d = fb.mainNet5d ?? 0; boardPct = fb.pct; dataMissing = Boolean(fb.dataMissing); }
       if (mainNet === 0 && !llmGroup) {
         for (const b of input.boards) {
@@ -335,8 +339,10 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
       }
       // v9.59（V8-7）：折叠 key 归一化 —— LLM 主线名"人工智能" vs 折叠 key"AI应用" 字面不同
       // → 用 conceptGroups 折叠大类做桥梁，匹配同一大类的板块资金
+      // v12-4（P1）：桥梁统一走 classifyStock（剥 ⚡ 前缀后；事件主线也能找到所属大类资金）
       if (mainNet === 0 && foldedBoards.size > 0) {
-        const mg = conceptGroupOf(mlKey); // v11-8 复查：剥 ⚡ 前缀（事件主线也能找到所属大类资金）
+        const cls = classifyStock(stockCodes[0] ?? "", [], mlKey);
+        const mg = cls.mainline !== "其他" ? cls.mainline : conceptGroupOf(mlKey);
         if (mg) {
           for (const [k, v] of foldedBoards) {
             if (k === mg || (conceptGroupOf(k) ?? k) === mg) {

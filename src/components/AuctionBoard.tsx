@@ -88,6 +88,10 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
                     it.auctionPct >= 0 ? "text-rose-400" : "text-emerald-400"
                   }`}>
                     {it.auctionPct >= 0 ? "+" : ""}{it.auctionPct.toFixed(2)}%
+                    {/* v12-1（P0）：竞价未撮合 → 标注"虚拟参考价"（openPrice=0 用 currentPrice 兜底，非真实开盘） */}
+                    {it.auctionPending && (
+                      <span className="ml-1 rounded bg-amber-500/15 px-1 text-[10px] font-bold text-amber-300" title="集合竞价未撮合（9:15-9:25），涨幅按当前价虚拟参考价计算">竞价中</span>
+                    )}
                   </td>
                   {/* v9.26.14：实时涨幅（当前价 vs 昨收） */}
                   <td className={`px-1 py-0.5 text-right font-mono font-bold ${
