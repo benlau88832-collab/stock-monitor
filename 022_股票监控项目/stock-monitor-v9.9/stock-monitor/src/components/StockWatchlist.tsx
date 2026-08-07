@@ -359,6 +359,12 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
 
   useEffect(() => { refreshStocks(); }, [codes]); // eslint-disable-line
   useEffect(() => { const t = setInterval(refreshStocks, 60000); return () => clearInterval(t); }, [refreshStocks]);
+  // v9.67：AI 助手 addToRadar 加入自选股后 → 自定义事件刷新（AIConsole 与雷达联动）
+  useEffect(() => {
+    const onWatchChanged = () => setCodes(loadWatchlist());
+    window.addEventListener("stock-watchlist-changed", onWatchChanged);
+    return () => window.removeEventListener("stock-watchlist-changed", onWatchChanged);
+  }, []);
 
   // ---- 加载选中个股信息流 ----
   const loadInfo = useCallback(async (code: string) => {

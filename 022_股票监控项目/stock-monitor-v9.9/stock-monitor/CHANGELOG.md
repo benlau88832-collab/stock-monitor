@@ -4,6 +4,28 @@
 
 ---
 
+## v9.68 — AI 一键加入个股雷达 + 开启盯价监控（调研→雷达→监控闭环）(2026-08-07)
+
+> 用户需求：对任意未监控个股，让 AI 助手直接加入个股雷达并开启盯价监控。
+
+### 改动
+- **researchTools.ts** 新增工具 `addToRadar`：写 `localStorage: stock_watchlist`（自选股数组，上限 30，去重）+ `dispatchEvent("stock-watchlist-changed")` 通知已挂载的 StockWatchlist 刷新
+- **StockWatchlist.tsx**：监听 `stock-watchlist-changed` 事件 → `setCodes(loadWatchlist())` 自动刷新（AI 加入后雷达立即显示）
+- **RESEARCH_SYSTEM**：调研完成后引导"先 addToRadar 加入雷达，再 addPriceWatch 开启盯价监控，两步一次完成"
+
+### 效果
+AIConsole 对任意票（含未监控的）：
+```
+你：深度调研 600487 并帮我加入雷达盯价
+AI：...（五段式调研）→ addToRadar(600487) 加入雷达 → addPriceWatch(买入区/止损) 开启监控
+→ 个股雷达 Tab 立即出现该股卡片 + 盯价监控面板同步显示
+```
+
+### 验证
+- 三重验证门：tsc 0 / build 成功 / test 155 全绿
+
+---
+
 ## v9.67-fix — AIConsole 降级排查修复（PayloadTooLarge + 上游超时 + 降级文案 + ctx 名识别）(2026-08-07)
 
 > 用户报：AIConsole 显示"⏸ 本次为规则结果（AI 配额受限）"但工具轨迹显示调了 6 个工具，文案与实际矛盾。

@@ -62,6 +62,27 @@ export function getResearchTools(): AgentTool[] {
       execute: async () => serverGet("/api/watch/list"),
     },
     {
+      name: "addToRadar",
+      description: '把个股加入个股雷达（自选股，上限30）—— 传 {code,name} 如 {"code":"600487","name":"亨通光电"}。与 addPriceWatch 配合：调研完成后先加入雷达再开启盯价监控',
+      kind: "data",
+      execute: async (args: any) => {
+        const code = String(args?.code ?? "").trim();
+        const name = String(args?.name ?? "").trim() || code;
+        if (!/^\d{6}$/.test(code)) return { ok: false, error: "code 必须为 6 位数字" };
+        try {
+          const raw = localStorage.getItem("stock_watchlist");
+          const codes: string[] = raw ? JSON.parse(raw) : [];
+          if (codes.includes(code)) return { ok: true, existed: true, codes };
+          if (codes.length >= 30) return { ok: false, error: "自选股已达上限 30 只，请先删除再添加" };
+          codes.push(code);
+          localStorage.setItem("stock_watchlist", JSON.stringify(codes));
+          // 通知已挂载的 StockWatchlist 刷新（监听自定义事件）
+          window.dispatchEvent(new CustomEvent("stock-watchlist-changed", { detail: { code, name } }));
+          return { ok: true, added: code, name, codes };
+        } catch (e) { return { ok: false, error: "加入雷达失败:" + String(e) }; }
+      },
+    },
+    {
       name: "updatePriceWatch",
       description: '更新/暂停监控 —— 传 {code, status?:"active"|"paused"|"done", buy_low?, buy_high?, stop_loss?, trigger_pct?}',
       kind: "data",
@@ -83,7 +104,8 @@ export const RESEARCH_SYSTEM = `【个股深度调研流程 · stock-deep-resear
 - Phase 2 消息面：researchSearch 查最新研报/公告/新闻 → 机构预期与消息催化
 - Phase 3 行业博弈：researchData/researchSearch 查行业对比/景气/风险 → 行业判断
 - Phase 4 综合评级：汇总前四阶段 → 三档估值（乐观/合理/悲观）→ 合理目标价区间 → 支撑压力位 → 胜率×赔率 → 评级与建议操作
-最后：主动询问是否把结论（买入区/止损位）加入盯价监控（addPriceWatch），并说明可随时 listWatches 查看。`;
+最后：主动询问是否把结论（买入区/止损位）加入盯价监控（addPriceWatch），并说明可随时 listWatches 查看。
+【v9.67 联动】若用户想持续跟踪该股：先 addToRadar 加入个股雷达（自选股），再 addPriceWatch 开启盯价监控（买入区±5%强提示）——两步可一次完成，并在回复中说明已加入。`;
 
 // ============================================================
 // v9.67：调研会话状态（researchCtx）—— 让 AIConsole 拥有真正的多轮上下文
