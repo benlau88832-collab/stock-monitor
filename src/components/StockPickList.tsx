@@ -177,6 +177,9 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
 
   if (!pick || pick.picks.length === 0) return null;
 
+  // v11-7（P2）：降级透明展示 —— 主线强度不足/闸门收紧时，不藏着候选，明示"候选参考（非正式推荐）"
+  const downgraded = (candidate?.strengthScore ?? 0) < 60 || gate?.mode === "low" || gate?.mode === "closed";
+
   return (
     <div className="rounded-xl border border-rose-500/25 bg-rose-950/10 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -184,6 +187,13 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
         <span className="text-base font-black text-rose-200">
           🎯 今日上车标的清单
           <span className="ml-1.5 text-xs text-slate-500 font-normal">主线「{pick.mainline}」{pick.stage} · {pick.ztCount}只涨停 · 最高{pick.height}板</span>
+          {/* v11-7（P2）：强度不足/闸门收紧 → 明示降级（候选仍在，供参考） */}
+          {downgraded && (
+            <span className="ml-1.5 inline-block align-middle rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-bold text-amber-300"
+              title={`主线强度${candidate?.strengthScore ?? "—"}分 / 闸门${gate?.mode ?? "—"}：规则层降级为观望，以下为候选参考（非正式推荐）`}>
+              主线{candidate?.strengthScore ?? "—"}分 · 候选参考（非正式推荐）
+            </span>
+          )}
         </span>
         <div className="flex items-center gap-1">
           {pick.contend && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-bold text-amber-300" title={pick.contend}>⚠ 卡位</span>}

@@ -89,13 +89,16 @@ export function runConsensus(
 
   // ---- ②b 因子健康度（幻方"因子会过期"在线监测接入）----
   // factorLib 滚动 IC 评估出"疑似失效因子"占比高 → 全局下调置信（对"用历史无效信号投票"的惩罚）
-  // v9.57（V8-3）：样本 <30 交易日 → penalty 归零（不因不可靠 IC 扣置信）
+  // v9.57（V8-3）+ v11-9（P0）：样本 <30 交易日 → penalty 归零（注释承诺代码遗漏：
+  //   原代码 samples=null 时绕过保护直接罚分 → 数据积累不足时被"因子失效"误杀封锁）
   let factorHealthPenalty = 0;
-  if (opts?.factorStats && opts.factorStats.total >= 3) {
+  // v11-9：样本不足 → 显式提示（透明告知，但不罚分）
+  if (opts?.factorStats && opts.factorStats.total >= 3 && (opts.factorStats.samples ?? 0) < 30) {
+    evidence.push(`🧪 因子样本仅${opts.factorStats.samples ?? 0}天（<30，不具统计显著性），IC 不下调置信`);
+  }
+  if (opts?.factorStats && opts.factorStats.total >= 3 && (opts.factorStats.samples ?? 0) >= 30) {
     const ratio = opts.factorStats.decayed / opts.factorStats.total;
-    if (opts.factorStats.samples != null && opts.factorStats.samples < 30) {
-      evidence.push(`🧪 因子样本仅${opts.factorStats.samples}天（<30，不具统计显著性），IC 不下调置信`);
-    } else if (ratio >= 0.5) {
+    if (ratio >= 0.5) {
       factorHealthPenalty = 15;
     } else if (ratio >= 0.3) {
       factorHealthPenalty = 8;

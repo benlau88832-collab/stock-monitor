@@ -137,13 +137,20 @@ export default function FiveQBar({ battlePlan, overview }: Props) {
       </div>
 
       {/* 3. 谁是龙头 */}
+      {/* v11-2（P0）：龙头放大 text-lg font-black + 主线名兜底（不再只有"—"）+ 板数/理由 */}
       <div className="rounded-lg border border-white/10 bg-white/5 p-2">
         <div className="text-xs text-slate-500">3️⃣ 谁是龙头</div>
-        <div className="mt-0.5 text-xs font-bold text-slate-100 truncate">
-          {top?.leaders[0]?.name ?? "—"}
-          <span className="text-slate-500 ml-1">{top?.leaders[0]?.code ?? ""}</span>
+        <div className="mt-0.5 text-lg font-black text-amber-200 truncate">
+          {top?.leaders[0]?.name ?? top?.mainline?.slice(0, 4) ?? "—"}
+          <span className="text-xs text-slate-500 ml-1">{top?.leaders[0]?.code ?? ""}</span>
         </div>
-        <div className="text-xs text-slate-500">{top?.leaders[0]?.reason?.slice(0, 12) ?? "梯队数据积累中"}</div>
+        <div className="text-xs text-slate-400">
+          {top?.leaders[0]
+            ? `${top.leaders[0].boardCount ? top.leaders[0].boardCount + "板 · " : ""}${top.leaders[0].reason?.slice(0, 16) ?? ""}`
+            : top?.leaders && top.leaders.length > 0
+            ? `${top.leaders.length}只梯队`
+            : "梯队数据积累中"}
+        </div>
       </div>
 
       {/* 4. 能不能上车 */}

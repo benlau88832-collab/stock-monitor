@@ -159,7 +159,8 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
    最终裁决：{"final":{"action":"可上车|观望|禁止","confidence":0-100,"reason":"≤50字"}}
 5. 最多 5 轮工具调用后必须出最终裁决。
 6. 若用户消息中给了【因子健康度】且失效占比≥30%，你的最终置信度必须扣减（≥50%扣15、≥30%扣8），并在理由里说明。
-7. 【硬约束·v9.57 V8-5】最终裁决的 reason 必须引用至少 2 个具体数值（如"封单1.2亿/成交3亿=40%、主力净流入8000万"），禁止"资金较强/封单坚决"等无数字空话；数字只能来自工具返回，不得编造。`;
+7. 【硬约束·v9.57 V8-5】最终裁决的 reason 必须引用至少 2 个具体数值（如"封单1.2亿/成交3亿=40%、主力净流入8000万"），禁止"资金较强/封单坚决"等无数字空话；数字只能来自工具返回，不得编造。
+8. 【v11-6 P1 主观能动性】如果工具返回的字段有缺失，不要因此拒绝裁决——先调 estimateMissingFields 用已有数据推断缺失值（换手率/晋级率/10日资金），用推断值继续分析，并在 reason 里标注"基于部分数据推断"。`;
 
   const toolByName = new Map(tools.map(t => [t.name, t]));
   let history: string[] = []; // 前几轮的工具调用与结果（回灌给 LLM）
@@ -178,7 +179,8 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
       action, confidence, reason, evidence: agentTrace, rawEvidence: [], critic: null, degraded: false,
       path: agentPath, rounds: llmRounds, toolsCalled: [...calledTools],
     };
-    if (fhReport && fhReport.penalty > 0 && fhReport.total >= 3) {
+    // v9.43：因子健康度强制门控 —— v11-9（P0）：加 samples≥30 门控（样本不足不扣置信，避免数据积累期被"因子失效"误杀）
+    if (fhReport && fhReport.penalty > 0 && fhReport.total >= 3 && (fhReport.window ?? 0) >= 30) {
       const cap = action === "可上车" ? 60 : 65; // 高失效环境可上车置信不超 60
       v = {
         ...v,
@@ -368,7 +370,8 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
 3. 每轮只输出严格JSON之一：
    调用工具：{"calls":[{"tool":"工具名","reason":"为什么查它"}]}
    最终裁决：{"final":{"verdict":"可买|谨慎|回避","reason":"≤40字且必须引用≥1个具体数字（如'主力净流入8000万/封单比40%'），禁止'资金较强'类空话","riskPoints":["风险1","风险2"],"keyLevel":"关键观察点（如：竞价封单>0.8亿且不炸）"}}
-4. 最多 3 轮工具调用后必须出最终裁决。`;
+4. 最多 3 轮工具调用后必须出最终裁决。
+5. 【v11-6 P1】若 getStockFund 返回字段缺失（如换手/10日资金），先调 estimateMissingFields 推断，不要因缺数据拒绝研判，reason 标注"基于部分数据推断"。`;
 
   const toolByName = new Map(tools.map(t => [t.name, t]));
   let history: string[] = [];

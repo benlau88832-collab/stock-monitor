@@ -391,6 +391,8 @@ export function getAgentTools(): AgentTool[] {
       kind: "data",
       execute: async () => evaluateFactorHealth(),
     },
+    // v11-6（P1）：数据缺失主动推断 —— 不要因缺字段拒绝裁决
+    estimateMissingFields,
   ];
   return cachedTools;
 }
@@ -404,8 +406,38 @@ export interface StockToolInput {
   mainline: string; stage: string; boardCount: number;
 }
 
+// ============== v11-6（P1）：数据缺失主动推断工具 ==============
+// 目标：AI 不再因字段缺失"罢工"——用已有数据推断缺失值并在返回中标注"推断"
+const estimateMissingFields: AgentTool = {
+  name: "estimateMissingFields",
+  description: "数据缺失时用已有数据推断缺失字段（不因此拒绝裁决）：传 {turnoverRate?, boardPct?, promotionRate?, ztYesterday?, ztToday?, mainNet5d?, mainNet10d?} —— 换手率缺失用板块涨幅推断(涨>5%≈12%/涨>2%≈8%/其他4%)；晋级率缺失用昨日/今日涨停对比推断；10日资金缺失用5日资金×1.8近似。返回推断值+推断依据（reason 里标注'基于部分数据推断'）",
+  kind: "data",
+  execute: async (args: any) => {
+    const out: Record<string, unknown> = { ...args };
+    const inferred: string[] = [];
+    // 换手率：板块涨幅 + 量价推断（涨>5%+放量≈换手8-15%）
+    if (args.turnoverRate == null && args.boardPct != null) {
+      out.turnoverRate = args.boardPct > 5 ? 12 : args.boardPct > 2 ? 8 : 4;
+      inferred.push(`换手率(板块涨幅${args.boardPct}%推断≈${out.turnoverRate}%)`);
+    }
+    // 晋级率：昨日涨停 → 今日涨停池对比
+    if (args.promotionRate == null && args.ztYesterday != null && args.ztToday != null) {
+      out.promotionRate = args.ztYesterday > 0 ? Math.round((args.ztToday / args.ztYesterday) * 100) / 100 : 0.2;
+      inferred.push(`晋级率(昨日${args.ztYesterday}→今日${args.ztToday}推断≈${out.promotionRate})`);
+    }
+    // 10日资金：5日资金 × 1.8 近似
+    if (args.mainNet10d == null && args.mainNet5d != null) {
+      out.mainNet10d = Math.round(Number(args.mainNet5d) * 1.8);
+      inferred.push(`10日资金(5日×1.8近似≈${out.mainNet10d})`);
+    }
+    return { ...out, inferred, note: "基于部分数据推断（非真实值），仅供参考" };
+  },
+};
+
 export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
   return [
+    // v11-6（P1）：个股 Agent 同样可推断缺失字段
+    estimateMissingFields,
     {
       name: "getStockFund",
       description: "个股资金面：主力净流入(元/占比)/5日/10日/换手/量比（fetchStockOne 实时）",

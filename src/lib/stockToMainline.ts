@@ -13,7 +13,10 @@ import type { ZTPoolItem } from "./themeLadder";
 import { fetchBoardFundFlow, fetchBoardConstituents } from "./api";
 import { isRealConceptBoard } from "./boardTaxonomy";
 import { fetchStocksBoards } from "./stockBoards";
-import { foldConcepts, foldBoardFunds, conceptGroupOf } from "./conceptGroups";
+import { foldConcepts, foldBoardFunds, conceptGroupOf, CONCEPT_GROUPS } from "./conceptGroups";
+
+// v11-12（P0）：LLM 归类硬约束 —— 主线名 MUST 从 conceptGroups 24 大类表选（禁止自创/事件主题）
+const LLM_GROUP_NAMES = CONCEPT_GROUPS.map(g => g.group).join("、");
 
 // v9.60（V9-D2）：Math.max(...空数组) 返回 -Infinity → 统一防空纯函数（红线 #6）
 // 为什么：height 为 -Infinity 会污染下游所有用到 height 的强度分/阶段判断。
@@ -173,6 +176,13 @@ export async function classifyStocksToMainlines(input: ClassifyInput): Promise<C
    归类必须优先参考 concepts：比如 concepts=["通信","华为"] 就归"通信"，
    不要只看 hybk 行业名。concepts 为空时再按名称+hybk 判断。
 
+🔒 归类纪律（v11-12 MUST 遵守，最高优先）：
+1. 每条主线名 MUST 从以下大类中选，禁止自创：${LLM_GROUP_NAMES}
+2. 细分概念折叠："光通信/CPO"→通信；"光模块"→通信；"液冷"→算力；"AI应用"→AI应用；"国产芯片/半导体"→芯片
+3. 禁止用事件主题做主线名（"2026中报预增""业绩预增"等 → 归到该股所属行业大类，绝不当板块主线）
+4. 一只股只归一条主线（选最匹配的大类）
+5. 如果无法归入任何大类 → 输出 "其他"
+
 输入涨停股（代码/名称/申万行业/连板数/涨幅/概念归属）：
 ${JSON.stringify(pool)}
 
@@ -213,7 +223,39 @@ ${JSON.stringify(pool)}
 }
 
 /** v9.26.15：LLM 归类结果 + 概念聚合合并（LLM 只处理前 30 只，其余涨停用概念补齐防漏主线） */
+// v11-8（P0）：LLM 输出后统一折叠 —— 概念折叠（光通信/CPO→通信）+ 事件主题过滤（⚡前缀标记）
+// 事件主题关键词：预增/预减/年报/季报/业绩/中报/增持/减持/重组/中标（不删除，标记为事件主线）
+const EVENT_MAINLINE_RE = /预增|预减|年报|季报|业绩|中报|增持|减持|重组|中标|并购|回购/;
+function foldLLMResult(parsedResult: ClassifyResult): ClassifyResult {
+  // ① stockMap 折叠：每只股的 mainline 折叠到大类；事件主题 → ⚡ 前缀
+  const stockMap = new Map(parsedResult.stockMap);
+  for (const [code, s] of stockMap) {
+    let ml = s.mainline ?? "";
+    const folded = conceptGroupOf(ml);
+    if (folded) ml = folded;
+    if (EVENT_MAINLINE_RE.test(ml) && !ml.startsWith("⚡")) ml = `⚡${ml}`;
+    if (ml !== s.mainline) stockMap.set(code, { ...s, mainline: ml });
+  }
+  // ② groups 折叠 + 同名合并（ztCount/leaders 合并）
+  const foldedGroups = new Map<string, MainlineGroup>();
+  for (const g of parsedResult.groups) {
+    let name = conceptGroupOf(g.mainline) ?? g.mainline;
+    if (EVENT_MAINLINE_RE.test(name) && !name.startsWith("⚡")) name = `⚡${name}`;
+    const existing = foldedGroups.get(name);
+    if (existing) {
+      existing.ztCount = (existing.ztCount ?? 0) + (g.ztCount ?? 0);
+      existing.leaders = [...(existing.leaders ?? []), ...(g.leaders ?? [])];
+      if (!existing.logic && g.logic) existing.logic = g.logic;
+    } else {
+      foldedGroups.set(name, { ...g, mainline: name });
+    }
+  }
+  return { ...parsedResult, stockMap, groups: [...foldedGroups.values()] };
+}
 async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: ClassifyInput): Promise<ClassifyResult> {
+  // v11-8（P0）：LLM 主线名统一折叠 + 事件主题过滤 —— 光通信/CPO→通信、2026中报预增→⚡事件
+  //   （原 LLM 输出直接原样使用，foldConcepts 只用于概念兜底路径 → "通信"与"光通信/CPO"并存两条主线）
+  parsedResult = foldLLMResult(parsedResult);
   const llmCodes = new Set(parsedResult.stockMap.keys());
   // 找出 LLM 未覆盖的涨停股
   const uncovered = input.rawPool.filter(p => !llmCodes.has(String(p.c ?? "")));
@@ -274,11 +316,13 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
       // v9.56（V8-6）：全部失败后加 hybk 兜底 + fundMissing 标记（不再静默假 0）
       // v9.60（V9-D1）：资金来源板块字段缺失 → dataMissing 透传（UI 显示"数据缺失"而非误导 0）
       let mainNet = 0, mainNet5d = 0, boardPct = 0, fundMissing = false, dataMissing = false;
-      const fb = foldedBoards.get(ml);
+      // v11-8 复查（自验证）：⚡ 事件主线前缀剥掉再匹配资金 —— 否则"⚡2026中报预增"永远匹配失败→fundMissing
+      const mlKey = ml.replace(/^⚡/, "");
+      const fb = foldedBoards.get(mlKey) ?? foldedBoards.get(ml);
       if (fb) { mainNet = fb.mainNet; mainNet5d = fb.mainNet5d ?? 0; boardPct = fb.pct; dataMissing = Boolean(fb.dataMissing); }
       if (mainNet === 0 && !llmGroup) {
         for (const b of input.boards) {
-          if (ml.includes(b.name) || b.name.includes(ml)) {
+          if (mlKey.includes(b.name) || b.name.includes(mlKey)) {
             mainNet = b.mainNet; mainNet5d = b.mainNet5d ?? 0; boardPct = b.pct;
             dataMissing = Boolean(b.dataMissing);
             break;
@@ -292,7 +336,7 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
       // v9.59（V8-7）：折叠 key 归一化 —— LLM 主线名"人工智能" vs 折叠 key"AI应用" 字面不同
       // → 用 conceptGroups 折叠大类做桥梁，匹配同一大类的板块资金
       if (mainNet === 0 && foldedBoards.size > 0) {
-        const mg = conceptGroupOf(ml);
+        const mg = conceptGroupOf(mlKey); // v11-8 复查：剥 ⚡ 前缀（事件主线也能找到所属大类资金）
         if (mg) {
           for (const [k, v] of foldedBoards) {
             if (k === mg || (conceptGroupOf(k) ?? k) === mg) {

@@ -1,5 +1,7 @@
 // 题材梯队纯函数：输入涨停池数组，输出按行业(hybk)分组的题材梯队
 // 为什么是纯函数：不碰 DOM / localStorage / 网络，便于单测与多处复用
+// v11-11（P0）：分组改用全站唯一分类器 classifyStock（hybk 折叠到大类）
+import { classifyStock } from "./classifyStock";
 
 /** 涨停池单股原始数据（与 api.ts ZTPool 字段对齐） */
 export interface ZTPoolItem {
@@ -67,10 +69,10 @@ function fmtFbt(t: number): string {
 export function buildThemeLadder(pool: ZTPoolItem[]): ThemeGroup[] {
   if (!pool || pool.length === 0) return [];
 
-  // 按 hybk 分组
+  // v11-11（P0）：按 classifyStock 唯一分类器分组（hybk 折叠到大类：通信设备→通信）
   const groupMap = new Map<string, ZTPoolItem[]>();
   for (const item of pool) {
-    const key = item.hybk || "其他";
+    const key = classifyStock(String(item.c ?? ""), [], item.hybk).mainline;
     const arr = groupMap.get(key) ?? [];
     arr.push(item);
     groupMap.set(key, arr);

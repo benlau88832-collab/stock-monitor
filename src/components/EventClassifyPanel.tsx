@@ -3,6 +3,7 @@
 // 游资逻辑：同一事件 → 判断是"政策级(全市场)/行业级(产业链)/事件级(个股)"，
 //   再按催化强度 + 受益板块决定是否值得跟踪（对接 decisionBus 消息面证据源）。
 // 数据：kv event_classify:日期（cron 15:40 盘后 LLM 批量分级落库）
+// v11-5（P1）：移回驾驶舱（决策区下方）+ 增强 —— 可点击跳消息面 / 力度★ / 影响方向 / 受益个股数
 // ============================================================
 import { useState, useEffect } from "react";
 import { isLocalServer, kvGet } from "../lib/cloudStore";
@@ -18,17 +19,28 @@ interface ClassifiedEvent {
 }
 
 const LEVEL_META: Record<string, { label: string; color: string }> = {
-  政策: { label: "🏛 政策级", color: "bg-rose-500/20 text-rose-300 border-rose-500/40" },
+  政策: { label: "🏛️ 政策级", color: "bg-rose-500/20 text-rose-300 border-rose-500/40" },
   行业: { label: "🏭 行业级", color: "bg-amber-500/20 text-amber-300 border-amber-500/40" },
-  事件: { label: "📌 事件级", color: "bg-sky-500/20 text-sky-300 border-sky-500/40" },
+  事件: { label: "⚡ 事件级", color: "bg-sky-500/20 text-sky-300 border-sky-500/40" },
 };
+
+// v11-5：影响方向推断（利好↑/利空↓/中性）—— 从标题关键词轻量判断（数据无 direction 字段）
+const BULL_RE = /利好|增长|提价|涨价|中标|获批|突破|加速|扩大|支持|加码|回购|增持|落地|提速|超预期/;
+const BEAR_RE = /利空|下跌|下滑|亏损|减持|处罚|立案|退市|下调|终止|延期|不及预期|暴雷/;
+function directionOf(title: string): "利好" | "利空" | "中性" {
+  if (BEAR_RE.test(title)) return "利空";
+  if (BULL_RE.test(title)) return "利好";
+  return "中性";
+}
 
 function ScoreBadge({ s }: { s: number }) {
   const cls = s >= 65 ? "bg-rose-500/25 text-rose-300" : s >= 40 ? "bg-amber-500/25 text-amber-300" : "bg-slate-500/25 text-slate-400";
-  return <span className={`rounded px-1 py-0.5 text-[10px] font-bold ${cls}`}>{s}分</span>;
+  // v11-5：力度 ★（分数 → 1-3★）
+  const stars = s >= 65 ? "★★★" : s >= 40 ? "★★" : "★";
+  return <span className={`rounded px-1 py-0.5 text-[10px] font-bold ${cls}`} title={`催化 ${s} 分`}>{stars}</span>;
 }
 
-export default function EventClassifyPanel() {
+export default function EventClassifyPanel({ onOpenNews }: { onOpenNews?: () => void }) {
   const [items, setItems] = useState<ClassifiedEvent[] | null>(null);
   const [date, setDate] = useState("");
 
@@ -78,17 +90,32 @@ export default function EventClassifyPanel() {
               <div className={`inline-block rounded border px-1.5 py-0.5 text-[10px] font-bold ${meta.color}`}>
                 {meta.label}（{list.length}）
               </div>
-              {list.slice(0, 6).map((e, i) => (
-                <div key={i} className="text-[10px] leading-snug border-b border-white/5 pb-1 last:border-0">
+              {list.slice(0, 6).map((e, i) => {
+                const dir = directionOf(e.title);
+                const dirCls = dir === "利好" ? "text-emerald-300" : dir === "利空" ? "text-rose-300" : "text-slate-500";
+                return (
+                <div key={i} className="text-xs leading-snug border-b border-white/5 pb-1 last:border-0">
                   <div className="flex items-start justify-between gap-1">
-                    <span className="text-slate-300 flex-1">{e.title.length > 34 ? e.title.slice(0, 34) + "…" : e.title}</span>
+                    {/* v11-5：事件可点击 → 跳消息面 Tab 查看详情 */}
+                    <span
+                      className={`text-slate-300 flex-1 cursor-pointer hover:text-slate-100 ${onOpenNews ? "" : ""}`}
+                      title={`${e.timeSensitivity ?? ""} · ${e.reason ?? ""}${onOpenNews ? "\n点击跳转消息面查看详情" : ""}`}
+                      onClick={onOpenNews}
+                    >
+                      {e.title.length > 34 ? e.title.slice(0, 34) + "…" : e.title}
+                    </span>
+                    <span className={`shrink-0 text-[10px] font-bold ${dirCls}`}>{dir === "利好" ? "↑" : dir === "利空" ? "↓" : "→"}</span>
                     <ScoreBadge s={e.catalystScore} />
                   </div>
                   {e.beneficiaries && e.beneficiaries.length > 0 && (
-                    <div className="text-xs text-slate-500 mt-0.5">→ {e.beneficiaries.slice(0, 3).join(" / ")}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      → {e.beneficiaries.slice(0, 3).join(" / ")}
+                      <span className="text-slate-600">（{e.beneficiaries.length} 受益）</span>
+                    </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           );
         })}

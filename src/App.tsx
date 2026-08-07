@@ -20,8 +20,7 @@ import Dashboard, { type WatchStockBrief } from "./components/Dashboard";
 import ThemeLadder from "./components/ThemeLadder";
 import CommodityChain from "./components/CommodityChain";
 import MarginPanel from "./components/MarginPanel";
-// v9.49（N1）：事件三级研判（政策/行业/事件）从驾驶舱移到消息面 Tab（消息研判归消息面）
-import EventClassifyPanel from "./components/EventClassifyPanel";
+// v11-5（P1）：EventClassifyPanel 已移回驾驶舱（Dashboard 内渲染），App 不再直接引用
 import { type BattlePlanData } from "./components/BattlePlan";
 import { detectHighLowSwitch, type ZTPoolItem } from "./lib/themeLadder";
 import { classifyBoard } from "./lib/boardTaxonomy";
@@ -1288,8 +1287,7 @@ export default function App() {
                 } : null}
               />
             </div>
-            {/* v9.49（N1）：事件三级研判（政策/行业/事件 + 受益板块）—— 消息研判归消息面 */}
-            <EventClassifyPanel />
+            {/* v9.49（N1）：事件三级研判 —— v11-5（P1）已移回驾驶舱决策区下方（Dashboard 内渲染） */}
           </Suspense>
         )}
       </main>

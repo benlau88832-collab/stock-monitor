@@ -66,58 +66,16 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
     );
   }
 
-  // SVG 尺寸
-  const w = 920, h = 360, padL = 50, padR = 140, padT = 12, padB = 30;
-  // y 范围：取流入流出绝对值最大者 ± 一档 padding
-  const maxAbs = Math.max(
-    inflow[0]?.mainNet ? Math.abs(toYi(inflow[0].mainNet)) : 0,
-    outflow[0]?.mainNet ? Math.abs(toYi(outflow[0].mainNet)) : 0,
-    0.01,
-  );
-  const yMax = maxAbs * 1.15;
-  const yMin = -maxAbs * 1.15;
-  const yRange = yMax - yMin;
-  const xOf = (m: number) => padL + (m / 270) * (w - padL - padR); // 0..270 分钟 → padL..w-padR
-  const yOf = (yi: number) => h - padB - ((yi - yMin) / yRange) * (h - padT - padB);
-  const y0 = yOf(0);
-  const xEnd = xOf(asOfMinutes);
-
-  /** 渲染单条行业线：起点 (0, 0)，终点 (asOfMinutes, mainNet 亿) */
-  function renderLine(name: string, valYi: number, color: string) {
-    const x0 = xOf(0);
-    const y0p = yOf(0);
-    const yEnd = yOf(valYi);
-    // 平滑曲线：用三次贝塞尔，模拟分时的"累积过程"（前慢后快 / 前快后慢的轻微弧度）
-    const cx = (x0 + xEnd) / 2;
-    const path = valYi >= 0
-      ? `M ${x0} ${y0p} C ${cx} ${y0p} ${cx} ${yEnd} ${xEnd} ${yEnd}`
-      : `M ${x0} ${y0p} C ${cx} ${y0p} ${cx} ${yEnd} ${xEnd} ${yEnd}`;
-    return (
-      <g key={name}>
-        <path d={path} fill="none" stroke={color} strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
-      </g>
-    );
-  }
-
-  // 标签定位：按末端 y 排序后错位防重叠（与原版一致）
-  const allLabel = [
-    ...inflow.map((b, i) => ({ name: b.name, valYi: toYi(b.mainNet), isInflow: true, idx: i })),
-    ...outflow.map((b, i) => ({ name: b.name, valYi: toYi(b.mainNet), isInflow: false, idx: i })),
-  ].sort((a, b) => a.valYi - b.valYi); // 从流出（底）到流入（顶）
-  const labelGap = 16;
-  for (let i = 1; i < allLabel.length; i++) {
-    const prev = yOf(allLabel[i - 1].valYi);
-    const cur = yOf(allLabel[i].valYi);
-    if (cur - prev < labelGap) {
-      // 上移上一个（或下移当前）—— 通过微调 valYi 等价下移当前
-      allLabel[i].valYi = allLabel[i - 1].valYi - labelGap * (yRange / (h - padT - padB));
-    }
-  }
-  // clamp 到绘图区
-  for (const lb of allLabel) {
-    if (lb.valYi > yMax * 0.95) lb.valYi = yMax * 0.95;
-    if (lb.valYi < yMin * 0.95) lb.valYi = yMin * 0.95;
-  }
+  // ============== v11-10（P1）：横向条形图（替换伪分时曲线） ==============
+  // 原实现：30 条线全从 (09:30,0) 扇形展开，视觉错位混乱；且是插值伪曲线
+  // 新实现：0 基准线居中，流入行业红色向右伸、流出行业绿色向左伸，每行行业名+金额
+  // 布局：SVG 单列条形，maxAbs 归一化条长；行高 24px；行业多 → 外层滚动
+  const rows = [...inflow.map(b => ({ b, isIn: true })), ...outflow.map(b => ({ b, isIn: false }))];
+  const rowH = 24;
+  const svgH = Math.min(rows.length, 15) * rowH + 24; // 最多显示 15 行，其余滚动
+  const labelW = 64, gapW = 6, valW = 60, barMaxW = 320;
+  const x0 = labelW + barMaxW * 0.18; // 0 基准线位置（左侧留行业名+少量右伸空间）
+  const maxAbsY = Math.max(...rows.map(r => Math.abs(toYi(r.b.mainNet))), 0.01);
 
   return (
     <div className="rounded-xl border border-rose-500/20 bg-gradient-to-br from-black/40 to-rose-950/5 p-3 space-y-2">
@@ -127,57 +85,37 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
           <span className="text-rose-400">● 流入</span>
           <span className="text-emerald-400">● 流出</span>
           <span>· 截至 {minutesToLabel(asOfMinutes)} · {refreshSec}s 刷新</span>
-          {/* v9.54（V7-14）：数据诚实标注 —— 非真实分时，单点值插值示意 */}
-          <span className="rounded bg-slate-500/15 px-1.5 py-0.5 font-bold text-amber-300/90" title="受东财 push2his 持续 ban 影响，本图为当日累计净流入单点插值示意，非真实分时资金流；待真实分钟源恢复后自动替换">⚠ 示意曲线（非真实分时）</span>
+          <span className="rounded bg-slate-500/15 px-1.5 py-0.5 font-bold text-amber-300/90" title="当日累计主力净流入（单日快照），非分时曲线">当日累计净流入</span>
         </div>
       </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="w-full">
-        {/* 0 基准线 */}
-        <line x1={padL} y1={y0} x2={w - padR} y2={y0} stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeDasharray="4 3" />
-        {/* y 轴标签（亿） */}
-        {[yMax, yMax / 2, 0, yMin / 2, yMin].map((v, i) => (
-          <text key={i} x={padL - 4} y={yOf(v) + 3} textAnchor="end" fill="rgba(148,163,184,0.7)" fontSize="10">
-            {v >= 0 ? "+" : ""}{v.toFixed(1)}亿
-          </text>
-        ))}
-        {/* x 轴时间标签 */}
-        {[
-          { m: 0, label: "09:30" },
-          { m: 60, label: "10:30" },
-          { m: 120, label: "11:30" },
-          { m: 150, label: "13:00" },
-          { m: 210, label: "14:30" },
-          { m: 270, label: "15:00" },
-        ].filter((_, i) => i % 1 === 0).map(t => (
-          <text key={t.label} x={xOf(t.m)} y={h - 8} textAnchor="middle" fill="rgba(148,163,184,0.7)" fontSize="10">
-            {t.label}
-          </text>
-        ))}
-        {/* 流入曲线（红） */}
-        {inflow.map((b, i) => renderLine(b.name, toYi(b.mainNet), inflowColors[i % inflowColors.length]))}
-        {/* 流出曲线（绿） */}
-        {outflow.map((b, i) => renderLine(b.name, toYi(b.mainNet), outflowColors[i % outflowColors.length]))}
-        {/* 标签（末端 y 错位防重叠） */}
-        {allLabel.map((lb) => {
-          const raw = lb.isInflow
-            ? toYi(inflow[lb.idx].mainNet)
-            : toYi(outflow[lb.idx].mainNet);
-          const y = yOf(lb.valYi);
-          const color = lb.isInflow ? "#f43f5e" : "#10b981";
-          const textColor = lb.isInflow ? "#fca5a5" : "#86efac";
-          return (
-            <g key={`label-${lb.name}`}>
-              <line x1={xEnd} y1={yOf(raw)} x2={xEnd + 6} y2={y} stroke={color} strokeWidth="0.6" strokeDasharray="2 2" opacity="0.6" />
-              <text x={xEnd + 12} y={y + 3} fontSize="10" fontWeight="600" fill={textColor}>
-                {lb.name}
-              </text>
-              <text x={xEnd + 12} y={y + 16} fontSize="9" fill={textColor} opacity="0.75">
-                {raw >= 0 ? "+" : ""}{raw.toFixed(2)}亿
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+      {/* 横向条形图（滚动区，最多展示 15 行） */}
+      <div className="max-h-[400px] overflow-y-auto pr-1">
+        <svg viewBox={`0 0 ${labelW + barMaxW + valW} ${svgH}`} className="w-full" role="img" aria-label="行业资金流向横向条形图，红色流入右伸、绿色流出左伸">
+          {/* 0 基准线 */}
+          <line x1={x0} y1={8} x2={x0} y2={svgH - 8} stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeDasharray="4 3" />
+          {rows.map(({ b, isIn }, i) => {
+            const valYi = toYi(b.mainNet);
+            const len = Math.max(3, Math.abs(valYi) / maxAbsY * barMaxW * 0.8);
+            const y = 14 + i * rowH;
+            const barX = isIn ? x0 + 2 : x0 - 2 - len;
+            const color = isIn ? "#f43f5e" : "#10b981";
+            const textColor = isIn ? "#fca5a5" : "#86efac";
+            return (
+              <g key={b.code}>
+                {/* 行业名 */}
+                <text x={x0 - gapW} y={y + 8} textAnchor="end" fontSize="11" fill="rgba(148,163,184,0.9)">{b.name.slice(0, 6)}</text>
+                {/* 条形（流入红右伸 / 流出绿左伸） */}
+                <rect x={barX} y={y} width={len} height={10} rx={2} fill={color} opacity={0.75} />
+                {/* 金额 */}
+                <text x={isIn ? x0 + 2 + len + 5 : x0 - 2 - len - 5} y={y + 8}
+                  fontSize="10" fontWeight="600" fill={textColor} textAnchor={isIn ? "start" : "end"}>
+                  {valYi >= 0 ? "+" : ""}{valYi.toFixed(1)}亿
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
       {/* 下方明细（流入榜 + 流出榜） */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
         <div>
@@ -231,14 +169,14 @@ function streakBadge(s: FundStreak | undefined, side: "inflow" | "outflow") {
   if (!s) return null;
   // 切换信号（无论方向，最值得注意）
   if (side === "outflow" && s.switchedFromHere)
-    return <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300" title={`昨日流入→今日流出（切换信号）`}>⚠切换</span>;
+    return <span className="rounded bg-amber-500/20 px-1 text-xs font-bold text-amber-300" title={`昨日流入→今日流出（切换信号）`}>⚠切换</span>;
   if (side === "inflow" && s.switchedToHere)
-    return <span className="rounded bg-sky-500/20 px-1 text-[9px] font-bold text-sky-300" title={`昨日流出→今日流入（资金进场）`}>↗进场</span>;
+    return <span className="rounded bg-sky-500/20 px-1 text-xs font-bold text-sky-300" title={`昨日流出→今日流入（资金进场）`}>↗进场</span>;
   // 连续流入≥3 天（机构建仓信号）
   if (side === "inflow" && s.consecutiveInflowDays >= 3)
-    return <span className="rounded bg-rose-500/20 px-1 text-[9px] font-bold text-rose-300" title={`连续${s.consecutiveInflowDays}日主力净流入`}>🔥{s.consecutiveInflowDays}日</span>;
+    return <span className="rounded bg-rose-500/20 px-1 text-xs font-bold text-rose-300" title={`连续${s.consecutiveInflowDays}日主力净流入`}>🔥{s.consecutiveInflowDays}日</span>;
   // 连续流出≥3 天
   if (side === "outflow" && s.consecutiveInflowDays <= -3)
-    return <span className="rounded bg-emerald-500/20 px-1 text-[9px] font-bold text-emerald-300" title={`连续${-s.consecutiveInflowDays}日主力净流出`}>❄{-s.consecutiveInflowDays}日</span>;
+    return <span className="rounded bg-emerald-500/20 px-1 text-xs font-bold text-emerald-300" title={`连续${-s.consecutiveInflowDays}日主力净流出`}>❄{-s.consecutiveInflowDays}日</span>;
   return null;
 }

@@ -88,11 +88,20 @@ describe("decisionBus 因子健康度（v9.39 幻方闭环）", () => {
       mk("龙虎榜交叉", "可上车", 80, 0.9),
     ];
     const base = runConsensus(srcs);
-    const penalized = runConsensus(srcs, { factorStats: { decayed: 6, total: 10 } });
+    // v11-9（P0）：samples≥30 才触发因子罚分（样本不足不误杀）—— 传 samples:30 模拟成熟样本
+    const penalized = runConsensus(srcs, { factorStats: { decayed: 6, total: 10, samples: 30 } });
     // 原始置信 100（全票一致）→ 罚 15 → clamp 到 85；base 无罚时也被 clamp 到 95
     expect(penalized.confidence).toBe(85);
     expect(penalized.confidence).toBeLessThan(base.confidence);
     expect(penalized.evidence.some(e => e.includes("因子健康度"))).toBe(true);
+  });
+
+  it("v11-9：样本<30 → 不罚分（数据积累期不被'因子失效'误杀）", () => {
+    const srcs = [mk("准入闸", "可上车", 90, 1.0), mk("市场状态", "可上车", 85, 1.0)];
+    const base = runConsensus(srcs);
+    const penalized = runConsensus(srcs, { factorStats: { decayed: 9, total: 10, samples: 10 } });
+    expect(penalized.confidence).toBe(base.confidence);
+    expect(penalized.evidence.some(e => e.includes("不具统计显著性"))).toBe(true);
   });
 
   it("失效因子占比<30% → 不降置信", () => {

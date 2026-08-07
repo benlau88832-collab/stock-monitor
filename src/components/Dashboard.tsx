@@ -52,7 +52,9 @@ import WeeklyCoach from "./WeeklyCoach";
 import BattlePlan, { type BattlePlanData } from "./BattlePlan";
 // v9.52（V7-3）：今日上车标的清单（决策区下方、BattlePlan 之后）
 import StockPickList from "./StockPickList";
-import GlobalSignals from "./GlobalSignals";
+// v11-4（P1）：GlobalSignals 移出驾驶舱 → fundline Tab"🌐外围信号"（App.tsx 已渲染，此处不再 import）
+// v11-5（P1）：事件三级研判回驾驶舱
+import EventClassifyPanel from "./EventClassifyPanel";
 import { fmtMoney, fmtPct, pctColor, localDateStrOffset } from "../lib/format";
 import { loadIntradaySeries, computeMomentum, suggestPosition } from "../lib/sentimentStore";
 import { buildThemeLadder, type ZTPoolItem } from "../lib/themeLadder";
@@ -580,9 +582,11 @@ export default function Dashboard({
 
   // v9.38（V3-2/3）：Agent 深审 —— v9.39 起自动主导（5 分钟节流）+ 保留手动按钮
   // v9.41（V4-E）：覆盖 Top-3 主线（每条一个 AI 裁决，共享节流）
-  const [agentResults, setAgentResults] = useState<Array<{ mainline: string; verdict: AgentVerdict }>>([]);
+  const [agentResults, setAgentResults] = useState<Array<{ mainline: string; verdict: AgentVerdict; snap: { strengthScore: number; ztCount: number } }>>([]);
   const [agentLoading, setAgentLoading] = useState(false);
   const agentLastRunRef = useRef(0); // 自动触发节流（5 分钟）
+  // v11-3（P0）：上次裁决 action（变化提示用）—— ref 在 setAgentResults 前存旧值
+  const lastActionRef = useRef<string | null>(null);
   const runAgent = async (auto = false) => {
     // v9.45（V5-1）：自动触发只覆盖 Top-1（最强主线，把单周期 ~18 次调用降到 ~6）；
     // 手动按钮才覆盖 Top-3 全量
@@ -593,10 +597,20 @@ export default function Dashboard({
       const now = Date.now();
       if (now - agentLastRunRef.current < 5 * 60 * 1000) return;
       agentLastRunRef.current = now;
+      // v11-3（P0）：数据未显著变化时复用上次裁决（防前后矛盾）
+      // 判据：强度分变化 <10 且 涨停数变化 <3 → 保持上次结果，不重跑 Agent
+      if (agentResults.length > 0) {
+        const last = agentResults[0];
+        const top0 = cands[0];
+        const scoreDelta = Math.abs((top0.strengthScore ?? 0) - (last.snap?.strengthScore ?? 0));
+        const ztDelta = Math.abs((top0.ztCount ?? 0) - (last.snap?.ztCount ?? 0));
+        if (scoreDelta < 10 && ztDelta < 3) return;
+      }
     }
     setAgentLoading(true);
     if (!auto) setAgentResults([]);
-    const results: Array<{ mainline: string; verdict: AgentVerdict }> = [];
+    const prevAction = agentResults[0]?.verdict.action ?? null;
+    const results: Array<{ mainline: string; verdict: AgentVerdict; snap: { strengthScore: number; ztCount: number } }> = [];
     for (const top of cands) {
       try {
         const r = await decideForMainline(
@@ -605,9 +619,10 @@ export default function Dashboard({
           // v9.40（V4-D）：默认开 Critic 挑刺；自洽投票默认关省配额
           { useCritic: true, selfConsistency: false },
         );
-        results.push({ mainline: top.mainline, verdict: r });
+        results.push({ mainline: top.mainline, verdict: r, snap: { strengthScore: top.strengthScore ?? 0, ztCount: top.ztCount ?? 0 } });
       } catch { /* 单条失败不影响其他 */ }
     }
+    lastActionRef.current = results[0]?.verdict.action ?? prevAction;
     setAgentResults(results);
     setAgentLoading(false);
   };
@@ -852,6 +867,8 @@ export default function Dashboard({
           agent={agentResults[0]?.verdict ?? null}
           signalGates={signalGates}
           factorStats={factorStats ?? undefined}
+          // v11-3（P0）：上次裁决 action（变化提示用）
+          prevAction={lastActionRef.current}
         />
         {/* v10-3（P0）：选股清单紧贴裁决 —— "可上车→买这些"一气呵成，中间不插 BattlePlan/LimitTempBar */}
         <StockPickList
@@ -864,6 +881,8 @@ export default function Dashboard({
           }))}
           gate={battlePlan?.gate ?? null}
         />
+        {/* v11-5（P1）：事件三级研判移回驾驶舱（决策区下方，裁决→选股→事件一气呵成） */}
+        <EventClassifyPanel onOpenNews={() => onSwitchTab?.("news")} />
         {/* v9.38（V3-2/3）：Agent 手动重审按钮（自动已每5分钟跑，手动可即时刷新） */}
         <div className="flex items-center gap-2">
           <button onClick={() => runAgent(false)} disabled={agentLoading}
@@ -940,7 +959,7 @@ export default function Dashboard({
           <LadderMini overview={overview} onSwitchTab={() => onSwitchTab?.("dragon")} />
           <Playbook sentiment={overview?.sentiment} limitUpCount={overview?.limitPool?.limitUpCount}
             blastedRate={overview?.limitPool?.blastedRate} overview={overview} globalData={globalData} mainline={mainline} />
-          {globalData && <GlobalSignals data={globalData} loading={loading} />}
+          {/* v11-4（P1）：GlobalSignals 已移出驾驶舱（fundline Tab"🌐外围信号"已有，此处不再重复渲染） */}
           <InstitutionFund />
           <LadderPulse overview={overview} />
           <WeeklyCoach />

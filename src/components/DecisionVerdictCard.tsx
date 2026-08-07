@@ -21,9 +21,11 @@ interface Props {
   factorStats?: { decayed: number; total: number; samples?: number | null };
   /** v9.39：Agent 裁决（LLM 工具调研结果，有则置顶为主结论） */
   agent?: AgentVerdict | null;
+  /** v11-3（P0）：上次裁决 action（裁决变化时显示"与上次不同"，让用户知道变化是数据驱动的） */
+  prevAction?: string | null;
 }
 
-export default function DecisionVerdictCard({ mainline = "—", sources = [], signalGates = [], factorStats, agent = null }: Props) {
+export default function DecisionVerdictCard({ mainline = "—", sources = [], signalGates = [], factorStats, agent = null, prevAction = null }: Props) {
   const [showEvidence, setShowEvidence] = useState(false);
   const verdict: DecisionVerdict | null = useMemo(() => {
     if (sources.length === 0) return null;
@@ -129,6 +131,13 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
         )}
       </div>
 
+      {/* v11-3（P0）：与上次裁决不同 → 显式提示（变化是数据驱动而非随机） */}
+      {prevAction && mainAction && prevAction !== mainAction && (
+        <div className="mt-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs font-bold text-amber-300">
+          ⚠ 与上次裁决不同（上次={prevAction}）—— 数据变化导致，非随机
+        </div>
+      )}
+
       {/* V4-C：AI-规则分歧显式告警（不静默覆盖） */}
       {aiRuleDivergent && (
         <div className="mt-1.5 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs font-bold text-rose-300">
@@ -151,6 +160,12 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
         <div className="mt-2 space-y-1">
           {/* V10-1：AI 理由 text-[12px] → text-base leading-relaxed */}
           <div className="text-base leading-relaxed text-amber-200/90">💬 {aiVerdict.reason || "（AI 未给出理由）"}</div>
+          {/* v11-6（P1）：裁决基于部分推断数据 → 透明告知 */}
+          {aiVerdict.reason && /基于部分(数据|推断)|推断[（(]/.test(aiVerdict.reason) && (
+            <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs font-bold text-amber-300">
+              ⚠ 基于部分推断数据（换手率/晋级率等为推断值，非真实落库），仅供参考
+            </div>
+          )}
           {aiVerdict.critic && (
             <div className="rounded border border-rose-500/20 bg-rose-500/5 px-2 py-1 text-xs text-rose-300/80">
               {aiVerdict.critic}

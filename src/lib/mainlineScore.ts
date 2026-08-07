@@ -97,13 +97,19 @@ export function calcMainlineStrength(input: MainlineStrengthInput): MainlineStre
   );
 
   // v9.26 F-12：数据完整度（缺失字段不计分，避免"数据缺失当 0 分"或"缺数据高置信"）
-  // 可缺失字段：晋级率 / 10日资金 / 换手率 / 催化剂强度；基础字段（涨停/高度/5日资金）视为必填
+  // V11-1（P0）：结构性缺失不计入"可交易"判定 —— 晋级率为基础字段（缺失=数据不完整），
+  //   10日资金/换手率/催化剂为进阶字段（缺失仅标注，不影响完整度下限），
+  //   完整度下限 0.5 —— 不再因字段结构缺失而"永远无可交易"（级联根因修复）
   const missingFields: string[] = [];
   if (input.promotionRate == null) missingFields.push("晋级率");
-  if (input.mainNet10d == null) missingFields.push("10日资金");
-  if (input.turnoverRate == null) missingFields.push("换手率");
-  if (input.catalystStrength == null) missingFields.push("催化剂");
-  const dataCompleteness = Math.max(0, 1 - missingFields.length / 4);
+  const optionalMissing: string[] = [];
+  if (input.mainNet10d == null) optionalMissing.push("10日资金");
+  if (input.turnoverRate == null) optionalMissing.push("换手率");
+  if (input.catalystStrength == null) optionalMissing.push("催化剂");
+  const baseComplete = input.promotionRate != null ? 1 : 0;
+  const optionalRatio = 1 - optionalMissing.length / 3;
+  const dataCompleteness = Math.max(0.5, baseComplete * 0.6 + optionalRatio * 0.4);
+  missingFields.push(...optionalMissing);
 
   return {
     score: clamp(score),
