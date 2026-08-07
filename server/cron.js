@@ -204,13 +204,15 @@ async function fetchZTPool(date = bjDate()) {
 }
 
 // ---------- 2. 抓快讯 → news ----------
-async function fetchFastNews() {
-  const url = `https://np-weblist.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=80&req_trace=${Date.now()}`;
+// v15（待确认方案·数据补全）：pageSize 参数化 —— 启动补抓传 200（覆盖周末积压），常规 cron 默认 80
+async function fetchFastNews(pageSize = 80) {
+  const url = `https://np-weblist.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=${pageSize}&req_trace=${Date.now()}`;
   const json = await httpsGet(url);
   return (json?.data?.fastNewsList ?? []).map(n => {
     // v9.26.9：东财快讯 date/time 偶发缺失 → 产生 "undefined undefined"；用当前北京时间兜底
+    // v15-fix：t 含 "undefined" 且长度>10 会绕过兜底 → 显式判 includes("undefined")
     const t = `${n.date ?? ""} ${n.time ?? ""}`.trim();
-    const finalTime = t.length > 10 ? t : new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
+    const finalTime = (!t.includes("undefined") && t.length > 10) ? t : new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
     return {
       code: String(n.code ?? contentKey(`news_${n.title ?? ""}_${n.date ?? ""}_${n.time ?? ""}`)),
       title: n.title ?? "",
@@ -226,10 +228,19 @@ async function fetchFastNews() {
 }
 
 // ---------- 3. 抓公告 → announcements ----------
-async function fetchAnnouncements() {
-  const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=80&page_index=1&ann_type=A&client_source=web&stock_list=`;
-  const json = await httpsGet(url);
-  const list = json?.data?.list ?? [];
+// v15（数据补全）：pages 参数化 —— 启动补抓拉 3 页（覆盖周五晚+周末积压），常规 cron 默认 1 页
+async function fetchAnnouncements(pages = 1) {
+  const all = [];
+  for (let p = 1; p <= pages; p++) {
+    const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=80&page_index=${p}&ann_type=A&client_source=web&stock_list=`;
+    try {
+      const json = await httpsGet(url);
+      const list = json?.data?.list ?? [];
+      if (list.length === 0) break;
+      all.push(...list);
+    } catch { break; }
+  }
+  const list = all;
   return list.map(a => ({
     artCode: String(a.art_code ?? contentKey(`ann_${a.code ?? ""}_${a.notice_date ?? ""}_${a.title ?? ""}`)),
     // codes/columns 是数组结构（东财 2026 新格式）
@@ -739,8 +750,9 @@ function startCron({ pool }) {
       console.log(`[cron] 涨停快照入库 ${snap.date}: ${snap.count} 只`);
     } catch (e) { console.error("[cron] 启动快照失败:", e.message); }
     try {
-      const news = await fetchFastNews();
-      const anns = await fetchAnnouncements();
+      // v15（数据补全）：启动补抓拉大参数 —— 快讯 200 条 + 公告 3 页（240 条），覆盖周五关~周一开积压
+      const news = await fetchFastNews(200);
+      const anns = await fetchAnnouncements(3);
       const c = await pool.connect();
       try {
         await c.query("BEGIN");
