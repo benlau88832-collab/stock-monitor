@@ -6,7 +6,7 @@
 // v11-5（P1）：移回驾驶舱（决策区下方）+ 增强 —— 可点击跳消息面 / 力度★ / 影响方向 / 受益个股数
 // v12-5（P1）：盘中实时化 —— 盘后 kv 未生成时，用本地快讯流（getAllSince 今日）关键词轻量分级，不等盘后 LLM
 // ============================================================
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { isLocalServer, kvGet } from "../lib/cloudStore";
 import { getAllSince } from "../lib/dataStore";
 import DisclaimerTag from "./DisclaimerTag";
@@ -54,9 +54,67 @@ function ScoreBadge({ s }: { s: number }) {
   return <span className={`rounded px-1 py-0.5 text-[10px] font-bold ${cls}`} title={`催化 ${s} 分`}>{stars}</span>;
 }
 
-export default function EventClassifyPanel({ onOpenNews }: { onOpenNews?: () => void }) {
+export default function EventClassifyPanel({ onOpenNews, onSwitchTab }: {
+  onOpenNews?: () => void;
+  /** v13-4（P0）：跳转 Tab（雷达/消息面）用 */
+  onSwitchTab?: (tab: string) => void;
+}) {
   const [items, setItems] = useState<ClassifiedEvent[] | null>(null);
   const [date, setDate] = useState("");
+  // v13-4（P0）：新闻驱动作战管线结果（theme_analysis:latest）—— 有则优先展示管线视图
+  const [analysis, setAnalysis] = useState<any | null>(null);
+  const [triggering, setTriggering] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  // 上一轮 heat 对比（热度箭头 🔥/❄️/🆕）—— 组件内缓存上次的 heat map
+  const prevHeatRef = useRef<Map<string, number> | null>(null);
+
+  // v13-4：加载最新 theme_analysis + 30 分钟自动刷新
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const r: any = await kvGet("theme_analysis:latest");
+        if (r && Array.isArray(r.themes) && r.themes.length > 0 && alive) {
+          const next = new Map<string, number>(r.themes.map((t: any) => [t.theme, t.heat] as [string, number]));
+          const prev = prevHeatRef.current;
+          const withDelta = r.themes.map((t: any) => {
+            let delta: string | null = null;
+            if (!prev) delta = "🆕";
+            else {
+              const p = prev.get(t.theme);
+              if (p == null) delta = "🆕";
+              else if (t.heat - p >= 10) delta = `🔥+${t.heat - p}`;
+              else if (p - t.heat >= 10) delta = `❄️-${p - t.heat}`;
+              else delta = "➖";
+            }
+            return { ...t, delta };
+          });
+          prevHeatRef.current = next;
+          setAnalysis({ ...r, themes: withDelta });
+        }
+      } catch { /* 无管线结果 → 保持事件研判视图 */ }
+    };
+    load();
+    const t = setInterval(load, 30 * 60 * 1000); // 30 分钟自动刷新
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  // v13-4：🔄 立即分析（手动触发一轮管线）
+  const triggerNow = async () => {
+    setTriggering(true);
+    try {
+      const r = await fetch("/api/theme-analysis/trigger", { method: "POST" });
+      if (r.ok) {
+        const j = await r.json();
+        if (j.result && Array.isArray(j.result.themes)) {
+          prevHeatRef.current = new Map<string, number>(j.result.themes.map((t: any) => [t.theme, t.heat] as [string, number]));
+          setAnalysis({ ...j.result, themes: j.result.themes.map((t: any) => ({ ...t, delta: "🆕" })) });
+        }
+      }
+    } catch { /* 静默 */ }
+    setTriggering(false);
+  };
 
   useEffect(() => {
     if (!isLocalServer()) return;
@@ -102,6 +160,117 @@ export default function EventClassifyPanel({ onOpenNews }: { onOpenNews?: () => 
     })();
     return () => { alive = false; };
   }, []);
+
+  // ============== v13-4（P0）：管线视图优先 ==============
+  if (analysis) {
+    const top3 = analysis.themes.slice(0, 3);
+    const risks = analysis.themes.filter((t: any) => t.verdict === "风险警示");
+    const rest = analysis.themes.slice(3);
+    const showThemes = showAll ? analysis.themes : top3;
+    return (
+      <div className="rounded-xl border border-rose-500/25 bg-rose-950/10 p-3 space-y-2">
+        <div className="flex items-center justify-between flex-wrap gap-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-slate-200">📡 新闻驱动·热点主题作战</span>
+            {analysis.time && (
+              <span className="text-[10px] text-slate-500">
+                最新 {analysis.time} · {analysis.round === "手动" ? "手动" : analysis.round}
+              </span>
+            )}
+            <DisclaimerTag />
+          </div>
+          {/* 🔄 立即分析（手动触发一轮管线，不等 30 分钟 cron） */}
+          <button onClick={triggerNow} disabled={triggering}
+            className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs font-bold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50">
+            {triggering ? "🤖 分析中…" : "🔄 立即分析"}
+          </button>
+        </div>
+
+        {/* TOP 主题（默认 3，全部可展开） */}
+        {showThemes.map((t: any) => (
+          <div key={t.theme} className="rounded-lg border border-white/10 bg-black/20 p-2.5 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`rounded px-1.5 py-0.5 text-xs font-black ${
+                t.verdict === "领涨龙头" ? "bg-rose-500/20 text-rose-300"
+                : t.verdict === "风险警示" ? "bg-red-500/20 text-red-300"
+                : t.verdict === "潜力起爆" ? "bg-emerald-500/20 text-emerald-300"
+                : "bg-amber-500/15 text-amber-300"
+              }`}>
+                {t.verdict === "领涨龙头" ? "🏛️" : t.verdict === "风险警示" ? "🚫" : t.verdict === "潜力起爆" ? "⚡" : "👀"} {t.theme}
+              </span>
+              {/* 热度条 */}
+              <span className="h-1.5 w-20 rounded bg-white/10 overflow-hidden inline-block align-middle">
+                <span className="block h-full rounded bg-rose-500/70" style={{ width: `${t.heat}%` }} />
+              </span>
+              <span className="text-xs font-black text-slate-200">{t.heat}分</span>
+              {/* 热度变化箭头（与上一轮对比） */}
+              {t.delta && (
+                <span className={`text-xs font-bold ${
+                  t.delta.startsWith("🔥") ? "text-rose-300" : t.delta.startsWith("❄️") ? "text-emerald-300" : "text-slate-500"
+                }`}>{t.delta}</span>
+              )}
+              <span className="text-xs text-slate-500">{t.fundAnalysis ?? ""}</span>
+            </div>
+            <div className="flex items-center justify-between flex-wrap gap-1">
+              <span className="text-xs text-amber-200/80">{t.action ?? ""}</span>
+              {/* 展开选股详情 */}
+              {t.picks && t.picks.length > 0 && (
+                <button onClick={() => setExpanded(expanded === t.theme ? null : t.theme)}
+                  className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-slate-400 hover:text-slate-200">
+                  🎯 {t.picks.length}只选股 {expanded === t.theme ? "▴" : "▾"}
+                </button>
+              )}
+            </div>
+            {/* 选股详情（展开显示） */}
+            {expanded === t.theme && t.picks && (
+              <div className="space-y-1 border-t border-white/5 pt-1.5">
+                {t.picks.map((p: any) => (
+                  <div key={p.code} className="flex items-center gap-2 text-xs flex-wrap">
+                    <span className={`rounded px-1 py-0.5 font-bold ${
+                      p.aiVerdict === "可买" ? "bg-emerald-500/15 text-emerald-300"
+                      : p.aiVerdict === "回避" ? "bg-rose-500/15 text-rose-300" : "bg-amber-500/15 text-amber-300"
+                    }`}>{p.aiVerdict ?? "谨慎"}</span>
+                    <span className="text-slate-200 font-bold cursor-pointer hover:text-rose-300"
+                      title="跳转个股雷达"
+                      onClick={() => onSwitchTab?.("radar")}>{p.name}</span>
+                    <span className="text-slate-600">{p.code}</span>
+                    <span className="text-slate-500">买入: {p.buyTrigger}</span>
+                    <span className="text-emerald-400/70">止损: {p.stopLoss}</span>
+                    <span className="text-rose-300/70">风险: {p.risk}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* L3 折叠：全部主题 / 风险警示 */}
+        <div className="flex items-center gap-2 flex-wrap text-xs">
+          {rest.length > 0 && (
+            <button onClick={() => setShowAll(v => !v)} className="rounded bg-white/5 px-1.5 py-0.5 text-slate-400 hover:text-slate-200">
+              📋 全部主题({analysis.themes.length}) {showAll ? "▴" : "▾"}
+            </button>
+          )}
+          {risks.length > 0 && (
+            <button onClick={() => setExpanded(expanded === "__risks" ? null : "__risks")}
+              className="rounded bg-red-500/10 px-1.5 py-0.5 font-bold text-red-300 hover:bg-red-500/20">
+              🚫 风险警示({risks.length}) {expanded === "__risks" ? "▴" : "▾"}
+            </button>
+          )}
+          <span className="text-slate-600">每 30 分钟自动分析 · 点击"立即分析"即时刷新</span>
+        </div>
+        {expanded === "__risks" && risks.length > 0 && (
+          <div className="space-y-1 rounded border border-red-500/20 bg-red-500/5 p-2">
+            {risks.map((t: any) => (
+              <div key={t.theme} className="text-xs text-red-300/80">
+                🚫 {t.theme}（{t.heat}分）{t.fundAnalysis ?? ""} · {t.action ?? ""}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (items === null || items.length === 0) return null;
 

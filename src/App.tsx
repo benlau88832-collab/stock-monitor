@@ -878,6 +878,8 @@ export default function App() {
     try {
       const limitPool = await fetchLimitPoolSummary();
       setOverview(prev => (prev ? { ...prev, limitPool } : prev));
+      // v12-6（P1）：涨停池可能截断 → 全局 console 警告（五问条/温度条等主显示点不逐个透传，落一条日志兜底）
+      if (limitPool?.truncated) console.warn(`[ztpool] ${limitPool.truncated}`);
       // v9.34（S1）：封单衰减检测（与上一轮 18s 快照对比）
       if (phase === "trading" && limitPool?.rawZTPool?.length) {
         const alerts = detectSealDecay(limitPool.rawZTPool);

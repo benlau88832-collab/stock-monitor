@@ -4,6 +4,23 @@
 
 ---
 
+## v9.72 — GLM5.2-V13 全部落地：新闻驱动作战管线 + AIConsole 本地数据优先（4/4 指令）(2026-08-08)
+
+> 依据 `022_股票监控项目/GLM5.2建议-v13.txt`（605 行）逐条执行，4 条修改指令全部完成。
+> 核心：实现"新闻→主题→资金验证→选股→研判"完整管线（2 次 LLM/30 分钟），AIConsole 妙想工具仅在"个股深度调研"时加载。
+
+### 🔴 P0（管线 + AIConsole 修复）
+- **V13-3** assistantAgent：`isDeepResearch = question.includes("个股深度调研")` 严格触发（原宽松正则废除）；**妙想工具（researchQuote/researchData/researchSearch/searchNewsFull）仅该分支加载**；新增 getLocalNews 本地快讯工具；system prompt 加"工具使用铁律"（默认本地数据秒回，妙想仅在含'个股深度调研'时存在）
+- **V13-1** 新闻驱动作战管线：新建 `src/lib/themeAnalysis.ts`（extractThemeHeat 规则抽主题 + buildAnalysisPrompt/buildStockPrompt）；server/cron.js 加 runThemeAnalysis（近 2h 快讯 → 24 大类折叠热度 → kv fund_streak 资金 → 1 次 LLM 行情分析 → 涨停池规则选股 → 1 次 LLM 标的研判 → 落库 theme_analysis:日期:时分 + :latest）；cron 盘前 9:15 + 盘中 */30 + 盘后 15:05
+- **V13-4** EventClassifyPanel 重构为管线展示器：theme_analysis:latest 优先（TOP3 热度条 + verdict + 资金分析 + 选股展开 + 热度箭头 🔥/❄️/🆕/➖ + 全部主题/风险警示折叠 + 选股点击跳雷达）；"🔄 立即分析"按钮 → POST /api/theme-analysis/trigger（server/db.js 新增，复用 runThemeAnalysis）；30 分钟自动刷新；无管线结果时保留 V11-5/V12-5 事件三级研判兜底
+
+### 遵循 CLAUDE.md 第十四节自验证协议
+- 每项：门1 tsc 0 / 门2 build 成功 / 门3 test 全绿（最终 **175 全绿**，+5 themeAnalysis 用例）
+- 阶段2 grep：getResearchTools/searchNewsFull 仅在 isDeepResearch 分支（验收 4 ✅）；onSwitchTab 传参链完整；触发接口连通
+- 冒烟：runThemeAnalysis 产出 10 主题（芯片 90 分首主题，修复 news.time text vs timestamp 类型错误）；POST trigger ok:True 10 主题
+
+---
+
 ## v9.71 — GLM5.2-V12 全部落地：竞价数据根因 + 分类贯通补齐 + 事件盘中实时（7/7 指令）(2026-08-08)
 
 > 依据 `022_股票监控项目/GLM5.2建议-v12.txt`（232 行）逐条执行，7 条修改指令全部完成。

@@ -39,33 +39,66 @@ export async function runAssistantAgent(
     researchCtx?: import("./researchTools").ResearchCtx | null;
   },
 ): Promise<AssistantReply> {
-  const tools = [...getAgentTools(), ...getResearchTools(), {
-    name: "getStockFundDetail",
-    description: '个股资金面（按代码）：主力净流入(元/占比)/5日/10日/换手/量比/现价/涨幅 —— 传 code 参数如 {"code":"600001"}',
-    kind: "data",
-    execute: async (args: any) => {
-      try {
-        const { fetchStockOne } = await import("./api");
-        const d = await fetchStockOne(String(args?.code ?? ""));
-        if (!d) return { error: "个股行情获取失败（代码无效？）" };
-        return d;
-      } catch (e) { return { error: "资金查询失败:" + String(e) }; }
+  // V13-3（P0）：妙想工具仅在用户消息包含"个股深度调研"六个字时加载（用户明确要求）
+  // 其他任何问题（"今日消息""主线分析""某只票怎么样"）都不加载妙想工具 —— 只用本地数据工具 + LLM 推理
+  const isDeepResearch = question.includes("个股深度调研");
+  const maxRounds = isDeepResearch ? 12 : 5;
+  // V13-2/3（P0）：工具集条件加载 —— 本地工具始终有；妙想工具（researchQuote/researchData/researchSearch/searchNewsFull）仅深度调研时加入
+  // 新增 getLocalNews（本地快讯/公告，秒回不调妙想）—— 用户问消息/新闻/政策/公告 MUST 用这个
+  const tools = [
+    ...getAgentTools(), // 本地决策工具（主线/资金/席位/仓位/选股/离场/因子等）
+    {
+      name: "getLocalNews",
+      description: '读取本地已抓取的快讯/公告（来自东财，cron 每20分钟更新，秒回不调外部API）。用户问"今日消息/新闻/政策/公告/有什么事件"时 MUST 优先用这个，不用 searchNewsFull。传 { hours: 2 } 读近2小时，不传读今日全部。',
+      kind: "data",
+      execute: async (args: any) => {
+        try {
+          const { getAllSince } = await import("./dataStore");
+          const hours = Number(args?.hours ?? 24);
+          const since = new Date(Date.now() - hours * 3600000).toISOString().slice(0, 10);
+          const { news, ann } = getAllSince(since);
+          return {
+            newsCount: news.length,
+            annCount: ann.length,
+            topNews: news.slice(0, 15).map(n => ({ title: n.title, time: n.time, sentiment: n.sentiment, stars: n.stars })),
+            topAnns: ann.slice(0, 10).map(a => ({ title: a.title, name: a.stockName, time: a.time })),
+          };
+        } catch { return { error: "本地数据读取失败" }; }
+      },
     },
-  }, {
-    // v9.64（V2-P1-1）：新闻全文搜索工具化 —— 用户问政策/公告/事件时，AI 可主动搜最新消息
-    name: "searchNewsFull",
-    description: '新闻全文搜索：按关键词拉最新消息标题/摘要/时间（回答"XX消息利好谁/有什么政策"时先调它）—— 传 keyword 参数如 {"keyword":"低空经济"}',
-    kind: "data",
-    execute: async (args: any) => {
-      try {
-        const { fetchStockNews } = await import("./api");
-        const items = await fetchStockNews(String(args?.keyword ?? ""), 15);
-        return items.slice(0, 15).map(n => ({
-          title: n.title, time: n.time, summary: (n as any).summary ?? "",
-        }));
-      } catch (e) { return { error: "新闻搜索失败:" + String(e) }; }
+    {
+      name: "getStockFundDetail",
+      description: '个股资金面（按代码）：主力净流入(元/占比)/5日/10日/换手/量比/现价/涨幅 —— 传 code 参数如 {"code":"600001"}',
+      kind: "data",
+      execute: async (args: any) => {
+        try {
+          const { fetchStockOne } = await import("./api");
+          const d = await fetchStockOne(String(args?.code ?? ""));
+          if (!d) return { error: "个股行情获取失败（代码无效？）" };
+          return d;
+        } catch (e) { return { error: "资金查询失败:" + String(e) }; }
+      },
     },
-  }];
+    // ★ V13-3：妙想工具（researchQuote/researchData/researchSearch/searchNewsFull）仅在"个股深度调研"时加载
+    ...(isDeepResearch ? [
+      ...getResearchTools(),
+      {
+        // v9.64（V2-P1-1）：新闻全文搜索工具化 —— 深度调研时补充外部信息
+        name: "searchNewsFull",
+        description: '新闻全文搜索：按关键词拉最新消息标题/摘要/时间（回答"XX消息利好谁/有什么政策"时先调它）—— 传 keyword 参数如 {"keyword":"低空经济"}',
+        kind: "data",
+        execute: async (args: any) => {
+          try {
+            const { fetchStockNews } = await import("./api");
+            const items = await fetchStockNews(String(args?.keyword ?? ""), 15);
+            return items.slice(0, 15).map(n => ({
+              title: n.title, time: n.time, summary: (n as any).summary ?? "",
+            }));
+          } catch (e) { return { error: "新闻搜索失败:" + String(e) }; }
+        },
+      },
+    ] : []),
+  ];
   const toolDefs = tools.map(t => ({
     name: t.name,
     description: t.description,
@@ -83,10 +116,13 @@ export async function runAssistantAgent(
     siteContext.watchStocks ? "用户自选股：" + siteContext.watchStocks : "",
   ].filter(Boolean).join("\n");
 
-  // v9.66.1：深度调研（含"深度调研/个股深度分析/深入查询/继续"）→ 轮数放宽到 12，能跑完五段式
-  const isDeepResearch = /深度调研|深度分析|个股深度|深入查询|继续.{0,6}(调研|Phase|阶段)/.test(question);
-  const maxRounds = isDeepResearch ? 12 : 5;
+  // V13-3（P0）：触发条件收紧为仅"个股深度调研"六个字（用户明确要求，其他问题不用妙想）
+  // isDeepResearch/maxRounds 已在工具集处声明（第 44-45 行），此处不再重复
   const system = "你是这个A股实时监控终端的全站分析师助手（10年游资操盘手）。用户会问你任何关于主线/个股/资金/消息/席位/仓位的问题。\n\n"
+    + "【工具使用铁律 v13-3】\n"
+    + "- 默认所有问题（消息/主线/个股/资金/仓位）→ MUST 优先用本地数据工具（getLocalNews/getStockFundDetail/getAdmissionVerdict/getFundStreak 等），用已抓取的真实数据 + 你的推理来回答。\n"
+    + "- 妙想工具（researchQuote/researchData/researchSearch/searchNewsFull）仅在用户消息含'个股深度调研'时可用——其他时候这些工具不存在，不要尝试调用。\n"
+    + "- 本地数据工具秒回，不依赖外部 API，不会超时。\n\n"
     + "你有以下工具（自主决定调用顺序与次数，最多 " + maxRounds + " 轮；查个股时用 getStockFundDetail 传 code）：\n"
     + toolDefs.map(t => "- " + t.name + ": " + t.description).join("\n")
     + "\n\n" + RESEARCH_SYSTEM + "\n\n"

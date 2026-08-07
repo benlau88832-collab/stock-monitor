@@ -137,6 +137,16 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ---------- v13-4（P0）：新闻驱动作战管线手动触发 ----------
+  // 前端"🔄 立即分析"按钮 → 立即跑一轮管线（不等 30 分钟 cron），复用 cron.runThemeAnalysis
+  app.post("/api/theme-analysis/trigger", async (req, res) => {
+    try {
+      const { runThemeAnalysis } = require("../cron");
+      const result = await runThemeAnalysis({ pool, label: "手动" });
+      res.json({ ok: true, result });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.post("/api/db/anns", async (req, res) => {
     try {
       const items = Array.isArray(req.body) ? req.body : [];
