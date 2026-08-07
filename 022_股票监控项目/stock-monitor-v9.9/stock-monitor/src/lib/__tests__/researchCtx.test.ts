@@ -12,6 +12,13 @@ describe("researchCtx 多轮上下文", () => {
     expect(extractStockCode("继续深入查询")).toBeNull();
   });
 
+  it("v9.67：中文名也能识别（避免 ctx 残留旧标的）", () => {
+    expect(extractStockCode("个股深度调研 亨通光电")).toBe("600487");
+    expect(extractStockCode("深度调研 中天科技")).toBe("600522");
+    expect(extractStockCode("深度调研 贵州茅台")).toBe("600519");
+    expect(extractStockCode("看看行情")).toBeNull();
+  });
+
   it("识别新调研指令（需代码）", () => {
     expect(isNewResearchRequest("个股深度调研 中天科技 600522")).toBe(true);
     expect(isNewResearchRequest("深度调研 600487")).toBe(true);

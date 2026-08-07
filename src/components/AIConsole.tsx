@@ -139,11 +139,11 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
               <div key={i} className={`text-xs ${m.role === "user" ? "text-right" : "text-left"}`}>
                 {m.role === "ai" && m.degraded && (
                   <div className="mb-1 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-bold text-rose-300">
-                    ⏸ 本次为规则结果（AI 配额受限/失败）
+                    ⏸ 本次降级回复（非 AI，详见下方说明）
                   </div>
                 )}
                 {m.role === "ai" && m.tools && m.tools.length > 0 && (
-                  <div className="mb-1 text-[9px] text-slate-600">🔍 已调工具：{m.tools.join(" / ")}</div>
+                  <div className="mb-1 text-[9px] text-slate-600">🔍 已调工具：{m.tools.join(" / ")}{m.degraded && m.tools.length > 0 ? "（部分结果可用）" : ""}</div>
                 )}
                 <div className={`inline-block max-w-[92%] whitespace-pre-wrap rounded-xl px-2.5 py-1.5 text-left ${
                   m.role === "user" ? "bg-violet-500/20 text-violet-100" : "bg-white/5 text-slate-200"

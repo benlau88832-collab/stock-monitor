@@ -107,14 +107,16 @@ export async function runAssistantAgent(
   let roundHistory: string[] = [];
   let llmOk = true;
   let rateLimitedFlag = false;
+  let lastReason: "rateLimited" | "timeout" | "network" | "model" | undefined;
   const calledTools = new Set<string>();
 
   for (let round = 0; round < maxRounds; round++) {
     const user = round === 0 ? userCtx : (roundHistory.join("\n") + "\n\n（继续，或直接给最终答复）：");
     let r: AgentChatResult | null;
     try { r = await callAgentChat(system, user, toolDefs, { temperature: 0.2, history: opts?.history }); } catch { r = null; }
-    if (!r) { llmOk = false; break; }
-    if (r.rateLimited) { llmOk = false; rateLimitedFlag = true; break; }
+    if (!r) { llmOk = false; lastReason = "model"; break; }
+    if (r.rateLimited) { llmOk = false; rateLimitedFlag = true; lastReason = "rateLimited"; break; }
+    if (r.reason) { llmOk = false; lastReason = r.reason; break; }
 
     // ① 原生 tool_calls
     if (r.toolCalls && r.toolCalls.length > 0) {
@@ -155,10 +157,23 @@ export async function runAssistantAgent(
     }
     roundHistory.push("（第" + (round + 1) + "轮 LLM 输出无法解析）");
   }
+  // v9.67：智能降级文案 —— 按"调了几个工具"和降级原因分类，不再一刀切
+  const toolCount = calledTools.size;
+  const reason = lastReason;
+  let reply: string;
+  if (llmOk) {
+    reply = "抱歉，本轮未能给出可靠答复（AI 输出异常）。可换个问法重试，或到对应 Tab 查看详细数据。";
+  } else if (rateLimitedFlag) {
+    reply = `⏸ AI 配额受限（达 ${maxRounds > 5 ? "深度" : "标准"}桶上限）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。可稍后重试，或查看工具轨迹中已调用的工具结果。`;
+  } else if (reason === "timeout") {
+    reply = `⏸ AI 上游超时（20s 内未返回，妙想 API 经代理 127.0.0.1:7897 调用慢）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。建议重试，或临时关闭代理后再试。`;
+  } else if (reason === "network") {
+    reply = `⏸ AI 网络不通（无法连接到妙想 API）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。检查网络/代理后重试，或直接查看各 Tab 的实时数据。`;
+  } else {
+    reply = `⏸ AI 服务异常${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具（${[...calledTools].join("/")}）但最终结论未生成` : ""}。建议稍后重试，或直接查看各 Tab 的实时数据。`;
+  }
   return {
-    reply: llmOk
-      ? "抱歉，本轮未能给出可靠答复（AI 输出异常）。可换个问法重试，或到对应 Tab 查看详细数据。"
-      : "⏸ AI 配额受限/服务不可用，本次未能调用全站数据（可稍后重试，或直接查看各 Tab 的实时数据）。",
+    reply,
     toolsCalled: [...calledTools],
     degraded: true,
     rateLimited: rateLimitedFlag,

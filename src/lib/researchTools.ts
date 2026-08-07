@@ -7,6 +7,7 @@
 //   持久化 localStorage，每轮注入 LLM —— "像真人对话一样"记住上下文
 // ============================================================
 import type { AgentTool } from "./agentTools";
+import { STOCK_NAME_MAP } from "./stockNames";
 
 async function serverGet<T>(path: string): Promise<T> {
   const r = await fetch(path);
@@ -115,10 +116,14 @@ export function saveResearchCtx(ctx: ResearchCtx | null): void {
   } catch { /* 静默 */ }
 }
 
-/** 从用户消息提取 6 位股票代码（若有） */
+/** 从用户消息提取 6 位股票代码（支持中文名映射，如"亨通光电"→600487） */
 export function extractStockCode(text: string): string | null {
   const m = text.match(/\b\d{6}\b/);
-  return m ? m[0] : null;
+  if (m) return m[0];
+  for (const [name, code] of Object.entries(STOCK_NAME_MAP)) {
+    if (text.includes(name)) return code;
+  }
+  return null;
 }
 
 /** 判断是否"新调研"指令（含深度调研/深度分析/个股深度 + 代码） */

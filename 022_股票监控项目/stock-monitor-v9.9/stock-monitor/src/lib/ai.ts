@@ -565,6 +565,8 @@ export interface AgentChatResult {
   toolCalls?: AgentToolCall[];
   /** v9.45（V5-1）：true = 服务端配额受限（429，非模型不可用）→ 前端显式标注，不静默降级 */
   rateLimited?: boolean;
+  /** v9.67：降级原因（rateLimited / timeout / network / model）→ 前端区分文案 */
+  reason?: "rateLimited" | "timeout" | "network" | "model";
 }
 
 /** 单轮 Agent 对话（带工具清单；LLM 可选择返回 tool_calls 或直接出文本） */
@@ -602,15 +604,20 @@ export async function callAgentChat(
     if (!resp.ok) {
       // v9.45（V5-1）：429 配额受限 → 显式标记（区别于"服务端不可用"），AI 不再静默退回规则
       if (resp.status === 429) {
-        try { const j = await resp.json(); if (j?.rateLimited) return { text: "", rateLimited: true }; } catch { /* keep */ }
+        try { const j = await resp.json(); if (j?.rateLimited) return { text: "", rateLimited: true, reason: "rateLimited" }; } catch { /* keep */ }
       }
-      return null;
+      // v9.67：502/500 区分降级原因
+      try {
+        const j = await resp.json();
+        const reason = (j?.reason === "timeout" || j?.reason === "network" || j?.reason === "model") ? j.reason : "model";
+        return { text: "", rateLimited: false, reason };
+      } catch { return { text: "", reason: "model" }; }
     }
     const j = await resp.json();
-    if (j.error) return null;
+    if (j.error) return { text: "", reason: "model" };
     return { text: j.text ?? "", toolCalls: j.toolCalls };
   } catch {
     clearTimeout(timer);
-    return null;
+    return { text: "", reason: "network" };
   }
 }

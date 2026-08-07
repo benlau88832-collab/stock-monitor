@@ -4,6 +4,32 @@
 
 ---
 
+## v9.67-fix — AIConsole 降级排查修复（PayloadTooLarge + 上游超时 + 降级文案 + ctx 名识别）(2026-08-07)
+
+> 用户报：AIConsole 显示"⏸ 本次为规则结果（AI 配额受限）"但工具轨迹显示调了 6 个工具，文案与实际矛盾。
+
+### 深度排查（PM2 日志）
+1. **PayloadTooLargeError：request entity too large**（反复出现）—— v9.64 把 express.json limit 1mb 太狠，AI 长上下文+history+toolDefs+researchCtx 累积超 1mb
+2. **AI 上游超时**：`[ai] call failed: upstream timeout | proxy: http://127.0.0.1:7897` —— 妙想 API 经用户代理调用 30s 超时
+3. **降级文案撒谎**：assistantAgent.ts:161 固定"本次未能调用全站数据"，但工具实际调了
+4. **ctx 残留旧标的**：用户问"亨通光电"（无 6 位代码）→ extractStockCode 返 null → ctx 不切换 → 助手靠工具查到 600487 但 ctx 仍指中天
+5. **降级原因不分**：AIConsole 固定显示"AI 配额受限/失败"，实际可能是 timeout/network/model/429
+
+### 修复
+- **server/index.js**：`express.json` limit 1mb → **2mb**（PayloadTooLargeError 根治）
+- **server/routes/ai.js**：调妙想 API 超时 30s → **20s** + 失败分类 `{reason: "timeout"|"network"|"model"}`
+- **src/lib/ai.ts**：callAgentChat 透传 `reason`（502/500 也返回带 reason 的对象，不再静默 null）
+- **src/lib/assistantAgent.ts**：智能降级文案（按 reason 分类 + 显示已调工具数）；累加 `lastReason`；超时/网络/模型各自明确提示
+- **src/lib/stockNames.ts**（新）：常用股票名→代码映射（18 只：亨通光电→600487 等）
+- **src/lib/researchTools.ts**：extractStockCode 双匹配（6 位代码 OR 中文名映射）→ "个股深度调研 亨通光电"也能识别并切 ctx
+- **src/components/AIConsole.tsx**：降级标签"⏸ 本次降级回复（非 AI）"+ 工具轨迹标注"部分结果可用"
+
+### 验证
+- 三重验证门：tsc 0 / build 成功 / test **155 全绿**（新增中文名识别 3 用例）
+- 单测覆盖：中文名→代码、reason 降级分支
+
+---
+
 ## v9.67 — AIConsole 真·多轮上下文（结构化调研会话状态 researchCtx）(2026-08-07)
 
 > 用户要求："修改成跟我们这样对话一样，拥有上下文理解能力" —— v9.66-fix 只传 8 条文本不够，

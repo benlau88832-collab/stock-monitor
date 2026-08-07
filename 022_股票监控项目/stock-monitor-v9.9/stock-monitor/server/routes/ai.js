@@ -111,7 +111,8 @@ module.exports = function aiRoutes(app) {
         if (toolChoice) body.tool_choice = toolChoice;
       }
 
-      const json = await postJSON(baseUrl, body, 30000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
+      // v9.67：30s → 20s（PM2 日志反复 upstream timeout 30s，缩短超时让前端快速拿到降级响应而不是 35s 卡死）
+      const json = await postJSON(baseUrl, body, 20000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
       const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
       // v9.41：Agent 需要 tool_calls（LLM 决定下一步调哪个工具）
       const toolCalls = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0
@@ -123,7 +124,10 @@ module.exports = function aiRoutes(app) {
       res.json({ text: msg.content || "", toolCalls });
     } catch (e) {
       console.error("[ai] call failed:", e && e.message, "| proxy:", PROXY_URL);
-      res.status(502).json({ error: (e && e.message) || "model call failed" });
+      // v9.67：分类降级原因（前端可显式标注）—— timeout / network / model
+      const msg = String(e?.message ?? "");
+      const reason = /timeout|ETIMEDOUT|aborted/i.test(msg) ? "timeout" : /proxy|ENOTFOUND|ECONN/i.test(msg) ? "network" : "model";
+      res.status(502).json({ error: msg || "model call failed", reason });
     }
   });
 };
