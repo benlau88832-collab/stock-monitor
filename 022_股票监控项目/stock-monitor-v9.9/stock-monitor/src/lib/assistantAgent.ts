@@ -5,8 +5,8 @@
 // 降级：配额受限/失败 → degraded（AIConsole 顶部显式标注 V8-10）
 // ============================================================
 import { getAgentTools } from "./agentTools";
-// v9.66：个股深度调研工具组（妙想五段式 + 盯价监控）
-import { getResearchTools, RESEARCH_SYSTEM } from "./researchTools";
+// v9.66.1：导入调研会话状态工具
+import { getResearchTools, RESEARCH_SYSTEM, researchCtxNote } from "./researchTools";
 import { callAgentChat, parseAIJSON, type AgentChatResult } from "./ai";
 import { fmtMoney } from "./format";
 
@@ -35,6 +35,8 @@ export async function runAssistantAgent(
   opts?: {
     /** v9.66.1：多轮对话历史（AIConsole 传最近对话，深度调研"继续/深入"能衔接上文） */
     history?: Array<{ role: "user" | "assistant"; content: string }>;
+    /** v9.67：调研会话状态（标的/进度/已收集数据）—— 结构化上下文，LLM 每轮"记得" */
+    researchCtx?: import("./researchTools").ResearchCtx | null;
   },
 ): Promise<AssistantReply> {
   const tools = [...getAgentTools(), ...getResearchTools(), {
@@ -98,7 +100,10 @@ export async function runAssistantAgent(
     + "5. 不知道/数据不足就直说，禁止编造数字。\n"
     + "6. 【多轮衔接 v9.66.1】系统会给你最近几轮对话历史。若用户说\"继续/深入查询\"：先读历史确认当前调研的标的与进度，从上次停止处继续推进（不要从头重复 Phase 0），完成剩余阶段后再评级；若历史中的标的与用户新提的标的不同，才切换新标的。";
 
-  const userCtx = "【当前页面状态】\n" + ctxSummary + "\n\n【用户提问】" + question + "\n\n本轮请输出JSON（工具调用或最终答复）：";
+  // v9.67：注入调研会话状态（若 AIConsole 正在调研某标的）—— 结构化上下文优先于纯文本历史
+  const ctxNote = opts?.researchCtx ? researchCtxNote(opts.researchCtx) : "";
+  const userCtx = (ctxNote ? "【调研会话状态】\n" + ctxNote + "\n\n" : "")
+    + "【当前页面状态】\n" + ctxSummary + "\n\n【用户提问】" + question + "\n\n本轮请输出JSON（工具调用或最终答复）：";
   let roundHistory: string[] = [];
   let llmOk = true;
   let rateLimitedFlag = false;

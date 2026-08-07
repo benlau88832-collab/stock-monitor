@@ -2,9 +2,16 @@
 // v9.58（V8-8）：全局 AI 助手 —— 右下角悬浮对话窗（所有 Tab 可见）
 // 用户提问 → runAssistantAgent 全站 ReAct → 显示工具轨迹 + 带数字答复
 // V8-10：降级时顶部显式"⏸ 本次为规则结果（AI 配额受限）"，绝不假装 AI
+// v9.67：调研会话状态 researchCtx —— 结构化上下文（标的/进度/已收集数据）持久化，
+//   每轮注入 LLM + 对话历史持久化 —— "像真人对话一样"记住上下文，刷新不丢
 // ============================================================
 import { useState, useRef, useEffect } from "react";
 import { runAssistantAgent, type AssistantSiteContext } from "../lib/assistantAgent";
+import {
+  loadResearchCtx, saveResearchCtx, updateResearchCtxAfterReply,
+  extractStockCode, isNewResearchRequest, isContinueResearch,
+  type ResearchCtx,
+} from "../lib/researchTools";
 
 interface Msg {
   role: "user" | "ai";
@@ -13,12 +20,27 @@ interface Msg {
   degraded?: boolean;
 }
 
+const MSGS_KEY = "ai_console_msgs";
+
+function loadMsgs(): Msg[] {
+  try {
+    const raw = localStorage.getItem(MSGS_KEY);
+    return raw ? JSON.parse(raw) as Msg[] : [];
+  } catch { return []; }
+}
+
 export default function AIConsole({ siteContext }: { siteContext: AssistantSiteContext }) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
-  const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [msgs, setMsgs] = useState<Msg[]>(loadMsgs);
+  const [researchCtx, setResearchCtx] = useState<ResearchCtx | null>(loadResearchCtx);
   const [busy, setBusy] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  // 对话历史持久化（刷新不丢）
+  useEffect(() => {
+    try { localStorage.setItem(MSGS_KEY, JSON.stringify(msgs.slice(-30))); } catch { /* 静默 */ }
+  }, [msgs]);
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
@@ -28,16 +50,40 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
     const q = input.trim();
     if (!q || busy) return;
     setInput("");
+
+    // v9.67：维护调研会话状态 —— 新调研(带代码)开新会话；继续沿用；换代码切换
+    let ctx = researchCtx;
+    if (isNewResearchRequest(q)) {
+      const code = extractStockCode(q)!;
+      const oldName = ctx?.code === code ? ctx.name : "";
+      ctx = { code, name: oldName || code, phase: 0, collected: [], conclusion: "", updatedAt: Date.now() };
+      saveResearchCtx(ctx);
+      setResearchCtx(ctx);
+    } else if (isContinueResearch(q) && ctx) {
+      // 沿用当前会话（不重置）
+    } else if (extractStockCode(q)) {
+      // 新提代码但非调研指令 → 若有正在调研的会话且代码不同 → 切换（保持历史可追溯）
+      const code = extractStockCode(q)!;
+      if (ctx && ctx.code !== code) {
+        ctx = { code, name: code, phase: 0, collected: ctx.collected.slice(-3), conclusion: "", updatedAt: Date.now() };
+        saveResearchCtx(ctx);
+        setResearchCtx(ctx);
+      }
+    }
+
     setMsgs(m => [...m, { role: "user", text: q }]);
     setBusy(true);
     setMsgs(m => [...m, { role: "ai", text: "🔍 正在调全站数据调研…" }]);
     try {
-      // v9.66.1：传最近对话历史（清洗掉工具轨迹/系统标记）→ 深度调研"继续/深入"能衔接上文
+      // 最近对话历史（清洗工具轨迹/系统标记）
       const history = msgs
         .filter(m => m.role === "user" || (m.role === "ai" && !m.text.startsWith("🔍")))
         .slice(-8)
         .map(m => ({ role: m.role === "user" ? "user" as const : "assistant" as const, content: m.text.slice(0, 800) }));
-      const r = await runAssistantAgent(q, siteContext, { history });
+      const r = await runAssistantAgent(q, siteContext, { history, researchCtx: ctx });
+      // 回复后推进会话状态
+      const nextCtx = updateResearchCtxAfterReply(ctx, r.reply, r.toolsCalled);
+      if (nextCtx) setResearchCtx(nextCtx);
       setMsgs(m => m.slice(0, -1).concat({
         role: "ai",
         text: r.reply,

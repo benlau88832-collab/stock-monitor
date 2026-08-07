@@ -4,6 +4,37 @@
 
 ---
 
+## v9.67 — AIConsole 真·多轮上下文（结构化调研会话状态 researchCtx）(2026-08-07)
+
+> 用户要求："修改成跟我们这样对话一样，拥有上下文理解能力" —— v9.66-fix 只传 8 条文本不够，
+> 本版加入**结构化会话状态**：标的/进度/已收集数据持久化，每轮注入 LLM，刷新不丢。
+
+### 核心：researchCtx（researchTools.ts）
+- `ResearchCtx`：{ code, name, phase(0-4), collected[](≤20条), conclusion } —— "调研到哪了"的结构化快照
+- `extractStockCode / isNewResearchRequest / isContinueResearch`：指令识别（新调研/继续/换标的）
+- `researchCtxNote`：把会话状态注入 LLM 用户消息（"已推进到 Phase 2，已收集：A/B/C，继续 Phase 3"）
+- `updateResearchCtxAfterReply`：回复后自动推进 Phase（含评级→Phase 4+结论）
+- 持久化 `localStorage: ai_research_ctx`（刷新页面上下文不丢）
+
+### AIConsole.tsx
+- 新调研指令（含代码）→ 开新会话；"继续/深入"→ 沿用；新提不同代码 → 切换
+- 对话历史也持久化（`ai_console_msgs`，刷新恢复）
+- 调用时同时传 `history`（文本）+ `researchCtx`（结构化）—— 双保险
+
+### assistantAgent.ts
+- `opts.researchCtx` 注入 user 消息顶部（结构化上下文优先于纯文本历史）
+- 深度调研轮数 5→12（v9.66-fix 保留）
+
+### 效果
+- "个股深度调研 600522" → "继续深入查询财务" → "继续 Phase 3+4"：LLM 每轮都知道标的/进度/已收集数据，不重头、不串场（中天调研不会再冒出亨通结论）
+- 刷新页面后说"继续"仍接得上
+
+### 验证
+- 三重验证门：tsc 0 / build 成功 / test 154 全绿（新增 researchCtx 5 用例）
+- 注意：researchTools 追加代码时 bash heredoc 会展开 `${}` 污染代码 → 已用 Write 全量重写修复
+
+---
+
 ## v9.66-fix — AIConsole 深度调研多轮上下文修复（"继续/深入查询"不再断片）(2026-08-07)
 
 > 用户反馈：AIConsole 调研"深入查询/继续 Phase3"后回答串场（中天调研冒出亨通结论）、每轮从 Phase 0 重头来。
