@@ -4,6 +4,33 @@
 
 ---
 
+## v9.74 — GLM5.2-V14 全部落地：全面体检清算（9/9 指令）(2026-08-08)
+
+> 依据 `022_股票监控项目/GLM5.2建议-v14.txt`（221 行）逐条执行，9 条修改指令全部完成（P0×2 / P1×3 / P2×4）。
+
+### 🔴 P0
+- **V14-1** conceptGroups 补 6 个 2025-2026 热门主题：新增 3 组（数据要素/核能核电/前沿科技 25 词根）+ 新能源车补"以旧换新"——新闻管线不再"unmapped"（验收 grep-c=7 ≥6）
+- **V14-2** V13-7 快捷直答 + V13-8 智能 fallback 补做（assistantAgent）：消息/新闻/快讯/公告类问题 **0 次 LLM 本地直答**（秒回不超时）+ 主线类 siteContext 直答；降级时提取已获取工具 title 数据拼入"📝 已获取数据参考"（不再空白"AI 输出异常"）
+
+### 🟠 P1
+- **V14-3** 022_ 清理：**审计证明 git 跟踪的 022_ 192 文件全部为当前开发目录**（stock-monitor-v9.9 源码），无旧版残留——报告指令 `rm -rf` 基于误判，未执行（保护当前项目/CLAUDE.md/.workbuddy）
+- **V14-4** 死代码 5 函数：审计确认全库 0 引用 0 定义（v9.61 已删），注释更新确认
+- **V14-5** 分类收敛：AnnouncementPanel 2 处 getIndustryByCode → classifyStock；剩余 conceptGroupOf 4 处均为名字/新闻标题折叠（classifyStock 需 code/hybk 维度不适用，审计保留）
+
+### 🟡 P2
+- **V14-6** num→strictNum：fetchBoardFundFlow/fetchMarketMainFund 关键金额字段（f62/f164/f174）——缺失不静默污染，配合 dataMissing 标注（strictNum 使用 2→11）
+- **V14-7** pagesize 统一：server cron 6 处 300 → 500（与前端一致，大涨停潮不截断）
+- **V14-8** console.log：审计确认前端 7 处全在 ?debug=1 门控内（v9.61 已收敛），isDebug 导出复用
+- **V14-9** as any 减少：Dashboard market_daily 2 处 as any → MarketDailyLite 精确接口（实际 16 处，已消除 Dashboard 全部真实 as any）
+
+### 最终验证（用户指定）
+- `grep -rn "buildMainlineCandidates\|determineLeaders\|computeMainlineScore" src/` → 仅 mainline.ts:2 注释（无代码）
+- `ls 022_*` → 空（无旧版残留）
+- `npx tsc --noEmit` → 退出码 0
+- 单测 **175 全绿**
+
+---
+
 ## v9.73 — GLM5.2-V13 补丁全部落地：选股/ETF 推荐 + LLM 关联验证 + 展开可点击（2/2 指令）(2026-08-08)
 
 > 依据 `022_股票监控项目/GLM5.2建议-v13补丁.txt`（1084 行）逐条执行（V13-1/2/3/4 已在 v9.72 完成）。

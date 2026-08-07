@@ -253,13 +253,14 @@ export async function fetchMarketMainFund(): Promise<MarketFundData> {
     // v9.53（V7-8）：字段缺失 → 不再静默当 0（缺失显式标注，UI 显示"数据缺失"）
     // v9.60（V9-D1）：缺失检测从仅 f62/f164/f174 扩展为全部资金字段（f66/f72/f78/f84 任一缺失同样标注）
     if (hasMissingKeyFields(d, ["f62", "f66", "f72", "f78", "f84", "f164", "f174"])) missing = true;
-    agg.mainNet += num(d.f62);
+    // v14-6（P2）：关键金额字段 strictNum()（缺失跳过累加不污染，dataMissing 已标注）
+    agg.mainNet += strictNum(d.f62) ?? 0;
     agg.extraLargeNet += num(d.f66);
     agg.largeNet += num(d.f72);
     agg.mediumNet += num(d.f78);
     agg.smallNet += num(d.f84);
-    agg.mainNet5d += num(d.f164);
-    agg.mainNet10d += num(d.f174);
+    agg.mainNet5d += strictNum(d.f164) ?? 0;
+    agg.mainNet10d += strictNum(d.f174) ?? 0;
   }
   agg.dataMissing = missing;
   return agg;
@@ -308,15 +309,16 @@ export async function fetchBoardFundFlow(
         code: String(d.f12 ?? ""),
         name: String(d.f14 ?? ""),
         pct: num(d.f3),
-        mainNet: num(d.f62),
+        // v14-6（P2）：关键金额字段 num() → strictNum()（缺失/非法值不静默污染，配合 dataMissing 标注 UI 显示"数据缺失"）
+        mainNet: strictNum(d.f62) ?? 0,
         extraLargeNet: num(d.f66),
         largeNet: num(d.f72),
         mediumNet: num(d.f78),
         smallNet: num(d.f84),
         mainNetPct: num(d.f184),
-        mainNet5d: num(d.f164),
+        mainNet5d: strictNum(d.f164) ?? 0,
         mainNet5dPct: num(d.f165),
-        mainNet10d: num(d.f174),
+        mainNet10d: strictNum(d.f174) ?? 0,
         mainNet10dPct: num(d.f175),
         boardType,
         dataMissing,

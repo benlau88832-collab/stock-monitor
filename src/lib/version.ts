@@ -2,5 +2,5 @@
 // 版本常量（v9.47：footer 去硬编码 —— 每次发版更新此处即可）
 // 引用：App.tsx footer
 // ============================================================
-export const APP_VERSION = "v9.73";
+export const APP_VERSION = "v9.74";
 export const BUILD_DATE = "2026-08-06";

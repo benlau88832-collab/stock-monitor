@@ -3,7 +3,9 @@ import { fetchMarketAnnouncements, type MarketAnnouncement } from "../lib/api";
 import { callAI, parseAIJSON } from "../lib/ai";
 import type { AnnItem } from "../lib/llmNewsIntelligence";
 import { upsertAnnouncements } from "../lib/dataStore";
-import { getIndustryByCode, matchBoardsByText } from "../lib/boardMap";
+import { matchBoardsByText } from "../lib/boardMap";
+// v14-5（P1）：分类统一入口 —— getIndustryByCode 旧路径 → classifyStock（全站唯一分类器）
+import { classifyStock } from "../lib/classifyStock";
 // v9.32.1（缺口7）：公告类型聚类标签
 import { clusterAnnouncement, ANN_CATEGORY_META } from "../lib/annCluster";
 
@@ -190,7 +192,7 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
         stockName: a.stockName,
         title: a.title,
         columnName: a.columnName,
-        boards: (() => { const ind = getIndustryByCode(a.stockCode); return ind ? [ind] : matchBoardsByText(`${a.title} ${a.stockName ?? ""}`); })(),
+        boards: (() => { const ind = classifyStock(String(a.stockCode ?? "")).mainline; return ind && ind !== "其他" ? [ind] : matchBoardsByText(`${a.title} ${a.stockName ?? ""}`); })(),
         score: aiScore?.score,
         logic: aiScore?.logic,
         url: a.url,
@@ -324,7 +326,7 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
         return {
           artCode: a.artCode, stockCode: a.stockCode, stockName: a.stockName,
           title: a.title, columnName: a.columnName,
-          boards: (() => { const ind = getIndustryByCode(a.stockCode); return ind ? [ind] : matchBoardsByText(`${a.title} ${a.stockName ?? ""}`); })(),
+          boards: (() => { const ind = classifyStock(String(a.stockCode ?? "")).mainline; return ind && ind !== "其他" ? [ind] : matchBoardsByText(`${a.title} ${a.stockName ?? ""}`); })(),
           score: aiScore?.score, logic: aiScore?.logic,
           url: a.url, time: a.time,
         };
@@ -571,7 +573,7 @@ function AnnRow({
         <span className="shrink-0 text-[11px] font-bold text-slate-300 w-[56px] truncate">
           {item.stockName || "—"}
           {badge && badge > 1 && (
-            <span className="ml-0.5 inline-flex items-center justify-center rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-bold w-4 h-4 leading-none">
+            <span className="ml-0.5 inline-flex items-center justify-center rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold w-4 h-4 leading-none">
               {badge}
             </span>
           )}
@@ -604,7 +606,7 @@ function AnnRow({
 
       {/* NEW 标记 */}
       {item.isNew && (
-        <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-bold bg-emerald-500/30 text-emerald-200 animate-pulse">
+        <span className="shrink-0 rounded px-1 py-0.5 text-xs font-bold bg-emerald-500/30 text-emerald-200 animate-pulse">
           NEW
         </span>
       )}
@@ -616,7 +618,7 @@ function AnnRow({
 
       {/* AI评分 */}
       {aiScore && (
-        <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${
+        <span className={`shrink-0 rounded px-1 py-0.5 text-xs font-bold ${
           aiScore.score >= 4 ? "bg-emerald-500/20 text-emerald-300" :
           aiScore.score >= 3 ? "bg-amber-500/20 text-amber-300" :
           "bg-slate-500/20 text-slate-400"

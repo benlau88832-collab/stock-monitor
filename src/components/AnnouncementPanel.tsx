@@ -3,7 +3,9 @@ import { fetchMarketAnnouncements, type MarketAnnouncement } from "../lib/api";
 import { callAI, parseAIJSON } from "../lib/ai";
 import type { AnnItem } from "../lib/llmNewsIntelligence";
 import { upsertAnnouncements } from "../lib/dataStore";
-import { getIndustryByCode, matchBoardsByText } from "../lib/boardMap";
+import { matchBoardsByText } from "../lib/boardMap";
+// v14-5（P1）：分类统一入口 —— getIndustryByCode 旧路径 → classifyStock（全站唯一分类器）
+import { classifyStock } from "../lib/classifyStock";
 // v9.32.1（缺口7）：公告类型聚类标签
 import { clusterAnnouncement, ANN_CATEGORY_META } from "../lib/annCluster";
 
@@ -190,7 +192,7 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
         stockName: a.stockName,
         title: a.title,
         columnName: a.columnName,
-        boards: (() => { const ind = getIndustryByCode(a.stockCode); return ind ? [ind] : matchBoardsByText(`${a.title} ${a.stockName ?? ""}`); })(),
+        boards: (() => { const ind = classifyStock(String(a.stockCode ?? "")).mainline; return ind && ind !== "其他" ? [ind] : matchBoardsByText(`${a.title} ${a.stockName ?? ""}`); })(),
         score: aiScore?.score,
         logic: aiScore?.logic,
         url: a.url,
@@ -324,7 +326,7 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
         return {
           artCode: a.artCode, stockCode: a.stockCode, stockName: a.stockName,
           title: a.title, columnName: a.columnName,
-          boards: (() => { const ind = getIndustryByCode(a.stockCode); return ind ? [ind] : matchBoardsByText(`${a.title} ${a.stockName ?? ""}`); })(),
+          boards: (() => { const ind = classifyStock(String(a.stockCode ?? "")).mainline; return ind && ind !== "其他" ? [ind] : matchBoardsByText(`${a.title} ${a.stockName ?? ""}`); })(),
           score: aiScore?.score, logic: aiScore?.logic,
           url: a.url, time: a.time,
         };

@@ -148,6 +148,34 @@ export async function runAssistantAgent(
   let lastReason: "rateLimited" | "timeout" | "network" | "model" | undefined;
   const calledTools = new Set<string>();
 
+  // ============== V14-2（= V13-7 补做）：简单问题快捷直答（0 次 LLM，秒回不超时） ==============
+  const q = question.trim();
+  // ① 消息/新闻/快讯/公告/事件类 → 直接读本地快讯（不调 LLM，不调妙想）
+  if (/消息|新闻|快讯|公告|事件|海内外|国内外/.test(q) && !q.includes("个股深度调研")) {
+    try {
+      const { getAllSince } = await import("./dataStore");
+      let since = new Date().toISOString().slice(0, 10);
+      if (/昨天|昨日/.test(q)) { const d = new Date(); d.setDate(d.getDate() - 1); since = d.toISOString().slice(0, 10); }
+      const dm = q.match(/(\d{1,2})[.月](\d{1,2})/);
+      if (dm) since = `${new Date().getFullYear()}-${String(+dm[1]).padStart(2, "0")}-${String(+dm[2]).padStart(2, "0")}`;
+      const { news, ann } = getAllSince(since);
+      if (news.length === 0 && ann.length === 0)
+        return { reply: `${since} 暂无本地快讯/公告（cron 可能尚未抓取或非交易日）。`, toolsCalled: ["getLocalNews"], degraded: false };
+      const lines = [`📅 ${since} 本地消息（快讯${news.length}·公告${ann.length}）`];
+      const policy = news.filter(n => /国务院|央行|证监会|发改委|财政部/.test(n.title));
+      if (policy.length) { lines.push("🏛️ 政策："); policy.slice(0, 5).forEach(n => lines.push(`  • ${n.title}`)); }
+      const market = news.filter(n => !policy.includes(n)).slice(0, 10);
+      if (market.length) { lines.push("📊 市场："); market.forEach(n => lines.push(`  • ${n.title}`)); }
+      const strong = ann.filter(a => /业绩|中标|增持|回购|重组|获批/.test(a.title)).slice(0, 5);
+      if (strong.length) { lines.push("📋 公告："); strong.forEach(a => lines.push(`  • ${a.stockName ?? ""}：${a.title}`)); }
+      return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getLocalNews"], degraded: false };
+    } catch { /* 快捷失败→继续 ReAct */ }
+  }
+  // ② 主线类 → 直接用 siteContext（当前页面状态已打包最强主线）
+  if (/主线.*什么|今日主线|最强主线/.test(q) && siteContext.topMainline) {
+    return { reply: `今日最强主线：${siteContext.topMainline}（强度${siteContext.topMainlineScore ?? "?"}分，涨停${siteContext.topMainlineZtCount ?? "?"}只）`, toolsCalled: ["siteContext"], degraded: false };
+  }
+
   for (let round = 0; round < maxRounds; round++) {
     const user = round === 0 ? userCtx : (roundHistory.join("\n") + "\n\n（继续，或直接给最终答复）：");
     let r: AgentChatResult | null;
@@ -196,8 +224,14 @@ export async function runAssistantAgent(
     roundHistory.push("（第" + (round + 1) + "轮 LLM 输出无法解析）");
   }
   // v9.67：智能降级文案 —— 按"调了几个工具"和降级原因分类，不再一刀切
+  // V14-2（= V13-8 补做）：降级时提取已获取工具数据（title 字段）拼入文案，不再空白
   const toolCount = calledTools.size;
   const reason = lastReason;
+  let fbData = "";
+  if (roundHistory.length > 0) {
+    const titles = roundHistory.join("\n").match(/"title":\s*"([^"]+)"/g);
+    if (titles?.length) fbData = "\n\n📝 已获取数据参考：\n" + titles.slice(0, 8).map(t => "• " + t.replace(/"title":\s*"/, "").replace(/"$/, "")).join("\n");
+  }
   let reply: string;
   if (llmOk) {
     reply = "抱歉，本轮未能给出可靠答复（AI 输出异常）。可换个问法重试，或到对应 Tab 查看详细数据。";
@@ -210,6 +244,8 @@ export async function runAssistantAgent(
   } else {
     reply = `⏸ AI 服务异常${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具（${[...calledTools].join("/")}）但最终结论未生成` : ""}。建议稍后重试，或直接查看各 Tab 的实时数据。`;
   }
+  // V14-2（V13-8）：降级时有已获取数据 → 附上（不再"AI 输出异常"空白）
+  reply = fbData ? reply + fbData : reply;
   return {
     reply,
     toolsCalled: [...calledTools],

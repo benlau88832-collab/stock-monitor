@@ -719,6 +719,18 @@ export default function Dashboard({
 
   // 组装因子历史行（读 sentiment/market_daily 序列；v9.40 V4-G 补 4 因子输入字段）
   // v9.55-fix（V7-19 复盘补做）：用北京时间交易日历判回看日期（原 getDay 本地时区会偏移）
+  // v14-9（P2）：market_daily kv 精确类型（替代 as any）
+  interface MarketDailyLite {
+    ztCount?: number | null;
+    blastedRate?: number | null;
+    maxBoardHeight?: number | null;
+    premiumAvg?: number | null;
+    promotionRate?: number | null;
+    sealDecayCount?: number | null;
+    lhbBoostCount?: number | null;
+    fundInflowStreak?: number | null;
+    nuclearCount?: number | null;
+  }
   async function loadFactorRows(): Promise<Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }>> {
     const out: Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }> = [];
     const d = new Date();
@@ -733,7 +745,8 @@ export default function Dashboard({
         if (Number.isFinite(num)) row.sentiment = num;
       } catch { /* 静默 */ }
       try {
-        const md = await kvGet(`market_daily:${ds}`) as any;
+        // v14-9（P2）：market_daily 用精确接口替代 as any
+        const md = await kvGet(`market_daily:${ds}`) as MarketDailyLite | null;
         if (md) {
           row.ztCount = md.ztCount ?? null;
           row.blastedRate = md.blastedRate ?? null;
@@ -748,7 +761,7 @@ export default function Dashboard({
         }
         // v9.57（V8-1）：读次日 market_daily（ztCount/maxBoardHeight）→ "主线延续"标签数据
         const nxt = new Date(t); nxt.setDate(nxt.getDate() + 1);
-        const nxtMd = await kvGet(`market_daily:${bjDateStr(nxt)}`) as any;
+        const nxtMd = await kvGet(`market_daily:${bjDateStr(nxt)}`) as MarketDailyLite | null;
         if (nxtMd) {
           row.nextZtCount = nxtMd.ztCount ?? null;
           row.nextHeight = nxtMd.maxBoardHeight ?? null;

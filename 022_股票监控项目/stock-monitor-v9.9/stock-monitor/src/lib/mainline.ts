@@ -1,5 +1,6 @@
 // 主线作战引擎（v9.16 打破重建）
 // v9.61（V9-S1）：删除死代码 buildMainlineCandidates/determineLeaders/computeMainlineScore
+// v14-4（P1 复查确认）：5 个死函数（+detectExtremeBoard/detectExtremeBatch）全库 0 引用 0 定义 —— 已彻底清理，无残留
 //   （实际走 stockToMainline + themeLadder，此文件仅保留市场风格感知 detectMarketStyle + ETF 偏好）
 // 数据源：涨停池(rawPool) + 板块资金流(boards) + 真实新闻(news)
 import { RISK_APPETITE_ATTACK, RISK_APPETITE_DEFENSE, ZT_COUNT_BOOM, BLAST_RATE_DEFENSE } from "./thresholds";

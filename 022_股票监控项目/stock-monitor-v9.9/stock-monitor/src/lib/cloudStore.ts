@@ -10,7 +10,8 @@
 const SYNC_INTERVAL = 5 * 60 * 1000; // 5 分钟增量同步
 
 // v9.61（V9-S3）：非 debug 的 console.log 收敛到 ?debug=1 开关 —— 生产静默，排查时开 debug 看
-function isDebug(): boolean {
+// v14-8（P2）：isDebug 导出供其他模块复用（boardMap/dataStore/App 的 log 统一门控）
+export function isDebug(): boolean {
   if (typeof window === "undefined") return false;
   return new URLSearchParams(window.location.search).get("debug") === "1";
 }
