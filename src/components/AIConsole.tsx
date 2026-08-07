@@ -84,6 +84,22 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
       // 回复后推进会话状态
       const nextCtx = updateResearchCtxAfterReply(ctx, r.reply, r.toolsCalled);
       if (nextCtx) setResearchCtx(nextCtx);
+      // v10-7（P2）：调研完成（Phase 4 有结论）→ 自动落库 research_reports（选股清单可显示"🔬 深度调研"）
+      if (nextCtx && nextCtx.phase >= 4 && nextCtx.conclusion && !r.degraded) {
+        try {
+          await fetch("/api/research/report", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              code: nextCtx.code,
+              name: nextCtx.name,
+              phase: 4,
+              summary_json: { conclusion: nextCtx.conclusion, collected: nextCtx.collected.slice(-5) },
+              full_text: nextCtx.conclusion,
+            }),
+          }).catch(() => {});
+        } catch { /* 落库失败不阻塞对话 */ }
+      }
       setMsgs(m => m.slice(0, -1).concat({
         role: "ai",
         text: r.reply,
@@ -120,7 +136,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
             <div className="flex items-center gap-2">
               <span className="text-sm font-bold text-violet-300">🤖 全站 AI 助手</span>
-              <span className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] text-slate-500">可问主线/个股/资金/席位/消息</span>
+              <span className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-slate-500">可问主线/个股/资金/席位/消息</span>
             </div>
             <button onClick={() => setOpen(false)} className="rounded px-1.5 py-0.5 text-slate-500 hover:text-slate-300">✕</button>
           </div>
@@ -138,12 +154,12 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
             {msgs.map((m, i) => (
               <div key={i} className={`text-xs ${m.role === "user" ? "text-right" : "text-left"}`}>
                 {m.role === "ai" && m.degraded && (
-                  <div className="mb-1 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-bold text-rose-300">
+                  <div className="mb-1 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-xs font-bold text-rose-300">
                     ⏸ 本次降级回复（非 AI，详见下方说明）
                   </div>
                 )}
                 {m.role === "ai" && m.tools && m.tools.length > 0 && (
-                  <div className="mb-1 text-[9px] text-slate-600">🔍 已调工具：{m.tools.join(" / ")}{m.degraded && m.tools.length > 0 ? "（部分结果可用）" : ""}</div>
+                  <div className="mb-1 text-xs text-slate-600">🔍 已调工具：{m.tools.join(" / ")}{m.degraded && m.tools.length > 0 ? "（部分结果可用）" : ""}</div>
                 )}
                 <div className={`inline-block max-w-[92%] whitespace-pre-wrap rounded-xl px-2.5 py-1.5 text-left ${
                   m.role === "user" ? "bg-violet-500/20 text-violet-100" : "bg-white/5 text-slate-200"

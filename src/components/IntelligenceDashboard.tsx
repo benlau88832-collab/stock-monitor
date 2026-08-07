@@ -400,7 +400,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
           <div className="max-h-[180px] overflow-y-auto [scrollbar-width:thin] space-y-0.5">
             {boardItems.slice(0, 40).map((item, i) => (
               <div key={i} className="flex items-center gap-1 text-[11px] py-0.5 hover:bg-white/5">
-                <span className={`rounded px-1 py-0.5 text-[9px] shrink-0 ${item.tag === "公告" ? "bg-amber-500/20 text-amber-300" : "bg-slate-500/20 text-slate-400"}`}>{item.tag}</span>
+                <span className={`rounded px-1 py-0.5 text-xs shrink-0 ${item.tag === "公告" ? "bg-amber-500/20 text-amber-300" : "bg-slate-500/20 text-slate-400"}`}>{item.tag}</span>
                 <span className="text-slate-500 w-14 shrink-0">{item.time?.slice(5, 10)}</span>
                 <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-slate-300 hover:text-amber-300 truncate flex-1">{item.title}</a>
               </div>
@@ -442,7 +442,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
           ) : historyMemos.map(m => (
             <div key={m.date} className="flex items-center gap-2 text-[11px] py-0.5">
               <span className="text-slate-500 w-14 shrink-0">{m.date.slice(4, 6)}-{m.date.slice(6, 8)}</span>
-              <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${STAGE_COLORS[m.cycleStage]?.split(" ").slice(0, 2).join(" ") ?? ""}`}>{m.cycleStage}</span>
+              <span className={`rounded px-1 py-0.5 text-xs font-bold ${STAGE_COLORS[m.cycleStage]?.split(" ").slice(0, 2).join(" ") ?? ""}`}>{m.cycleStage}</span>
               <span className="text-slate-300 truncate flex-1">{m.focusThemes.join("/") || "—"}</span>
               <span className="text-slate-500 shrink-0 truncate max-w-[100px]">{m.directionAdvice?.slice(0, 18)}</span>
             </div>

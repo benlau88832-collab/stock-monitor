@@ -231,14 +231,14 @@ function streakBadge(s: FundStreak | undefined, side: "inflow" | "outflow") {
   if (!s) return null;
   // 切换信号（无论方向，最值得注意）
   if (side === "outflow" && s.switchedFromHere)
-    return <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300" title={`昨日流入→今日流出（切换信号）`}>⚠切换</span>;
+    return <span className="rounded bg-amber-500/20 px-1 text-xs font-bold text-amber-300" title={`昨日流入→今日流出（切换信号）`}>⚠切换</span>;
   if (side === "inflow" && s.switchedToHere)
-    return <span className="rounded bg-sky-500/20 px-1 text-[9px] font-bold text-sky-300" title={`昨日流出→今日流入（资金进场）`}>↗进场</span>;
+    return <span className="rounded bg-sky-500/20 px-1 text-xs font-bold text-sky-300" title={`昨日流出→今日流入（资金进场）`}>↗进场</span>;
   // 连续流入≥3 天（机构建仓信号）
   if (side === "inflow" && s.consecutiveInflowDays >= 3)
-    return <span className="rounded bg-rose-500/20 px-1 text-[9px] font-bold text-rose-300" title={`连续${s.consecutiveInflowDays}日主力净流入`}>🔥{s.consecutiveInflowDays}日</span>;
+    return <span className="rounded bg-rose-500/20 px-1 text-xs font-bold text-rose-300" title={`连续${s.consecutiveInflowDays}日主力净流入`}>🔥{s.consecutiveInflowDays}日</span>;
   // 连续流出≥3 天
   if (side === "outflow" && s.consecutiveInflowDays <= -3)
-    return <span className="rounded bg-emerald-500/20 px-1 text-[9px] font-bold text-emerald-300" title={`连续${-s.consecutiveInflowDays}日主力净流出`}>❄{-s.consecutiveInflowDays}日</span>;
+    return <span className="rounded bg-emerald-500/20 px-1 text-xs font-bold text-emerald-300" title={`连续${-s.consecutiveInflowDays}日主力净流出`}>❄{-s.consecutiveInflowDays}日</span>;
   return null;
 }

@@ -116,7 +116,7 @@ export default function ReviewPanel() {
         <div className="rounded border border-violet-500/25 bg-violet-500/10 p-2">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[10px] font-bold text-violet-300">🤖 自动复盘 {autoReview.date}（LLM/规则版）</span>
-            <span className="text-[9px] text-slate-500">服务端 cron 15:40 生成</span>
+            <span className="text-xs text-slate-500">服务端 cron 15:40 生成</span>
           </div>
           <pre className="whitespace-pre-wrap text-[10px] text-slate-300 leading-relaxed">{autoReview.text}</pre>
         </div>

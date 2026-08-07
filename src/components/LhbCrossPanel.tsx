@@ -67,7 +67,7 @@ export default function LhbCrossPanel({ overview }: { overview?: OverviewData | 
             <span className={`shrink-0 font-mono font-bold ${it.netBuy >= 0 ? "text-rose-300" : "text-emerald-300"}`}>
               {it.netBuy >= 0 ? "+" : ""}{fmtMoney(it.netBuy)}
             </span>
-            <span className="shrink-0 text-[9px] text-slate-500">{it.pct.toFixed(1)}%</span>
+            <span className="shrink-0 text-xs text-slate-500">{it.pct.toFixed(1)}%</span>
             <span className="ml-auto shrink-0 truncate max-w-[200px] text-[10px] text-slate-500" title={it.explain}>
               {it.explain || ""}
             </span>

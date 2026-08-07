@@ -84,7 +84,7 @@ export default function DisciplinePanel({ overview }: { overview?: OverviewData 
           <span className="font-bold">💰 组合风险预算</span>
           <span className="font-mono">
             {risk.currentPct}% / 上限{risk.maxPositionPct}%
-            <span className="ml-1 text-[9px] opacity-70">({marketState ?? "—"} ×{risk.marketFactor} ×连亏熔断{risk.lossFactor})</span>
+            <span className="ml-1 text-xs opacity-70">({marketState ?? "—"} ×{risk.marketFactor} ×连亏熔断{risk.lossFactor})</span>
           </span>
         </div>
         <div className="mt-0.5">{risk.advice}</div>

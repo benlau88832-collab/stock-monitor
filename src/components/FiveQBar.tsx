@@ -100,27 +100,28 @@ export default function FiveQBar({ battlePlan, overview }: Props) {
       {/* 0. 市场状态（v9.34 S2：幻方"状态自适应"——先判今天是什么市） */}
       {marketState && stateMeta && (
         <div className={`rounded-lg border p-2 ${stateMeta.color.split(" ").slice(0, 2).join(" ")}`}>
-          <div className="text-[9px] text-slate-500">🏛️ 市场状态</div>
+          <div className="text-xs text-slate-500">🏛️ 市场状态</div>
           <div className="mt-0.5 text-xs font-black truncate" title={`置信 ${marketState.confidence}% · ${marketState.evidence.join(" · ")}`}>
             {stateMeta.icon} {marketState.state}
-            <span className="ml-1 rounded bg-black/20 px-1 py-0.5 text-[9px] font-bold">
+            <span className="ml-1 rounded bg-black/20 px-1 py-0.5 text-xs font-bold">
               仓位{Math.round(marketState.positionFactor * 100)}%
             </span>
           </div>
-          <div className="text-[9px] text-slate-500 truncate" title={marketState.playbook}>
+          <div className="text-xs text-slate-500 truncate" title={marketState.playbook}>
             {marketState.playbook}
           </div>
         </div>
       )}
 
       {/* 1. 主线是什么（v9.26 A.3 三态：唯一可交易/多主线轮动/无可交易） */}
-      <div className="rounded-lg border border-white/10 bg-white/5 p-2">
-        <div className="text-[9px] text-slate-500">1️⃣ 主线是什么</div>
-        <div className={`mt-0.5 text-xs font-bold truncate ${mainlineState.cls}`} title={mainlineState.desc}>
+      {/* v10-8（P2）：第一问（最强主线名）放大 —— 今天最强主线是"第一优先级"信息 */}
+      <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-2">
+        <div className="text-xs text-slate-500">1️⃣ 主线是什么</div>
+        <div className={`mt-0.5 text-xl font-black truncate ${mainlineState.cls}`} title={mainlineState.desc}>
           {mainlineState.label}
-          {top && <span className={`ml-1 rounded px-1 py-0.5 text-[9px] font-black ${strengthMeta.color}`}>{topScore}分</span>}
+          {top && <span className={`ml-1.5 rounded px-1.5 py-0.5 text-sm font-black ${strengthMeta.color}`}>{topScore}分</span>}
         </div>
-        <div className="text-[9px] text-slate-500" title={mainlineState.desc}>
+        <div className="text-xs text-slate-500" title={mainlineState.desc}>
           {mainlineState.desc}
           {top && top.strengthMissing && top.strengthMissing.length > 0 && (
             <span className="text-amber-400/80"> 缺:{top.strengthMissing.join("/")}</span>
@@ -130,32 +131,32 @@ export default function FiveQBar({ battlePlan, overview }: Props) {
 
       {/* 2. 处于什么阶段 */}
       <div className="rounded-lg border border-white/10 bg-white/5 p-2">
-        <div className="text-[9px] text-slate-500">2️⃣ 处于什么阶段</div>
+        <div className="text-xs text-slate-500">2️⃣ 处于什么阶段</div>
         <div className="mt-0.5 text-xs font-bold text-amber-300 truncate">{marketStageLabel}</div>
-        <div className="text-[9px] text-slate-500">{battlePlan?.gate?.label ?? "—"}</div>
+        <div className="text-xs text-slate-500">{battlePlan?.gate?.label ?? "—"}</div>
       </div>
 
       {/* 3. 谁是龙头 */}
       <div className="rounded-lg border border-white/10 bg-white/5 p-2">
-        <div className="text-[9px] text-slate-500">3️⃣ 谁是龙头</div>
+        <div className="text-xs text-slate-500">3️⃣ 谁是龙头</div>
         <div className="mt-0.5 text-xs font-bold text-slate-100 truncate">
           {top?.leaders[0]?.name ?? "—"}
           <span className="text-slate-500 ml-1">{top?.leaders[0]?.code ?? ""}</span>
         </div>
-        <div className="text-[9px] text-slate-500">{top?.leaders[0]?.reason?.slice(0, 12) ?? "梯队数据积累中"}</div>
+        <div className="text-xs text-slate-500">{top?.leaders[0]?.reason?.slice(0, 12) ?? "梯队数据积累中"}</div>
       </div>
 
       {/* 4. 能不能上车 */}
       <div className="rounded-lg border border-white/10 bg-white/5 p-2">
-        <div className="text-[9px] text-slate-500">4️⃣ 能不能上车</div>
+        <div className="text-xs text-slate-500">4️⃣ 能不能上车</div>
         <div className={`mt-0.5 inline-block rounded border px-1.5 py-0.5 text-[11px] font-black ${actionColor}`}>
           {action}
-          {admission.pass && <span className="ml-1 text-[9px] font-normal opacity-80">置信 {admission.confidence}%</span>}
+          {admission.pass && <span className="ml-1 text-xs font-normal opacity-80">置信 {admission.confidence}%</span>}
         </div>
-        <div className="text-[9px] text-slate-500 mt-0.5 truncate" title={admission.pass ? admission.reasons.join("；") : admission.blockers.join("；")}>
+        <div className="text-xs text-slate-500 mt-0.5 truncate" title={admission.pass ? admission.reasons.join("；") : admission.blockers.join("；")}>
           {admission.pass ? admission.reasons.join("；") : (admission.blockers[0] ?? "—")}
         </div>
-        <div className="text-[9px] text-slate-500 mt-0.5">
+        <div className="text-xs text-slate-500 mt-0.5">
           闸门×{battlePlan?.gate?.factor?.toFixed(1) ?? "—"}
           <DisclaimerTag />
         </div>
@@ -163,13 +164,13 @@ export default function FiveQBar({ battlePlan, overview }: Props) {
 
       {/* 5. 什么时候跑 */}
       <div className="rounded-lg border border-white/10 bg-white/5 p-2">
-        <div className="text-[9px] text-slate-500">5️⃣ 什么时候跑</div>
+        <div className="text-xs text-slate-500">5️⃣ 什么时候跑</div>
         {top?.exitSignal ? (
           <div className="mt-0.5 text-[11px] font-bold text-rose-400">⚠ 已触发</div>
         ) : (
           <div className="mt-0.5 text-[11px] font-bold text-emerald-400">✓ 尚未触发</div>
         )}
-        <div className="text-[9px] text-slate-500 truncate" title={top?.exitSignalText ?? ""}>
+        <div className="text-xs text-slate-500 truncate" title={top?.exitSignalText ?? ""}>
           {top?.exitSignalText ?? "持续监控炸板率/晋级率"}
         </div>
       </div>

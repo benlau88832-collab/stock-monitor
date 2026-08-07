@@ -109,9 +109,9 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
                   <td className="px-1 py-0.5 text-center text-slate-400">{it.boardCount ? `${it.boardCount}板` : "—"}</td>
                   <td className="px-1 py-0.5 text-center">
                     {it.auctionLimitUp ? (
-                      <span className="rounded bg-rose-500/20 px-1 py-0.5 text-[9px] font-bold text-rose-300">⚡竞价涨停</span>
+                      <span className="rounded bg-rose-500/20 px-1 py-0.5 text-xs font-bold text-rose-300">⚡竞价涨停</span>
                     ) : it.auctionGapDown ? (
-                      <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-[9px] font-bold text-emerald-300">大幅低开</span>
+                      <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-xs font-bold text-emerald-300">大幅低开</span>
                     ) : (
                       <span className={`font-mono ${it.strength >= 70 ? "text-rose-300" : it.strength >= 40 ? "text-amber-300" : "text-slate-400"}`}>
                         {it.strength}
@@ -127,7 +127,7 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
         <div className="text-[10px] text-slate-500">{loading ? "加载中…" : "暂无竞价数据"}</div>
       )}
 
-      <div className="text-[9px] text-slate-600">仅用于早盘强度观察，非交易依据 · 竞价数据为开盘首笔近似</div>
+      <div className="text-xs text-slate-600">仅用于早盘强度观察，非交易依据 · 竞价数据为开盘首笔近似</div>
     </div>
   );
 }

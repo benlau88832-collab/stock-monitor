@@ -104,7 +104,7 @@ export default function LadderPulse({ overview }: Props) {
       <div className="flex items-center justify-between">
         <span className="text-xs font-bold text-amber-200">🧠 AI把脉</span>
         <div className="flex items-center gap-2">
-          {degraded && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300">规则版</span>}
+          {degraded && <span className="rounded px-1 py-0.5 text-xs font-bold bg-amber-500/20 text-amber-300">规则版</span>}
           {genTime && <span className="text-[11px] text-slate-600">{genTime}</span>}
           <button onClick={generate} disabled={loading}
             className="text-[11px] text-violet-400 hover:text-violet-300 disabled:opacity-40">

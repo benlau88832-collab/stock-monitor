@@ -89,6 +89,46 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
   //   研判形同虚设；现从 rawPool 取真实原始字段喂给 decideForStock
   const [aiMap, setAiMap] = useState<Map<string, StockVerdict>>(new Map());
   const [aiRateLimited, setAiRateLimited] = useState(false);
+  // v10-5（P1）：盯价偏离度 map（code → 偏离%）—— 从 price_watch 清单读，30s 轮询
+  const [watchMap, setWatchMap] = useState<Map<string, number>>(new Map());
+  // v10-7（P2）：深度调研摘要 map（code → 结论）—— 从 research_reports 读
+  const [researchMap, setResearchMap] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/watch/list");
+        const j = await r.json();
+        if (j.ok && alive) {
+          const m = new Map<string, number>();
+          for (const w of j.items ?? []) {
+            if (w.status === "active" && w.deviation != null) m.set(String(w.code), Number(w.deviation));
+          }
+          setWatchMap(m);
+        }
+      } catch { /* 服务端不可用 → 不显示 */ }
+      // v10-7：深度调研摘要（research_reports 落库的最新报告）
+      try {
+        const codes = pick?.picks.map(p => p.code).join(",") ?? "";
+        if (codes) {
+          const r2 = await fetch(`/api/research/reports?codes=${encodeURIComponent(codes)}`);
+          const j2 = await r2.json();
+          if (j2.ok && alive) {
+            const rm = new Map<string, string>();
+            for (const it of j2.items ?? []) {
+              const c = String(it.code ?? "");
+              const concl = it.summary_json?.conclusion ?? it.rr_json?.conclusion ?? "";
+              if (c && concl) rm.set(c, String(concl).slice(0, 120));
+            }
+            setResearchMap(rm);
+          }
+        }
+      } catch { /* 静默 */ }
+    };
+    load();
+    const t = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, [pick?.picks]);
   useEffect(() => {
     if (!pick || pick.picks.length === 0) return;
     let alive = true;
@@ -140,46 +180,58 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
   return (
     <div className="rounded-xl border border-rose-500/25 bg-rose-950/10 p-3">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-bold text-rose-200">
+        {/* V10-2：标题 text-xs → text-base font-black */}
+        <span className="text-base font-black text-rose-200">
           🎯 今日上车标的清单
-          <span className="ml-1.5 text-[10px] text-slate-500 font-normal">主线「{pick.mainline}」{pick.stage} · {pick.ztCount}只涨停 · 最高{pick.height}板</span>
+          <span className="ml-1.5 text-xs text-slate-500 font-normal">主线「{pick.mainline}」{pick.stage} · {pick.ztCount}只涨停 · 最高{pick.height}板</span>
         </span>
         <div className="flex items-center gap-1">
-          {pick.contend && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold text-amber-300" title={pick.contend}>⚠ 卡位</span>}
+          {pick.contend && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-bold text-amber-300" title={pick.contend}>⚠ 卡位</span>}
           <DisclaimerTag />
         </div>
       </div>
 
       {/* v9.53（V7-11）：AI 配额受限 → 显式标注"本次非 AI" */}
       {aiRateLimited && (
-        <div className="mb-2 rounded border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-[10px] font-bold text-rose-200">
+        <div className="mb-2 rounded border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-xs font-bold text-rose-200">
           ⏸ AI 配额受限，标的研判为规则降级（非 AI 主导）
         </div>
       )}
 
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         {pick.picks.map(p => (
-          <div key={p.code} className="flex items-center gap-2 rounded-lg border border-white/5 bg-black/20 px-2.5 py-1.5">
-            <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-black ${roleColor[p.role]}`}>{p.role}</span>
+          <div key={p.code} className="flex items-center gap-2 rounded-lg border border-white/5 bg-black/20 px-2.5 py-2">
+            <span className={`shrink-0 rounded border px-1.5 py-0.5 text-xs font-black ${roleColor[p.role]}`}>{p.role}</span>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="truncate text-xs font-bold text-slate-100">{p.name}</span>
-                <span className="text-[9px] text-slate-600">{p.code}</span>
-                <span className="text-[9px] text-slate-500">{p.boardCount}板</span>
-                <span className="rounded bg-white/5 px-1 py-px text-[9px] text-slate-400" title="涨停池轻量评分(封单30/连板25/换手20/炸板/首板)">分{p.pickScore}</span>
-                {p.fundNote && <span className="truncate text-[9px] text-cyan-300/80">💧 {p.fundNote}</span>}
+              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                {/* V10-2：标的名称 text-xs → text-xl font-black（L1 核心） */}
+                <span className="truncate text-xl font-black text-slate-50">{p.name}</span>
+                {/* V10-2：代码/板数/评分 text-xs → text-xs（L3 辅助） */}
+                <span className="text-xs text-slate-500">{p.code}</span>
+                <span className="text-xs text-slate-400">{p.boardCount}板</span>
+                <span className="rounded bg-white/5 px-1 py-px text-xs text-slate-400" title="涨停池轻量评分(封单30/连板25/换手20/炸板/首板)">分{p.pickScore}</span>
+                {p.fundNote && <span className="truncate text-xs text-cyan-300/80">💧 {p.fundNote}</span>}
+                {/* v10-5（P1）：盯价偏离度徽章（已在盯价监控中的标的直接显示偏离） */}
+                {watchMap.has(p.code) && (
+                  <span className={`rounded px-1.5 py-0.5 text-xs font-bold ${
+                    Math.abs(watchMap.get(p.code)!) > 3 ? "bg-rose-500/20 text-rose-300" : "bg-sky-500/20 text-sky-300"
+                  }`} title="盯价监控中的偏离度（相对买入区中值）">
+                    📡 偏离 {watchMap.get(p.code)! > 0 ? "+" : ""}{watchMap.get(p.code)!.toFixed(1)}%
+                  </span>
+                )}
               </div>
-              <div className="mt-0.5 text-[10px] text-slate-400">
+              {/* V10-2：买入逻辑 text-xs → text-sm（L2 关键） */}
+              <div className="mt-0.5 text-sm text-slate-300">
                 {p.buyLogic} · <span className="text-amber-200/70">{p.entryStrategy}</span>
               </div>
               {/* v9.53（V7-2/10）：AI 一句话研判（逐标的） */}
               {(() => {
                 const ai = aiMap.get(p.code);
-                if (!ai) return <div className="mt-0.5 text-[9px] text-slate-600">🤖 AI 研判中…</div>;
+                if (!ai) return <div className="mt-0.5 text-xs text-slate-600">🤖 AI 研判中…</div>;
                 const vc = ai.verdict === "可买" ? "bg-emerald-500/20 text-emerald-300" : ai.verdict === "回避" ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300";
                 return (
-                  <div className="mt-0.5 text-[10px]">
-                    <span className={`mr-1 rounded px-1 py-px text-[9px] font-bold ${vc}`}>{ai.verdict}</span>
+                  <div className="mt-0.5 text-sm">
+                    <span className={`mr-1 rounded px-1 py-px text-xs font-bold ${vc}`}>{ai.verdict}</span>
                     <span className="text-violet-300/90">{ai.reason}</span>
                     {ai.keyLevel && <span className="text-slate-500"> · 📌 {ai.keyLevel}</span>}
                     {ai.riskPoints.length > 0 && <span className="text-rose-300/70"> · ⚠ {ai.riskPoints.join("、")}</span>}
@@ -187,24 +239,30 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
                 );
               })()}
               {p.risks.length > 0 && (
-                <div className="mt-0.5 text-[9px] text-rose-300/70">⚠ {p.risks.join(" · ")}</div>
+                <div className="mt-0.5 text-xs text-rose-300/70">⚠ {p.risks.join(" · ")}</div>
+              )}
+              {/* v10-7（P2）：妙想深度调研结论嵌入（research_reports 最新落库） */}
+              {researchMap.has(p.code) && (
+                <div className="mt-0.5 rounded bg-violet-500/10 px-1.5 py-0.5 text-xs text-violet-300/90">
+                  🔬 深度调研：{researchMap.get(p.code)}
+                </div>
               )}
             </div>
+            {/* V10-2：仓位独立色块 + 止损（与名称同高，L1 核心） */}
             <div className="shrink-0 text-right">
-              <div className="text-xs font-black text-emerald-300">{p.suggestedPct}%</div>
-              <div className="text-[9px] text-slate-500">仓位</div>
-              <div className="mt-0.5 text-[9px] text-rose-300/80">止损{p.stopLoss}%</div>
+              <span className="rounded-lg bg-emerald-500/20 px-2.5 py-1 text-lg font-black text-emerald-300">{p.suggestedPct}%</span>
+              <div className="mt-0.5 text-sm text-slate-500">止损 {p.stopLoss}%</div>
             </div>
           </div>
         ))}
       </div>
 
       {pick.excluded.length > 0 && (
-        <div className="mt-1.5 text-[9px] text-slate-600">
+        <div className="mt-1.5 text-xs text-slate-600">
           已剔除 {pick.excluded.length} 只（{pick.excluded.map(e => `${e.name}(${e.reason})`).join("、")}）
         </div>
       )}
-      <div className="mt-1.5 text-[9px] text-slate-600">
+      <div className="mt-1.5 text-xs text-slate-600">
         💡 规则引擎按「龙一打板 → 龙二/三接力 → 首板低吸」分桶；仓位联动闸门（合计≤30%）；诱多/否决已剔除。仅供参考，不构成投资建议。
       </div>
     </div>

@@ -258,7 +258,7 @@ function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
       <div className="flex items-center justify-between text-[10px]">
         <span className="text-slate-400">{label} <span className="text-slate-600">({weight})</span></span>
         <span className={`font-mono font-bold ${score >= 70 ? "text-emerald-300" : score >= 40 ? "text-amber-300" : "text-rose-300"}`}>
-          {score.toFixed(0)} <span className="text-[9px] text-slate-500">({scoreLabel(score)})</span>
+          {score.toFixed(0)} <span className="text-xs text-slate-500">({scoreLabel(score)})</span>
         </span>
       </div>
       <div className="h-1.5 bg-white/5 rounded overflow-hidden">
@@ -292,7 +292,7 @@ function BuySellAnalysisPanel({ buyers, sellers, behaviorMap }: {
             analysis.scores.total >= 70 ? "text-emerald-400" :
             analysis.scores.total >= 40 ? "text-amber-400" : "text-rose-400"
           }`}>{analysis.scores.total}</span>
-          <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+          <span className={`rounded px-1.5 py-0.5 text-xs font-bold ${
             analysis.confidence === "强" ? "bg-emerald-500/20 text-emerald-300" :
             analysis.confidence === "中" ? "bg-amber-500/20 text-amber-300" :
             "bg-rose-500/20 text-rose-300"
@@ -391,7 +391,7 @@ function SeatHistoryExpansion({ deptName }: { deptName: string }) {
                 <span className="rounded bg-amber-500/20 text-amber-300 px-1">{r.count}</span>
               </td>
               <td className="px-1 py-0.5 text-center">
-                <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${r.direction === "买" ? "bg-rose-500/20 text-rose-300" : r.direction === "卖" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>
+                <span className={`rounded px-1 py-0.5 text-xs font-bold ${r.direction === "买" ? "bg-rose-500/20 text-rose-300" : r.direction === "卖" ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>
                   {r.direction}
                 </span>
               </td>

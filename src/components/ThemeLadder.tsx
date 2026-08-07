@@ -226,7 +226,7 @@ function ThemeRow({
             <span className="text-slate-200 font-bold ml-0.5">{group.pioneer.name}</span>
             <span className="text-slate-500 ml-0.5">{group.pioneer.firstBoardTime.slice(0, 5)}</span>
             {earlyBird && (
-              <span className="ml-1 rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300">
+              <span className="ml-1 rounded px-1 py-0.5 text-xs font-bold bg-amber-500/20 text-amber-300">
                 早盘先锋
               </span>
             )}

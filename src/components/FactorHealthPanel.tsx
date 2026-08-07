@@ -222,7 +222,7 @@ export default function FactorHealthPanel() {
               <div className="w-36 shrink-0">
                 <div className="text-xs font-semibold text-slate-200">{f.name}</div>
                 <div className="mt-0.5 flex items-center gap-1">
-                  <span className={`rounded px-1 py-px text-[9px] font-bold ${
+                  <span className={`rounded px-1 py-px text-xs font-bold ${
                     retired ? "bg-slate-500/30 text-slate-300"
                     : flipped ? "bg-cyan-500/20 text-cyan-300"
                     : cur.decayed ? "bg-rose-500/20 text-rose-300"
@@ -231,7 +231,7 @@ export default function FactorHealthPanel() {
                   }`}>
                     {retired ? "⛔ 退役" : flipped ? "↻ 已反向" : cur.decayed ? "⚠ 失效" : cur.reversed ? "↻ 反转" : "健康"}
                   </span>
-                  <span className="text-[9px] text-slate-500">样本{cur.samples}</span>
+                  <span className="text-xs text-slate-500">样本{cur.samples}</span>
                 </div>
               </div>
               <div className="min-w-0 flex-1"><IcSpark points={pts} factorName={f.name} overrideIc={flipped ? showIc : null} /></div>

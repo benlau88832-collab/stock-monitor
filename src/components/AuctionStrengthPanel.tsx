@@ -81,10 +81,10 @@ export default function AuctionStrengthPanel({ yesterdayZt = [], todayZt = [] }:
             <span className={`shrink-0 font-mono font-bold ${it.auctionPct >= 0 ? "text-rose-300" : "text-emerald-300"}`}>
               {it.auctionPct >= 0 ? "+" : ""}{it.auctionPct.toFixed(1)}%
             </span>
-            {it.auctionLimitUp && <span className="rounded bg-rose-500/30 px-1 text-[9px] font-black text-rose-200">竞价封板</span>}
-            {it.auctionGapDown && <span className="rounded bg-emerald-500/20 px-1 text-[9px] font-black text-emerald-300">低开</span>}
+            {it.auctionLimitUp && <span className="rounded bg-rose-500/30 px-1 text-xs font-black text-rose-200">竞价封板</span>}
+            {it.auctionGapDown && <span className="rounded bg-emerald-500/20 px-1 text-xs font-black text-emerald-300">低开</span>}
             {it.boardCount != null && (
-              <span className="rounded bg-amber-500/15 px-1 text-[9px] font-bold text-amber-300">{it.boardCount}板</span>
+              <span className="rounded bg-amber-500/15 px-1 text-xs font-bold text-amber-300">{it.boardCount}板</span>
             )}
             <span className="ml-auto shrink-0 text-slate-500">{it.openAmountYi > 0 ? `竞价${it.openAmountYi.toFixed(1)}亿` : ""}</span>
           </a>

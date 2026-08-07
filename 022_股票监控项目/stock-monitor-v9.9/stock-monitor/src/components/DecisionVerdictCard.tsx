@@ -102,26 +102,28 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
           <span className="text-xs font-bold text-slate-200">
             {aiVerdict ? "🤖 AI 决策（自动主导）" : agent?.rateLimited ? "🧠 规则决策（AI 配额受限）" : "🧠 AI 终裁决（规则投票）"}
           </span>
-          {aiVerdict && <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">LLM 工具调研</span>}
+          {aiVerdict && <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-bold text-amber-300">LLM 工具调研</span>}
           {/* v9.45（V5-2）：Agent 路径徽标 —— 原生 tool_calls / JSON 协议 */}
-          {aiVerdict?.path === "native_toolcall" && <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">⚙ 原生 tool_calls</span>}
-          {aiVerdict?.path === "manual_json" && <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-bold text-sky-300">🧩 JSON 协议</span>}
+          {aiVerdict?.path === "native_toolcall" && <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-xs font-bold text-emerald-300">⚙ 原生 tool_calls</span>}
+          {aiVerdict?.path === "manual_json" && <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-xs font-bold text-sky-300">🧩 JSON 协议</span>}
           {/* v9.43：AI 结论已计入因子健康度门控（finalize 强制扣置信） */}
           {aiVerdict && /因子健康度/.test(aiVerdict.reason || "") && (
-            <span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">🧪 因子门控已计入</span>
+            <span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-xs font-bold text-cyan-300">🧪 因子门控已计入</span>
           )}
           <DisclaimerTag />
         </div>
-        <span className="max-w-[160px] truncate text-[10px] text-slate-500" title={mainline}>{mainline}</span>
+        <span className="max-w-[160px] truncate text-xs text-slate-500" title={mainline}>{mainline}</span>
       </div>
 
       <div className="mt-1.5 flex items-center gap-2">
-        <span className={`rounded-lg border px-2.5 py-1 text-base font-black ${actionColor}`}>
-          {mainAction === "可上车" ? "参考关注（可上车）" : mainAction === "观望" ? "观望" : "禁止参与"}
+        {/* V10-1：裁决 text-base → text-4xl font-black（整屏最大最亮，游资 3 秒看到结论） */}
+        <span className={`rounded-xl border-2 px-4 py-2 text-4xl font-black ${actionColor}`}>
+          {mainAction === "可上车" ? "✅ 可上车" : mainAction === "观望" ? "⏸ 观望" : "🚫 禁止"}
         </span>
-        <span className="text-[11px] text-slate-400">置信 <b className="text-slate-200">{mainConfidence}%</b></span>
+        {/* V10-1：置信 text-[11px] → text-xl font-bold */}
+        <span className="text-xl font-bold text-slate-200">置信 <b className="text-slate-100">{mainConfidence}%</b></span>
         {factorStats && factorStats.total >= 3 && factorStats.decayed >= Math.ceil(factorStats.total * 0.3) && (
-          <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-bold text-rose-300" title="滚动IC<0.05的因子占比高，已自动下调置信">
+          <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-xs font-bold text-rose-300" title="滚动IC<0.05的因子占比高，已自动下调置信">
             🧪 {factorStats.decayed}/{factorStats.total} 因子失效
           </span>
         )}
@@ -129,47 +131,48 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
 
       {/* V4-C：AI-规则分歧显式告警（不静默覆盖） */}
       {aiRuleDivergent && (
-        <div className="mt-1.5 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300">
+        <div className="mt-1.5 rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs font-bold text-rose-300">
           ⚠ AI 与规则多源分歧：AI={aiVerdict!.action} / 规则={ruleVerdict}，已按{mainAction === ruleVerdict ? "规则" : "AI"}显示，建议人工复核
         </div>
       )}
       {/* V4-B：门控降档标注 */}
       {gatedDowngrade && (
-        <div className="mt-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+        <div className="mt-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
           {gatedDowngrade}
         </div>
       )}
       {/* V4-I：样本不足提示 */}
       {lowSamples && (
-        <div className="mt-1 text-[9px] text-slate-500">⚠ 历史样本不足（因子/回测数据积累中），AI 结论仅参考，不构成高置信决策</div>
+        <div className="mt-1 text-xs text-slate-500">⚠ 历史样本不足（因子/回测数据积累中），AI 结论仅参考，不构成高置信决策</div>
       )}
 
       {/* AI 推理链（置顶理由） */}
       {aiVerdict ? (
-        <div className="mt-1.5 space-y-1">
-          <div className="text-[12px] leading-snug text-amber-200/90">💬 {aiVerdict.reason || "（AI 未给出理由）"}</div>
+        <div className="mt-2 space-y-1">
+          {/* V10-1：AI 理由 text-[12px] → text-base leading-relaxed */}
+          <div className="text-base leading-relaxed text-amber-200/90">💬 {aiVerdict.reason || "（AI 未给出理由）"}</div>
           {aiVerdict.critic && (
-            <div className="rounded border border-rose-500/20 bg-rose-500/5 px-2 py-1 text-[10px] text-rose-300/80">
+            <div className="rounded border border-rose-500/20 bg-rose-500/5 px-2 py-1 text-xs text-rose-300/80">
               {aiVerdict.critic}
             </div>
           )}
-          <div className="text-[9px] text-slate-600">证据包：{aiVerdict.evidence?.length ?? 0} 项工具结果{agent?.rounds ? ` · ${agent.rounds} 轮 ReAct` : ""}{agent?.toolsCalled?.length ? ` · 调 ${agent.toolsCalled.length} 工具` : ""}{agent?.selfConsistency ? ` · 自洽一致 ${agent.selfConsistency}%` : ""}</div>
+          <div className="text-xs text-slate-600">证据包：{aiVerdict.evidence?.length ?? 0} 项工具结果{agent?.rounds ? ` · ${agent.rounds} 轮 ReAct` : ""}{agent?.toolsCalled?.length ? ` · 调 ${agent.toolsCalled.length} 工具` : ""}{agent?.selfConsistency ? ` · 自洽一致 ${agent.selfConsistency}%` : ""}</div>
         </div>
       ) : agent?.degraded ? (
-        <div className="mt-1 text-[10px] text-slate-500">⚠ LLM 不可用，规则投票兜底{agent.reason ? `：${agent.reason}` : ""}</div>
+        <div className="mt-1 text-xs text-slate-500">⚠ LLM 不可用，规则投票兜底{agent.reason ? `：${agent.reason}` : ""}</div>
       ) : (
-        <div className="mt-1 text-[10px] text-slate-500">Agent 调研中（5 分钟自动刷新）…</div>
+        <div className="mt-1 text-xs text-slate-500">Agent 调研中（5 分钟自动刷新）…</div>
       )}
 
       {/* 规则投票（折叠为证据，不再并列抢眼球） */}
       {verdict && (
         <details className="mt-1.5" open={showEvidence}>
-          <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-400" onClick={() => setShowEvidence(v => !v)}>
+          <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-400" onClick={() => setShowEvidence(v => !v)}>
             📊 规则多源投票（{verdict.votes.length} 源 · 点击展开）
           </summary>
           <div className="mt-1 space-y-1">
             {verdict.votes.map(v => (
-              <div key={v.name} className="flex items-center gap-2 text-[10px]">
+              <div key={v.name} className="flex items-center gap-2 text-xs">
                 <span className="w-16 shrink-0 text-slate-400">{v.name}</span>
                 <span className={`rounded px-1.5 py-0.5 font-bold ${
                   v.verdict === "可上车" ? "bg-emerald-500/15 text-emerald-300"
@@ -181,20 +184,20 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
             ))}
             {/* 反对意见 */}
             {verdict.dissent.length > 0 && (
-              <div className="rounded border border-rose-500/20 bg-rose-500/5 px-2 py-1 text-[10px] text-rose-300/80">
+              <div className="rounded border border-rose-500/20 bg-rose-500/5 px-2 py-1 text-xs text-rose-300/80">
                 ⚠ 反对意见：{verdict.dissent.join("；")}
               </div>
             )}
             {/* 被门控信号 */}
             {verdict.gatedSignals.length > 0 && (
-              <div className="text-[9px] text-slate-500">🚪 回测门控：{verdict.gatedSignals.join("；")}</div>
+              <div className="text-xs text-slate-500">🚪 回测门控：{verdict.gatedSignals.join("；")}</div>
             )}
             {/* 证据链（可审计） */}
             <details>
-              <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-400">📋 证据链（点击展开）</summary>
+              <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-400">📋 证据链（点击展开）</summary>
               <div className="mt-0.5 space-y-0.5">
                 {verdict.evidence.map((e, i) => (
-                  <div key={i} className="text-[10px] text-slate-400">• {e}</div>
+                  <div key={i} className="text-xs text-slate-400">• {e}</div>
                 ))}
               </div>
             </details>

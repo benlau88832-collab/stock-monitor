@@ -356,7 +356,7 @@ export default function Playbook({ sentiment, limitUpCount, blastedRate, overvie
               data.aiReviewDegraded ? "border-amber-500/30 bg-amber-500/5 text-amber-200" : "border-violet-500/30 bg-violet-500/5 text-slate-200"
             }`}>
               {data.aiReviewDegraded && (
-                <span className="inline-block rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300 mb-1">规则版</span>
+                <span className="inline-block rounded px-1 py-0.5 text-xs font-bold bg-amber-500/20 text-amber-300 mb-1">规则版</span>
               )}
               {data.aiReview}
             </div>

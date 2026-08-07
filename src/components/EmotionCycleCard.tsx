@@ -70,9 +70,9 @@ export default function EmotionCycleCard({ input, premiumDist = null }: Props) {
           <div className="flex items-end gap-1.5 h-8">
             {distBars.map(b => (
               <div key={b.label} className="flex-1 flex flex-col items-center gap-0.5">
-                <span className="text-[9px] text-slate-400">{b.val}</span>
+                <span className="text-xs text-slate-400">{b.val}</span>
                 <div className={`w-full rounded-sm ${b.color}`} style={{ height: `${Math.max(8, b.val / distTotal * 32)}px`, opacity: 0.8 }} />
-                <span className="text-[9px] text-slate-500">{b.label}</span>
+                <span className="text-xs text-slate-500">{b.label}</span>
               </div>
             ))}
           </div>

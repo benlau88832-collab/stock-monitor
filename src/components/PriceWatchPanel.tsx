@@ -159,7 +159,7 @@ export default function PriceWatchPanel() {
                   <div className="font-medium text-slate-100">
                     {w.name} <span className="text-slate-500">({w.code})</span>
                     {w.status !== "active" && (
-                      <span className="ml-1 rounded bg-white/10 px-1 text-[9px] text-slate-400">{w.status === "paused" ? "已暂停" : "已完成"}</span>
+                      <span className="ml-1 rounded bg-white/10 px-1 text-xs text-slate-400">{w.status === "paused" ? "已暂停" : "已完成"}</span>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
@@ -185,7 +185,7 @@ export default function PriceWatchPanel() {
                   <div className="absolute top-0 h-full rounded bg-emerald-500/30" style={{ left: `${50 - tp / 2}%`, width: `${tp}%` }} />
                   <div className="absolute top-0 h-full rounded bg-slate-300/70" style={{ left: `${barPos}%`, width: "3px", transform: "translateX(-50%)" }} title={`偏离 ${dev}%`} />
                 </div>
-                {w.note && <div className="mt-1 text-[9px] text-slate-600">{w.note}</div>}
+                {w.note && <div className="mt-1 text-xs text-slate-600">{w.note}</div>}
               </div>
             );
           })}

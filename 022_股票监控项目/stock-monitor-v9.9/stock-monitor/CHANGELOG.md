@@ -4,6 +4,32 @@
 
 ---
 
+## v9.69 — GLM5.2 V10 全部落地：视觉层级重构 + AI 决策贯通体验（8/8 指令）(2026-08-07)
+
+> 依据 `022_股票监控项目/GLM5.2建议-v10.txt`（319 行审查报告）逐条执行，8 条修改指令全部完成。
+> 核心目标：把 AI 结论从"蚂蚁字堆里的一员"变成"整屏最大最亮的东西"——游资 3 秒看到"买什么、上多少仓"。
+
+### 🔴 P0 视觉层级核心（V10-1/2/3）
+- **V10-1 DecisionVerdictCard**：裁决 text-base(16px)→**text-4xl(36px) font-black**（✅可上车/⏸观望/🚫禁止）+ 置信 text-xl + AI 理由 text-base；规则投票保持折叠
+- **V10-2 StockPickList 三级字号**：标题 text-base、标的名称 text-xl font-black、代码/板数 text-xs、**仓位独立色块**（text-lg font-black emerald）、止损 text-sm、AI 研判 text-sm violet、买入逻辑 text-sm、卡片间距 space-y-2
+- **V10-3 Dashboard 重排**：StockPickList **紧贴 DecisionVerdictCard**（裁决→选股一气呵成），BattlePlan/LimitTempBar 移到下方
+
+### 🟠 P1 AI 贯通体验（V10-4/5/6）
+- **V10-4 BattlePlan 内嵌 AI 裁决**：每条主线标题旁显示"🤖 可上车 82%"徽章（agentResults 按主线名匹配）
+- **V10-5 选股嵌入盯价**：每只标的名旁显示"📡 偏离 ±X%"徽章（30s 轮询 /api/watch/list，偏离>3% 红/≤3% 蓝）
+- **V10-6 全局字号底线**：全仓 text-[9px] 93 处→text-xs、决策区 4 文件 text-[10px] 45 处→text-xs，**grep 验收 0 残留**
+
+### 🟡 P2 增强（V10-7/8）
+- **V10-7 妙想调研嵌入选股**：闭环打通 —— server +POST /api/research/report（落库，同日幂等）+GET /api/research/reports（批量查最新）；AIConsole 调研完成（Phase 4 有结论）自动落库；选股清单显示"🔬 深度调研：结论"
+- **V10-8 FiveQBar 第一问放大**：主线名 text-xs→**text-xl font-black**（今天最强主线 = 第一优先级信息），卡片描边强调
+
+### 遵循 CLAUDE.md
+- 三重验证门：tsc 0 error / build 成功 / test 155 全绿
+- 跨文件一致性：BattlePlan 加 prop → Dashboard 调用同步；StockPickList watchMap/researchMap → server 接口配套
+- 落库冒烟：POST report → GET reports 查回 → 删除测试记录 ✅
+
+---
+
 ## v9.68 — AI 一键加入个股雷达 + 开启盯价监控（调研→雷达→监控闭环）(2026-08-07)
 
 > 用户需求：对任意未监控个股，让 AI 助手直接加入个股雷达并开启盯价监控。

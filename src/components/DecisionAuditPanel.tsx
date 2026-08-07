@@ -155,7 +155,7 @@ export default function DecisionAuditPanel() {
                             {l.action === "可上车" ? "可上车" : l.action}
                           </span>
                           <span className="text-[10px] text-slate-400">置信 <b className="text-slate-200">{l.confidence}%</b></span>
-                          <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${l.source === "AI-Agent" ? "bg-amber-500/20 text-amber-300" : "bg-violet-500/20 text-violet-300"}`}>
+                          <span className={`rounded px-1 py-0.5 text-xs font-bold ${l.source === "AI-Agent" ? "bg-amber-500/20 text-amber-300" : "bg-violet-500/20 text-violet-300"}`}>
                             {l.source === "AI-Agent" ? "🤖 AI" : "🧠 规则"}
                           </span>
                           <span className="ml-auto max-w-[150px] truncate text-[10px] text-slate-500" title={l.mainline}>{l.mainline}</span>
@@ -170,7 +170,7 @@ export default function DecisionAuditPanel() {
                           <div className="mt-0.5 text-[10px] text-rose-300/80">🔍 {l.agentCritic}</div>
                         )}
                         {l.dissent && l.dissent.length > 0 && (
-                          <div className="mt-0.5 text-[9px] text-amber-300/60">分歧：{l.dissent.join("；").slice(0, 80)}</div>
+                          <div className="mt-0.5 text-xs text-amber-300/60">分歧：{l.dissent.join("；").slice(0, 80)}</div>
                         )}
                       </div>
                     );

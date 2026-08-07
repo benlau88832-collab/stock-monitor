@@ -53,4 +53,43 @@ module.exports = function researchRoutes(app) {
     const r = await runMx(MX_SEARCH, q);
     res.json(r);
   });
+
+  // v10-7（P2）：调研报告落库（AIConsole 调研完成后自动调用，同日幂等覆盖）
+  app.post("/api/research/report", async (req, res) => {
+    try {
+      const { pool } = require("../db");
+      const b = req.body ?? {};
+      const code = String(b.code || "").trim();
+      if (!code) return res.status(400).json({ error: "code required" });
+      await pool.query(
+        `INSERT INTO research_reports(code,name,report_date,phase,summary_json,valuation_json,levels_json,rr_json,full_text,created_at)
+         VALUES($1,$2,CURRENT_DATE,$3,$4,$5,$6,$7,$8,now())
+         ON CONFLICT(code,report_date) DO UPDATE SET
+           name=EXCLUDED.name, phase=EXCLUDED.phase, summary_json=EXCLUDED.summary_json,
+           valuation_json=EXCLUDED.valuation_json, levels_json=EXCLUDED.levels_json,
+           rr_json=EXCLUDED.rr_json, full_text=EXCLUDED.full_text, created_at=now()`,
+        [code, String(b.name || "").slice(0, 40), Number(b.phase ?? 4),
+          b.summary_json ? JSON.stringify(b.summary_json) : null,
+          b.valuation_json ? JSON.stringify(b.valuation_json) : null,
+          b.levels_json ? JSON.stringify(b.levels_json) : null,
+          b.rr_json ? JSON.stringify(b.rr_json) : null,
+          String(b.full_text || "").slice(0, 20000)],
+      );
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // v10-7（P2）：按代码批量查最新调研报告（选股清单显示"🔬 深度调研"用）
+  app.get("/api/research/reports", async (req, res) => {
+    try {
+      const { pool } = require("../db");
+      const codes = String(req.query.codes || "").split(",").map(s => s.trim()).filter(Boolean);
+      if (codes.length === 0) return res.json({ ok: true, items: [] });
+      const r = await pool.query(
+        `SELECT DISTINCT ON (code) code, name, report_date, phase, summary_json, valuation_json, levels_json, rr_json
+         FROM research_reports WHERE code = ANY($1) ORDER BY code, report_date DESC`, [codes],
+      );
+      res.json({ ok: true, items: r.rows });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 };

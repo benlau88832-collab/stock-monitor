@@ -610,7 +610,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                           const ai = getStockAI(code);
                           if (!ai) return null;
                           const cls = ai.verdict === "可买" ? "bg-emerald-500/20 text-emerald-300" : ai.verdict === "回避" ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300";
-                          return <span className={`rounded px-1 py-px text-[9px] font-bold ${cls}`} title={`AI 研判：${ai.reason}`}>AI:{ai.verdict}</span>;
+                          return <span className={`rounded px-1 py-px text-xs font-bold ${cls}`} title={`AI 研判：${ai.reason}`}>AI:{ai.verdict}</span>;
                         })()}
                       </div>
                       <div className="text-[11px] text-slate-500">{code}</div>

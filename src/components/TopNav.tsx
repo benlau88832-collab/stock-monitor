@@ -142,7 +142,7 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
                 className="rounded px-1.5 py-1 bg-white/10 text-slate-300 hover:bg-white/20 relative">
                 🔔
                 {unread > 0 && (
-                  <span className="absolute -top-1 -right-1 rounded-full bg-rose-500 text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center">
+                  <span className="absolute -top-1 -right-1 rounded-full bg-rose-500 text-white text-xs font-bold w-4 h-4 flex items-center justify-center">
                     {unread > 9 ? "9+" : unread}
                   </span>
                 )}
@@ -169,7 +169,7 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
               className="relative rounded px-2 py-1 bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 border border-violet-500/30 font-semibold text-[11px]">
               💬 AI督导
               {criticalCount > 0 && (
-                <span className="absolute -top-1 -right-1 rounded-full bg-rose-500 text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center">
+                <span className="absolute -top-1 -right-1 rounded-full bg-rose-500 text-white text-xs font-bold w-4 h-4 flex items-center justify-center">
                   {criticalCount > 9 ? "9+" : criticalCount}
                 </span>
               )}

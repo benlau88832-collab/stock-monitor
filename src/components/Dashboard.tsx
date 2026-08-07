@@ -123,7 +123,7 @@ function LimitTempBar({ overview }: { overview: OverviewData | null }) {
       {lp.boardCounts && Object.keys(lp.boardCounts).length > 0 && (
         <span className="text-slate-400">梯队<b className="text-amber-300">{Object.entries(lp.boardCounts).sort((a, b) => Number(b[0]) - Number(a[0])).slice(0, 3).map(([h, n]) => `${h}板×${n}`).join(" ")}</b></span>
       )}
-      <span className="ml-auto text-[10px] text-slate-600">涨停{lp.limitUpCount} · 炸板{lp.blastedRate.toFixed(1)}%（见顶部状态栏）</span>
+      <span className="ml-auto text-xs text-slate-600">涨停{lp.limitUpCount} · 炸板{lp.blastedRate.toFixed(1)}%（见顶部状态栏）</span>
     </div>
   );
 }
@@ -166,7 +166,7 @@ function PositionMatchStrip({ stocks, boards }: {
     <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3 space-y-1.5">
       <div className="flex items-center justify-between">
         <div className="text-[11px] font-bold text-violet-300">🎯 持仓 × 主线匹配</div>
-        <div className="flex gap-1.5 text-[10px]">
+        <div className="flex gap-1.5 text-xs">
           <span className="text-emerald-300">顺风{sum.tailwind}</span>
           {sum.concept_breakout > 0 && <span className="text-amber-300 font-bold">🔥异动{sum.concept_breakout}</span>}
           <span className="text-slate-400">孤立{sum.isolated}</span>
@@ -180,16 +180,16 @@ function PositionMatchStrip({ stocks, boards }: {
       )}
       <div className="flex flex-wrap gap-1.5">
         {matches.map(m => (
-          <span key={m.code} className={`rounded-lg border px-2 py-1 text-[10px] ${statusColor(m.status)}`} title={m.hint}>
+          <span key={m.code} className={`rounded-lg border px-2 py-1 text-xs ${statusColor(m.status)}`} title={m.hint}>
             <span className="text-slate-200 font-semibold">{m.name}</span>
             <span className="ml-1 text-slate-500">{m.code}</span>
-            <span className={`ml-1 rounded px-1 py-0.5 text-[9px] font-bold ${badge(m.status)}`}>{label(m.status)}</span>
+            <span className={`ml-1 rounded px-1 py-0.5 text-xs font-bold ${badge(m.status)}`}>{label(m.status)}</span>
             {m.matchedBoard && <span className="ml-1 text-slate-400">{m.matchedBoard.name}({m.matchedBoard.pct >= 0 ? "+" : ""}{m.matchedBoard.pct.toFixed(2)}%)</span>}
-            {m.matchFrom === "concept" && <span className="ml-1 text-amber-400/80 text-[9px]">概念</span>}
+            {m.matchFrom === "concept" && <span className="ml-1 text-amber-400/80 text-xs">概念</span>}
           </span>
         ))}
       </div>
-      <div className="text-[10px] text-slate-600">顺风=主线行业/概念共振 / 🔥异动=涨幅 ≥5% 但偏离主线（历史统计追高风险高）/ 逆风=主线退潮 / 孤立=与今日主线无关</div>
+      <div className="text-xs text-slate-600">顺风=主线行业/概念共振 / 🔥异动=涨幅 ≥5% 但偏离主线（历史统计追高风险高）/ 逆风=主线退潮 / 孤立=与今日主线无关</div>
     </div>
   );
 }
@@ -278,7 +278,7 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
     <div className="rounded-lg border border-white/10 bg-white/5 p-2">
       <div className="flex items-center justify-between mb-1">
         <span className="text-[11px] text-slate-500">异动捕捉引擎</span>
-        <span className="flex items-center gap-1 text-[10px]">
+        <span className="flex items-center gap-1 text-xs">
           {sCount > 0 && <span className="animate-pulse rounded bg-rose-500/20 px-1.5 py-0.5 font-bold text-rose-300">S×{sCount} 紧急</span>}
           <span className="text-slate-600">S级红闪 · A级高亮 · B级关注</span>
         </span>
@@ -293,15 +293,15 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
               {/* 等级色条 */}
               <span className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${meta.bar}`} />
               <div className="flex items-center gap-1">
-                <span className={`rounded px-1 text-[10px] font-black ${meta.badge}`}>{meta.label}</span>
+                <span className={`rounded px-1 text-xs font-black ${meta.badge}`}>{meta.label}</span>
                 <span className="font-bold text-slate-200">{stock.name}</span>
                 <span className={`font-semibold ${pctColor(stock.pct)}`}>{fmtPct(stock.pct)}</span>
               </div>
-              <div className="text-[10px] text-slate-500 leading-tight mt-0.5">
+              <div className="text-xs text-slate-500 leading-tight mt-0.5">
                 {verdict.reason}
                 {verdict.mainlineHit && <span className="ml-1 text-amber-300">⚡呼应主线</span>}
               </div>
-              <div className="text-[10px] text-slate-400 leading-tight">
+              <div className="text-xs text-slate-400 leading-tight">
                 {verdict.aiComment} · <span className={actionColor(verdict.action)}>{verdict.action}</span>
               </div>
             </div>
@@ -313,7 +313,7 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
       </div>
       {/* 事件流摘要（S/A 级历史 + v9.26 A.6 LLM 异步解释） */}
       {events.length > 0 && (
-        <div className="mt-1 border-t border-white/5 pt-1 text-[10px] space-y-1">
+        <div className="mt-1 border-t border-white/5 pt-1 text-xs space-y-1">
           {events.slice(0, 5).map(e => (
             <div key={e.id} className="flex flex-wrap gap-x-3 gap-y-0.5">
               <span className={e.level === "S" ? "text-rose-400" : e.level === "A" ? "text-amber-300/80" : "text-slate-500"}>
@@ -358,7 +358,7 @@ function SentimentSparkline({ pts }: { pts: { t: string; s: number }[] }) {
         <circle cx={first.x} cy={first.y} r="2" fill="rgba(255,255,255,0.4)" />
         <circle cx={last.x} cy={last.y} r="3" fill={rising ? "#f59e0b" : "#38bdf8"} />
       </svg>
-      <div className="flex justify-between text-[9px] text-slate-600">
+      <div className="flex justify-between text-xs text-slate-600">
         <span>{pts[0].t}</span>
         <span>情绪日内轨迹</span>
         <span>{pts[pts.length - 1].t}</span>
@@ -404,10 +404,10 @@ function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: Ga
             ? "border-rose-500/40 bg-rose-500/10"
             : "border-sky-500/40 bg-sky-500/10"
         }`}>
-          <div className={`text-[10px] font-bold ${s >= 80 ? "text-rose-300" : "text-sky-300"}`}>
+          <div className={`text-xs font-bold ${s >= 80 ? "text-rose-300" : "text-sky-300"}`}>
             {s >= 80 ? "⚡ 控仓兑现（反向信号）" : "🔵 超跌机会（反向窗口）"}
           </div>
-          <div className="text-[9px] text-slate-300 mt-0.5 leading-snug">
+          <div className="text-xs text-slate-300 mt-0.5 leading-snug">
             {s >= 80
               ? "情绪极度贪婪 = 风险累积信号。已重仓者分批兑现，向确定性最高的龙头集中；轻仓者戒追高、加仓严守止损。"
               : "情绪极度恐慌 = 逆向买入窗口。关注 ETF 与白马蓝筹的左侧机会；分批建仓（白马/龙头优先），止损位设买入下方 5-8%。"}
@@ -418,17 +418,17 @@ function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: Ga
       <div className="text-[11px] font-semibold text-slate-300">动量 {momentumLabel}</div>
       {/* P2：建议总仓位（十年机构视角：先定仓位，再谈标的） */}
       <div className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5">
-        <div className="text-[10px] text-slate-500">建议总仓位</div>
+        <div className="text-xs text-slate-500">建议总仓位</div>
         <div className={`text-2xl font-black ${posColor}`}>{advice.positionPct}%</div>
-        <div className="text-[10px] text-slate-400">{advice.label}</div>
-        <div className="text-[9px] text-slate-600 mt-0.5">{advice.hint}</div>
+        <div className="text-xs text-slate-400">{advice.label}</div>
+        <div className="text-xs text-slate-600 mt-0.5">{advice.hint}</div>
       </div>
       {/* P2：日内轨迹折线 */}
       <SentimentSparkline pts={intraday} />
       {gate && gate.reason.length > 0 && (
         <div className="space-y-0.5">
           {gate.reason.map((r, i) => (
-            <div key={i} className="text-[10px] text-rose-400">🔥 {r}</div>
+            <div key={i} className="text-xs text-rose-400">🔥 {r}</div>
           ))}
         </div>
       )}
@@ -463,10 +463,10 @@ function ImportantFeed() {
       <div className="text-[11px] font-bold text-amber-300 mb-1">⭐ 重要信息摘录（新闻+公告）</div>
       {items.map((x, i) => (
         <a key={i} href={x.url} target="_blank" rel="noopener noreferrer" className="block py-0.5 hover:bg-white/5 rounded">
-          <span className={`text-[10px] font-bold mr-1 ${tagColor(x.tag)}`}>[{x.tag}]</span>
+          <span className={`text-xs font-bold mr-1 ${tagColor(x.tag)}`}>[{x.tag}]</span>
           <span className="text-[11px] text-slate-200">{x.title}</span>
-          {x.summary && <span className="text-[10px] text-slate-500 ml-1">{x.summary}</span>}
-          <span className="text-[10px] text-slate-600 ml-1">{x.time.slice(5, 16)}</span>
+          {x.summary && <span className="text-xs text-slate-500 ml-1">{x.summary}</span>}
+          <span className="text-xs text-slate-600 ml-1">{x.time.slice(5, 16)}</span>
         </a>
       ))}
     </div>
@@ -508,7 +508,7 @@ function LadderMini({ overview, onSwitchTab }: { overview: OverviewData | null; 
         <div key={g.theme} className="flex items-center justify-between text-[11px] py-0.5">
           <span className="text-slate-200">{g.theme}</span>
           <span className={g.height >= 3 ? "text-amber-300 font-bold" : "text-slate-400"}>{g.height}板 {g.count}只</span>
-          {g.gapTiers.length > 0 && <span className="text-[9px] text-slate-500 line-through ml-1">断档</span>}
+          {g.gapTiers.length > 0 && <span className="text-xs text-slate-500 line-through ml-1">断档</span>}
         </div>
       ))}
     </div>
@@ -853,19 +853,30 @@ export default function Dashboard({
           signalGates={signalGates}
           factorStats={factorStats ?? undefined}
         />
+        {/* v10-3（P0）：选股清单紧贴裁决 —— "可上车→买这些"一气呵成，中间不插 BattlePlan/LimitTempBar */}
+        <StockPickList
+          candidate={battlePlan?.candidates?.[0] ?? null}
+          rawPool={overview?.limitPool?.rawZTPool ?? []}
+          potential={mainline?.potential?.map(p => ({
+            code: p.code, name: p.name,
+            mainNetPct: p.mainNetPct ?? 0, mainNet5dPct: 0, // potential 无 5d 字段，增强仅用当日主力占比
+            vetoed: Boolean(p.vetoed), vetoReasons: p.vetoReasons ?? [],
+          }))}
+          gate={battlePlan?.gate ?? null}
+        />
         {/* v9.38（V3-2/3）：Agent 手动重审按钮（自动已每5分钟跑，手动可即时刷新） */}
         <div className="flex items-center gap-2">
           <button onClick={() => runAgent(false)} disabled={agentLoading}
             className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50">
             {agentLoading ? "🤖 Agent 调研中…" : "⚡ 立即重审（LLM）"}
           </button>
-          <span className="text-[9px] text-slate-600">自动每 5 分钟裁决一次；点击即时重审</span>
+          <span className="text-xs text-slate-600">自动每 5 分钟裁决一次；点击即时重审</span>
         </div>
         {/* v9.41（V4-E）：Top-2/3 主线 AI 裁决摘要 */}
         {agentResults.length > 1 && (
           <div className="space-y-1 rounded-lg border border-white/5 bg-black/20 p-2">
             {agentResults.slice(1).map(({ mainline, verdict }) => (
-              <div key={mainline} className="flex items-center gap-2 text-[10px]">
+              <div key={mainline} className="flex items-center gap-2 text-xs">
                 <span className="w-24 truncate text-slate-400" title={mainline}>{mainline}</span>
                 <span className={`rounded px-1.5 py-0.5 font-bold ${
                   verdict.action === "可上车" ? "bg-emerald-500/15 text-emerald-300"
@@ -899,7 +910,7 @@ export default function Dashboard({
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
                   <div className="text-xs font-bold text-amber-200">
                     🤖 AI 预判龙一：<span className="text-base">{leaderPredict.predictLeader.name}</span>
-                    <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
+                    <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
                   </div>
                   {leaderPredict.reason && <div className="mt-1 text-[11px] text-slate-300">理由：{leaderPredict.reason}</div>}
                   {leaderPredict.watch && <div className="text-[11px] text-rose-300/80">⚠ 盯防：{leaderPredict.watch}</div>}
@@ -912,18 +923,9 @@ export default function Dashboard({
           )}
           {/* v9.48 D4：核心温度条提到决策区下方（盘中核心进阶指标，D2 已去 EmotionCycle 冗余） */}
           <LimitTempBar overview={overview} />
-          <BattlePlan data={battlePlan ?? null} />
-          {/* v9.52（V7-1/3）：今日上车标的清单 —— "主线可上车"→"买这些"（决策区下方、作战计划之后） */}
-          <StockPickList
-            candidate={battlePlan?.candidates?.[0] ?? null}
-            rawPool={overview?.limitPool?.rawZTPool ?? []}
-            potential={mainline?.potential?.map(p => ({
-              code: p.code, name: p.name,
-              mainNetPct: p.mainNetPct ?? 0, mainNet5dPct: 0, // potential 无 5d 字段，增强仅用当日主力占比
-              vetoed: Boolean(p.vetoed), vetoReasons: p.vetoReasons ?? [],
-            }))}
-            gate={battlePlan?.gate ?? null}
-          />
+          {/* v10-4（P1）：作战卡内嵌 AI 裁决徽章（每条主线显示 LLM 结论） */}
+          <BattlePlan data={battlePlan ?? null} agentResults={agentResults} />
+          {/* v10-3：StockPickList 已上移至裁决区（见上），此处不再重复渲染 */}
           <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
           <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
           <MarketOverview data={overview} loading={loading} />
@@ -1009,10 +1011,10 @@ export default function Dashboard({
                       <span className="text-[11px] font-mono text-slate-400">{s.probability}%</span>
                     </div>
                     {s.conditions.length > 0 && (
-                      <div className="mt-0.5 text-[10px] text-slate-500">触发：{s.conditions.join("；")}</div>
+                      <div className="mt-0.5 text-xs text-slate-500">触发：{s.conditions.join("；")}</div>
                     )}
                     {s.focus.length > 0 && (
-                      <div className="text-[10px] text-amber-200/70">关注：{s.focus.join("、")}</div>
+                      <div className="text-xs text-amber-200/70">关注：{s.focus.join("、")}</div>
                     )}
                   </div>
                 ))}

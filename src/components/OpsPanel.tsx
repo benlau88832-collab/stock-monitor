@@ -63,10 +63,10 @@ export default function OpsPanel() {
           <div className="text-[10px] text-slate-500">数据源成功率（近 {totalCalls} 次）</div>
           <div className={`text-lg font-bold ${okRate >= 90 ? "text-emerald-300" : okRate >= 70 ? "text-amber-300" : "text-rose-300"}`}>{okRate}%</div>
           {apiRecs.filter(r => r.recentCalls >= 3 && r.recentSuccesses / r.recentCalls < 0.5).slice(0, 3).map((r, i) => (
-            <div key={i} className="text-[9px] text-rose-300/80 truncate">✗ {r.name}</div>
+            <div key={i} className="text-xs text-rose-300/80 truncate">✗ {r.name}</div>
           ))}
           {apiRecs.filter(r => r.recentCalls >= 2 && r.avgMs > 3000).slice(0, 2).map((r, i) => (
-            <div key={i} className="text-[9px] text-amber-300/80 truncate">🐢 {r.name} {(r.avgMs / 1000).toFixed(1)}s</div>
+            <div key={i} className="text-xs text-amber-300/80 truncate">🐢 {r.name} {(r.avgMs / 1000).toFixed(1)}s</div>
           ))}
         </div>
 

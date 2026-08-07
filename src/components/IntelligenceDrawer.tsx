@@ -379,7 +379,7 @@ export default function IntelligenceDrawer({ open, onClose }: Props) {
                       : "bg-white/5 text-slate-300 border border-white/10"
                   }`}>
                     <div className="whitespace-pre-wrap">{msg.content}</div>
-                    <div className="text-[9px] text-slate-600 mt-1">
+                    <div className="text-xs text-slate-600 mt-1">
                       {new Date(msg.ts).toTimeString().slice(0, 5)}
                     </div>
                   </div>

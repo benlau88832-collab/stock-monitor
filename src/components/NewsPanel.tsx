@@ -341,7 +341,7 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-bold text-violet-300">🤖 AI要点</span>
           <div className="flex items-center gap-2">
-            {aiDegraded && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300">规则版</span>}
+            {aiDegraded && <span className="rounded px-1 py-0.5 text-xs font-bold bg-amber-500/20 text-amber-300">规则版</span>}
             <button onClick={() => generateDigest(allNews)} disabled={aiDigestLoading}
               className="text-[11px] text-violet-400 hover:text-violet-300 disabled:opacity-40">
               {aiDigestLoading ? "生成中…" : "刷新"}

@@ -571,7 +571,7 @@ function AnnRow({
         <span className="shrink-0 text-[11px] font-bold text-slate-300 w-[56px] truncate">
           {item.stockName || "—"}
           {badge && badge > 1 && (
-            <span className="ml-0.5 inline-flex items-center justify-center rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-bold w-4 h-4 leading-none">
+            <span className="ml-0.5 inline-flex items-center justify-center rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold w-4 h-4 leading-none">
               {badge}
             </span>
           )}
@@ -604,7 +604,7 @@ function AnnRow({
 
       {/* NEW 标记 */}
       {item.isNew && (
-        <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-bold bg-emerald-500/30 text-emerald-200 animate-pulse">
+        <span className="shrink-0 rounded px-1 py-0.5 text-xs font-bold bg-emerald-500/30 text-emerald-200 animate-pulse">
           NEW
         </span>
       )}
@@ -616,7 +616,7 @@ function AnnRow({
 
       {/* AI评分 */}
       {aiScore && (
-        <span className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-bold ${
+        <span className={`shrink-0 rounded px-1 py-0.5 text-xs font-bold ${
           aiScore.score >= 4 ? "bg-emerald-500/20 text-emerald-300" :
           aiScore.score >= 3 ? "bg-amber-500/20 text-amber-300" :
           "bg-slate-500/20 text-slate-400"

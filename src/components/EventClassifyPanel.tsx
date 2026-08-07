@@ -85,7 +85,7 @@ export default function EventClassifyPanel() {
                     <ScoreBadge s={e.catalystScore} />
                   </div>
                   {e.beneficiaries && e.beneficiaries.length > 0 && (
-                    <div className="text-[9px] text-slate-500 mt-0.5">→ {e.beneficiaries.slice(0, 3).join(" / ")}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">→ {e.beneficiaries.slice(0, 3).join(" / ")}</div>
                   )}
                 </div>
               ))}
@@ -93,7 +93,7 @@ export default function EventClassifyPanel() {
           );
         })}
       </div>
-      <div className="text-[9px] text-slate-600">
+      <div className="text-xs text-slate-600">
         💡 政策级（全市场）&gt; 行业级（产业链）&gt; 事件级（个股）；高分事件可在 Agent 深审中点"事件深挖"看影响传导
       </div>
     </div>

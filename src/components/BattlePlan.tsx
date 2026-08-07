@@ -59,7 +59,7 @@ function StyleBadge({ style }: { style: MarketStyleInfo }) {
 }
 
 // ============== 主线区块（含龙一龙二龙三 + v9.23 强度分/离场/诊断） ==============
-function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose, position, fundMissing, dataMissing }: {
+function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, isPulse, caution, llm, strengthScore, exitSignal, exitSignalText, onDiagnose, position, fundMissing, dataMissing, agentVerdict }: {
   rank: number;
   name: string;
   ztCount: number;
@@ -83,6 +83,8 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
   onDiagnose?: () => void;
   /** v9.27（P1-6）：仓位定量化建议（可上车/观望/禁止 + 建议%） */
   position?: PositionAdvice;
+  /** v10-4（P1）：AI 裁决徽章（按主线名匹配 Top-3 agentResults） */
+  agentVerdict?: { action: string; confidence: number } | null;
 }) {
   const rankColor = rank === 1 ? "border-rose-500/40 bg-rose-500/5" : rank === 2 ? "border-amber-500/30 bg-amber-500/5" : "border-slate-500/20 bg-white/5";
   const rankLabel = rank === 1 ? "🏆 第一主线" : rank === 2 ? "🥈 第二主线" : "🥉 第三主线";
@@ -106,11 +108,11 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
         <div className="flex items-center gap-2">
           <span className={`text-xs font-black ${rankText}`}>{rankLabel}</span>
           <span className="text-sm font-bold text-slate-100">{name}</span>
-          {isPulse && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-slate-500/20 text-slate-400">💨 脉冲/孤峰</span>}
+          {isPulse && <span className="rounded px-1 py-0.5 text-xs font-bold bg-slate-500/20 text-slate-400">💨 脉冲/孤峰</span>}
           {weakEffect && ztCount > 0 && !isPulse && (
-            <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300">板块效应弱</span>
+            <span className="rounded px-1 py-0.5 text-xs font-bold bg-amber-500/20 text-amber-300">板块效应弱</span>
           )}
-          {llm && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-violet-500/20 text-violet-300">LLM</span>}
+          {llm && <span className="rounded px-1 py-0.5 text-xs font-bold bg-violet-500/20 text-violet-300">LLM</span>}
           {/* v9.23-1：强度分大字号徽章 */}
           {strengthScore != null && (
             <span className={`rounded border px-1.5 py-0.5 text-[12px] font-black ${strengthCls}`} title="主线强度分（PRD 6.1：涨停占比25+连板20+晋级率15+资金20+换手10+催化10）">
@@ -119,32 +121,42 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
           )}
           {/* v9.23-2：离场信号 */}
           {exitSignal && (
-            <span className="rounded border border-rose-500/50 bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-black text-rose-300" title={exitSignalText}>
+            <span className="rounded border border-rose-500/50 bg-rose-500/15 px-1.5 py-0.5 text-xs font-black text-rose-300" title={exitSignalText}>
               ⚠ 退潮
             </span>
           )}
           {/* v9.27（P1-6）：仓位定量化徽章 */}
           {position && position.action !== "可上车" && (
-            <span className={`rounded border px-1.5 py-0.5 text-[9px] font-black ${
+            <span className={`rounded border px-1.5 py-0.5 text-xs font-black ${
               position.action === "禁止" ? "border-rose-500/50 bg-rose-500/15 text-rose-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300"
             }`} title={position.rationale}>
               {position.action === "禁止" ? "🚫 禁止" : "👀 观望"} · {position.rationale.slice(0, 18)}
             </span>
           )}
+          {/* v10-4（P1）：AI 裁决徽章（每条主线显示 LLM 结论，AI 贯通到每个决策节点） */}
+          {agentVerdict && (
+            <span className={`rounded px-1.5 py-0.5 text-sm font-bold ${
+              agentVerdict.action === "可上车" ? "bg-emerald-500/20 text-emerald-300"
+              : agentVerdict.action === "禁止" ? "bg-rose-500/20 text-rose-300"
+              : "bg-amber-500/20 text-amber-300"
+            }`} title="AI Agent 对该主线的裁决">
+              🤖 {agentVerdict.action === "可上车" ? "可上车" : agentVerdict.action === "禁止" ? "禁止" : "观望"} {agentVerdict.confidence}%
+            </span>
+          )}
           {position && position.action === "可上车" && (
-            <span className="rounded border border-emerald-500/50 bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-black text-emerald-300" title={position.rationale}>
+            <span className="rounded border border-emerald-500/50 bg-emerald-500/15 px-1.5 py-0.5 text-xs font-black text-emerald-300" title={position.rationale}>
               🚀 仓位 {position.suggestedPct}% · 首仓 {position.tranches[0]?.pct ?? 0}% · 止损 {position.stopLoss}%
             </span>
           )}
           {/* v9.23.1-fix：折叠按钮（<60 默认折叠，点击展开） */}
           {strengthScore != null && strengthScore < 60 && (
             <button onClick={() => setCollapsed(v => !v)}
-              className="rounded bg-slate-500/20 px-1.5 py-0.5 text-[9px] text-slate-400 hover:bg-slate-500/30">
+              className="rounded bg-slate-500/20 px-1.5 py-0.5 text-xs text-slate-400 hover:bg-slate-500/30">
               {collapsed ? "▸ 展开" : "▾ 折叠"}
             </button>
           )}
         </div>
-        <div className="flex gap-1.5 text-[10px] text-slate-400">
+        <div className="flex gap-1.5 text-xs text-slate-400">
           {/* v9.21-C：开盘啦式热度条 */}
           <span className="rounded bg-black/30 px-1.5 py-0.5" title="该主线今日涨停家数">
             🔥 <b className="text-rose-300">{ztCount}</b> 涨停
@@ -189,7 +201,7 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
         });
         if (contend.status === "卡位胶着") {
           return (
-            <div className="mt-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300" title={contend.reason}>
+            <div className="mt-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-300" title={contend.reason}>
               ⚔️ 卡位战：{contend.contenders.join(" vs ")}（龙一未定，追高风险）
             </div>
           );
@@ -200,7 +212,7 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
         {leaders.length === 0 && <div className="text-[11px] text-slate-500">涨停梯队数据积累中</div>}
         {leaders.map((l, i) => (
           <div key={i} className="flex items-center gap-2 text-[11px]">
-            <span className={`w-8 shrink-0 rounded px-1 py-0.5 text-center text-[10px] font-bold ${
+            <span className={`w-8 shrink-0 rounded px-1 py-0.5 text-center text-xs font-bold ${
               l.role === "龙一" ? "bg-rose-500/20 text-rose-300"
               : l.role === "龙二" ? "bg-amber-500/20 text-amber-300"
               : "bg-slate-500/20 text-slate-300"
@@ -211,13 +223,13 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
             <span className="text-slate-500">{l.code}</span>
             {/* v9.32.1（缺口4）：板型徽标（一字=难上车，换手=可上车） */}
             {l.boardType && BOARD_TYPE_META[l.boardType] && (
-              <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${BOARD_TYPE_META[l.boardType].cls}`} title={BOARD_TYPE_META[l.boardType].hint}>
+              <span className={`rounded px-1 py-0.5 text-xs font-bold ${BOARD_TYPE_META[l.boardType].cls}`} title={BOARD_TYPE_META[l.boardType].hint}>
                 {BOARD_TYPE_META[l.boardType].label}
               </span>
             )}
             {/* 人气榜徽标：人气 Top10 高亮 */}
             {l.popularRank != null && l.popularRank > 0 && (
-              <span className={`rounded px-1 py-0.5 text-[9px] font-bold ${
+              <span className={`rounded px-1 py-0.5 text-xs font-bold ${
                 l.popularRank <= 3 ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/15 text-amber-300"
               }`}>🔥人气#{l.popularRank}</span>
             )}
@@ -228,7 +240,7 @@ function MainlineBlock({ rank, name, ztCount, height, mainNet, leaders, logic, i
 
       {/* LLM 逻辑 */}
       {logic && (
-        <div className="mt-1.5 rounded bg-black/20 px-2 py-1 text-[10px] text-slate-400 leading-relaxed">
+        <div className="mt-1.5 rounded bg-black/20 px-2 py-1 text-xs text-slate-400 leading-relaxed">
           📌 {logic}
           {caution && <span className="ml-1 text-amber-400">⚠️ {caution}</span>}
         </div>
@@ -251,7 +263,7 @@ function CandidatePool({ themes }: { themes: BattlePlanData["candidateThemes"] }
           {themes.map(t => (
             // v9.26.13：板块名点击跳板块详情页
             <a key={t.board} href={boardNameRealUrl(t.board)} target="_blank" rel="noopener noreferrer"
-               className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/15 hover:border-white/30 cursor-pointer">
+               className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-xs text-slate-300 hover:bg-white/15 hover:border-white/30 cursor-pointer">
               {t.board} <b className="text-slate-400">{t.total}</b>
             </a>
           ))}
@@ -275,14 +287,14 @@ function ETFBlock({ etfs }: { etfs: ETFScoreResult[] }) {
             <span className={`w-5 text-center font-black ${i === 0 ? "text-emerald-300" : "text-slate-500"}`}>{i + 1}</span>
             <span className="font-semibold text-slate-100">{e.name}</span>
             {e.fromMainline && e.matchedMainline && (
-              <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-300">主线直出</span>
+              <span className="rounded px-1 py-0.5 text-xs font-bold bg-emerald-500/20 text-emerald-300">主线直出</span>
             )}
-            <span className="ml-auto text-slate-500 text-[10px]">{e.code}</span>
+            <span className="ml-auto text-slate-500 text-xs">{e.code}</span>
             <span className={`font-black ${e.total >= 70 ? "text-emerald-300" : e.total >= 55 ? "text-amber-300" : "text-slate-400"}`}>{e.total}</span>
           </a>
         ))}
       </div>
-      <div className="mt-1 text-[10px] text-slate-600">
+      <div className="mt-1 text-xs text-slate-600">
         评分 = 资金趋势30% + 板块联动25% + 风格适配20% + 主线直出15% + 宏观10% · 点击跳详情
       </div>
     </div>
@@ -290,7 +302,11 @@ function ETFBlock({ etfs }: { etfs: ETFScoreResult[] }) {
 }
 
 // ============== 主组件 ==============
-export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
+export default function BattlePlan({ data, agentResults }: {
+  data: BattlePlanData | null;
+  /** v10-4（P1）：Top-N 主线 AI 裁决（按 mainline 名匹配） */
+  agentResults?: Array<{ mainline: string; verdict: { action: string; confidence: number } | null }>;
+}) {
   if (!data) return null;
 
   const { gate, candidates, llmRanked, marketStyle, etfs, candidateThemes, classifyOverview } = data;
@@ -389,7 +405,7 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
         {gate.reason.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {gate.reason.map((r, i) => (
-              <span key={i} className="rounded px-1 py-0.5 text-[10px] bg-rose-500/20 text-rose-300">🔥 {r}</span>
+              <span key={i} className="rounded px-1 py-0.5 text-xs bg-rose-500/20 text-rose-300">🔥 {r}</span>
             ))}
           </div>
         )}
@@ -432,6 +448,8 @@ export default function BattlePlan({ data }: { data: BattlePlanData | null }) {
               exitSignal={d.exitSignal}
               exitSignalText={d.exitSignalText}
               onDiagnose={() => setDiagMainline(d.board)}
+              // v10-4（P1）：AI 裁决按主线名匹配（agentResults 为 Top-N LLM 裁决）
+              agentVerdict={agentResults?.find(r => r.mainline === d.board)?.verdict ?? null}
               // v9.27（P1-6）：仓位定量化（闸门×强度×单票上限，联动纪律截断）
               position={computePositionAdvice({
                 mainline: d.board,

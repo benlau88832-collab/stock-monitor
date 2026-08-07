@@ -112,7 +112,7 @@ export default function BoardRankPanel({ inflow, outflow }: Props) {
                   <a href={boardRealUrl(b.code, "concept")} target="_blank" rel="noopener noreferrer" className="text-slate-200 hover:text-amber-300">
                     {b.name}
                   </a>
-                  <span className={`ml-1 rounded px-1 py-0.5 text-[9px] ${kind === "industry" ? "bg-slate-500/20 text-slate-500" : "bg-amber-500/20 text-amber-400"}`}>
+                  <span className={`ml-1 rounded px-1 py-0.5 text-xs ${kind === "industry" ? "bg-slate-500/20 text-slate-500" : "bg-amber-500/20 text-amber-400"}`}>
                     {kind === "industry" ? "行业" : "题材"}
                   </span>
                   <DivergeBadge mainNet={b.mainNet} pct={b.pct} />

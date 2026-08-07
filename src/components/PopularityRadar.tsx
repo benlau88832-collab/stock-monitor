@@ -260,9 +260,9 @@ export default function PopularityRadar() {
                     </a>
                     <span className="text-slate-600 ml-1">{row.code}</span>
                     {row.thsConcepts.length > 0 && (
-                      <span className="ml-1 text-[9px] text-sky-400/80">{row.thsConcepts.slice(0, 2).join("/")}</span>
+                      <span className="ml-1 text-xs text-sky-400/80">{row.thsConcepts.slice(0, 2).join("/")}</span>
                     )}
-                    {row.thsTag && <span className="ml-1 text-[9px] text-amber-400/90">[{row.thsTag}]</span>}
+                    {row.thsTag && <span className="ml-1 text-xs text-amber-400/90">[{row.thsTag}]</span>}
                   </td>
                   <td className="px-1 py-1 text-center text-slate-300">{row.emRank ?? "—"}</td>
                   <td className="px-1 py-1 text-center text-slate-300">{row.thsRank ?? "—"}</td>
@@ -277,10 +277,10 @@ export default function PopularityRadar() {
                   </td>
                   <td className="px-1 py-1 text-center space-x-0.5">
                     {row.resonance && (
-                      <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-violet-500/25 text-violet-300">⚡共振</span>
+                      <span className="rounded px-1 py-0.5 text-xs font-bold bg-violet-500/25 text-violet-300">⚡共振</span>
                     )}
                     {isNew && (
-                      <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-300">新</span>
+                      <span className="rounded px-1 py-0.5 text-xs font-bold bg-emerald-500/20 text-emerald-300">新</span>
                     )}
                   </td>
                 </tr>

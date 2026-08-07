@@ -25,7 +25,7 @@ const FRESHNESS_META: Record<DataFreshness, { label: string; color: string; tip:
 export default function FreshnessTag({ type, text }: { type: DataFreshness; text?: string }) {
   const meta = FRESHNESS_META[type];
   return (
-    <span className={`ml-1 inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[9px] font-bold ${meta.color}`} title={meta.tip}>
+    <span className={`ml-1 inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-xs font-bold ${meta.color}`} title={meta.tip}>
       {text ?? meta.label}
     </span>
   );

@@ -115,10 +115,10 @@ export default function SignalPanel() {
                     </td>
                     <td className="px-2 py-1 text-right text-slate-300">{s.winRateT5 != null ? `${s.winRateT5}%` : "—"}</td>
                     <td className="px-2 py-1 text-right">
-                      {s.health === "healthy" && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-300">有效</span>}
-                      {s.health === "warning" && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300">一般</span>}
-                      {s.health === "suspect" && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-rose-500/20 text-rose-300" title="胜率<45%，信号可信度存疑，建议降低权重">存疑</span>}
-                      {s.health === "insufficient" && <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-slate-500/20 text-slate-400">样本不足</span>}
+                      {s.health === "healthy" && <span className="rounded px-1 py-0.5 text-xs font-bold bg-emerald-500/20 text-emerald-300">有效</span>}
+                      {s.health === "warning" && <span className="rounded px-1 py-0.5 text-xs font-bold bg-amber-500/20 text-amber-300">一般</span>}
+                      {s.health === "suspect" && <span className="rounded px-1 py-0.5 text-xs font-bold bg-rose-500/20 text-rose-300" title="胜率<45%，信号可信度存疑，建议降低权重">存疑</span>}
+                      {s.health === "insufficient" && <span className="rounded px-1 py-0.5 text-xs font-bold bg-slate-500/20 text-slate-400">样本不足</span>}
                     </td>
                   </tr>
                 ))}
