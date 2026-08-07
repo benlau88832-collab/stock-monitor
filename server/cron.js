@@ -589,6 +589,12 @@ function startCron({ pool }) {
     try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] review failed:", e.message); }
     // v9.38.1（V3-12）：事件三级分类（政策/行业/事件）—— 盘后批量跑一次
     try { await runEventClassify({ pool }); } catch (e) { console.error("[cron] event_classify failed:", e.message); }
+    // v9.66：收盘盯价快照（active 监控清单 → 收盘价/偏离度 → log + 触发事件）
+    try {
+      const { runWatchCheck } = require("./routes/watch");
+      const wr = await runWatchCheck(pool);
+      console.log(`[cron] 收盘盯价: ${wr.checked} 只监控, ${wr.triggered.length} 只触发关注区间`);
+    } catch (e) { console.error("[cron] watch close failed:", e.message); }
     try {
       const funds = await fetchBoardFundServer();
       if (funds.length > 0) {
@@ -808,7 +814,19 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] 启动大宗交易失败:", e.message); }
   }, 3000);
 
-  console.log("[cron] scheduled: 15:40 快照+分析+复盘 · 每20分钟抓快讯/公告/政策 · Asia/Shanghai");
+  console.log("[cron] scheduled: 15:40 快照+分析+复盘 · 每20分钟抓快讯/公告/政策 · 盘中每5分钟盯价 · Asia/Shanghai");
+
+  // v9.66：个股盯价监控 —— 盘中每 5 分钟（9:05-15:05 交易日），active 清单拉价算偏离
+  cron.schedule("*/5 9-15 * * 1-5", async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      const { runWatchCheck } = require("./routes/watch");
+      const r = await runWatchCheck(pool);
+      if (r.triggered.length > 0) {
+        console.log(`[cron] ⚡ 盯价触发关注区间: ${r.triggered.map(t => `${t.name}(${t.code}) 现价${t.price} 偏离${t.deviation}%`).join(" | ")}`);
+      }
+    } catch (e) { console.error("[cron] 盘中盯价失败:", e.message); }
+  });
 };
 
 // 导出抓取函数供验证/手动触发用

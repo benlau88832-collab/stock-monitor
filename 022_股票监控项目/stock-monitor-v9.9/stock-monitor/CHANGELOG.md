@@ -4,6 +4,33 @@
 
 ---
 
+## v9.66 — 三 Skill 嵌入 + 个股盯价监控（全站 AI 调研 · PG 存储 · ±5% 强提示）(2026-08-07)
+
+> 依据 `022_股票监控项目/方案_调研嵌入与盯价监控.md` 执行。零硬编码：所有标的由用户经 AI 对话录入（price_watch 表），系统只做通用流程。
+
+### server 层
+- **db.js** +3 表：`research_reports`（调研报告+核心数据，同日幂等覆盖）/ `price_watch`（监控清单）/ `price_watch_log`（价格走势快照）/ `price_watch_events`（触发事件）
+- **routes/research.js**（新）：妙想 API 中转 3 接口（quote/data/search）—— child_process 调本机 mx-data/mx-search Python 脚本，`MX_APIKEY` 环境变量读取（Key 只存服务端，符合红线）
+- **routes/watch.js**（新）：监控清单 CRUD + 走势查询 + 触发事件（未读轮询/已读标记）+ `runWatchCheck` 盯价核心（批量拉现价→偏离度→写 log→触发）
+- **cron.js**：盘中每 5 分钟盯价（交易日 9-15 点，active 清单）+ 15:40 收盘盯价快照
+
+### 前端层
+- **researchTools.ts**（新）：AIConsole 新增 6 个工具 —— researchQuote/researchData/researchSearch（妙想调研）+ addPriceWatch/listWatches/updatePriceWatch（盯价监控）+ 五段式调研流程 system 注入（stock-deep-research-v2 流程引导）
+- **PriceWatchPanel.tsx**（新）：监控清单（现价/买入区/偏离度/状态）+ 偏离度进度条（中间绿色带=±5%触发区）+ SVG 走势图（买入区上下沿虚线+触发红点）+ 30s 轮询触发事件 → alertBus 强提示（声音+系统通知+标题闪烁）
+- **App.tsx**：PriceWatchPanel 挂"个股雷达"Tab（lazy）
+
+### 使用方式（全站 AI 助手）
+1. AIConsole 问「深度调研 600XXX」→ AI 按五段式（速览→财务→消息→行业→评级）自动调研，产出三档估值/目标价/支撑压力/胜率赔率
+2. AI 询问是否录入盯价监控 → 确认后 addPriceWatch 写入买入区/止损
+3. 个股雷达 Tab 实时显示偏离度；跌入买入区 ±5% → 强提示
+
+### 遵循 CLAUDE.md
+- 三重验证门：tsc 0 error / build 成功 / test 149 全绿
+- MX_APIKEY 只存 server/.env（红线 #8）；提示措辞用"进入关注区间"（合规）；零硬编码标的
+- server 冒烟测试通过（茅台 1309.22 偏离 +0.7% 触发链路验证，测试数据已清理）
+
+---
+
 ## v9.65 — V1/V2 待办收尾（S1/S7/M2 + V2-P2 可观测化）(2026-08-07)
 
 > 承接 v9.64 的剩余待办，一次做掉四项，遵循 CLAUDE.md 自验证协议。

@@ -11,6 +11,8 @@ import DarkPool from "./components/DarkPool";
 import GlobalSignals from "./components/GlobalSignals";
 // 深潜组件 lazy 分包：龙虎榜/个股雷达/消息面不在首屏，按需加载
 const StockWatchlist = lazy(() => import("./components/StockWatchlist"));
+// v9.66：盯价监控面板（个股雷达 Tab）
+const PriceWatchPanel = lazy(() => import("./components/PriceWatchPanel"));
 const NewsPanel = lazy(() => import("./components/NewsPanel"));
 const DragonTiger = lazy(() => import("./components/DragonTiger"));
 const LimitBoard = lazy(() => import("./components/LimitBoard"));
@@ -1259,6 +1261,8 @@ export default function App() {
           <Suspense fallback={<div className="text-slate-400 p-6">加载个股雷达…</div>}>
             {/* v9.24-P1-2：传入今日主线名，供个股决策卡做主线归属判断 */}
             <StockWatchlist mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []} />
+            {/* v9.66：盯价监控面板（深度调研结论录入 → 跌入买入区 ±5% 强提示） */}
+            <PriceWatchPanel />
           </Suspense>
         )}
 

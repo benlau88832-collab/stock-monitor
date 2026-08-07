@@ -5,6 +5,8 @@
 // 降级：配额受限/失败 → degraded（AIConsole 顶部显式标注 V8-10）
 // ============================================================
 import { getAgentTools } from "./agentTools";
+// v9.66：个股深度调研工具组（妙想五段式 + 盯价监控）
+import { getResearchTools, RESEARCH_SYSTEM } from "./researchTools";
 import { callAgentChat, parseAIJSON, type AgentChatResult } from "./ai";
 import { fmtMoney } from "./format";
 
@@ -31,7 +33,7 @@ export async function runAssistantAgent(
   question: string,
   siteContext: AssistantSiteContext = {},
 ): Promise<AssistantReply> {
-  const tools = [...getAgentTools(), {
+  const tools = [...getAgentTools(), ...getResearchTools(), {
     name: "getStockFundDetail",
     description: '个股资金面（按代码）：主力净流入(元/占比)/5日/10日/换手/量比/现价/涨幅 —— 传 code 参数如 {"code":"600001"}',
     kind: "data",
@@ -78,7 +80,8 @@ export async function runAssistantAgent(
   const system = "你是这个A股实时监控终端的全站分析师助手（10年游资操盘手）。用户会问你任何关于主线/个股/资金/消息/席位/仓位的问题。\n\n"
     + "你有以下工具（自主决定调用顺序与次数，最多 5 轮；查个股时用 getStockFundDetail 传 code）：\n"
     + toolDefs.map(t => "- " + t.name + ": " + t.description).join("\n")
-    + "\n\n规则：\n"
+    + "\n\n" + RESEARCH_SYSTEM + "\n\n"
+    + "规则：\n"
     + "1. 先调用 1-3 个关键工具获取真实数据（如问\"低空经济能不能上车\"→ getAdmissionVerdict/getMainlineStrength/getFundStreak；问\"某只票\"→ getStockFundDetail/detectTrap/checkExitSignal）。\n"
     + "2. 观察工具结果后再决定下一步；数据足够后直接给最终答复。\n"
     + "3. 每轮输出严格JSON之一：\n"

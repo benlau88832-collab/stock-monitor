@@ -54,8 +54,63 @@ CREATE TABLE IF NOT EXISTS kv_store (
   value      JSONB NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT now()
 );
+-- v9.66：个股深度调研报告（三 skill 嵌入，全站 AI 助手产出）
+CREATE TABLE IF NOT EXISTS research_reports (
+  id           SERIAL PRIMARY KEY,
+  code         TEXT NOT NULL,
+  name         TEXT,
+  report_date  DATE NOT NULL DEFAULT CURRENT_DATE,
+  phase        SMALLINT DEFAULT 0,
+  summary_json JSONB,
+  valuation_json JSONB,
+  levels_json  JSONB,
+  rr_json      JSONB,
+  full_text    TEXT,
+  created_at   TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(code, report_date)
+);
+-- v9.66：个股盯价监控清单（用户/AI 录入，零硬编码）
+CREATE TABLE IF NOT EXISTS price_watch (
+  id          SERIAL PRIMARY KEY,
+  code        TEXT UNIQUE NOT NULL,
+  name        TEXT,
+  buy_low     NUMERIC,
+  buy_high    NUMERIC,
+  stop_loss   NUMERIC,
+  trigger_pct NUMERIC DEFAULT 5,
+  status      TEXT DEFAULT 'active',
+  note        TEXT,
+  created_at  TIMESTAMPTZ DEFAULT now(),
+  updated_at  TIMESTAMPTZ DEFAULT now()
+);
+-- v9.66：价格走势快照 + 触发事件（每日收盘 + 盘中）
+CREATE TABLE IF NOT EXISTS price_watch_log (
+  id            SERIAL PRIMARY KEY,
+  code          TEXT NOT NULL,
+  date          DATE NOT NULL DEFAULT CURRENT_DATE,
+  price         NUMERIC,
+  mid_price     NUMERIC,
+  deviation_pct NUMERIC,
+  triggered     BOOLEAN DEFAULT false,
+  event_text    TEXT,
+  created_at    TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(code, date)
+);
+-- v9.66：盯价触发事件（前端轮询 → alertBus 强提示）
+CREATE TABLE IF NOT EXISTS price_watch_events (
+  id            SERIAL PRIMARY KEY,
+  code          TEXT,
+  name          TEXT,
+  price         NUMERIC,
+  mid_price     NUMERIC,
+  deviation_pct NUMERIC,
+  event_text    TEXT,
+  read_at       TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
 CREATE INDEX IF NOT EXISTS idx_news_time ON news(time);
 CREATE INDEX IF NOT EXISTS idx_ann_time ON announcements(time);
+CREATE INDEX IF NOT EXISTS idx_pwl_code_date ON price_watch_log(code, date);
 `;
 
 async function initDb() {

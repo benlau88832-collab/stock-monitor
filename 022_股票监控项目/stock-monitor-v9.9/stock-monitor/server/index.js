@@ -47,6 +47,12 @@ require("./routes/proxy")(app);
 // ---------- AI 中转路由（v9.26 F-03：模型 Key 只存服务端 .env） ----------
 require("./routes/ai")(app);
 
+// ---------- v9.66：个股深度调研（妙想中转） ----------
+require("./routes/research")(app);
+
+// ---------- v9.66：个股盯价监控（清单/走势/触发事件） ----------
+require("./routes/watch")(app);
+
 // ---------- 定时任务（收盘抓取 + LLM 分析） ----------
 require("./cron")({ pool });
 
