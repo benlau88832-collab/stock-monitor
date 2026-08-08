@@ -4,7 +4,7 @@
 //       ② /api/db/*  前端数据读写 PostgreSQL
 //       ③ /api/proxy/* 东方财富接口转发（CORS/限流缓存）
 //       ④ 定时抓取 + LLM 分析（cron）
-// 访问：本机 http://localhost:8080 ；局域网 http://<本机IP>:8080
+// 访问：本机 http://localhost:8080
 // ============================================================
 const express = require("express");
 const cors = require("cors");
@@ -18,16 +18,31 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-app.use(cors());
-// v9.64（V1 安全）：10mb → 1mb（配合 kv/bulk ≤100 条，防一次打满 PG）
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+// v9.75（安全修复）：CORS 从全放开收敛为仅本机来源 ——
+// 之前 app.use(cors()) 允许任意网页跨域读取 /api/db/*（实测可无鉴权读到 AI Key），
+// 现在只放行 localhost/127.0.0.1 同源访问；GitHub Pages 线上无 /api 不受影响。
+const isLocalOrigin = (origin) => {
+  if (!origin) return true; // 同源/无 Origin（curl 等）
+  try {
+    const u = new URL(origin);
+    return u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  } catch { return false; }
+};
+app.use(cors({
+  origin: (origin, cb) => {
+    if (isLocalOrigin(origin)) cb(null, true);
+    else cb(null, false); // 拒绝第三方 Origin，不返回 ACAO 头
+  },
+}));
+// v9.67：1mb → 2mb —— AI 长上下文+history+toolDefs+researchCtx 累积常超 1mb（PM2 日志反复 PayloadTooLargeError），2mb 在安全范围
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 // ---------- 健康检查 ----------
 app.get("/api/health", async (req, res) => {
   let db = "down";
   try { await pool.query("SELECT 1"); db = "up"; } catch {}
-  res.json({ ok: true, db, version: "v9.25-local", time: new Date().toISOString() });
+  res.json({ ok: true, db, version: "v9.75-local", time: new Date().toISOString() });
 });
 
 // ---------- 静态托管（前端单文件产物） ----------
@@ -57,18 +72,11 @@ require("./routes/watch")(app);
 require("./cron")({ pool });
 
 // ---------- 启动 ----------
+// v9.75（安全修复）：只监听 127.0.0.1（本机），不再暴露 0.0.0.0 —— 局域网其他设备无法访问，恶意网页无法触碰
 initDb().then(() => {
-  app.listen(PORT, "0.0.0.0", () => {
-    const nets = os.networkInterfaces();
-    const ips = [];
-    for (const k of Object.keys(nets)) {
-      for (const n of nets[k] || []) {
-        if (n.family === "IPv4" && !n.internal) ips.push(n.address);
-      }
-    }
+  app.listen(PORT, "127.0.0.1", () => {
     console.log(`[server] stock-monitor local server on port ${PORT}`);
     console.log(`[server] 本机访问:   http://localhost:${PORT}`);
-    ips.forEach(ip => console.log(`[server] 局域网访问: http://${ip}:${PORT}`));
   });
 }).catch(err => {
   console.error("[server] DB init failed:", err.message);
