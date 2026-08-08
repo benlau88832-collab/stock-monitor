@@ -2,6 +2,7 @@
 // 版本常量（v9.47：footer 去硬编码 —— 每次发版更新此处即可）
 // 引用：App.tsx footer
 // v9.77：V2 审查（游资/机构视角操盘实用性）P0/P1 修复批次
+// v9.78：性能修复 —— 渐进式主线渲染（LLM 归类不阻塞首帧）+ AI 并发限流器（响应 Agnes 并发限流）
 // ============================================================
-export const APP_VERSION = "v9.77";
+export const APP_VERSION = "v9.78";
 export const BUILD_DATE = "2026-08-09";

@@ -158,6 +158,24 @@ function reserveSlot(): number | null {
   return token;
 }
 
+// ============== v9.78：并发限流（响应 Agnes 并发限流） ==============
+// 分钟限速已存在（10/min）；并发限流防止同一瞬间多个 AI 请求（主线归类 + Agent + 快讯 + 个股研判 + 精排）
+// 同时打到 Agnes 并发上限 → 排队等待/超时降级。简单信号量：在飞数 > MAX 时排队等待，最多 MAX 并发。
+const AI_MAX_CONCURRENT = 3;
+let aiInFlight = 0;
+const aiWaiters: Array<() => void> = [];
+
+async function acquireAISlot(): Promise<void> {
+  if (aiInFlight < AI_MAX_CONCURRENT) { aiInFlight++; return; }
+  await new Promise<void>((resolve) => aiWaiters.push(resolve));
+  aiInFlight++;
+}
+function releaseAISlot(): void {
+  aiInFlight = Math.max(0, aiInFlight - 1);
+  const next = aiWaiters.shift();
+  if (next) next();
+}
+
 /** 失败时释放自己占的槽位（按 token 精确删除，并发安全） */
 function releaseSlot(token: number | null): void {
   if (token == null) return;
@@ -356,12 +374,16 @@ async function executeAI<T extends AITask>(
   ck: string,
 ): Promise<AIResult> {
   let slotToken: number | null = null; // v9.26.10：try 外声明，catch/finally 可访问
+  let acquiredConcurrent = false; // v9.78：并发信号量是否已持有（finally 只释放持有的）
   try {
     // v9.26 F-04：请求预留限速（失败路径 releaseSlot 释放配额）
     slotToken = reserveSlot(); // v9.26.10：token 模型，失败精确释放自己
     if (slotToken == null) {
       return degradeResult(task, payload, "每分钟限速");
     }
+    // v9.78：并发限流（≤3 在飞）—— 主线归类/Agent/快讯/个股研判并发高峰时排队，避免打爆 Agnes 并发上限
+    await acquireAISlot();
+    acquiredConcurrent = true;
 
     const settings = loadSettings();
 
@@ -487,6 +509,8 @@ async function executeAI<T extends AITask>(
     const msg = e instanceof Error ? e.message : "未知错误";
     return degradeResult(task, payload, msg);
   } finally {
+    // v9.78：释放并发信号量（若已持有）
+    if (acquiredConcurrent) releaseAISlot();
     inflightMap.delete(ck);
   }
 }

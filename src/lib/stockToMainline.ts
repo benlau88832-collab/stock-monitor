@@ -118,15 +118,26 @@ export interface ClassifyInput {
   boards: Array<{ name: string; pct: number; mainNet: number; mainNet5d?: number; mainNet5dPct?: number; dataMissing?: boolean }>;
   /** 新闻标题（用于填充每条主线的 newsTitles） */
   newsItems: Array<{ title: string; stars: number }>;
+  /**
+   * v9.78（性能修复）：skipLLM=true 跳过 LLM 调用直接走 hybk 硬分类（快路径，~1-3s）。
+   * 供 App 渐进式渲染：先用快路径渲染作战卡，LLM 软语义归类异步升级，避免 LLM 阻塞首屏。
+   */
+  skipLLM?: boolean;
 }
 
 /**
  * 批量归类涨停股到主线（一次 LLM 调用）
  * 失败时降级回 hybk 硬分类（构建 MainlineGroup）
+ * v9.78：skipLLM=true 时直接走 hybk 硬分类（无 LLM，渐进式渲染的快路径）
  */
 export async function classifyStocksToMainlines(input: ClassifyInput): Promise<ClassifyResult> {
   if (!input.rawPool || input.rawPool.length === 0) {
     return { stockMap: new Map(), groups: [], overview: { totalStocks: 0, mainlineCount: 0, trueMainlineCount: 0, logic: "无涨停数据" }, fromLLM: false };
+  }
+
+  // v9.78（性能）：skipLLM 快路径 —— 直接 hybk 硬分类（无 LLM），供渐进式渲染首帧
+  if (input.skipLLM) {
+    return fallbackByHybk(input);
   }
 
   // 限 payload 30 只（v9.17-fix：50只+thinking=true 超时降级；改 30只+thinking=false 专用任务槽）

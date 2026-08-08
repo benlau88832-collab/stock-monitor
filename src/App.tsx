@@ -250,6 +250,9 @@ export default function App() {
   // v9.77（A8-04）：主线精排时间节流 —— 注释声称"每 20-30 分钟"实际每次 refreshAll(60s) 都跑，
   // 与 5 分钟 Agent/个股研判抢 analysis 桶；加 20 分钟硬节流（规则排序即时展示，精排异步补位）
   const lastLLMRankAt = useRef(0);
+  // v9.78（性能修复）：主线引擎轮次护栏 —— 渐进式渲染（快路径 hybk → 异步 LLM 升级）时，
+  // 慢的 LLM 升级不覆盖更新的轮次
+  const battleSeq = useRef(0);
   // F-02 修复：refreshAll 空依赖，闭包需读最新 state → 用 ref 镜像（避免陈旧闭包）
   const overviewRef = useRef(overview);
   useEffect(() => { overviewRef.current = overview; }, [overview]);
@@ -653,18 +656,16 @@ export default function App() {
           ? computeThemeScores(allScoringBoards, rawPool, newsItems, hlPulseNew)
           : [];
 
-        // ---- ① LLM 涨停主线归类（v9.17 核心：取代 hybk 硬分类） ----
-        // 一次 LLM 调用把涨停池按"软语义"重新归类到主线（AI应用/云计算/机器人等）
-        // 失败降级回 hybk 硬分类（stockToMainline.fallbackByHybk）
-        const llmClassify = await classifyStocksToMainlines({
-          rawPool,
-          // F-08 修复：字段已补全，无需 as unknown as 强断言
-          boards: allScoringBoards,
-          newsItems,
-        });
-        // 把 LLM 归类结果适配到 candidates（BattlePlan.tsx 期望的形状）
-        const candidates: MainlineGroup[] = llmClassify.groups;
-        const classifyOverview = llmClassify.overview;
+        // ---- ① 主线归类 + 渐进式渲染（v9.78 性能修复） ----
+        // 原实现：await classifyStocksToMainlines(LLM) 阻塞 refreshAll → 作战卡/裁决卡/选股清单
+        // 要等 LLM 完成才出现（Agnes 慢/并发限流时卡 10-30s）。
+        // 现改为：快路径 skipLLM(hybk，无 LLM ~1-3s) 先渲染；LLM 软语义归类异步升级（不阻塞首帧）。
+        const mySeq = ++battleSeq.current;
+        const renderBattlePlan = async (
+          cands: MainlineGroup[],
+          classifyOverview: { totalStocks: number; mainlineCount: number; trueMainlineCount: number; logic: string },
+        ) => {
+          const candidates: MainlineGroup[] = cands;
 
         // ---- v9.23-1/2：主线强度分 + 离场信号注入（PRD 6.1/6.4） ----
         // 基于涨停家数占比/连板高度/资金连续性 计算，避免"资金流入金额大≠主线强"
@@ -824,45 +825,63 @@ export default function App() {
         // 候选观察池（板块4-8名）
         const candidateThemes = themeResults.slice(3, 8).map(t => ({ board: t.board, total: t.total, tier: t.tier }));
 
-        // ---- 先用规则分渲染作战卡（渐进式：先规则后LLM） ----
-        setBattlePlan({ gate, candidates, llmRanked: null, marketStyle, etfs: topETFs, candidateThemes, classifyOverview });
+          // ---- 先用规则分渲染作战卡（渐进式：先规则后LLM） ----
+          setBattlePlan({ gate, candidates, llmRanked: null, marketStyle, etfs: topETFs, candidateThemes, classifyOverview });
 
-        // ?debug=1 诊断模式（Fix4：可观测性）
-        if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
-          console.log("=== 主线引擎（LLM 归类）===", { 情绪: sentiment, 涨停数: rawPool.length, 风格: marketStyle.label, 风险偏好: marketStyle.riskAppetite, 闸门: gate.factor, 归类概览: classifyOverview });
-          console.table(candidates.slice(0, 8).map(c => ({ 主线: c.mainline, 涨停: c.ztCount, 高度: c.height, 资金: (c.mainNet / 1e8).toFixed(0) + "亿", 强度: c.score, 脉冲: c.isPulse ? "是" : "否", 龙一: c.leaders[0]?.name ?? "—", 龙二: c.leaders[1]?.name ?? "—" })));
-          console.table(etfResults.map(e => ({ 代码: e.code, 名称: e.name, 总分: e.total, 置信: e.tier, 资金: e.factors.fundTrend, 联动: e.factors.boardLink, 风格: e.factors.styleFit, 主线: e.factors.mainlineLink, 宏观: e.factors.macro, 直出: e.fromMainline ? e.matchedMainline : "" })));
-        }
-
-        // 推荐落盘（每日首次，同日同code不重复）
-        const recDate = localDateStr();
-        const recGateFactor = gate.factor ?? 0;
-        for (const c of candidates.slice(0, 5)) {
-          recordRecommendation({ date: recDate, type: "theme", code: c.mainline, board: c.mainline, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
-          for (const l of c.leaders) {
-            recordRecommendation({ date: recDate, type: "stock", code: l.code, board: c.mainline, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+          // ?debug=1 诊断模式（Fix4：可观测性）
+          if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
+            console.log("=== 主线引擎（LLM 归类）===", { 情绪: sentiment, 涨停数: rawPool.length, 风格: marketStyle.label, 风险偏好: marketStyle.riskAppetite, 闸门: gate.factor, 归类概览: classifyOverview });
+            console.table(candidates.slice(0, 8).map(c => ({ 主线: c.mainline, 涨停: c.ztCount, 高度: c.height, 资金: (c.mainNet / 1e8).toFixed(0) + "亿", 强度: c.score, 脉冲: c.isPulse ? "是" : "否", 龙一: c.leaders[0]?.name ?? "—", 龙二: c.leaders[1]?.name ?? "—" })));
+            console.table(etfResults.map(e => ({ 代码: e.code, 名称: e.name, 总分: e.total, 置信: e.tier, 资金: e.factors.fundTrend, 联动: e.factors.boardLink, 风格: e.factors.styleFit, 主线: e.factors.mainlineLink, 宏观: e.factors.macro, 直出: e.fromMainline ? e.matchedMainline : "" })));
           }
-        }
-        for (const e of topETFs) {
-          recordRecommendation({ date: recDate, type: "etf", code: e.code, board: e.matchedMainline ?? "", priceAtRec: 0, totalScore: e.total, gateFactor: recGateFactor });
-        }
 
-        // ---- LLM 主线精排（异步补位，不阻塞首次渲染） ----
-        // 调用频率：规则渲染后 1 次 + 每 20-30 分钟（payload 变化时，由调用方节流）；
-        // 失败自动降级回规则排序（rankMainlinesWithLLM 内部处理）
-        // v9.77（A8-04）：20 分钟时间节流落地（原注释写了但未实现，每 60s 都烧 analysis 桶）
-        if (candidates.length > 0 && Date.now() - lastLLMRankAt.current >= 20 * 60 * 1000) {
-          lastLLMRankAt.current = Date.now();
-          const { news: catNews, ann: catAnn } = getAllSince(localDateStrOffset(3));
-          const catalystsMap = buildMainlineCatalysts(candidates.map(c => c.mainline), catNews, catAnn);
+          // 推荐落盘（每日首次，同日同code不重复）
+          const recDate = localDateStr();
+          const recGateFactor = gate.factor ?? 0;
+          for (const c of candidates.slice(0, 5)) {
+            recordRecommendation({ date: recDate, type: "theme", code: c.mainline, board: c.mainline, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+            for (const l of c.leaders) {
+              recordRecommendation({ date: recDate, type: "stock", code: l.code, board: c.mainline, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+            }
+          }
+          for (const e of topETFs) {
+            recordRecommendation({ date: recDate, type: "etf", code: e.code, board: e.matchedMainline ?? "", priceAtRec: 0, totalScore: e.total, gateFactor: recGateFactor });
+          }
+
+          // ---- LLM 主线精排（异步补位，不阻塞渲染；v9.77 20min 节流） ----
+          // 失败自动降级回规则排序（rankMainlinesWithLLM 内部处理）
+          if (candidates.length > 0 && Date.now() - lastLLMRankAt.current >= 20 * 60 * 1000) {
+            lastLLMRankAt.current = Date.now();
+            const { news: catNews, ann: catAnn } = getAllSince(localDateStrOffset(3));
+            const catalystsMap = buildMainlineCatalysts(candidates.map(c => c.mainline), catNews, catAnn);
+            (async () => {
+              try {
+                const seq = ++llmRankSeq.current; // v9.26.9：竞态护栏——只应用最新一轮结果
+                const llmRanked = await rankMainlinesWithLLM(candidates.slice(0, 6), marketStyle, catalystsMap);
+                if (seq === llmRankSeq.current) {
+                  setBattlePlan(prev => prev ? { ...prev, llmRanked } : prev);
+                }
+              } catch { /* LLM 精排失败 → 保持规则排序 */ }
+            })();
+          }
+        }; // renderBattlePlan 结束
+
+        // ---- 快路径：skipLLM hybk 归类先渲染（无 LLM，~1-3s）----
+        try {
+          const quick = await classifyStocksToMainlines({ rawPool, boards: allScoringBoards, newsItems, skipLLM: true });
+          if (mySeq !== battleSeq.current) return;
+          await renderBattlePlan(quick.groups, quick.overview);
+        } catch { setBattlePlan(null); }
+
+        // ---- 异步升级：LLM 软语义归类（不阻塞渲染；Agnes 慢/并发限流时首帧已是规则结果）----
+        if (rawPool.length > 0) {
           (async () => {
             try {
-              const seq = ++llmRankSeq.current; // v9.26.9：竞态护栏——只应用最新一轮结果
-              const llmRanked = await rankMainlinesWithLLM(candidates.slice(0, 6), marketStyle, catalystsMap);
-              if (seq === llmRankSeq.current) {
-                setBattlePlan(prev => prev ? { ...prev, llmRanked } : prev);
-              }
-            } catch { /* LLM 精排失败 → 保持规则排序 */ }
+              const llm = await classifyStocksToMainlines({ rawPool, boards: allScoringBoards, newsItems });
+              if (mySeq !== battleSeq.current) return; // 已有更新轮次 → 丢弃慢的 LLM 结果
+              if (!llm.groups || llm.groups.length === 0) return;
+              await renderBattlePlan(llm.groups, llm.overview);
+            } catch { /* LLM 升级失败 → 保持快路径结果 */ }
           })();
         }
 
