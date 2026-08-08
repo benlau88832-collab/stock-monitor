@@ -295,7 +295,7 @@ const BOARD_FS: Record<string, string> = {
 export async function fetchBoardFundFlow(
   boardType: "industry" | "concept" | "region",
   limit = 15,
-  opts?: { all?: boolean | "full" },
+  opts?: { all?: boolean },
 ): Promise<BoardFlowItem[]> {
   const fs = BOARD_FS[boardType];
   const fields = "f12,f14,f3,f62,f66,f72,f78,f84,f164,f165,f174,f175,f184";
@@ -329,46 +329,9 @@ export async function fetchBoardFundFlow(
   // v9.30.1：all=true 时用"双请求"拿全量（流入 po=1 降序 + 流出 po=0 升序），合并去重后本地 mainNet 降序。
   // 修复：原实现仅 po=1 降序 + pz=limit —— 东财 t:2 行业细分远超 100 个，f62 降序前 100 全是正数，
   //      流出行业被挤出结果集 → 资金走势图"主力净流出"永远为 0。
-  // v9.75-fix（板块加载不出 + 卡顿）：
-  //   all=true  → 双请求各 limit（高频调用场景：App 主刷新 60s/次，2 次请求/轮，保持原行为）
-  //   all="full" → 按 total 分页拉全量（低频场景：boardMap 每日构建一次，~10 页）
-  if (opts?.all === "full") {
-    const PZ = 100;
-    const base = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${PZ}&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
-    const fetchPages = async (po: 1 | 0): Promise<BoardFlowItem[]> => {
-      const outItems: BoardFlowItem[] = [];
-      let total = 0;
-      try {
-        const first = await trackedJsonp<any>("板块资金流", `${base}&po=${po}`);
-        total = Number(first?.data?.total) || 0;
-        outItems.push(...parse(first));
-      } catch { return outItems; }
-      const totalPages = total > 0 ? Math.ceil(total / PZ) : 1;
-      for (let pn = 2; pn <= totalPages; pn++) {
-        try {
-          // v9.75-fix（卡顿）：与行情通道错峰
-          await new Promise(r => setTimeout(r, 120));
-          const j = await trackedJsonp<any>("板块资金流", `${base}&po=${po}&pn=${pn}`);
-          const diff = normalizeDiff(j?.data?.diff);
-          if (diff.length === 0) break;
-          outItems.push(...parse(j));
-          if (diff.length < PZ) break;
-        } catch { break; }
-      }
-      return outItems;
-    };
-    const [inflowRes, outflowRes] = await Promise.allSettled([fetchPages(1), fetchPages(0)]);
-    const merged = new Map<string, BoardFlowItem>();
-    for (const r of [inflowRes, outflowRes]) {
-      if (r.status === "fulfilled") {
-        for (const it of r.value) if (it.code) merged.set(it.code, it);
-      }
-    }
-    return [...merged.values()].sort((a, b) => b.mainNet - a.mainNet);
-  }
-
-  if (opts?.all === true) {
-    const base = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${limit}&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
+  // 注意：不能靠 pz=500 拉全量 —— 东财对 pz 有上限（约100），且排序后仅返回头部。
+  if (opts?.all) {
+    const base = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=300&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
     const [inflowRes, outflowRes] = await Promise.allSettled([
       trackedJsonp<any>("板块资金流入", `${base}&po=1`),
       trackedJsonp<any>("板块资金流出", `${base}&po=0`),
@@ -1227,62 +1190,22 @@ export async function fetchStockBriefBatch(codes: string[]): Promise<Map<string,
 }
 
 /** 全市场 股票代码 -> 申万行业（f128=行业），分页拉取 */
-// v9.75-fix（卡顿+板块加载不出双修复）：
-//   ① 板块缺失：pz 硬上限 100 + total≈12393 → 原写死 40 页只覆盖 ~4000 只；
-//   ② 首屏卡：124 页串行 JSONP（并发 3）需 ~40s。改为按市场 4 路并行拉取（每路独立分页），
-//     整体耗时 ~10s 且默认非阻塞（boardMap 旧缓存先行，构建完成才替换）。
 export async function fetchStockIndustryMap(): Promise<Record<string, string>> {
+  const fs = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81";
   const fields = "f12,f14,f128";
-  const PZ = 100;
-  // 按市场拆分（沪主板+深主板 / 创业板 / 科创板），3 路并行，每路独立分页。
-  // v9.75-fix（卡顿+板块缺失）：北交所 total≈6846 且其个股 f128 行业字段多为空，
-  // 跳过可省 ~69 页请求（行业映射只对沪深创科有意义，北交所股票少、流动性低、归"其他"影响小）
-  const markets: Array<{ fs: string; tag: string }> = [
-    { fs: "m:1+t:2,m:0+t:6", tag: "沪深主板" },  // 沪主板 + 深主板
-    { fs: "m:0+t:80", tag: "创业板" },
-    { fs: "m:1+t:23", tag: "科创板" },
-  ];
   const out: Record<string, string> = {};
-
-  const fetchOneMarket = async (fs: string): Promise<void> => {
-    // 首页：先取 total 决定页数
-    const firstUrl = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${PZ}&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${fs}&fields=${fields}`;
-    let firstDiff: any[] = [];
-    let total = 0;
-    try {
-      const j = await jsonp<any>(firstUrl, 12000);
-      firstDiff = normalizeDiff(j?.data?.diff);
-      total = Number(j?.data?.total) || 0;
-    } catch { /* 单市场失败跳过 */ }
-    for (const d of firstDiff) {
+  for (let pn = 1; pn <= 10; pn++) {
+    const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=${pn}&pz=2000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${fs}&fields=${fields}`;
+    const json = await jsonp<any>(url, 12000);
+    const diff = normalizeDiff(json?.data?.diff);
+    if (diff.length === 0) break;
+    for (const d of diff) {
       const code = String(d.f12 ?? "");
       const ind = String(d.f128 ?? "").trim();
       if (code && ind) out[code] = ind;
     }
-    const totalPages = total > 0 ? Math.ceil(total / PZ) : 1;
-    for (let pn = 2; pn <= totalPages; pn++) {
-      try {
-        const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=${pn}&pz=${PZ}&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${fs}&fields=${fields}`;
-        // v9.75-fix（卡顿）：构建通道与行情通道错峰 —— 每页间 120ms 间隔，避免上百次请求
-        // 瞬间打满 jsonpQueue（并发 3）导致首屏其他行情（涨停池/资金流）排队等待
-        await new Promise(r => setTimeout(r, 120));
-        const json = await jsonp<any>(url, 12000);
-        const diff = normalizeDiff(json?.data?.diff);
-        if (diff.length === 0) break;
-        for (const d of diff) {
-          const code = String(d.f12 ?? "");
-          const ind = String(d.f128 ?? "").trim();
-          if (code && ind) out[code] = ind;
-        }
-        if (diff.length < PZ) break;
-      } catch {
-        break; // 单页失败：保留已获取部分
-      }
-    }
-  };
-
-  // 4 路并行；任一路失败不影响其他
-  await Promise.allSettled(markets.map(m => fetchOneMarket(m.fs)));
+    if (diff.length < 2000) break;
+  }
   return out;
 }
 
