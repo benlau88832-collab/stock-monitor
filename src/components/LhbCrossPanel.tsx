@@ -3,6 +3,8 @@
 // 游资逻辑：涨停 + 龙虎榜净买入 = 资金真金白银确认，次日溢价增强信号。
 // 数据：kv lhb:日期（cron 15:40 落库）+ overview 涨停池
 // P0-5：交叉命中且净买入 → alertBus.emit（warning，首次出现才报）
+// v9.76.1 修复：P0-5 useEffect 原先放在提前 return 之后 → React #310
+//   （hooks 数量随渲染变化）。已移到组件顶部无条件执行。
 // ============================================================
 import { useState, useEffect, useRef } from "react";
 import { fmtMoney } from "../lib/format";
@@ -41,6 +43,28 @@ export default function LhbCrossPanel({ overview }: { overview?: OverviewData | 
     return () => { alive = false; };
   }, []);
 
+  // P0-5：交叉命中且净买入 > 0 → alertBus emit（warning 级；T+1 复盘数据，非盘中紧急，不升 critical 免骚扰）
+  // v9.76.1 修复：必须位于所有提前 return 之前（无条件执行，hooks 数量恒定）
+  useEffect(() => {
+    if (!lhb || lhb.length === 0) return;
+    const ztCodes = new Set<string>(
+      (overview?.limitPool?.rawZTPool ?? []).map((s: any) => String(s.c || "").replace(/^[A-Z]{2}/, "")),
+    );
+    const crossed = lhb
+      .filter(x => ztCodes.has(x.code))
+      .sort((a, b) => b.netBuy - a.netBuy)
+      .slice(0, 15);
+    for (const it of crossed) {
+      if (it.netBuy <= 0 || emittedRef.current.has(it.code)) continue;
+      emittedRef.current.add(it.code);
+      alertEmit({
+        id: `lhb_cross_${it.code}`,
+        severity: "warning",
+        message: `🐉 ${it.name}(${it.code}) 上龙虎榜且今日涨停，净买入 ${fmtMoney(it.netBuy)}，席位加持信号`,
+      });
+    }
+  }, [lhb, overview]);
+
   if (lhb === null || lhb.length === 0) return null;
 
   // 涨停池代码集合
@@ -52,19 +76,6 @@ export default function LhbCrossPanel({ overview }: { overview?: OverviewData | 
     .filter(x => ztCodes.has(x.code))
     .sort((a, b) => b.netBuy - a.netBuy)
     .slice(0, 15);
-
-  // P0-5：交叉命中且净买入 > 0 → alertBus emit（warning 级；T+1 复盘数据，非盘中紧急，不升 critical 免骚扰）
-  useEffect(() => {
-    for (const it of crossed) {
-      if (it.netBuy <= 0 || emittedRef.current.has(it.code)) continue;
-      emittedRef.current.add(it.code);
-      alertEmit({
-        id: `lhb_cross_${it.code}`,
-        severity: "warning",
-        message: `🐉 ${it.name}(${it.code}) 上龙虎榜且今日涨停，净买入 ${fmtMoney(it.netBuy)}，席位加持信号`,
-      });
-    }
-  }, [crossed]);
 
   if (crossed.length === 0) return null;
 
