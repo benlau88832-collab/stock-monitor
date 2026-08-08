@@ -8,7 +8,7 @@ import { getAgentTools } from "./agentTools";
 // v9.66.1：导入调研会话状态工具
 import { getResearchTools, RESEARCH_SYSTEM, researchCtxNote } from "./researchTools";
 import { callAgentChat, parseAIJSON, type AgentChatResult } from "./ai";
-import { fmtMoney } from "./format";
+import { fmtMoney, getBJDateStr } from "./format";
 
 export interface AssistantReply {
   reply: string;
@@ -57,7 +57,7 @@ export async function runAssistantAgent(
         try {
           const { getAllSince } = await import("./dataStore");
           const hours = Number(args?.hours ?? 24);
-          const since = new Date(Date.now() - hours * 3600000).toISOString().slice(0, 10);
+          const since = getBJDateStr(new Date(Date.now() - hours * 3600000)); // v15-1：北京时间日期（原 toISOString 本地偏移 bug）
           const { news, ann } = getAllSince(since);
           return {
             newsCount: news.length,
@@ -154,8 +154,8 @@ export async function runAssistantAgent(
   if (/消息|新闻|快讯|公告|事件|海内外|国内外/.test(q) && !q.includes("个股深度调研")) {
     try {
       const { getAllSince } = await import("./dataStore");
-      let since = new Date().toISOString().slice(0, 10);
-      if (/昨天|昨日/.test(q)) { const d = new Date(); d.setDate(d.getDate() - 1); since = d.toISOString().slice(0, 10); }
+      let since = getBJDateStr(); // v15-1：北京时间今日（原 toISOString UTC 会偏一天）
+      if (/昨天|昨日/.test(q)) { since = getBJDateStr(new Date(Date.now() - 86400000)); }
       const dm = q.match(/(\d{1,2})[.月](\d{1,2})/);
       if (dm) since = `${new Date().getFullYear()}-${String(+dm[1]).padStart(2, "0")}-${String(+dm[2]).padStart(2, "0")}`;
       const { news, ann } = getAllSince(since);

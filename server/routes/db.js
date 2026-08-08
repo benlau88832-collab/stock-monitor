@@ -193,4 +193,68 @@ module.exports = function dbRoutes(app) {
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
+
+  // ---------- P0-1：人类拍板台账 ----------
+  app.post("/api/db/decision_post", async (req, res) => {
+    const p = req.body || {};
+    if (!p.ticketId || !p.humanAction) return res.status(400).json({ error: "ticketId & humanAction required" });
+    try {
+      await pool.query(
+        `INSERT INTO decision_post(date,ticket_id,mainline,code,human_action,confidence_at_post,price_at_post,executed,pnl,notes,decision_log_ref,ts)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
+         ON CONFLICT (ticket_id) DO NOTHING`,
+        [
+          p.date, p.ticketId, p.mainline ?? null, p.code ?? null, p.humanAction,
+          p.confidenceAtPost ?? null, p.priceAtPost ?? null, Boolean(p.executed), p.pnl ?? null,
+          p.notes ?? "", p.decisionLogRef ?? null,
+        ],
+      );
+      res.json({ ok: true, ticketId: p.ticketId });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/db/decision_post/:date?", async (req, res) => {
+    try {
+      const date = req.params.date;
+      const r = date
+        ? await pool.query("SELECT * FROM decision_post WHERE date=$1 ORDER BY ts DESC", [date])
+        : await pool.query("SELECT * FROM decision_post ORDER BY ts DESC LIMIT 200");
+      res.json({ ok: true, rows: r.rows });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // P0-3：拍板盈亏回填
+  app.post("/api/db/decision_post/pnl", async (req, res) => {
+    const { ticketId, pnl, executed } = req.body || {};
+    if (!ticketId) return res.status(400).json({ error: "ticketId required" });
+    try {
+      await pool.query("UPDATE decision_post SET pnl=$1, executed=$2 WHERE ticket_id=$3", [
+        pnl ?? null, Boolean(executed), ticketId,
+      ]);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ---------- P0-3：成交台账 ----------
+  app.post("/api/db/trade_ledger", async (req, res) => {
+    const t = req.body || {};
+    if (!t.code || !t.action || typeof t.price !== "number") return res.status(400).json({ error: "code/action/price required" });
+    try {
+      await pool.query(
+        `INSERT INTO trade_ledger(date,decision_post_ref,code,name,action,price,quantity,cost,pnl_pct,notes,ts)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())`,
+        [t.date, t.decisionPostRef ?? null, t.code, t.name ?? null, t.action, t.price,
+         t.quantity ?? 0, t.cost ?? null, t.pnlPct ?? null, t.notes ?? null],
+      );
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/db/trade_ledger", async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(Number(req.query.limit) || 200, 500));
+      const r = await pool.query("SELECT * FROM trade_ledger ORDER BY ts DESC LIMIT $1", [limit]);
+      res.json({ ok: true, rows: r.rows });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 };

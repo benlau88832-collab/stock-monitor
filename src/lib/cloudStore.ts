@@ -88,6 +88,9 @@ export async function pushAnnsCloud(items: any[]): Promise<void> {
 }
 
 // ============== localStorage 全量迁移 ==============
+/** 不应上传到 PG 的 key 前缀（含明文 API Key / 敏感凭据的本地配置） */
+const SKIP_UPLOAD_PREFIXES = ["ai_settings", "llm_api_key"];
+
 /** 把所有 localStorage key 上传到 PG（首次部署时调用） */
 export async function migrateLocalStorageToCloud(): Promise<number> {
   if (!isLocalServer()) return 0;
@@ -96,6 +99,9 @@ export async function migrateLocalStorageToCloud(): Promise<number> {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key) continue;
+      // v9.75（安全修复）：跳过含明文 API Key 的配置 key ——
+      // 此前全量上传会把 ai_settings_v1（含 apiKey）复制进 PG，PG 备份泄漏即 Key 泄漏
+      if (SKIP_UPLOAD_PREFIXES.some(p => key.startsWith(p))) continue;
       try {
         const raw = localStorage.getItem(key);
         if (raw == null) continue;

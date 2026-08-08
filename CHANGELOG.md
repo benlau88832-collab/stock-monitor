@@ -4,44 +4,6 @@
 
 ---
 
-## v9.75 — 深度审查四轮整改：安全加固 + AI 决策深化（2026-08-08）
-
-> 基于《审查报告-2026-08-08.md》《审查补充报告-2026-08-08.md》《AI决策深化专项审查报告.md》四轮整改全部落地。
-
-### 🔴 安全加固（P0）
-- **CORS 收敛**：`*` → 仅 localhost/127.0.0.1（实测 evil Origin 无 ACAO 头，恶意网页无法再跨域读 API Key）
-- **监听收敛**：`0.0.0.0` → `127.0.0.1`（局域网设备无法触达，攻击面关闭）
-- **API Key 不上行 PG**：cloudStore 迁移跳过 `ai_settings*`/`llm_api_key`（此前 Key 被复制进数据库）
-- **jsonb 二次 parse 修复 ×3**（cron.js）：premiumAvg/promotionRate 不再"今日算今日"（日期格式混用）、fund_streak 资金联动激活（`sv.list`→`sv.items`）
-- **行业映射分页修复**：`pz=2000`→`pz=100` 循环（此前只覆盖涨幅榜前 100 只，全市场 ~5000 只静默无行业）
-
-### 🟠 数据正确性（P0）
-- **zt_snapshot 日期格式统一**（cron.js）：runThemeAnalysis 查询用 dateStr → "新闻驱动作战管线" Step4 LLM 选股研判从死代码激活
-- **复盘输入修复**：strongAnn 字符串数组直接 join（原按对象取字段渲染成 `::` 垃圾串）
-- **快讯规则提星**：`rankNewsStars()` 正则（降准/增持/中标等）→ strongNews 不再恒空
-- **Agent 工具假数据清除**（agentTools.ts ×3）：checkExitSignal/checkSysRisk/checkStockExitSignal 改为缺数据显式 `dataMissing`（不投票、提示 LLM），Dashboard 注入真实 hs300Pct/跌停/炸板/情绪
-- **硬否决失配修复**（decisionBus）：VETO_SOURCES 补英文工具名，规则兜底路径不再"系统性风险红仍可上车"
-- **自选股轮询节流**：18s 快通道不再拖累批量行情（60s 节流）
-
-### 🟡 AI 决策深化（阶段一/二/三）
-- **提示词补数据 ×7**：eventExplain（真实涨幅/量比/换手）、leaderPredict（涨停池白名单+置信钳制）、riskRadar（外围指数/溢价分布/晋级率）、nextDayScenarios（连板梯队/市场风格）、stockJudge（主线板块名单）、mainlineRank（龙一封单额/连板/板型）、supervisor（信号账本命中率）
-- **快讯 LLM 分级回填**（cron）：标题判重幂等，stars/sentiment 真实回填（实测 15 条）
-- **黑天鹅 LLM 二级确认**（cron）：正则初筛→LLM 精筛（severe/moderate + 影响）
-- **因子失效 LLM 归因层**：factorHealth 输出"为什么失效"+退役建议（日级缓存防重复计费）
-- **次日闸门预测**：盘后 LLM 结合隔夜外围预判明日闸门，Dashboard 🚦 卡片展示
-- **主题分析资金匹配**：exact → 关键词交集匹配（"芯片"↔"半导体"）
-- **Critic 独立任务槽**：不再复用 dailyIntel（语义/token/缓存/FALLBACK 全错配已修）
-- **parseAIJSON 截断容错**：从最后一个 `}` 截断补 `]` 重试（max_tokens 截断不再整段丢失）
-- **批量扫描节流**：并发 2 + 1.2s 间隔（不再撞 10/min 限速）
-- **命中率对账分桶**：降级样本独立 degraded 桶，不污染 AI/规则胜率
-- **公告评分幂等**：代码|标题哈希判重（15:40+启动不重复计费）
-
-### 🔧 工程修复
-- **git 仓库结构修复**：server/db.js 被错误覆盖为路由模块（克隆无法启动）→ 恢复 db 模块；删除残留 routes/index.js、routes/cron.js
-- **部署真源确认**：PM2 实际运行 022_ 副本（含 .env），git 工作树为同步镜像——两处已完全对齐（md5 一致）
-
----
-
 ## v9.74 — GLM5.2-V14 全部落地：全面体检清算（9/9 指令）(2026-08-08)
 
 > 依据 `022_股票监控项目/GLM5.2建议-v14.txt`（221 行）逐条执行，9 条修改指令全部完成（P0×2 / P1×3 / P2×4）。

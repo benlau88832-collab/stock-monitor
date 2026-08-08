@@ -4,6 +4,8 @@
 // 存储：localStorage（v9.20 云端持久化时迁移）
 
 import { localDateStr } from "./format";
+// P2-4：纪律数据 PG 化（本地部署时同步 cloudStore，跨设备一致）
+import { isLocalServer, kvSet } from "./cloudStore";
 
 // ============== 数据结构 ==============
 export interface PositionRecord {
@@ -73,6 +75,10 @@ export function loadDisciplineState(): DisciplineState {
 
 export function saveDisciplineState(state: DisciplineState): void {
   try { localStorage.setItem(DISC_KEY, JSON.stringify(state)); } catch { /* 满 → 静默 */ }
+  // P2-4：本地部署时同步 PG kv（cloudStore 5 分钟自动同步兜底，此处主动推一次保证即时跨设备）
+  if (isLocalServer()) {
+    kvSet("discipline_state_v1", state).catch(() => { /* 同步失败 5 分钟 sync 兜底 */ });
+  }
 }
 
 // ============== 纪律计算（纯函数） ==============
@@ -153,4 +159,33 @@ export function recordTradeResult(
   // 连续亏损计数：只看最近 N 天，若最新一笔是盈利则清零
   const lossStreak = pnlPct < 0 ? state.lossStreak + 1 : 0;
   return { ...state, recentPnl: recent, lossStreak };
+}
+
+// ============== P0-2：拍板自动入纪律 ==============
+/**
+ * 拍板"确认上车"后自动加入持仓列表（默认估算 20% 仓位）
+ * 防重：同 code 不重复加（避免连续拍板刷出多份持仓）
+ * 用户后续到 DisciplinePanel 修订实际股数/成本
+ */
+export function addDecisionToPosition(post: {
+  code: string | null;
+  priceAtPost: number | null;
+  mainline: string | null;
+}): void {
+  if (!post.code || !post.priceAtPost || post.priceAtPost <= 0) return;
+  const s = loadDisciplineState();
+  // 防重：同 code 已存在 → 不重复加（避免连续拍板刷出多份持仓）
+  if (s.positions.some(p => p.code === post.code)) return;
+  // 默认先用总资金的 20% 估算（用户回填后修）
+  const estValue = s.settings.totalCapital * 0.2;
+  s.positions.push({
+    code: post.code!,
+    name: "",              // 调用方/后续 UI 填
+    cost: post.priceAtPost!,
+    price: post.priceAtPost!,
+    value: estValue,
+    pnlPct: 0,
+  });
+  s.todayNewPositions = (s.todayNewPositions ?? 0) + 1;
+  saveDisciplineState(s);
 }

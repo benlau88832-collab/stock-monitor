@@ -75,17 +75,63 @@ export interface IndexQuote {
 }
 
 export async function fetchIndexOverview(): Promise<IndexQuote[]> {
-  const secids = MAJOR_INDICES.map((i) => i.secid).join(",");
-  const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
-  const json = await trackedJsonp<any>("指数概览", url);
-  const diff = normalizeDiff(json?.data?.diff);
-  return diff.map((d: Record<string, unknown>) => ({
-    code: String(d.f12 ?? ""),
-    name: String(d.f14 ?? ""),
-    price: num(d.f2),
-    pct: num(d.f3),
-    change: num(d.f4),
-  }));
+  try {
+    const secids = MAJOR_INDICES.map((i) => i.secid).join(",");
+    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
+    const json = await trackedJsonp<any>("指数概览", url);
+    const diff = normalizeDiff(json?.data?.diff);
+    if (diff.length > 0) {
+      return diff.map((d: Record<string, unknown>) => ({
+        code: String(d.f12 ?? ""),
+        name: String(d.f14 ?? ""),
+        price: num(d.f2),
+        pct: num(d.f3),
+        change: num(d.f4),
+      }));
+    }
+    throw new Error("empty diff");
+  } catch {
+    // P3-2：东财指数接口失败/空 → 降级腾讯 qt.gtimg.cn（浏览器直连无 CORS）
+    return fetchIndexOverviewTencent();
+  }
+}
+
+/**
+ * P3-2：腾讯指数备用源（qt.gtimg.cn，雪球格式）
+ * 代码映射：上证指数 sh000001 / 深证成指 sz399001 / 创业板指 sz399006 / 科创50 sh000688 / 沪深300 sh000300
+ * 返回格式：v_sh000001="1~上证指数~000001~收盘价~昨收~今开~成交量~...~涨幅%~..."
+ */
+async function fetchIndexOverviewTencent(): Promise<IndexQuote[]> {
+  try {
+    const codeMap: Record<string, string> = {
+      "000001": "sh000001", "399001": "sz399001", "399006": "sz399006",
+      "000688": "sh000688", "000300": "sh000300",
+    };
+    const codes = MAJOR_INDICES.map(i => codeMap[i.code]).filter(Boolean).join(",");
+    const resp = await fetch(`https://qt.gtimg.cn/q=${codes}`, { mode: "cors" });
+    if (!resp.ok) return [];
+    // 腾讯接口默认 GBK，浏览器 fetch 可能乱码 → 用 text() 拿原始后尝试解码
+    const raw = await resp.arrayBuffer();
+    let text: string;
+    try { text = new TextDecoder("gbk").decode(raw); } catch { text = new TextDecoder("utf-8").decode(raw); }
+    const out: IndexQuote[] = [];
+    for (const line of text.split(";")) {
+      const m = line.match(/v_(\w+)="([^"]*)"/);
+      if (!m) continue;
+      const fields = m[2].split("~");
+      if (fields.length < 32) continue;
+      const name = fields[1];
+      const price = Number(fields[3]);
+      const pct = Number(fields[32]);
+      const change = Number(fields[31]);
+      const code = fields[2];
+      if (!name || !Number.isFinite(price)) continue;
+      out.push({ code: String(code), name, price, pct: Number.isFinite(pct) ? pct : 0, change: Number.isFinite(change) ? change : 0 });
+    }
+    if (out.length === 0) return [];
+    console.warn("[api] 东财指数降级腾讯备用源:", out.length, "条");
+    return out;
+  } catch { return []; }
 }
 
 // ============== 全市场涨跌家数（修正版） ==============

@@ -8,6 +8,8 @@
 // ============================================================
 import { kvGet } from "./cloudStore";
 import { getBJDate, getBJWeekday } from "./format";
+import { loadRecentPosts } from "./decisionPost";
+import { backfillPostPnl } from "./tradeLedger";
 
 export interface HitrateBucket {
   hits: number;
@@ -105,6 +107,81 @@ export async function computeDecisionHitrate(days = 30): Promise<HitrateResult> 
     bucket.total++;
     bucket.hits += win;
   }
+  if (res.ai.total > 0) res.ai.rate = Math.round(res.ai.hits / res.ai.total * 100);
+  if (res.rule.total > 0) res.rule.rate = Math.round(res.rule.hits / res.rule.total * 100);
+  if (res.degraded.total > 0) res.degraded.rate = Math.round(res.degraded.hits / res.degraded.total * 100);
+  return res;
+}
+
+// ============================================================
+// P0-3：人类拍板 → 真实 T+5 盈亏归因（升级版，替代宏观情绪代理）
+// 数据：decision_log（AI/规则裁决）+ decision_post（人类拍板）
+// 逻辑：只统计 humanAction==="confirm" 的样本，用真实日 K 回填 T+5 PnL
+// 三分桶：ai（source=AI-Agent）/ rule（规则投票）/ degraded（降级）
+// 保留 computeDecisionHitrate（向后兼容），此函数为"真实盈亏版"
+// ============================================================
+
+export interface PostHitrateResult {
+  ai: HitrateBucket;
+  rule: HitrateBucket;
+  degraded: HitrateBucket;
+  /** 桶内平均 T+5 盈亏%（真实涨跌，非 0/1 胜率） */
+  aiPnlT5: { avg: number | null; n: number };
+  rulePnlT5: { avg: number | null; n: number };
+  degradedPnlT5: { avg: number | null; n: number };
+  /** 已回填样本数（少于拍板数 = 数据积累中） */
+  backfilledCount: number;
+}
+
+/** 计算"confirm 拍板"的真实 T+5 盈亏统计（AI vs 规则 vs 降级） */
+export async function computePostHitrate(days = 30): Promise<PostHitrateResult> {
+  const res: PostHitrateResult = {
+    ai: { hits: 0, total: 0, rate: null },
+    rule: { hits: 0, total: 0, rate: null },
+    degraded: { hits: 0, total: 0, rate: null },
+    aiPnlT5: { avg: null, n: 0 },
+    rulePnlT5: { avg: null, n: 0 },
+    degradedPnlT5: { avg: null, n: 0 },
+    backfilledCount: 0,
+  };
+  const logs = loadDecisionLogs(days);
+  const posts = loadRecentPosts(days).filter(p => p.humanAction === "confirm" && p.decisionLogRef);
+
+  // 按 decisionLogRef 配对：拍板 → 对应 AI/规则裁决（拿到 source 分桶）
+  const logByTs = new Map<string, DecisionLogEntry>();
+  for (const l of logs) if (l.ts) logByTs.set(l.ts, l);
+
+  for (const post of posts) {
+    const log = logByTs.get(post.decisionLogRef!) ?? logByTs.get(String(post.decisionLogRef));
+    const source = log?.source ?? "规则投票";  // 无配对按规则保守处理
+    const isDegraded = log ? (log.path === "rule_fallback" || log.rateLimited === true || log.gatedDowngrade != null) : false;
+    const bucketKey = isDegraded ? "degraded" : source === "AI-Agent" ? "ai" : "rule";
+
+    // 真实 T+5 盈亏回填（本地无则尝试现算；失败静默）
+    let pnlT5: number | null = null;
+    if (post.pnl != null) {
+      pnlT5 = post.pnl;
+    } else if (post.executed) {
+      pnlT5 = post.pnl; // executed=true 但 pnl=null 时保持 null
+    } else if (post.code && post.priceAtPost) {
+      try {
+        const r = await backfillPostPnl(post);
+        pnlT5 = r?.t5 ?? null;
+      } catch { /* 静默 */ }
+    }
+
+    if (pnlT5 == null) continue;  // 未回填不统计（数据积累中）
+    res.backfilledCount++;
+    const bucket = res[bucketKey];
+    bucket.total++;
+    bucket.hits += pnlT5 > 0 ? 1 : 0;
+    const pnlBucket = bucketKey === "ai" ? res.aiPnlT5 : bucketKey === "rule" ? res.rulePnlT5 : res.degradedPnlT5;
+    pnlBucket.n++;
+    pnlBucket.avg = pnlBucket.avg == null
+      ? pnlT5
+      : Math.round((pnlBucket.avg * (pnlBucket.n - 1) + pnlT5) / pnlBucket.n * 100) / 100;
+  }
+
   if (res.ai.total > 0) res.ai.rate = Math.round(res.ai.hits / res.ai.total * 100);
   if (res.rule.total > 0) res.rule.rate = Math.round(res.rule.hits / res.rule.total * 100);
   if (res.degraded.total > 0) res.degraded.rate = Math.round(res.degraded.hits / res.degraded.total * 100);

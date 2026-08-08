@@ -221,6 +221,62 @@ export function getTodayCalls(): number {
 // ============== 单飞控制 ==============
 const inflightMap = new Map<string, Promise<AIResult>>();
 
+// ============== P2-3：流式对话（SSE） ==============
+/**
+ * 流式调用服务端 /api/ai/stream（SSE），逐段回调 delta
+ * 仅本地部署可用（有 server）；线上返回 null（调用方回退 runAssistantAgent）
+ * 用于 AIConsole 等需要"打字机"效果的场景
+ */
+export async function streamChat(
+  opts: { system: string; user: string; temperature?: number; maxTokens?: number; thinking?: boolean },
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<{ text: string } | null> {
+  if (!isLocalServer()) return null;
+  try {
+    const resp = await fetch("/api/ai/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system: opts.system,
+        user: opts.user,
+        temperature: opts.temperature ?? 0.2,
+        maxTokens: opts.maxTokens ?? 2000,
+        thinking: opts.thinking ?? false,
+      }),
+      signal,
+    });
+    if (!resp.ok) return null;
+    if (!resp.body) return null;
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buf = "";
+    let full = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line.startsWith("data:")) continue;
+        const dataStr = line.slice(5).trim();
+        if (dataStr === "[DONE]") continue;
+        try {
+          const j = JSON.parse(dataStr);
+          if (j.error) return { text: full };
+          const delta = j.delta ?? "";
+          if (delta) { full += delta; onDelta(delta); }
+        } catch { /* 跳过坏行 */ }
+      }
+    }
+    return { text: full };
+  } catch {
+    return null;
+  }
+}
+
 // ============== 核心：callAI ==============
 /**
  * 统一 AI 调用入口

@@ -28,7 +28,9 @@ export type AITask =
   // v9.75（阶段二）：失效因子 LLM 归因（为什么失效）
   | "factorAttribution"
   // v9.75（阶段二）：次日闸门预测（regimeGate 规则闸门 + LLM 外围预判）
-  | "nextGatePredict";
+  | "nextGatePredict"
+  // P3-4：用户风格学习（周度，基于拍板/成交/盈亏 → 风格标签 + 心理偏差 + 禁忌题材）
+  | "userStyleProfile";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -70,6 +72,8 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   factorAttribution: { temperature: 0.2, maxTokens: 800, thinking: false },
   // v9.75（阶段二）：次日闸门预测 —— 小输出结构化
   nextGatePredict: { temperature: 0.3, maxTokens: 600, thinking: false },
+  // P3-4：用户风格学习 —— 周度低频，中等输出
+  userStyleProfile: { temperature: 0.4, maxTokens: 800, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
@@ -126,6 +130,7 @@ export interface AITaskPayload {
   criticReview: { prompt: string };
   factorAttribution: { prompt: string };
   nextGatePredict: { prompt: string };
+  userStyleProfile: { prompt: string };
 }
 
 // ============== Prompt 构建器 ==============
@@ -307,6 +312,8 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
   factorAttribution: (p) => ({ system: `你是A股量化因子研究员，擅长解释因子失效的市场原因。只输出JSON。`, user: p.prompt }),
   // v9.75（阶段二）：次日闸门预测 —— 结合今日盘面+隔夜外围+政策，预判明日闸门状态
   nextGatePredict: (p) => ({ system: `你是A股市场情绪预判师。基于今日盘面与隔夜信息，预判明日开盘市场闸门状态（全开/谨慎/低仓/未知）。只输出JSON。`, user: p.prompt }),
+  // P3-4：用户风格学习 —— 从历史拍板/盈亏推断交易风格与心理偏差
+  userStyleProfile: (p) => ({ system: `你是A股行为金融分析师。基于用户历史交易数据，推断其交易风格与心理偏差。只输出JSON。`, user: p.prompt }),
   eventDeepDive: (p) => ({ system: SYSTEM_PREFIX, user:
 `你是A股事件深挖分析师。对以下已分级事件做影响推演，回答三个问题并给结论。
 
@@ -405,6 +412,8 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   factorAttribution: (_p) => JSON.stringify({ summary: "LLM不可用，无法归因", suggestions: [] }),
   // v9.75：次日闸门预测规则版
   nextGatePredict: (_p) => JSON.stringify({ nextGate: "未知", reason: "LLM不可用", watchPoints: [] }),
+  // P3-4：用户风格规则版
+  userStyleProfile: (_p) => JSON.stringify({ style: "未知", biases: [], avoidThemes: [], suggestion: "LLM不可用，无法分析用户风格" }),
   eventDeepDive: (p) => JSON.stringify({
     chain: `规则版：${p.title.slice(0, 30)} 影响传导待 LLM 深挖`,
     targets: [{ name: (p.beneficiaries || []).join("、") || p.title.slice(0, 12), reason: "规则版推荐" }],

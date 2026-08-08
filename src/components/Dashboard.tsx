@@ -20,6 +20,8 @@ import SignalEquityPanel from "./SignalEquityPanel";
 import AuctionStrengthPanel from "./AuctionStrengthPanel";
 // v9.36（A3）：龙虎榜×涨停池交叉
 import LhbCrossPanel from "./LhbCrossPanel";
+// P1-3：极简盯盘皮肤（盘中 3 秒扫一眼）
+import SimpleWatchSkin, { type TopMainlineBrief, type WatchAlertBrief } from "./SimpleWatchSkin";
 // v9.49（N1）：EventClassifyPanel 已移到"消息面"Tab（事件研判归消息面），Dashboard 不再引用
 // v9.38.1（V3-12）：读 kv 事件分级数据（决策消息面证据源）
 import { isLocalServer, kvGet, kvSet } from "../lib/cloudStore";
@@ -289,7 +291,7 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
       <div className="flex gap-2 overflow-x-auto pb-1">
         {verdicts.map(({ stock, verdict }) => {
           const meta = LEVEL_META[verdict.level];
-          return (
+  return (
             <div key={stock.code}
               className={`relative shrink-0 rounded-lg pl-3 pr-2 py-1 text-[11px] border bg-black/20 ${verdict.level === "S" ? "animate-pulse border-rose-500/40" : verdict.level === "A" ? "border-amber-500/30" : "border-white/10"}`}
               title={`${verdict.reason}｜${verdict.aiComment}｜建议：${verdict.action}`}>
@@ -552,6 +554,39 @@ export default function Dashboard({
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
   const phase: SessionPhase = phaseProp;
+  // P1-3：极简盯盘皮肤 —— trading 阶段默认开启（3 秒扫一眼），可切换回深度视图
+  const [simpleSkin, setSimpleSkin] = useState<boolean>(() => {
+    try { return localStorage.getItem("simple_skin_default_on") === "1"; } catch { return false; }
+  });
+  const [watchAlerts, setWatchAlerts] = useState<WatchAlertBrief[]>([]);
+  // trading 阶段且用户未设置过偏好 → 默认开启极简皮肤
+  useEffect(() => {
+    if (phase === "trading" && !localStorage.getItem("simple_skin_default_on")) {
+      setSimpleSkin(true);
+      try { localStorage.setItem("simple_skin_default_on", "1"); } catch { /* 静默 */ }
+    }
+  }, [phase]);
+  // 拉盯价偏离（供极简皮肤自选预警卡使用；失败静默）
+  useEffect(() => {
+    if (!simpleSkin) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/watch/list");
+        const j = await r.json();
+        if (!alive) return;
+        const items: Array<{ code: string; name: string; deviation: number | null }> = j?.items ?? [];
+        setWatchAlerts(
+          items
+            .filter(x => x.deviation != null && Math.abs(x.deviation) > 0)
+            .map(x => ({ code: x.code, name: x.name || x.code, deviationPct: Math.round((x.deviation ?? 0) * 10) / 10 }))
+            .slice(0, 10),
+        );
+      } catch { /* 服务端不可用静默 */ }
+    })();
+    const t = setInterval(() => { /* 30s 刷新由外部 PriceWatchPanel 负责，此皮肤读快照即可 */ }, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, [simpleSkin]);
   // v9.45.1：面板展开状态持久化 —— 刷新/重开页面保持用户上次展开的面板（不再"神秘消失"）
   const PANEL_PREF_KEY = "dashboard_panels_pref";
   const loadPanelPref = (): Record<string, boolean> => {
@@ -643,6 +678,20 @@ export default function Dashboard({
     setAgentResults(results);
     setAgentLoading(false);
   };
+
+  // P1-5：竞价极端事件 → 强制 Agent 复裁决（跳过 5 分钟节流）
+  const runAgentRef = useRef(runAgent);
+  useEffect(() => { runAgentRef.current = runAgent; }, [runAgent]);
+  useEffect(() => {
+    const onAuctionExtreme = () => {
+      agentLastRunRef.current = 0; // 清零节流时间戳，允许立即重跑
+      runAgentRef.current(true);
+    };
+    try {
+      window.addEventListener("auction-extreme", onAuctionExtreme);
+      return () => window.removeEventListener("auction-extreme", onAuctionExtreme);
+    } catch { /* 静默 */ }
+  }, []);
 
   // v9.39（改造1）：AI 自动主导 —— 主线数据更新后自动裁决（盘中/盘后/盘前都跑，5 分钟节流）
   useEffect(() => {
@@ -879,6 +928,32 @@ export default function Dashboard({
       policyEventCount,
     });
   }, [battlePlan, overview, sealAlerts, policyEventCount, anomalyEvents, lhbBoost, fundStreakInflow]);
+
+  // ============== P1-3：极简盯盘皮肤（trading 阶段默认，盘中 3 秒扫一眼） ==============
+  if (simpleSkin) {
+    const top0 = battlePlan?.candidates?.[0];
+    const topMainline: TopMainlineBrief | null = top0 ? {
+      mainline: top0.mainline,
+      score: top0.strengthScore ?? top0.score ?? null,
+      height: top0.height ?? null,
+      zt: top0.ztCount ?? null,
+      agent: agentResults[0]?.verdict ? { action: agentResults[0].verdict.action, confidence: agentResults[0].verdict.confidence } : null,
+    } : null;
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between px-1 pt-1">
+          <div className="text-xs text-slate-500">⚡ 极简盯盘模式（盘中重点 3 秒可读）</div>
+          <div className="flex gap-2">
+            <button onClick={() => { setSimpleSkin(false); try { localStorage.setItem("simple_skin_default_on", "0"); } catch { /* 静默 */ } }}
+              className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/20">
+              🔍 展开深度视图
+            </button>
+          </div>
+        </div>
+        <SimpleWatchSkin overview={overview} topMainline={topMainline} watchAlerts={watchAlerts} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">

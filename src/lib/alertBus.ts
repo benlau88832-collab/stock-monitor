@@ -177,6 +177,30 @@ export function emit(evt: Omit<AlertEvent, "ts">): void {
     unreadCount++;
     startTitleFlash();
   }
+
+  // P0-5：critical 事件 → 外部推送（Server酱/企业微信/Bark，懒加载防循环依赖）
+  // pushGateway 自身有 cooldown（15 分钟同 title 去重）+ 通道开关 + 本地部署才推
+  if (evt.severity === "critical") {
+    import("./pushGateway").then(({ pushMessage }) => {
+      pushMessage({ title: evt.message.slice(0, 60), body: evt.message, severity: "critical" }).catch(() => { /* 静默 */ });
+    }).catch(() => { /* 懒加载失败静默 */ });
+  }
+
+  // P2-5：统一事件总线留痕（alertBus 的每条事件都记入 unieventBus 元数据层）
+  try {
+    import("./unieventBus").then(({ emitEvent }) => {
+      const type = evt.id.startsWith("watch_") ? "watch"
+        : evt.id.startsWith("veto") ? "veto"
+        : evt.id.startsWith("seal") ? "seal"
+        : evt.id.startsWith("nuclear") ? "nuclear"
+        : evt.id.startsWith("auction") ? "auction"
+        : evt.id.startsWith("lhb") ? "lhb"
+        : evt.id.startsWith("post_") || evt.id.startsWith("post_record") ? "ai_post"
+        : evt.id.startsWith("sys_risk") ? "sys_risk"
+        : "sentiment";
+      emitEvent({ id: evt.id, type: type as never, severity: evt.severity, message: evt.message });
+    }).catch(() => { /* 懒加载失败静默 */ });
+  } catch { /* 静默 */ }
 }
 
 /** 订阅预警事件，返回取消订阅函数 */

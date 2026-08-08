@@ -169,10 +169,56 @@ async function runWatchCheck(poolArg) {
           [w.code, w.name, price, mid, dev, `进入关注区间（偏离${dev}%，止损 ${w.stop_loss ?? "-"}）`],
         ).catch(() => {});
         triggered.push({ code: w.code, name: w.name, price, deviation: dev });
+        // P1-6：触发后异步生成 AI 一句话结论 + 推送（fire-and-forget，失败不影响主流程）
+        try {
+          quickStockVerdictAndPush(p, w, price, dev);
+        } catch { /* 静默 */ }
       }
     }
     return { checked: watches.length, triggered };
   } catch (e) { return { checked: 0, triggered: [], error: e.message }; }
+}
+
+/**
+ * P1-6：盯价触发 → LLM 一句话结论 + 推送（异步，不阻塞 runWatchCheck）
+ * 用 server/lib/httpProxy.callModelText 调 LLM（Key 在 server/.env）
+ * 结论写入 price_watch_events.event_text（前端轮询可见）+ 推送 push 渠道
+ */
+async function quickStockVerdictAndPush(p, w, price, dev) {
+  try {
+    const { callModelText } = require("../lib/httpProxy");
+    const prompt = `个股 ${w.name || w.code}(${w.code}) 现价 ${price} 元，相对买入区(${w.buy_low}-${w.buy_high})偏离 ${dev}%，止损参考 ${w.stop_loss ?? "未设"}。
+请给出一句话短线结论（≤40字）：直接写"可关注/观望/回避"开头 + 理由，不要多余格式。`;
+    const verdict = await callModelText(prompt, { system: "你是A股短线盯盘助手，只输出一句话结论（≤40字），不输出任何其他内容。", maxTokens: 80, temperature: 0.2 });
+    // 更新事件文本（追加 AI 结论）
+    if (verdict) {
+      await p.query(
+        `UPDATE price_watch_events SET event_text = event_text || ' 🤖 ' || $1
+         WHERE code=$2 AND read_at IS NULL ORDER BY id DESC LIMIT 1`,
+        [verdict.slice(0, 60), w.code],
+      ).catch(() => {});
+    }
+    // 推送（写 kv push_settings 判断；失败静默）
+    try {
+      const cfgR = await p.query(`SELECT value FROM kv_store WHERE key='push_settings_v1'`);
+      const cfg = cfgR.rows[0]?.value;
+      const s = cfg && typeof cfg === "object" && !Array.isArray(cfg)
+        ? cfg
+        : (cfg && typeof cfg.__raw === "string" ? JSON.parse(cfg.__raw) : null);
+      if (s && s.enabled && s.channel) {
+        const pushReq = require("./push");
+        // push 路由是 express router，直接复用其逻辑较复杂 → 用 http 简单实现跳过，
+        // 简化：直接把 AI 结论推给已配置渠道（走 push 模块导出的 sendPushIfConfigured）
+        if (typeof pushReq.sendPushIfConfigured === "function") {
+          await pushReq.sendPushIfConfigured({
+            title: `🎯 盯价触发：${w.name || w.code}`,
+            body: `${verdict || ""}\n现价 ${price} 元 · 偏离 ${dev}% · 止损 ${w.stop_loss ?? "-"}`,
+            severity: "critical",
+          }, p);
+        }
+      }
+    } catch { /* 推送失败静默 */ }
+  } catch { /* LLM 失败静默（不影响触发事件本身） */ }
 }
 
 module.exports.runWatchCheck = runWatchCheck;

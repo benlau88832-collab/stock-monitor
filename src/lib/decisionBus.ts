@@ -38,7 +38,13 @@ export function gateWeight(winRate: number | null, samples: number | null): numb
 }
 
 /** 硬否决名单：这些源出 "禁止" 时直接一票否决 */
-const VETO_SOURCES = new Set(["系统性风险", "诱多引擎", "组合风险"]);
+// v9.75（正确性修复）：此前只有中文名，而 aiAgent 规则兜底路径（collectToolEvidence）
+// 投出的 name 是英文工具名（checkSysRisk/detectSealDecay/computePortfolioRisk）→ 硬否决永远失配，
+// 系统性风险 red 时共识结果仍可能"可上车"。现在中英文名并存，两条路径（decisionCollector 中文 / aiAgent 英文）都生效。
+const VETO_SOURCES = new Set([
+  "系统性风险", "诱多引擎", "组合风险",
+  "checkSysRisk", "detectSealDecay", "detectTrap", "computePortfolioRisk",
+]);
 
 /** 多源共识裁决（纯函数，可单测） */
 export function runConsensus(

@@ -10,7 +10,8 @@ const MAX_ENTRIES = 500;
 export interface SignalEntry {
   id: string;           // 唯一ID（日期+类型+代码）
   date: string;         // 触发日期 YYYY-MM-DD
-  type: "veto" | "quadrant" | "cycle" | "sentiment_cross";
+  // P1-7：新增 ai_decision —— AI 决策拍板进入信号账本，纳入净值曲线统一核算
+  type: "veto" | "quadrant" | "cycle" | "sentiment_cross" | "ai_decision";
   typeLabel: string;    // 显示名称
   code: string;         // 标的代码（市场级信号用 "MARKET"）
   name: string;         // 标的名称

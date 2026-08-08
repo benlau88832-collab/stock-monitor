@@ -6,6 +6,8 @@
 // v9.38.1（V3-P0）：LLM 转发抽公共层 server/lib/httpProxy.js（惰性+容错，消除重复实现）
 // ============================================================
 const { postJSON, PROXY_URL } = require("../lib/httpProxy");
+// P2-3：流式输出需要原生 https 直连（SSE），不走 postJSON（一次性返回）
+const https = require("https");
 
 // 任务白名单（与前端 src/lib/aiPrompts.ts TASK_CONFIG 保持一致）
 // v9.28（P1-9）：新增独立业务 task themeNewsScore/stockNewsScore/dailyIntel
@@ -129,5 +131,96 @@ module.exports = function aiRoutes(app) {
       const reason = /timeout|ETIMEDOUT|aborted/i.test(msg) ? "timeout" : /proxy|ENOTFOUND|ECONN/i.test(msg) ? "network" : "model";
       res.status(502).json({ error: msg || "model call failed", reason });
     }
+  });
+
+  // ============== P2-3：流式输出（SSE，供 AIConsole 增量渲染） ==============
+  // 请求体同 /api/ai/call（system/user/temperature/maxTokens/thinking）
+  // 响应：SSE 流，每行 data: {"delta":"..."}；结束 data: [DONE]
+  // 失败：非 2xx + {error}
+  app.post("/api/ai/stream", async (req, res) => {
+    if (!checkAuth(req, res)) return;
+    const { system, user, temperature, maxTokens, thinking } = req.body || {};
+    if (!process.env.AI_API_KEY) {
+      return res.status(400).json({ error: "server AI key not configured" });
+    }
+    // 用 explain 桶限速（流式走通用分析配额）
+    if (!takeToken("explain")) {
+      return res.status(429).json({ error: "rate limited", rateLimited: true });
+    }
+    const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
+    const model = process.env.AI_MODEL || "agnes-2.5-flash";
+    const body = {
+      model,
+      messages: [
+        { role: "system", content: String(system || "") },
+        { role: "user", content: String(user || "") },
+      ],
+      max_tokens: Math.min(Number(maxTokens) || 2000, 8000),
+      temperature: temperature != null ? Number(temperature) : 0.2,
+      stream: true,
+      chat_template_kwargs: { enable_thinking: Boolean(thinking) },
+    };
+    const u = new URL(baseUrl);
+    const payload = JSON.stringify(body);
+    const reqOpts = {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(payload),
+        "Authorization": "Bearer " + (process.env.AI_API_KEY || ""),
+      },
+    };
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    });
+    const upstream = https.request(u, reqOpts, (r) => {
+      if (r.statusCode && (r.statusCode < 200 || r.statusCode >= 300)) {
+        const chunks = [];
+        r.on("data", c => chunks.push(c));
+        r.on("end", () => {
+          try { res.write(`data: ${JSON.stringify({ error: Buffer.concat(chunks).toString("utf8").slice(0, 200) })}\n\n`); } catch { /* 客户端可能已断开 */ }
+          res.end();
+        });
+        return;
+      }
+      let buf = "";
+      r.on("data", (c) => {
+        buf += c.toString("utf8");
+        // 按行解析 SSE（OpenAI 格式：data: {...}）
+        let idx;
+        while ((idx = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line || !line.startsWith("data:")) continue;
+          const dataStr = line.slice(5).trim();
+          if (dataStr === "[DONE]") {
+            try { res.write(`data: [DONE]\n\n`); } catch { /* 静默 */ }
+            continue;
+          }
+          try {
+            const j = JSON.parse(dataStr);
+            const delta = j?.choices?.[0]?.delta?.content ?? "";
+            if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+          } catch { /* 跳过坏行 */ }
+        }
+      });
+      r.on("end", () => {
+        try { res.write(`data: [DONE]\n\n`); } catch { /* 静默 */ }
+        res.end();
+      });
+      r.on("error", () => {
+        try { res.end(); } catch { /* 静默 */ }
+      });
+    });
+    upstream.on("error", () => {
+      try { res.write(`data: ${JSON.stringify({ error: "upstream error" })}\n\n`); res.end(); } catch { /* 静默 */ }
+    });
+    upstream.setTimeout(25000, () => { try { upstream.destroy(); } catch { /* 静默 */ } });
+    upstream.write(payload);
+    upstream.end();
+    // 客户端断开 → 终止上游
+    res.on("close", () => { try { upstream.destroy(); } catch { /* 静默 */ } });
   });
 };

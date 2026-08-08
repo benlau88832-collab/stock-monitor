@@ -15,6 +15,8 @@ import { getAgentTools, getStockAgentTools, evaluateFactorHealth, type FactorHea
 import { setStockAI, pruneStockAI } from "./aiConclusionStore";
 import { runConsensus, type EvidenceSource } from "./decisionBus";
 import type { ToolContext } from "./agentTools";
+// P1-1：用户画像注入（AI 看到"用户是谁"，反哺下次决策）
+import { getProfilePrompt } from "./userProfile";
 
 export interface AgentVerdict {
   action: "可上车" | "观望" | "禁止";
@@ -148,6 +150,8 @@ export async function runDecisionAgent(
     // v9.41：Agnes 原生 tool_calls 要求 function.parameters（JSON Schema）；宽松 schema 允许任意参数
     parameters: { type: "object", properties: {}, additionalProperties: true },
   }));
+  // P1-1：用户画像注入（AI 参考用户历史风格/胜率调整置信与措辞）
+  const profileBlock = `\n9. 【用户画像参考】\n${getProfilePrompt()}\n（若用户有连亏记录或低胜率题材，可适当下调置信；但不要因画像改变工具调用，只影响置信与措辞）`;
   const system = `你是10年经验的A股龙头战法操盘手，正在用工具独立调研主线"${mainline}"是否可上车。
 
 你有以下工具可调用（自主决定调用顺序与次数，最多 5 轮）：
@@ -163,7 +167,8 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
 5. 最多 5 轮工具调用后必须出最终裁决。
 6. 若用户消息中给了【因子健康度】且失效占比≥30%，你的最终置信度必须扣减（≥50%扣15、≥30%扣8），并在理由里说明。
 7. 【硬约束·v9.57 V8-5】最终裁决的 reason 必须引用至少 2 个具体数值（如"封单1.2亿/成交3亿=40%、主力净流入8000万"），禁止"资金较强/封单坚决"等无数字空话；数字只能来自工具返回，不得编造。
-8. 【v11-6 P1 主观能动性】如果工具返回的字段有缺失，不要因此拒绝裁决——先调 estimateMissingFields 用已有数据推断缺失值（换手率/晋级率/10日资金），用推断值继续分析，并在 reason 里标注"基于部分数据推断"。`;
+8. 【v11-6 P1 主观能动性】如果工具返回的字段有缺失，不要因此拒绝裁决——先调 estimateMissingFields 用已有数据推断缺失值（换手率/晋级率/10日资金），用推断值继续分析，并在 reason 里标注"基于部分数据推断"。
+${/* P1-1：用户画像注入（辅助置信调整，不改变工具逻辑） */ profileBlock}`;
 
   const toolByName = new Map(tools.map(t => [t.name, t]));
   let history: string[] = []; // 前几轮的工具调用与结果（回灌给 LLM）
@@ -374,7 +379,9 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
    调用工具：{"calls":[{"tool":"工具名","reason":"为什么查它"}]}
    最终裁决：{"final":{"verdict":"可买|谨慎|回避","reason":"≤40字且必须引用≥1个具体数字（如'主力净流入8000万/封单比40%'），禁止'资金较强'类空话","riskPoints":["风险1","风险2"],"keyLevel":"关键观察点（如：竞价封单>0.8亿且不炸）"}}
 4. 最多 3 轮工具调用后必须出最终裁决。
-5. 【v11-6 P1】若 getStockFund 返回字段缺失（如换手/10日资金），先调 estimateMissingFields 推断，不要因缺数据拒绝研判，reason 标注"基于部分数据推断"。`;
+5. 【v11-6 P1】若 getStockFund 返回字段缺失（如换手/10日资金），先调 estimateMissingFields 推断，不要因缺数据拒绝研判，reason 标注"基于部分数据推断"。
+6. 【用户画像参考】${getProfilePrompt()}
+   （若用户连亏/低胜率题材，可适当下调 confidence；不改变工具调用）`;
 
   const toolByName = new Map(tools.map(t => [t.name, t]));
   let history: string[] = [];

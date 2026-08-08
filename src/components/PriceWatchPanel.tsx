@@ -46,7 +46,7 @@ export default function PriceWatchPanel() {
           const known = new Set(prev.map(e => e.id));
           const fresh = (j.items as WatchEvent[]).filter(e => !known.has(e.id));
           for (const e of fresh) {
-            alertEmit({ id: `watch_${e.code}_${e.id}`, severity: "warning", message: `⚡ ${e.name}(${e.code}) 进入关注区间！现价 ${e.price}，偏离 ${e.deviation_pct}%` });
+            alertEmit({ id: `watch_${e.code}_${e.id}`, severity: "critical", message: `⚡ ${e.name}(${e.code}) 进入关注区间！现价 ${e.price}，偏离 ${e.deviation_pct}%` });
           }
           return fresh.length > 0 ? [...fresh, ...prev].slice(0, 20) : prev;
         });

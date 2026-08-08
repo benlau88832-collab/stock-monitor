@@ -4,4 +4,10 @@ dist/
 *.log
 *.png
 image-search/
+.workbuddy/
+backups/
+
+# 工作区其他目录（不属于 stock-monitor 仓库，防误提交）
 022_股票监控项目/
+tdx-mcp-server/
+server/tmp/

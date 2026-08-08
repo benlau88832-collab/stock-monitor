@@ -2,10 +2,12 @@
 // 展示 昨日涨停股 + 自选股 在开盘（竞价结果）的强度排行
 // 高亮：竞价即封板（red）/ 竞价大幅低开（green）
 // 数据近似说明：东财无竞价量字段，用 今开涨幅 + 首封时间 近似早盘强度
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchAuctionBoard, type AuctionItem } from "../lib/auction";
 import { stockRealUrl } from "../lib/realLinks";
 import FreshnessTag from "./FreshnessTag";
+// P1-5：竞价极端事件 → alertBus（critical 自动外推）
+import { emit as alertEmit } from "../lib/alertBus";
 
 interface Props {
   /** 昨日涨停股（code,name,hybk） */
@@ -44,6 +46,32 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
     const t = setInterval(load, 30000); // 30s 刷新
     return () => clearInterval(t);
   }, [autoRefresh, load]);
+
+  // P1-5：竞价极端事件（竞价涨停/大幅低开）→ alertBus critical（首次出现才 emit，组件生命周期内）
+  // 同时派发 window custom event "auction-extreme" → Dashboard 监听后强制 Agent 复裁决（跳过 5 分钟节流）
+  const emittedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const it of items) {
+      if (emittedRef.current.has(it.code)) continue;
+      if (it.auctionLimitUp) {
+        emittedRef.current.add(it.code);
+        alertEmit({
+          id: `auction_limitup_${it.code}`,
+          severity: "critical",
+          message: `⚡ 竞价即封板：${it.name || it.code}（${it.code}）竞价涨停，昨日涨停股竞价一字封死，早盘强度极强`,
+        });
+        try { window.dispatchEvent(new CustomEvent("auction-extreme", { detail: { code: it.code, name: it.name || it.code, type: "limitup" } })); } catch { /* 静默 */ }
+      } else if (it.auctionGapDown) {
+        emittedRef.current.add(it.code);
+        alertEmit({
+          id: `auction_gapdown_${it.code}`,
+          severity: "critical",
+          message: `🚨 竞价大幅低开：${it.name || it.code}（${it.code}）竞价低开${it.auctionPct.toFixed(1)}%，高标分歧/核按钮前兆，建议 AI 复裁决`,
+        });
+        try { window.dispatchEvent(new CustomEvent("auction-extreme", { detail: { code: it.code, name: it.name || it.code, type: "gapdown" } })); } catch { /* 静默 */ }
+      }
+    }
+  }, [items]);
 
   return (
     <div className="rounded-xl border border-amber-500/20 bg-amber-950/10 p-3 space-y-2">

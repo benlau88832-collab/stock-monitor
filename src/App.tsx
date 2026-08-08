@@ -1058,13 +1058,12 @@ export default function App() {
     if (!overview) return;
 
     // 重度背离：资金数据缺失/为0不报
+    // P0-5：veto_main 的 emit 统一走 alerts 数组 useEffect 通道（下方 1220 行附近），此处不再单独 emit
     const st = fundStructure?.structure;
     const mn = st?.today.mainNet, sn = st?.today.smallNet;
     const ok = mn != null && sn != null && mn !== 0 && sn !== 0;
     const divergenceActive = !!ok && mn! < 0 && sn! > 0 && (st?.mainNet5d ?? 0) < 0 && (st?.mainNet10d ?? 0) < 0;
-    if (divergenceActive) {
-      if (!lastSignalActive["divergence"]) { lastSignalActive["divergence"] = true; emitAlert({ severity: "critical", id: "veto_main", message: "重度背离：主力持续流出+散户接盘" }); }
-    } else lastSignalActive["divergence"] = false;
+    lastSignalActive["divergence"] = divergenceActive;
 
     // 极度贪婪
     const sent = overview.sentiment;
@@ -1209,6 +1208,21 @@ export default function App() {
       });
     }
   }
+
+  // ============== P0-5：critical 级警报 → alertBus.emit → 外部推送 ==============
+  // 跃迁护栏：每个 critical 警报只在首次出现时 emit 一次（lastSignalActive 同款模式）
+  useEffect(() => {
+    for (const a of alerts) {
+      if (a.level !== "critical") continue;
+      if (lastSignalActive[a.id]) continue;   // 已报过（true→true 不重复）
+      lastSignalActive[a.id] = true;
+      emitAlert({ severity: "critical", id: a.id, message: a.message });
+    }
+    // 反向：不在当前 alerts 中的 critical id → 复位（下次再触发能再报）
+    for (const k of Object.keys(lastSignalActive)) {
+      if (!alerts.some(a => a.id === k)) lastSignalActive[k] = false;
+    }
+  }, [alerts]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#0d1424,_#05070d_60%)] pb-16">

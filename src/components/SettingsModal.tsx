@@ -3,6 +3,8 @@ import { PROVIDERS, loadSettings, saveSettings, applyProvider, testAISettings, f
 import { getAIStats } from "../lib/ai";
 import { exportMemoBackup } from "../lib/newsMemoStore";
 import { forceRebuildBoardMap } from "../lib/boardMap";
+import { loadPushSettings, savePushSettings, type PushSettings, type PushChannel } from "../lib/pushSettings";
+import { pushMessage } from "../lib/pushGateway";
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const [s, setS] = useState<AISettings>(loadSettings());
@@ -11,8 +13,13 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const [testRes, setTestRes] = useState<{ ok: boolean; msg: string } | null>(null);
   const [serverCfg, setServerCfg] = useState<ServerAIConfig | null>(null);
   const [serverChecked, setServerChecked] = useState(false);
+  // P0-4：推送通道配置
+  const [push, setPush] = useState<PushSettings>(loadPushSettings());
+  const [pushTesting, setPushTesting] = useState(false);
+  const [pushTestRes, setPushTestRes] = useState<{ ok: boolean; msg: string } | null>(null);
   const stats = getAIStats();
   const upd = (p: Partial<AISettings>) => setS({ ...s, ...p });
+  const updPush = (p: Partial<PushSettings>) => setPush({ ...push, ...p });
 
   // v9.26.2 方案A：本地部署时检测服务端 AI 中转配置（Key 在 server/.env，浏览器不持有）
   useEffect(() => {
@@ -106,6 +113,65 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
               } catch (e) { alert("重建失败：" + (e as Error).message); }
             }}>🔄 重建板块表</button>
           </div>
+        </div>
+
+        {/* P0-4：外部推送通道配置 */}
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <h3 className="mb-2 text-sm font-bold text-slate-200">📲 外部推送通道（手机接收 critical 事件）</h3>
+          <p className="mb-3 text-xs text-slate-500">本地部署时通过服务端中转推送至 Server酱/企业微信/Bark（仅本地生效；线上无 server 静默不推）。Key 仅存 localStorage，不上 git。</p>
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={push.enabled} onChange={e => updPush({ enabled: e.target.checked })} />
+            启用推送
+          </label>
+          <div className="mt-2 grid grid-cols-1 gap-2">
+            <label className="text-xs text-slate-400">通道选择</label>
+            <select className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
+              value={push.channel ?? ""}
+              onChange={e => updPush({ channel: (e.target.value || null) as PushChannel | null })}>
+              <option value="">未配置</option>
+              <option value="serverchan">Server酱（SCTSendKey）</option>
+              <option value="wechatbot">企业微信群机器人 Webhook</option>
+              <option value="bark">Bark（iOS 推送）</option>
+            </select>
+            {push.channel === "serverchan" && (
+              <input type="password" className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
+                value={push.serverchanSctKey ?? ""} placeholder="SCT..."
+                onChange={e => updPush({ serverchanSctKey: e.target.value })} />
+            )}
+            {push.channel === "wechatbot" && (
+              <input type="password" className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
+                value={push.wechatbotKey ?? ""} placeholder="robot key（webhook 路径后段）"
+                onChange={e => updPush({ wechatbotKey: e.target.value })} />
+            )}
+            {push.channel === "bark" && (
+              <input type="password" className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
+                value={push.barkKey ?? ""} placeholder="Bark 设备 key"
+                onChange={e => updPush({ barkKey: e.target.value })} />
+            )}
+            <label className="text-xs text-slate-400">最低推送等级
+              <select className="ml-2 rounded bg-slate-800 px-2 py-1 text-xs"
+                value={push.minSeverity}
+                onChange={e => updPush({ minSeverity: e.target.value as "info" | "warning" | "critical" })}>
+                <option value="info">info（含普通）</option>
+                <option value="warning">warning（含警告）</option>
+                <option value="critical">critical（仅严重）</option>
+              </select>
+            </label>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button onClick={async () => {
+              setPushTesting(true); setPushTestRes(null);
+              savePushSettings(push);
+              const ok = await pushMessage({ title: "stock-monitor 测试推送", body: `已配置通道：${push.channel ?? "无"}`, severity: "critical" });
+              setPushTestRes({ ok, msg: ok ? "✅ 已推送，请检查手机" : "❌ 未收到，请检查 server 是否运行 + key 是否有效 + 通道选择" });
+              setPushTesting(false);
+            }} disabled={pushTesting || !push.enabled || !push.channel} className="rounded bg-sky-600 px-3 py-2 text-sm hover:bg-sky-500 disabled:opacity-50">
+              {pushTesting ? "测试中…" : "测试推送"}
+            </button>
+            <button onClick={() => { savePushSettings(push); setPushTestRes({ ok: true, msg: "✅ 已保存" }); }} className="rounded bg-emerald-600 px-3 py-2 text-sm hover:bg-emerald-500">保存</button>
+            {pushTestRes && <span className={`text-xs ${pushTestRes.ok ? "text-emerald-400" : "text-rose-400"}`}>{pushTestRes.msg}</span>}
+          </div>
+          <p className="mt-2 text-[10px] text-slate-500">说明：key 仅存 localStorage（不进 git），不会上传 GitHub Pages 线上版。</p>
         </div>
       </div>
     </div>

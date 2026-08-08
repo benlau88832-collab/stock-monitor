@@ -4,13 +4,26 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
+import { writeFileSync, mkdirSync } from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// 自定义插件：build 后写 .nojekyll（GitHub Pages 需要，emptyOutDir 会清掉）
+function writeNoJekyll() {
+  return {
+    name: "write-nojekyll",
+    closeBundle() {
+      const outDir = path.resolve(__dirname, "docs");
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(path.join(outDir, ".nojekyll"), "");
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), viteSingleFile()],
+  plugins: [react(), tailwindcss(), viteSingleFile(), writeNoJekyll()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

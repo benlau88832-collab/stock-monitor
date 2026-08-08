@@ -68,6 +68,9 @@ require("./routes/research")(app);
 // ---------- v9.66：个股盯价监控（清单/走势/触发事件） ----------
 require("./routes/watch")(app);
 
+// ---------- P0-4：外部推送中转（Server酱/企业微信/Bark） ----------
+require("./routes/push")(app);
+
 // ---------- 定时任务（收盘抓取 + LLM 分析） ----------
 require("./cron")({ pool });
 

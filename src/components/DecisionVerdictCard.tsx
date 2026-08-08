@@ -4,11 +4,16 @@
 //   规则投票折叠为"证据链/反对意见"佐证区（不再并列抢眼球）
 // 数据：decisionBus.runConsensus（规则多源）+ aiAgent（LLM 工具调研裁决）
 // ============================================================
-import { useMemo, useEffect, useState } from "react";
+import { useMemo, useEffect, useRef, useState } from "react";
 import { runConsensus, type EvidenceSource, type DecisionVerdict } from "../lib/decisionBus";
 import { gateWeight } from "../lib/decisionBus";
 import type { AgentVerdict } from "../lib/aiAgent";
 import DisclaimerTag from "./DisclaimerTag";
+import PostButtons from "./PostButtons";
+// P1-1：用户画像摘要（AI 看到"你是谁"）
+import { loadUserProfile, profileToPrompt } from "../lib/userProfile";
+// P1-2：决策改判解释（AI 为何从 X 改判为 Y）
+import { diffLastDecision, diffToText } from "../lib/decisionDiff";
 
 interface Props {
   /** 今日最强主线（用于展示主体） */
@@ -27,6 +32,8 @@ interface Props {
 
 export default function DecisionVerdictCard({ mainline = "—", sources = [], signalGates = [], factorStats, agent = null, prevAction = null }: Props) {
   const [showEvidence, setShowEvidence] = useState(false);
+  // P0-1：记录最后一次 decision_log 的 ts（供 PostButtons 幂等用）
+  const aiLogTsRef = useRef<string | null>(null);
   const verdict: DecisionVerdict | null = useMemo(() => {
     if (sources.length === 0) return null;
     return runConsensus(sources, { signalGates, factorStats });
@@ -80,6 +87,8 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
       const arr = JSON.parse(localStorage.getItem(key) ?? "[]");
       arr.push(log);
       localStorage.setItem(key, JSON.stringify(arr.slice(-50))); // 每日最多留 50 条
+      // P0-1：把本轮裁决的 ts 暴露给 PostButtons（同次 AI 裁决只能拍一次板）
+      aiLogTsRef.current = log.ts;
     } catch { /* 日志失败不影响功能 */ }
   }, [mainAction, mainConfidence, aiVerdict, verdict?.votes, mainline, gatedDowngrade, agent?.path, agent?.rounds, agent?.rateLimited]);
 
@@ -131,12 +140,27 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
         )}
       </div>
 
-      {/* v11-3（P0）：与上次裁决不同 → 显式提示（变化是数据驱动而非随机） */}
+      {/* v11-3（P0）+ P1-2：与上次裁决不同 → 显式解释（数据驱动 + 证据差异） */}
       {prevAction && mainAction && prevAction !== mainAction && (
         <div className="mt-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs font-bold text-amber-300">
           ⚠ 与上次裁决不同（上次={prevAction}）—— 数据变化导致，非随机
         </div>
       )}
+      {/* P1-2：决策改判深度解释（基于 decisionDiff 提取证据差异） */}
+      {aiVerdict && (() => {
+        const diff = diffLastDecision({
+          action: aiVerdict.action,
+          confidence: aiVerdict.confidence,
+          reason: aiVerdict.reason ?? "",
+          mainline,
+        });
+        if (!diff.changed) return null;
+        return (
+          <div className="mt-1.5 rounded border border-cyan-500/25 bg-cyan-500/5 px-2 py-1 text-[11px] text-cyan-200/80">
+            🔬 {diffToText(diff)}
+          </div>
+        );
+      })()}
 
       {/* V4-C：AI-规则分歧显式告警（不静默覆盖） */}
       {aiRuleDivergent && (
@@ -218,6 +242,27 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
             </details>
           </div>
         </details>
+      )}
+
+      {/* P1-1：用户画像一行（AI 决策已参考） */}
+      {(() => {
+        const profile = loadUserProfile();
+        if (!profile || profile.totalPosts === 0) return null;
+        const txt = profileToPrompt(profile);
+        return (
+          <div className="mt-1.5 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1 text-[10px] text-sky-200/70" title="AI 决策时参考的用户历史画像">
+            👤 用户画像：{txt}
+          </div>
+        );
+      })()}
+
+      {/* P0-1：人类拍板按钮区 —— AI 仅提议，最终由人决定；拍板落 decision_post 闭环台账 */}
+      {mainAction && (
+        <PostButtons
+          mainline={mainline}
+          agentVerdict={aiVerdict ? { action: aiVerdict.action, confidence: aiVerdict.confidence, reason: aiVerdict.reason } : null}
+          aiLogTs={aiLogTsRef.current}
+        />
       )}
     </div>
   );

@@ -15,13 +15,24 @@ import {
 
 export type TabKey = "dashboard" | "fundline" | "radar" | "dragon" | "news";
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: "dashboard", label: "驾驶舱" },
-  { key: "fundline", label: "资金主线" },
-  { key: "radar", label: "个股雷达" },
-  { key: "dragon", label: "龙虎榜复盘" },
-  { key: "news", label: "消息面" },
+// P2-2：时间轴语义 —— 每个 Tab 标注所属交易时段（盘前/盘中/盘后/资金/消息）
+// 保留 5 Tab 平铺 + URL hash 兼容；导航顶部显示"当前阶段"指示器
+const TABS: { key: TabKey; label: string; phase: string }[] = [
+  { key: "dashboard", label: "驾驶舱", phase: "盘前/盘中" },
+  { key: "radar", label: "个股雷达", phase: "盘中" },
+  { key: "fundline", label: "资金主线", phase: "资金" },
+  { key: "dragon", label: "龙虎榜复盘", phase: "盘后" },
+  { key: "news", label: "消息面", phase: "消息" },
 ];
+
+/** 当前交易阶段 → 时间轴标签（P2-2 阶段指示器） */
+const PHASE_LABEL: Record<string, string> = {
+  pre: "⏰ 盘前准备",
+  auction: "⏰ 集合竞价",
+  trading: "🔴 盘中作战",
+  post: "🌙 盘后复盘",
+  empty: "⚪ 休市",
+};
 
 interface Props {
   active: TabKey;
@@ -98,8 +109,13 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
             </div>
           </div>
           <div className="flex items-center gap-1">
+            {/* P2-2：当前交易阶段指示器（时间轴感知） */}
+            <span className="mr-1 hidden md:inline rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-bold text-slate-400"
+              title="当前交易时段">
+              {PHASE_LABEL[getCurrentSession().phase] ?? "⏰ 盘前"}
+            </span>
             {TABS.map((t) => (
-              <button key={t.key} onClick={() => onChange(t.key)}
+              <button key={t.key} onClick={() => onChange(t.key)} title={t.phase}
                 className={`rounded-lg px-2 py-1 sm:px-3 sm:py-1.5 text-xs font-semibold transition ${
                   active === t.key ? "bg-amber-500/20 text-amber-300" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
                 }`}>

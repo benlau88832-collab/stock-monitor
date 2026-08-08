@@ -14,6 +14,13 @@ syncLocalWithCloud();
 syncNewsFromCloud(10);
 startAutoSync();
 
+// P3-3：PWA Service Worker 注册（仅 https 或 localhost；SW 失败不影响功能）
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => { /* 注册失败静默 */ });
+  });
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>

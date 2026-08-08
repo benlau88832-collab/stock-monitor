@@ -2,11 +2,13 @@
 // v9.36（A3）：龙虎榜 × 涨停池交叉 —— 席位加持识别
 // 游资逻辑：涨停 + 龙虎榜净买入 = 资金真金白银确认，次日溢价增强信号。
 // 数据：kv lhb:日期（cron 15:40 落库）+ overview 涨停池
+// P0-5：交叉命中且净买入 → alertBus.emit（warning，首次出现才报）
 // ============================================================
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { fmtMoney } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 import { isLocalServer } from "../lib/cloudStore";
+import { emit as alertEmit } from "../lib/alertBus";
 import type { OverviewData } from "../App";
 
 interface LhbItem {
@@ -16,6 +18,8 @@ interface LhbItem {
 
 export default function LhbCrossPanel({ overview }: { overview?: OverviewData | null }) {
   const [lhb, setLhb] = useState<LhbItem[] | null>(null);
+  // P0-5：已 emit 的交叉标的（组件生命周期内只报一次）
+  const emittedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!isLocalServer()) return;
@@ -48,6 +52,19 @@ export default function LhbCrossPanel({ overview }: { overview?: OverviewData | 
     .filter(x => ztCodes.has(x.code))
     .sort((a, b) => b.netBuy - a.netBuy)
     .slice(0, 15);
+
+  // P0-5：交叉命中且净买入 > 0 → alertBus emit（warning 级；T+1 复盘数据，非盘中紧急，不升 critical 免骚扰）
+  useEffect(() => {
+    for (const it of crossed) {
+      if (it.netBuy <= 0 || emittedRef.current.has(it.code)) continue;
+      emittedRef.current.add(it.code);
+      alertEmit({
+        id: `lhb_cross_${it.code}`,
+        severity: "warning",
+        message: `🐉 ${it.name}(${it.code}) 上龙虎榜且今日涨停，净买入 ${fmtMoney(it.netBuy)}，席位加持信号`,
+      });
+    }
+  }, [crossed]);
 
   if (crossed.length === 0) return null;
 

@@ -28,6 +28,10 @@ function valueRank(key: string): number {
   if (key.startsWith("ai:cache:")) return 3;          // AI 缓存：重算即可，最先淘汰
   if (key.startsWith("ztpool:") || key.startsWith("fund_streak:")) return 2; // 快照：可重抓
   if (key.startsWith("decision_log:") || key.startsWith("factor_ic:")) return 2; // 日志快照
+  // P0：拍板/成交台账是闭环关键数据，比缓存高价值（rank=1 不会被先淘汰）
+  if (key.startsWith("decision_post:") || key.startsWith("trade_ledger_v1")) return 1;
+  // P0-4：推送设置高价值（用户配的密钥）
+  if (key.startsWith("push_settings_v1") || key.startsWith("push_cooldown_v1")) return 1;
   if (key.startsWith("signal_ledger") || key.startsWith("review_diary")) return 1; // 账本：保留
   if (key.startsWith("ai:")) return 2;
   return 1; // 其余（设置/自选股等）最低优先级淘汰
