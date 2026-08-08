@@ -22,7 +22,13 @@ export type AITask =
   // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
   | "eventDeepDive"
   // v9.41（V4-A）：Agent 原生 tool_calls 推理（真 ReAct，服务端透传 tools）
-  | "agentReason";
+  | "agentReason"
+  // v9.75（阶段三）：Critic 挑刺独立任务 —— 原复用 dailyIntel 槽位导致语义/token/缓存/FALLBACK 全错配
+  | "criticReview"
+  // v9.75（阶段二）：失效因子 LLM 归因（为什么失效）
+  | "factorAttribution"
+  // v9.75（阶段二）：次日闸门预测（regimeGate 规则闸门 + LLM 外围预判）
+  | "nextGatePredict";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -58,6 +64,12 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   eventDeepDive:   { temperature: 0.3, maxTokens: 800, thinking: false },
   // v9.41（V4-A）：Agent 工具推理
   agentReason:     { temperature: 0.2, maxTokens: 2000, thinking: false },
+  // v9.75（阶段三）：Critic 挑刺 —— 独立小任务（不再复用 dailyIntel 2000 token 配置）
+  criticReview:    { temperature: 0.3, maxTokens: 600, thinking: false },
+  // v9.75（阶段二）：失效因子归因 —— 小输出结构化
+  factorAttribution: { temperature: 0.2, maxTokens: 800, thinking: false },
+  // v9.75（阶段二）：次日闸门预测 —— 小输出结构化
+  nextGatePredict: { temperature: 0.3, maxTokens: 600, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
@@ -111,6 +123,9 @@ export interface AITaskPayload {
   eventClassify: { events: Array<{ title: string; source: string }> };
   eventDeepDive: { title: string; level: string; catalystScore: number; beneficiaries: string[] };
   agentReason: { prompt: string };
+  criticReview: { prompt: string };
+  factorAttribution: { prompt: string };
+  nextGatePredict: { prompt: string };
 }
 
 // ============== Prompt 构建器 ==============
@@ -286,6 +301,12 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
 只返回JSON数组，无其他文字。` }),
   // v9.38.1（V3-14）：单事件深挖（Agent 工具 getNewsDeep 用；仅高分事件触发）
   agentReason: (p) => ({ system: SYSTEM_PREFIX, user: p.prompt }),
+  // v9.75（阶段三）：Critic 挑刺 —— 独立任务（原来复用 dailyIntel，降级时 FALLBACK 解析错配导致误判"复核通过"）
+  criticReview: (p) => ({ system: `你是A股风险审查员，专门挑毛病。你的职责是找出给定裁决的反面证据并给出降级建议。只输出JSON。`, user: p.prompt }),
+  // v9.75（阶段二）：失效因子归因
+  factorAttribution: (p) => ({ system: `你是A股量化因子研究员，擅长解释因子失效的市场原因。只输出JSON。`, user: p.prompt }),
+  // v9.75（阶段二）：次日闸门预测 —— 结合今日盘面+隔夜外围+政策，预判明日闸门状态
+  nextGatePredict: (p) => ({ system: `你是A股市场情绪预判师。基于今日盘面与隔夜信息，预判明日开盘市场闸门状态（全开/谨慎/低仓/未知）。只输出JSON。`, user: p.prompt }),
   eventDeepDive: (p) => ({ system: SYSTEM_PREFIX, user:
 `你是A股事件深挖分析师。对以下已分级事件做影响推演，回答三个问题并给结论。
 
@@ -378,6 +399,12 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   ),
   // v9.38.1（V3-14）规则版：浅挖（关键词推受益方向）
   agentReason: (_p) => JSON.stringify({ action: "观望", confidence: 50, reason: "规则版（LLM不可用）" }),
+  // v9.75：Critic 规则版 —— null 语义（不再是 dailyIntel 的 JSON，避免降级时误判"复核通过"）
+  criticReview: (_p) => JSON.stringify({ canRefute: false, why: "LLM不可用，跳过Critic复核", suggestAction: "" }),
+  // v9.75：因子归因规则版
+  factorAttribution: (_p) => JSON.stringify({ summary: "LLM不可用，无法归因", suggestions: [] }),
+  // v9.75：次日闸门预测规则版
+  nextGatePredict: (_p) => JSON.stringify({ nextGate: "未知", reason: "LLM不可用", watchPoints: [] }),
   eventDeepDive: (p) => JSON.stringify({
     chain: `规则版：${p.title.slice(0, 30)} 影响传导待 LLM 深挖`,
     targets: [{ name: (p.beneficiaries || []).join("、") || p.title.slice(0, 12), reason: "规则版推荐" }],

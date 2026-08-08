@@ -235,7 +235,10 @@ async function fetchLiftBanDays(code: string): Promise<number | null> {
 }
 
 // ============== 详细研判 Prompt（六段式） ==============
-function buildDetailPrompt(stock: WatchStock, newsContext: string): string {
+function buildDetailPrompt(stock: WatchStock, newsContext: string, mainlines: string[] = []): string {
+  // v9.75（深化）：【同类股对比】要求"提及板块代表股"但此前未喂板块数据 → 模型靠训练记忆编名字。
+  // 现在把当前主线板块名单注入，让对比有真实参照系
+  const mainlineCtx = mainlines.length > 0 ? `\n当前主线板块：${mainlines.slice(0, 5).join("、")}` : "";
   return `你是专业的A股短线交易分析师。请对以下个股进行严谨的六段式研判。
 
 【严格要求】
@@ -253,6 +256,7 @@ function buildDetailPrompt(stock: WatchStock, newsContext: string): string {
 
 近期消息：
 ${newsContext || "无最新消息"}
+${mainlineCtx}
 
 请严格按以下六段结构输出：
 1.【资金面】引用具体主力净额、5日/10日趋势数字，判断资金结构健康度
@@ -454,7 +458,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
     setLlmLoading(true); setLlmResult(null); setChatHistory([]);
 
     const newsCtx = infoItems.filter(i => i.type === "news" || i.type === "announcement").slice(0, 6).map(i => `[${i.tag}] ${i.title}`).join("\n");
-    const prompt = buildDetailPrompt(stock, newsCtx);
+    const prompt = buildDetailPrompt(stock, newsCtx, mainlines);
     try {
       const { text, degraded } = await callLLM([{ role: "user", content: prompt }]);
       setLlmResult(text);
@@ -466,7 +470,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
     } catch (err) {
       setLlmResult(`❌ ${err instanceof Error ? err.message : String(err)}`);
     } finally { setLlmLoading(false); }
-  }, [aiOk, selected, stocks, infoItems]);
+  }, [aiOk, selected, stocks, infoItems, mainlines]);
 
   // ---- 追问 ----
   const handleFollowUp = useCallback(async () => {
@@ -491,23 +495,34 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   }, [aiOk, followUp, selected, stocks, chatHistory]);
 
   // ---- 批量扫描 ----
+  // v9.75（阶段三）：并发 2 + 限速保护 —— 原全量并发（20只→20次调用）撞 10/min 限速，
+  // 一半结果走"⚡规则版（每分钟限速）"。现改为并发2、每批间隔 1.2s，配额内完成且不触发降级
   const runBatchScan = useCallback(async () => {
     if (!aiOk) return;
     setScanLoading(true);
     const newStocks = { ...stocks };
-    for (const code of codes) {
-      const s = newStocks[code];
-      if (!s) continue;
-      try {
-        const { text, degraded } = await callLLM([{ role: "user", content: buildScanPrompt(s) }]);
-        const lines = text.trim().split("\n").filter(l => l.trim());
-        const score = parseInt(lines[0]) || 50;
-        const tip = lines[1] || "暂无评价";
-        newStocks[code] = { ...s, healthScore: Math.max(1, Math.min(100, score)), healthTip: tip, llmDegraded: degraded };
-      } catch {
-        newStocks[code] = { ...s, healthScore: null, healthTip: "扫描失败" };
+    const targets = codes.filter(c => newStocks[c]);
+    const CONCURRENCY = 2;
+    const PACE_MS = 1200;
+    let idx = 0;
+    const worker = async () => {
+      while (idx < targets.length) {
+        const code = targets[idx++];
+        const s = newStocks[code];
+        if (!s) continue;
+        try {
+          const { text, degraded } = await callLLM([{ role: "user", content: buildScanPrompt(s) }]);
+          const lines = text.trim().split("\n").filter(l => l.trim());
+          const score = parseInt(lines[0]) || 50;
+          const tip = lines[1] || "暂无评价";
+          newStocks[code] = { ...s, healthScore: Math.max(1, Math.min(100, score)), healthTip: tip, llmDegraded: degraded };
+        } catch {
+          newStocks[code] = { ...s, healthScore: null, healthTip: "扫描失败" };
+        }
+        await new Promise(r => setTimeout(r, PACE_MS));
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, targets.length) }, worker));
     setStocks(newStocks);
     setScanLoading(false);
   }, [aiOk, codes, stocks]);

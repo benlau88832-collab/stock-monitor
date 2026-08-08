@@ -232,6 +232,8 @@ export default function App() {
   const [currentPhase, setCurrentPhase] = useState<SessionPhase>(() => getCurrentSession().phase);
   // v9.33（缺口3）：LLM 盘后三剧本 / 竞价龙头预判 / 风险雷达
   const [nextScenarios, setNextScenarios] = useState<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null>(null);
+  // v9.75（阶段二）：次日闸门预测（LLM 结合隔夜外围/政策预判，盘后生成）
+  const [nextGatePredict, setNextGatePredict] = useState<{ nextGate: string; reason: string; watchPoints: string[] } | null>(null);
   const [leaderPredict, setLeaderPredict] = useState<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null>(null);
   const [riskRadarText, setRiskRadarText] = useState<string | null>(null);
   // v9.34（S1）：封单衰减预警（18s 高频通道轮询对比）
@@ -949,7 +951,13 @@ export default function App() {
     if (want === "post" && bl.candidates.length > 0) {
       llmBriefSeq.current = 1;
       const top3 = bl.candidates.slice(0, 3).map(c => `${c.mainline}(强度${c.strengthScore ?? c.score ?? 0}/涨停${c.ztCount})`).join("；");
-      const prompt = `今日涨停${ov.limitPool?.limitUpCount ?? 0}只，炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}%，最高${ov.maxBoardHeight ?? "?"}板，情绪${ov.sentiment ?? "?"}分。\nTop3主线：${top3}\n昨日溢价均值：${ov.premiumAvg ?? "?"}%`;
+      // v9.75（深化）：补梯队分布/市场风格/溢价分布 —— 原 prompt 只有 6 个数字，三剧本概率全靠模型猜
+      const ladderStr = ov.limitPool?.boardCounts
+        ? Object.entries(ov.limitPool.boardCounts).sort((a, b) => Number(b[0]) - Number(a[0])).slice(0, 5).map(([k, v]) => `${k}板${v}只`).join(" ")
+        : "";
+      const premStr = ov.premiumDist ? `昨日涨停今日分布：跌超5%${ov.premiumDist.ltNeg5}只/大赚${ov.premiumDist.gt3}只` : "";
+      const styleStr = bl.marketStyle ? `${bl.marketStyle.label ?? ""}${(bl.marketStyle as { riskAppetite?: number }).riskAppetite ? `（风险偏好${(bl.marketStyle as { riskAppetite?: number }).riskAppetite}）` : ""}` : "";
+      const prompt = `今日涨停${ov.limitPool?.limitUpCount ?? 0}只，炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}%，最高${ov.maxBoardHeight ?? "?"}板，情绪${ov.sentiment ?? "?"}分。\nTop3主线：${top3}\n昨日溢价均值：${ov.premiumAvg ?? "?"}%${ladderStr ? "\n连板梯队：" + ladderStr : ""}${premStr ? "\n" + premStr : ""}${styleStr ? `\n市场风格：${styleStr}` : ""}`;
       callAI("nextDayScenarios", { prompt }).then((r) => {
         if (cancelled) return;
         try {
@@ -957,8 +965,23 @@ export default function App() {
           if (Array.isArray(arr) && arr.length > 0) setNextScenarios(arr.slice(0, 3));
         } catch { /* 解析失败静默 */ }
       }).catch(() => {});
+      // v9.75（阶段二）：次日闸门预测 —— 规则闸门是"当日快照"，此调用让 LLM 结合隔夜外围/政策预判明日闸门（盘后一次）
+      {
+        const gateStr = bl.gate ? `今日闸门=${bl.gate.label}（系数${bl.gate.factor ?? "?"}）${(bl.gate.reason ?? []).length ? `，熔断：${bl.gate.reason.join("；")}` : ""}` : "";
+        const idxStr2 = (ov.indices ?? []).slice(0, 4).map(i => `${i.name}${i.pct >= 0 ? "+" : ""}${i.pct}%`).join(" ");
+        callAI("nextGatePredict", { prompt: `今日盘面：情绪${ov.sentiment ?? "?"}分 · 涨停${ov.limitPool?.limitUpCount ?? 0} · 炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}% · 最高${ov.maxBoardHeight ?? "?"}板\n${gateStr}\n外围指数：${idxStr2 || "无"}\n\n请预判明日开盘闸门状态并给出关键观察点。` }).then((r) => {
+          if (cancelled) return;
+          try {
+            const j = parseAIJSON<{ nextGate: string; reason: string; watchPoints: string[] }>(r.text);
+            if (j && j.nextGate) setNextGatePredict({ nextGate: String(j.nextGate), reason: String(j.reason ?? ""), watchPoints: Array.isArray(j.watchPoints) ? j.watchPoints.slice(0, 3) : [] });
+          } catch { /* 静默 */ }
+        }).catch(() => {});
+      }
       // 风险雷达（黑天鹅公告 + 跌停池由 overview 提供）
-      const rPrompt = `涨停${ov.limitPool?.limitUpCount ?? 0}只，跌停${ov.limitPool?.limitDownCount ?? 0}只，炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}%，情绪${ov.sentiment ?? "?"}分。`;
+      // v9.75（深化）：原只喂 4 个数字（涨停/跌停/炸板/情绪）→ LLM 只能编。补外围指数/溢价分布/晋级率，让风险判定有真实依据
+      const idxStr = (ov.indices ?? []).slice(0, 4).map(i => `${i.name}${i.pct >= 0 ? "+" : ""}${i.pct}%`).join(" ");
+      const riskPremStr = ov.premiumDist ? `昨日涨停今日分布：跌超5%${ov.premiumDist.ltNeg5}只/微亏${ov.premiumDist.neg5to0}只/小赚${ov.premiumDist.zeroTo3}只/大赚${ov.premiumDist.gt3}只` : "";
+      const rPrompt = `涨停${ov.limitPool?.limitUpCount ?? 0}只，跌停${ov.limitPool?.limitDownCount ?? 0}只，炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}%，情绪${ov.sentiment ?? "?"}分。\n外围指数：${idxStr || "无"}${riskPremStr ? "\n" + riskPremStr : ""}${ov.promotionRate != null ? `\n晋级率${(ov.promotionRate * 100).toFixed(0)}%` : ""}`;
       callAI("riskRadar", { prompt: rPrompt }).then((r) => {
         if (cancelled) return;
         try {
@@ -977,7 +1000,20 @@ export default function App() {
         if (cancelled) return;
         try {
           const j = parseAIJSON<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string }>(r.text);
-          if (j) setLeaderPredict({ predictLeader: j.predictLeader ?? null, confidence: Number(j.confidence) || 0, reason: String(j.reason ?? ""), watch: String(j.watch ?? "") });
+          if (j) {
+            // v9.75（防幻觉）：预测的龙头必须存在于今日/昨日涨停池白名单，否则丢弃（原信任 LLM 编造的 code）
+            const poolCodes = new Set([
+              ...(ov.limitPool?.rawZTPool ?? []).map((s: any) => String(s.c)),
+              ...(yesterday ?? []).map((s: any) => String(s.c ?? "")),
+            ].filter(Boolean));
+            const pj = j.predictLeader && poolCodes.has(String(j.predictLeader.code)) ? j.predictLeader : null;
+            setLeaderPredict({
+              predictLeader: pj,
+              confidence: Math.max(0, Math.min(100, Number(j.confidence) || 0)), // v9.75：置信钳制 0-100
+              reason: String(j.reason ?? ""),
+              watch: String(j.watch ?? ""),
+            });
+          }
         } catch { /* 静默 */ }
       }).catch(() => {});
     }
@@ -986,8 +1022,14 @@ export default function App() {
   }, [currentPhase, battlePlan, overview]);
 
   // 自选股异动带：每次刷新后用 fetchStockBriefBatch 批量拉取
+  // v9.75（性能修复）：refreshFast 每 18s setOverview 产生新引用 → 本 effect 被拖成 18s 轮询，
+  // 违背设计意图（主刷新 60s 才拉重接口）。加 lastWatchFetchAt 节流，60s 内重复触发直接跳过。
+  const lastWatchFetchAt = useRef(0);
   useEffect(() => {
     if (!overview) return;
+    const now = Date.now();
+    if (now - lastWatchFetchAt.current < 60000) return;
+    lastWatchFetchAt.current = now;
     let cancelled = false; // v9.26.9：慢响应不再覆盖新响应
     (async () => {
       try {
@@ -1192,6 +1234,7 @@ export default function App() {
             nextScenarios={nextScenarios}
             leaderPredict={leaderPredict}
             riskRadarText={riskRadarText}
+            nextGatePredict={nextGatePredict}
             sealAlerts={sealAlerts} />
         )}
 

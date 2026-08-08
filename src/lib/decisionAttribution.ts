@@ -18,6 +18,9 @@ export interface HitrateBucket {
 export interface HitrateResult {
   ai: HitrateBucket;   // source=AI-Agent（真 AI 裁决）
   rule: HitrateBucket; // source=规则投票（含降级）
+  // v9.75（阶段三）：降级样本独立分桶 —— LLM 失败/配额受限的裁决既不算 AI 也不算规则，
+  // 此前全部落入 rule 桶 → 规则胜率被 AI 故障污染、AI 胜率幸存者偏差
+  degraded: HitrateBucket;
 }
 
 export interface DecisionLogEntry {
@@ -74,6 +77,7 @@ export async function computeDecisionHitrate(days = 30): Promise<HitrateResult> 
   const res: HitrateResult = {
     ai: { hits: 0, total: 0, rate: null },
     rule: { hits: 0, total: 0, rate: null },
+    degraded: { hits: 0, total: 0, rate: null },
   };
   const cache = new Map<string, number | null>();
   const getSenti = async (ds: string): Promise<number | null> => {
@@ -94,11 +98,15 @@ export async function computeDecisionHitrate(days = 30): Promise<HitrateResult> 
     const nxt = await getSenti(next);
     if (cur == null || nxt == null) continue;
     const win = nxt >= cur ? 1 : 0;
-    const bucket = l.source === "AI-Agent" ? res.ai : res.rule;
+    // v9.75（阶段三）：降级样本分桶 —— path=rule_fallback（LLM 不可用/轮次耗尽）或 rateLimited（配额受限）
+    // 不算 AI 也不污染 rule（AI 故障与规则水平是两回事）
+    const isDegraded = l.path === "rule_fallback" || l.rateLimited === true || l.gatedDowngrade != null;
+    const bucket = isDegraded ? res.degraded : (l.source === "AI-Agent" ? res.ai : res.rule);
     bucket.total++;
     bucket.hits += win;
   }
   if (res.ai.total > 0) res.ai.rate = Math.round(res.ai.hits / res.ai.total * 100);
   if (res.rule.total > 0) res.rule.rate = Math.round(res.rule.hits / res.rule.total * 100);
+  if (res.degraded.total > 0) res.degraded.rate = Math.round(res.degraded.hits / res.degraded.total * 100);
   return res;
 }

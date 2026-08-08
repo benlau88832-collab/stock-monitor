@@ -43,6 +43,26 @@ export interface ToolContext {
   gateMode?: string;
   concentrationPct?: number;
   todayNewPositions?: number;
+  /** v9.75（P0-1 修复）：真实市场数据注入 —— 此前 checkSysRisk 硬编码 hs300Pct=null/limitDownCount=0，系统性风险判断被阉割 */
+  hs300Pct?: number | null;
+  limitDownCount?: number;
+  /** v9.75（P0-1 修复）：真实个股数据注入（decideForStock 场景）—— 此前 checkExitSignal/checkStockExitSignal 硬编码假成本/假资金 */
+  price?: number;
+  pct?: number;
+  sealFund?: number;
+  amount?: number;
+  mainNet?: number;
+  mainNetPct?: number;
+  retailNetPct?: number;
+  mainNet5d?: number;
+  mainNet10d?: number;
+}
+
+/** v9.75（P0-1 修复）：工具缺数据时的显式标记 —— 替代"喂假数字"（假数据会被 LLM 当真引用，AI 结论失真） */
+export interface DataMissingResult {
+  dataMissing: true;
+  missing: string[];
+  note: string;
 }
 
 // ---------- 工具定义（懒加载现有引擎，避免循环依赖） ----------
@@ -68,6 +88,8 @@ export interface FactorHealthReport {
   /** 按 decisionBus 规则：0 / 8 / 15 */
   penalty: number;
   summary: string;
+  /** v9.75（阶段二）：失效因子 LLM 归因（为什么失效 + 退役/反向建议；LLM 不可用或全健康时为 null） */
+  attribution?: string | null;
 }
 
 export async function evaluateFactorHealth(): Promise<FactorHealthReport | null> {
@@ -206,16 +228,27 @@ export function getAgentTools(): AgentTool[] {
       description: "个股离场：7 条规则 → red/yellow/none",
       kind: "vote",
       normalize: (r) => {
-        if (!r) return null;
+        if (!r || r.dataMissing) return null; // v9.75：缺数据不投票（原来喂假数据 → 离场检查假阳性/假阴性）
         const map: Record<string, Verdict> = { red: "禁止", yellow: "观望", none: "可上车" };
         return { verdict: map[r.level] ?? "观望", confidence: r.level === "red" ? 85 : r.level === "yellow" ? 60 : 50, reason: (r.reasons ?? []).join("；").slice(0, 50) };
       },
       execute: async (ctx: ToolContext) => {
+        // v9.75（P0-1 修复）：主线级决策无真实个股（原硬编码 600000/成本10/资金0 → LLM 引用假数字）。
+        // 现在：调用方注入真实个股数据（decideForStock）才算；否则显式 dataMissing 提示 LLM。
+        const missing = [];
+        if (ctx.price == null || ctx.mainNet == null) missing.push("个股实时行情/资金");
+        if (missing.length > 0) {
+          return { dataMissing: true as const, missing, note: "主线级决策未注入个股数据，跳过离场检查" };
+        }
         const { checkStockExit } = await import("./stockExit");
         const r = checkStockExit({
-          code: ctx.code ?? "600000", name: "标的", cost: 10, price: 10,
-          pct: 3, mainNetPct: 0, retailNetPct: 0, mainNet: 0, mainNet5d: 0, mainNet10d: 0,
-          sealFund: 0, amount: 0, leaderAlive: true, isLeader: false, mainline: ctx.mainline ?? "",
+          code: ctx.code ?? "?", name: "标的",
+          cost: null, // 无持仓成本信息 → 不触发成本止损规则（诚实的 null，而非假成本）
+          price: ctx.price!, pct: ctx.pct ?? 0,
+          mainNetPct: ctx.mainNetPct ?? 0, retailNetPct: ctx.retailNetPct ?? 0,
+          mainNet: ctx.mainNet ?? 0, mainNet5d: ctx.mainNet5d ?? 0, mainNet10d: ctx.mainNet10d ?? 0,
+          sealFund: ctx.sealFund ?? 0, amount: ctx.amount ?? 0,
+          leaderAlive: true, isLeader: false, mainline: ctx.mainline ?? "",
         });
         return { level: r.level, reasons: r.reasons };
       },
@@ -254,15 +287,24 @@ export function getAgentTools(): AgentTool[] {
       description: "系统性风险：沪深300/跌停/炸板/情绪 → red/yellow/none",
       kind: "vote",
       normalize: (r) => {
-        if (!r) return null;
+        if (!r || r.dataMissing) return null; // v9.75：缺数据不投票（原来 hs300=null/跌停=0 → red 判定被阉割）
         const map: Record<string, Verdict> = { red: "禁止", yellow: "观望", none: "可上车" };
         return { verdict: map[r.level] ?? "观望", confidence: r.level === "red" ? 90 : r.level === "yellow" ? 65 : 50, reason: r.text ?? "" };
       },
       execute: async (ctx: ToolContext) => {
+        // v9.75（P0-1 修复）：原硬编码 hs300Pct=null、limitDownCount=0 → 系统性风险 red 判定永远失效；
+        // 现在要求调用方注入真实市场数据（Dashboard decisionSources 已具备），缺失则显式 dataMissing
+        if (ctx.hs300Pct == null || ctx.limitDownCount == null) {
+          return {
+            dataMissing: true as const,
+            missing: ctx.hs300Pct == null ? ["沪深300涨跌"] : ["跌停家数"],
+            note: "缺少真实市场数据（沪深300/跌停家数），系统性风险判定降级",
+          };
+        }
         const { checkSysRisk } = await import("./sysRiskGuard");
         const r = checkSysRisk({
-          hs300Pct: null,
-          limitDownCount: 0,
+          hs300Pct: ctx.hs300Pct,
+          limitDownCount: ctx.limitDownCount,
           blastedRate: ctx.blastedRate ?? 0,
           sentiment: ctx.sentiment ?? null,
         });
@@ -389,7 +431,36 @@ export function getAgentTools(): AgentTool[] {
       name: "factorHealth",
       description: "因子健康度：查全部因子近10交易日滚动IC → 失效/方向反转清单 + 置信扣分建议（失效占比≥50%扣15、≥30%扣8）。决策前建议调用：若支撑你'可上车'的因子正失效，应下调置信甚至观望。",
       kind: "data",
-      execute: async () => evaluateFactorHealth(),
+      execute: async () => {
+        const report = await evaluateFactorHealth();
+        // v9.75（阶段二）：失效因子 LLM 归因层 —— 纯统计只给"失效"，不解释"为什么失效"。
+        // 对当日失效/反转因子做一次轻量 LLM 归因（日级缓存防重复计费，失败静默不影响主流程）
+        if (report && (report.decayedCount > 0 || report.reversedCount > 0)) {
+          try {
+            const cacheKey = `factor_attr:${report.date ?? new Date().toISOString().slice(0, 10)}`;
+            const cached = localStorage.getItem(cacheKey);
+            let attribution: string | null = null;
+            if (cached) {
+              try {
+                const j = JSON.parse(cached);
+                if (j && Date.now() - (j.ts ?? 0) < 24 * 3600 * 1000) attribution = j.text;
+              } catch { /* 缓存损坏忽略 */ }
+            }
+            if (!attribution) {
+              const { callAI, parseAIJSON } = await import("./ai");
+              const decayedList = report.items.filter(i => i.decayed || i.reversed).map(i => `${i.name}(IC=${i.ic != null ? i.ic.toFixed(3) : "?"},样本${i.samples})`).join("、");
+              const r = await callAI("factorAttribution", { prompt: `以下A股短线因子近期失效/方向反转（滚动IC接近0或与预期方向相反）。结合当前市场环境，给出最可能的失效原因（如：情绪因子在震荡市钝化/封单数据口径变化/样本不足等），并建议是否需要退役或反向使用。\n失效因子：${decayedList}`, });
+              const j = parseAIJSON<{ summary: string; suggestions: string[] }>(r.text);
+              attribution = j?.summary ? `${j.summary}${(j.suggestions ?? []).length ? `（建议：${j.suggestions.slice(0, 2).join("；")}）` : ""}` : null;
+              if (attribution && !r.degraded) {
+                try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), text: attribution })); } catch { /* 存储满忽略 */ }
+              }
+            }
+            if (attribution) report.attribution = attribution;
+          } catch { /* LLM 归因失败不影响健康度报告 */ }
+        }
+        return report;
+      },
     },
     // v11-6（P1）：数据缺失主动推断 —— 不要因缺字段拒绝裁决
     estimateMissingFields,
@@ -477,13 +548,34 @@ export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
       name: "checkStockExitSignal",
       description: "个股离场信号：7 条规则（成本/主力结构/封单）→ red/yellow/none",
       kind: "vote",
-      normalize: (r) => r ? { verdict: r.level === "red" ? "禁止" : r.level === "yellow" ? "观望" : "可上车", confidence: r.level === "red" ? 85 : r.level === "yellow" ? 60 : 50, reason: (r.reasons ?? []).join("；").slice(0, 50) } : null,
+      normalize: (r) => {
+        if (!r || r.dataMissing) return null; // v9.75：缺数据不投票
+        return r ? { verdict: r.level === "red" ? "禁止" : r.level === "yellow" ? "观望" : "可上车", confidence: r.level === "red" ? 85 : r.level === "yellow" ? 60 : 50, reason: (r.reasons ?? []).join("；").slice(0, 50) } : null;
+      },
       execute: async () => {
+        // v9.75（P0-1 修复）：原硬编码 cost=10/price=10/mainNet=0 → 离场信号失真。
+        // 现在用真实行情：fetchStockOne 实时拉资金/价格（getStockFund 同源），成本无持仓信息 → 诚实 null
+        let real: Awaited<ReturnType<typeof import("./api").fetchStockOne>> | null = null;
+        try {
+          const { fetchStockOne } = await import("./api");
+          real = await fetchStockOne(stock.code);
+        } catch { /* 拉取失败走 dataMissing */ }
+        if (!real) {
+          return { dataMissing: true as const, missing: ["个股实时行情/资金"], note: "行情拉取失败，跳过离场检查" };
+        }
+        // v9.60 语义：关键资金字段缺失 → 视为数据缺失，不喂 0 给规则（0 会触发"持续净流出"误报）
+        if ((real as { dataMissing?: boolean }).dataMissing) {
+          return { dataMissing: true as const, missing: ["关键资金字段"], note: "东财资金字段缺失，跳过离场检查" };
+        }
         const { checkStockExit } = await import("./stockExit");
         const r = checkStockExit({
-          code: stock.code, name: stock.name, cost: 10, price: 10,
-          pct: stock.pct, mainNetPct: 0, retailNetPct: 0, mainNet: 0, mainNet5d: 0, mainNet10d: 0,
-          sealFund: stock.sealFund, amount: stock.amount, leaderAlive: true, isLeader: stock.boardCount >= 2,
+          code: stock.code, name: stock.name,
+          cost: null, // 无持仓成本 → 不触发成本止损（诚实 null，非假成本 10）
+          price: real.price, pct: real.pct,
+          mainNetPct: real.mainNetPct ?? 0, retailNetPct: 0,
+          mainNet: real.mainNet ?? 0, mainNet5d: real.mainNet5d ?? 0, mainNet10d: real.mainNet10d ?? 0,
+          sealFund: stock.sealFund, amount: stock.amount,
+          leaderAlive: true, isLeader: stock.boardCount >= 2,
           mainline: stock.mainline,
         });
         return { level: r.level, reasons: r.reasons };

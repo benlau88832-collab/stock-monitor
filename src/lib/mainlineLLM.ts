@@ -43,16 +43,23 @@ export async function rankMainlinesWithLLM(
   if (candidates.length === 0) return [];
 
   // payload：涨停梯队 + 深度催化
-  const payload = candidates.slice(0, 6).map(c => ({
-    board: c.mainline,
-    zt: c.ztCount,
-    height: c.height,
-    leader: c.leaders[0]?.name ?? "",
-    fund: Math.round(c.mainNet / 1e8),  // 亿
-    news: c.newsTitles.slice(0, 3),
-    // v9.25：注入深度催化（业绩/收入指引/中标等）— LLM 看到这条信息后会识别到"医药生物 - 药明康德业绩大增"类强催化
-    catalyst: catalysts?.get(c.mainline) ?? [],
-  }));
+  // v9.75（深化）：补龙一封单额/连板数/板型 —— 决定"真龙"的依据（此前只有名字，LLM 无法判断封单强度）
+  const payload = candidates.slice(0, 6).map(c => {
+    const l0 = c.leaders[0];
+    return {
+      board: c.mainline,
+      zt: c.ztCount,
+      height: c.height,
+      leader: l0?.name ?? "",
+      leaderSealFundYi: l0?.sealFund ? Math.round(l0.sealFund / 1e8 * 10) / 10 : null, // 龙一封单(亿)
+      leaderBoards: l0?.boardCount ?? null, // 龙一连板数
+      leaderType: l0?.boardType ?? null,    // 一字/缩量/换手板
+      fund: Math.round(c.mainNet / 1e8),  // 亿
+      news: c.newsTitles.slice(0, 3),
+      // v9.25：注入深度催化（业绩/收入指引/中标等）— LLM 看到这条信息后会识别到"医药生物 - 药明康德业绩大增"类强催化
+      catalyst: catalysts?.get(c.mainline) ?? [],
+    };
+  });
 
   // 提取强催化摘要作为顶层提示（让 LLM 优先关注）
   const catalystLines: string[] = [];
@@ -75,7 +82,7 @@ export async function rankMainlinesWithLLM(
 
 市场环境：${style.label}（风险偏好${style.riskAppetite}）
 
-${catalystLines.length > 0 ? `【重要·近期深度催化】\n${catalystLines.join("\n")}\n` : ""}候选主线（涨停数/最高板/龙一候选/主力净流入亿/相关新闻/深度催化）：
+${catalystLines.length > 0 ? `【重要·近期深度催化】\n${catalystLines.join("\n")}\n` : ""}候选主线（涨停数/最高板/龙一/龙一封单亿/龙一连板/板型/主力净流入亿/相关新闻/深度催化）：
 ${JSON.stringify(payload)}
 
 判断规则（重要）：
@@ -84,7 +91,7 @@ ${JSON.stringify(payload)}
 - 涨停数多 + 高度高 + 有深度催化 = 真主线，最强主线
 - 纯情绪脉冲无深度催化 = isPulse=true，rank 靠后
 - 强负向催化（减持/暴雷/亏损/立案）→ rank 显著降低，confidence 折扣
-- 龙头确认：连板最高+封板最早通常为真龙；与深度催化方向一致更可信
+- 龙头确认：连板最高+封板最早+封单额大（leaderSealFundYi 高）通常为真龙；一字板/缩量板注意上车难度；与深度催化方向一致更可信
 - confidence = 该主线可信度 0-100
 
 输出格式（严格JSON数组，按 rank 升序；仅 6 个字段，leaders 只给龙一）：

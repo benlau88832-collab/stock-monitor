@@ -121,6 +121,10 @@ export default function DecisionAuditPanel() {
                     ? <span className="text-emerald-300">✅ AI 优于规则</span>
                     : <span className="text-amber-300">⚠ AI 未优于规则，建议人工复核</span>}</span>
                 )}
+                {/* v9.75（阶段三）：降级样本独立展示 —— LLM 故障样本不计入 AI/规则胜率 */}
+                {hitrate.degraded && hitrate.degraded.total > 0 && (
+                  <span className="ml-1 text-slate-500">· 降级样本 {hitrate.degraded.total} 例（不计入）</span>
+                )}
               </div>
             );
           })()}

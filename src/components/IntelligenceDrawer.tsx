@@ -216,6 +216,15 @@ async function buildSupervisorPrompt(question: string): Promise<{ system: string
     }
   }
 
+  // v9.75（深化）：注入信号账本 T+1/T+5 命中率 —— 让督导能引用历史决策效果（原快照无任何历史验证数据）
+  try {
+    const { getSignalStats } = await import("../lib/signalLedger");
+    const stats = getSignalStats().filter(s => s.count >= 3).slice(0, 8);
+    if (stats.length > 0) {
+      dataParts.push(`【信号历史验证】${stats.map(s => `${s.typeLabel}：${s.count}次/胜率${s.winRateT5 ?? "?"}%/均收${s.avgReturnT5 ?? "?"}%`).join(" | ")}`);
+    }
+  } catch { /* 账本不可用跳过 */ }
+
   // ===== 构建最终 Prompt =====
   // 构建 system（角色指令 + 日期提示）
   let system = SUPERVISOR_SYSTEM;

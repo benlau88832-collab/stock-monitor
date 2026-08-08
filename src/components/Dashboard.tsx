@@ -251,7 +251,8 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
       (async () => {
         try {
           const prompt = `股票${e.name}(${e.code}) 触发${e.level}级异动：${e.reason}${e.mainlineHit ? `，呼应当前主线(${e.mainlineName})` : "，未在今日主线"}。
-用不超过40字解释该异动可能的含义，并给一句行动建议。格式：归因（40字内）｜建议：动作`;
+真实数据：涨幅${e.pct?.toFixed?.(2) ?? "?"}% · 量比${e.volumeRatio?.toFixed?.(1) ?? "?"} · 换手${e.turnoverRate?.toFixed?.(1) ?? "?"}%。
+用不超过40字解释该异动可能的含义，并给一句行动建议。必须基于以上真实数据，不得编造数字。格式：归因（40字内）｜建议：动作`;
           const { callAI } = await import("../lib/ai");
           const r = await callAI("eventExplain", { prompt });
           const text = r.text.trim().replace(/^[\s\S]*?规则版[：:]\s*/, "").slice(0, 120);
@@ -538,6 +539,8 @@ interface DashboardProps {
   nextScenarios?: Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null;
   leaderPredict?: { predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null;
   riskRadarText?: string | null;
+  /** v9.75（阶段二）：次日闸门预测 */
+  nextGatePredict?: { nextGate: string; reason: string; watchPoints: string[] } | null;
   /** v9.34（S1）：封单衰减预警（终裁决证据源） */
   sealAlerts?: Array<{ level: "yellow" | "red" }> | null;
 }
@@ -545,7 +548,7 @@ interface DashboardProps {
 export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
   phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, ztPool, yesterdayZt,
-  nextScenarios = null, leaderPredict = null, riskRadarText = null, sealAlerts = null,
+  nextScenarios = null, leaderPredict = null, riskRadarText = null, sealAlerts = null, nextGatePredict = null,
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
   const phase: SessionPhase = phaseProp;
@@ -615,7 +618,21 @@ export default function Dashboard({
       try {
         const r = await decideForMainline(
           { mainline: top.mainline, strengthScore: top.strengthScore, ztCount: top.ztCount, height: top.height, exitSignal: top.exitSignal },
-          { trapFlagged: false, marketFactor: decisionSources.find(s => s.name === "市场状态")?.confidence ? 0.6 : 0.5 },
+          // v9.75（P0-1 修复）：注入真实市场数据 —— 此前 Agent 工具 checkSysRisk 硬编码
+          // hs300Pct=null/limitDownCount=0，系统性风险 red 判定永远失效（AI 决策建立在沙子上）。
+          // decisionSources 已聚合 overview 真实值，这里透传给 Agent 工具层。
+          {
+            trapFlagged: false,
+            marketFactor: decisionSources.find(s => s.name === "市场状态")?.confidence ? 0.6 : 0.5,
+            hs300Pct: overview?.indices?.find((i: any) => i.code === "000300")?.pct ?? null,
+            limitDownCount: overview?.limitPool?.limitDownCount ?? 0,
+            blastedRate: overview?.limitPool?.blastedRate ?? 0,
+            sentiment: overview?.sentiment ?? null,
+            sealRed: (sealAlerts ?? []).filter(a => a.level === "red").length,
+            sealYellow: (sealAlerts ?? []).filter(a => a.level === "yellow").length,
+            ztCount: overview?.limitPool?.limitUpCount ?? 0,
+            premiumAvg: overview?.premiumAvg ?? null,
+          },
           // v9.40（V4-D）：默认开 Critic 挑刺；自洽投票默认关省配额
           { useCritic: true, selfConsistency: false },
         );
@@ -1029,6 +1046,17 @@ export default function Dashboard({
               : riskRadarText.includes("[中]") ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
               : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
               🛡 {riskRadarText}
+            </div>
+          )}
+          {/* v9.75（阶段二）：次日闸门预测（LLM 结合隔夜外围/政策预判） */}
+          {nextGatePredict && nextGatePredict.nextGate && (
+            <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs">
+              <span className="font-bold text-slate-200">🚦 次日闸门预测：</span>
+              <span className={nextGatePredict.nextGate.includes("全开") ? "text-emerald-300" : nextGatePredict.nextGate.includes("低") || nextGatePredict.nextGate.includes("谨慎") ? "text-amber-300" : "text-slate-300"}>{nextGatePredict.nextGate}</span>
+              {nextGatePredict.reason && <span className="text-slate-400">（{nextGatePredict.reason}）</span>}
+              {nextGatePredict.watchPoints.length > 0 && (
+                <div className="mt-1 text-[11px] text-slate-400">👀 观察：{nextGatePredict.watchPoints.join("；")}</div>
+              )}
             </div>
           )}
           {nextScenarios && nextScenarios.length > 0 && (

@@ -46,11 +46,14 @@ async function fetchMarketDaily(pool) {
   // sealDecayCount：封单衰减预警数 —— server 无 sealMonitor 预警源，真实值缺失 → null（不再用 zbPool 炸板数代理）
   md.sealDecayCount = null;
   // premiumAvg（昨日涨停股今日平均涨幅）+ promotionRate（昨日首板今日继续涨停比例）
+  // v9.75（正确性修复）：zt_snapshot.date 存储为带横杠 dateStr（fetchZTPool 返回），
+  // 原用无横杠 bjDate() 比较（"2026-08-08" < "20260808" 恒真）→ 今天自己的行被当"昨日快照"，premium 今日算今日
   try {
-    const prevSnap = await pool.query(`SELECT data FROM zt_snapshot WHERE date < $1 ORDER BY date DESC LIMIT 1`, [date]);
+    const prevSnap = await pool.query(`SELECT data FROM zt_snapshot WHERE date < $1 ORDER BY date DESC LIMIT 1`, [dateStr]);
     let prevPool = [];
     if (prevSnap.rows[0]?.data) {
-      try { prevPool = JSON.parse(prevSnap.rows[0].data).pool ?? []; } catch { prevPool = []; }
+      // v9.75（安全/正确性修复）：data 为 jsonb，node-postgres 默认已解析为对象，直接 JSON.parse 会抛错被吞 → 兼容两种
+      try { const prevRaw = typeof prevSnap.rows[0].data === "string" ? JSON.parse(prevSnap.rows[0].data) : prevSnap.rows[0].data; prevPool = prevRaw.pool ?? []; } catch { prevPool = []; }
     }
     if (prevPool.length > 0) {
       const todayCodes = new Set(ztPool.map(p => String(p.c)));
@@ -92,7 +95,8 @@ async function fetchMarketDaily(pool) {
         const key = `fund_streak:${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, "0")}-${String(dd.getDate()).padStart(2, "0")}`;
         const r = await pool.query(`SELECT value FROM kv_store WHERE key=$1`, [key]).catch(() => ({ rows: [] }));
         let items = [];
-        if (r.rows[0]?.value) { try { items = JSON.parse(r.rows[0].value).items ?? []; } catch { items = []; } }
+        // v9.75（正确性修复）：value 为 jsonb 已自动解析，兼容字符串/对象两种形态
+        if (r.rows[0]?.value) { try { items = (typeof r.rows[0].value === "string" ? JSON.parse(r.rows[0].value) : r.rows[0].value).items ?? []; } catch { items = []; } }
         const top = items[0];
         if (top && top.mainNet > 0) streak++;
         else if (i > 0) break; // 今天可能还没落库，从昨天开始断链即停
@@ -204,8 +208,134 @@ async function fetchZTPool(date = bjDate()) {
 }
 
 // ---------- 2. 抓快讯 → news ----------
+// v9.75（P0-4 修复）：快讯规则提星 —— 此前 stars 恒 1，analyzeDaily 的 strongNews（stars>=3）恒空，
+// "市场速览"LLM 永远看不到快讯维度。用正则对高关注度快讯提星（零 LLM 成本，阶段二再上 LLM 分级回填）。
+const NEWS_BOOST_RE = /业绩预增|预增|中标|签订|合同|订单|增持|回购|重组|获批|突破|涨停|异动|政策|降准|降息|国常会|国务院|央行|证监会|发改委|工信部|财政部|创新高|大涨|暴涨|重大|全球首发|国产替代|专项债|并购|举牌|回购股份/;
+function rankNewsStars(title) {
+  return NEWS_BOOST_RE.test(title || "") ? 3 : 1;
+}
 // v15（待确认方案·数据补全）：pageSize 参数化 —— 启动补抓传 200（覆盖周末积压），常规 cron 默认 80
-async function fetchFastNews(pageSize = 80) {
+// ---------- 2c. 黑天鹅公告 LLM 二级确认（v9.75 · 阶段二） ----------
+// 背景：BLACK_ANN_RE 正则初筛存在漏召回（"业绩变脸/财务造假/实控人被拘"等语义负向不含触发词）
+// 与误召回（标题含"减持"但实际是"减持计划完成"中性公告）。本函数：正则初筛 → LLM 精筛
+// （确认是否真利空 + 影响级别 + 一句话影响），幂等：已确认标题跳过；无 key 静默保留正则结果。
+const BLACK_ANN_LLM_KEY = "black_ann_llm_v1";
+async function confirmBlackSwansWithLLM(pool, anns) {
+  if (!process.env.AI_API_KEY) return null;
+  const candidates = anns.filter(a => BLACK_ANN_RE.test(a.title || ""));
+  if (candidates.length === 0) return null;
+  try {
+    // 判重：已确认过标题跳过（kv 滚动 500）
+    let done = new Set();
+    try {
+      const k = await pool.query("SELECT value FROM kv_store WHERE key=$1", [BLACK_ANN_LLM_KEY]);
+      const v = k.rows[0]?.value;
+      const arr = (typeof v === "string" ? JSON.parse(v) : v)?.titles;
+      if (Array.isArray(arr)) done = new Set(arr);
+    } catch { /* 首次 */ }
+    const fresh = candidates.filter(a => !done.has(a.title)).slice(0, 15);
+    if (fresh.length === 0) return null;
+    const txt = await callLLM(`对以下公告逐条判断是否构成"黑天鹅"（突发重大利空，会让持仓股大跌甚至跌停）：是→"yes"并给影响级别(severe=立案/退市/造假类|moderate=减持/质押/问询类)与一句话影响；否→"no"。
+只输出JSON数组，无其他文字。\n[{"title":"原标题","isBlackSwan":"yes|no","level":"severe|moderate","impact":"≤20字"}]\n\n公告列表：\n${fresh.map((a, i) => `${i + 1}. [${a.stockName}]${a.title.slice(0, 70)}`).join("\n")}`, { maxTokens: 1500, temperature: 0.1 });
+    const cleaned = txt.replace(/```json|```/g, "").trim();
+    let arr = [];
+    try { arr = JSON.parse(cleaned); } catch {
+      const m = cleaned.match(/\[[\s\S]*\]/);
+      if (m) { try { arr = JSON.parse(m[0]); } catch { arr = []; } }
+    }
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    // 只接受输入集内的标题（防幻觉）；yes → 保留（标记级别与影响），no → 排除
+    const byTitle = new Map(fresh.map(a => [a.title, a]));
+    const confirmed = [];
+    for (const x of arr) {
+      const a = byTitle.get(String(x.title ?? ""));
+      if (!a) continue;
+      if (String(x.isBlackSwan) === "yes") {
+        confirmed.push({
+          code: a.stockCode, name: a.stockName, title: a.title, time: a.time, url: a.url,
+          level: String(x.level ?? "moderate"), impact: String(x.impact ?? "").slice(0, 20),
+        });
+      }
+    }
+    // 记录已评标题（无论 yes/no 都记录，防重复计费）
+    const merged = [...new Set([...done, ...fresh.map(a => a.title)])].slice(-500);
+    await pool.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      [BLACK_ANN_LLM_KEY, JSON.stringify({ titles: merged })],
+    );
+    if (confirmed.length > 0) console.log(`[cron] 黑天鹅LLM确认: ${confirmed.length}/${fresh.length} 条`);
+    return confirmed;
+  } catch (e) {
+    console.warn("[cron] 黑天鹅LLM确认失败（保留正则结果）:", e.message);
+    return null;
+  }
+}
+// 背景：快讯 stars 恒 1 → analyzeDaily 的 strongNews 恒空、event_classify 排序无真实依据。
+// 本函数：配 LLM Key 时，对近 2h 快讯 top20 做一次批调用回填 stars(1-5)/sentiment(positive/negative/neutral)，
+// 幂等：按 title 哈希判重（已回填过的标题不再重复计费）；无 key/失败静默（保留规则提星结果）。
+const RANKED_NEWS_TITLE_KEY = "news_ranked_titles_v1";
+async function rankFastNewsStars(pool) {
+  if (!process.env.AI_API_KEY) return 0;
+  try {
+    // 1. 取近 2h 未回填的快讯（规则星 ≤2 的才有提升空间，避免重复调用已高分项）
+    const sinceStr = new Date(Date.now() + 8 * 3600 * 1000 - 2 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
+    const r = await pool.query(
+      `SELECT title FROM news WHERE time >= $1 AND stars <= 2 ORDER BY time DESC LIMIT 30`,
+      [sinceStr],
+    );
+    if (r.rows.length === 0) return 0;
+    // 2. 判重（跨轮次已评分标题跳过）
+    let doneTitles = new Set();
+    try {
+      const k = await pool.query("SELECT value FROM kv_store WHERE key=$1", [RANKED_NEWS_TITLE_KEY]);
+      const v = k.rows[0]?.value;
+      const arr = (typeof v === "string" ? JSON.parse(v) : v)?.titles;
+      if (Array.isArray(arr)) doneTitles = new Set(arr);
+    } catch { /* 首次无记录 */ }
+    const fresh = r.rows.map(x => String(x.title || "")).filter(t => t && !doneTitles.has(t)).slice(0, 20);
+    if (fresh.length === 0) return 0;
+    // 3. LLM 批打分（一次调用换 20 条分级）
+    const txt = await callLLM(`对以下快讯逐条打分：stars=1-5（5=重大利好/大级别催化，4=强利好，3=中性偏多或利空风险，2=普通，1=无关紧要）；sentiment=positive|negative|neutral。只输出JSON数组，无其他文字。\n[{"title":"原标题","stars":3,"sentiment":"positive","logic":"≤15字"}]\n\n快讯列表：\n${fresh.map((t, i) => `${i + 1}. ${t.slice(0, 80)}`).join("\n")}`, { maxTokens: 2000, temperature: 0.1 });
+    const cleaned = txt.replace(/```json|```/g, "").trim();
+    let arr = [];
+    try { arr = JSON.parse(cleaned); } catch {
+      const m = cleaned.match(/\[[\s\S]*\]/);
+      if (m) { try { arr = JSON.parse(m[0]); } catch { arr = []; } }
+    }
+    if (!Array.isArray(arr) || arr.length === 0) return 0;
+    // 4. 回填（只接受输入集合内的标题，防 LLM 幻觉新标题）
+    const titleSet = new Set(fresh);
+    let updated = 0;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const x of arr) {
+        const title = String(x.title ?? "");
+        if (!titleSet.has(title)) continue;
+        const stars = Math.max(1, Math.min(5, Number(x.stars) || 1));
+        const sentiment = ["positive", "negative", "neutral"].includes(String(x.sentiment)) ? String(x.sentiment) : "neutral";
+        const up = await client.query(
+          `UPDATE news SET stars=$1, sentiment=$2 WHERE title=$3 AND stars <= 2`,
+          [stars, sentiment, title],
+        );
+        if (up.rowCount > 0) updated++;
+      }
+      // 5. 记录已评标题（滚动保留最近 500，防 kv 膨胀）
+      const merged = [...new Set([...doneTitles, ...fresh])].slice(-500);
+      await client.query(
+        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+        [RANKED_NEWS_TITLE_KEY, JSON.stringify({ titles: merged })],
+      );
+      await client.query("COMMIT");
+    } catch (e) { await client.query("ROLLBACK"); throw e; }
+    finally { client.release(); }
+    if (updated > 0) console.log(`[cron] 快讯LLM分级回填: ${updated} 条`);
+    return updated;
+  } catch (e) {
+    console.warn("[cron] 快讯LLM分级失败（保留规则提星）:", e.message);
+    return 0;
+  }
+}async function fetchFastNews(pageSize = 80) {
   const url = `https://np-weblist.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=${pageSize}&req_trace=${Date.now()}`;
   const json = await httpsGet(url);
   return (json?.data?.fastNewsList ?? []).map(n => {
@@ -218,7 +348,7 @@ async function fetchFastNews(pageSize = 80) {
       title: n.title ?? "",
       summary: n.summary ?? "",
       sentiment: "neutral",
-      stars: 1,
+      stars: rankNewsStars(n.title),
       isOverseas: /纳斯达克|道琼斯|恒生|港股|美股|比特币/.test((n.title || "") + (n.summary || "")),
       time: finalTime,
       url: n.url ?? "",
@@ -282,6 +412,26 @@ async function fetchPolicyNews() {
 // （如"净利润同比+200%"不含这些词）。改为：配了 LLM Key 时对 top40 公告
 // 一次调用打分（score≥4=强利好），LLM 不可用时用扩展关键词正则兜底。
 const STRONG_ANN_RE = /业绩|中标|增持|回购|重组|突破|获批|净利润|同比|预增|增长|合同|订单|签约|股权|合资|扩产|涨价|产能|激励|分红|扭亏|减亏/;
+// v9.75（阶段三）：公告评分幂等 —— 15:40 与启动各评一次同批公告 = 重复计费。
+// 用"代码+标题"哈希集合判重，同日已评过标题直接跳过（kv 滚动 500）
+const RANKED_ANN_KEY = "ranked_ann_titles_v1";
+async function loadRankedAnnTitles(pool) {
+  try {
+    const k = await pool.query("SELECT value FROM kv_store WHERE key=$1", [RANKED_ANN_KEY]);
+    const v = k.rows[0]?.value;
+    const arr = (typeof v === "string" ? JSON.parse(v) : v)?.titles;
+    return Array.isArray(arr) ? new Set(arr) : new Set();
+  } catch { return new Set(); }
+}
+async function saveRankedAnnTitles(pool, titles) {
+  try {
+    const merged = [...titles].slice(-500);
+    await pool.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now()) ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      [RANKED_ANN_KEY, JSON.stringify({ titles: merged })],
+    );
+  } catch { /* 失败不影响评分 */ }
+}
 // v9.32：黑天鹅公告（利空向）—— 盘前突发立案/退市/商誉减值等会让持仓秒跌停
 const BLACK_ANN_RE = /立案|退市|商誉减值|被问询|警示函|行政处罚|预亏|业绩预减|减持|质押|违约|停牌核查|风险提示|控股股东|被列为失信|司法冻结/;
 async function rankStrongAnnouncements(pool, dateStr) {
@@ -291,20 +441,29 @@ async function rankStrongAnnouncements(pool, dateStr) {
     .slice(0, 15).map(a => `${a.stock_name}:${a.title}`);
 
   // LLM 一次评分（仅配 key 时；失败静默走规则）
+  // v9.75（阶段三）：幂等 —— 同日已评过的标题（15:40 评分后启动又跑）跳过，避免重复计费
   const strongByLLM = [];
   if (process.env.AI_API_KEY && anns.length > 0) {
     try {
-      const top40 = anns.slice(0, 40).map(a => `${a.stock_code} ${a.stock_name}: ${a.title}`).join("\n");
-      const txt = await callLLM(`对以下公告逐条评分（1-5：5=重大利好必关注，4=强利好，3=中性偏多，≤2=无关/利空），只输出JSON数组，无其他文字：\n[{"code":"代码","score":4,"logic":"≤20字"}]\n\n公告列表：\n${top40}`);
-      const cleaned = txt.replace(/```json|```/g, "").trim();
-      const arr = JSON.parse(cleaned);
-      if (Array.isArray(arr)) {
-        for (const x of arr.slice(0, 15)) {
-          if (Number(x.score) >= 4) {
-            const a = anns.find(y => y.stock_code === String(x.code));
-            strongByLLM.push(a ? `${a.stock_name}:${a.title}` : `code ${x.code}:${x.logic || ""}`);
+      const rankedTitles = await loadRankedAnnTitles(pool);
+      const freshAnns = anns.filter(a => !rankedTitles.has(`${a.stock_code}|${a.title}`));
+      if (freshAnns.length > 0) {
+        const top40 = freshAnns.slice(0, 40).map(a => `${a.stock_code} ${a.stock_name}: ${a.title}`).join("\n");
+        const txt = await callLLM(`对以下公告逐条评分（1-5：5=重大利好必关注，4=强利好，3=中性偏多，≤2=无关/利空），只输出JSON数组，无其他文字：\n[{"code":"代码","score":4,"logic":"≤20字"}]\n\n公告列表：\n${top40}`);
+        const cleaned = txt.replace(/```json|```/g, "").trim();
+        const arr = JSON.parse(cleaned);
+        if (Array.isArray(arr)) {
+          for (const x of arr.slice(0, 15)) {
+            if (Number(x.score) >= 4) {
+              const a = anns.find(y => y.stock_code === String(x.code));
+              strongByLLM.push(a ? `${a.stock_name}:${a.title}` : `code ${x.code}:${x.logic || ""}`);
+            }
           }
         }
+        // 记录已评标题（无论是否进 strong，防重复计费）
+        const scored = freshAnns.slice(0, 40).map(a => `${a.stock_code}|${a.title}`);
+        for (const t of scored) rankedTitles.add(t);
+        await saveRankedAnnTitles(pool, rankedTitles);
       }
     } catch (e) {
       console.warn("[cron] 公告LLM评分失败，走规则:", e.message);
@@ -400,7 +559,9 @@ async function generateDailyReview({ pool }) {
     // 4. LLM 或规则版
     let reviewText = "";
     const system = `你是10年经验的A股游资复盘分析师。基于今日收盘数据做盘后复盘。严格按以下四个标题输出，禁止增减标题，每段≤4行：【今日主线回顾】【错过与教训】【明日关注清单】【风险提示】。直接输出正文。`;
-    const userText = `日期：${dateStr}\n今日主线：${mainlines}\n涨停${poolArr.length}只\n强催化公告：${strongAnn.slice(0, 5).map(a => (a.stock_name || a.name || "") + ":" + (a.title || "")).join("；") || "无"}\n黑天鹅公告：${blackSwans || "无"}`;
+    // v9.75（正确性修复）：strongAnn 是字符串数组（"名称:标题"格式，rankStrongAnnouncements 产出），
+    // 原按对象取 a.stock_name/a.title → 每项渲染成 ":"，LLM 收到垃圾串；现在直接 join 使用
+    const userText = `日期：${dateStr}\n今日主线：${mainlines}\n涨停${poolArr.length}只\n强催化公告：${strongAnn.slice(0, 5).join("；") || "无"}\n黑天鹅公告：${blackSwans || "无"}`;
     if (process.env.AI_API_KEY) {
       try { reviewText = await callLLM(userText, { system, maxTokens: 1000, temperature: 0.3 }); }
       catch (e) { reviewText = `【今日主线回顾】${mainlines}\n【错过与教训】LLM调用失败(${e.message})\n【明日关注清单】请稍后重试\n【风险提示】炸板数据见情绪卡`; }
@@ -692,6 +853,9 @@ function startCron({ pool }) {
       }
       console.log(`[cron] 20min fetch: news=${news.length} ann=${anns.length}`);
 
+      // v9.75（阶段二）：快讯 LLM 分级回填（stars/sentiment）—— 解决 strongNews 恒空 + 事件排序无依据
+      try { await rankFastNewsStars(pool); } catch { /* 不影响主流程 */ }
+
       // v9.28（P2-1）：政策类快讯落库（kv_store: policy:YYYY-MM-DD）
       try {
         const policies = await fetchPolicyNews();
@@ -708,15 +872,18 @@ function startCron({ pool }) {
       } catch (e) { console.error("[cron] policy fetch failed:", e.message); }
 
       // v9.32：黑天鹅公告落库（kv_store: black_swan:YYYY-MM-DD）—— 利空向公告实时采集
+      // v9.75（阶段二）：正则初筛 → LLM 二级确认（yes 保留 + 影响级别；失败静默用正则结果）
       try {
-        const blackSwans = anns.filter(a => BLACK_ANN_RE.test(a.title || ""));
+        const regexHits = anns.filter(a => BLACK_ANN_RE.test(a.title || ""));
+        const llmConfirmed = await confirmBlackSwansWithLLM(pool, anns);
+        const blackSwans = llmConfirmed !== null ? llmConfirmed : regexHits.map(a => ({ code: a.stockCode, name: a.stockName, title: a.title, time: a.time, url: a.url }));
         if (blackSwans.length > 0) {
           const bsDate = bjDate();
           const bsDateStr = `${bsDate.slice(0, 4)}-${bsDate.slice(4, 6)}-${bsDate.slice(6, 8)}`;
           await pool.query(
             `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
              ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
-            [`black_swan:${bsDateStr}`, JSON.stringify({ date: bsDateStr, items: blackSwans.map(a => ({ code: a.stockCode, name: a.stockName, title: a.title, time: a.time, url: a.url })) })],
+            [`black_swan:${bsDateStr}`, JSON.stringify({ date: bsDateStr, items: blackSwans })],
           );
           console.log(`[cron] black_swan ${bsDateStr}: ${blackSwans.length} 条`);
         }
@@ -792,6 +959,9 @@ function startCron({ pool }) {
         console.log(`[cron] 启动政策入库 ${pDateStr}: ${policies.length} 条`);
       }
     } catch (e) { console.error("[cron] 启动政策失败:", e.message); }
+
+    // v9.75（阶段二）：启动即快讯 LLM 分级回填（先分级，analyzeDaily 的 strongNews 才有数据）
+    try { await rankFastNewsStars(pool); } catch { /* 不影响 */ }
 
     await analyzeDaily({ pool });
     // v9.33（缺口2/6/8）：启动即补 复盘 + 资金流 + 大宗交易（容错，任一失败不阻塞）
@@ -922,19 +1092,35 @@ async function runThemeAnalysis({ pool, label = "手动" }) {
     const streakR = await pool.query("SELECT value FROM kv_store WHERE key LIKE 'fund_streak%' ORDER BY updated_at DESC LIMIT 1");
     let fundData = [];
     try {
-      const sv = streakR.rows[0]?.value ? JSON.parse(streakR.rows[0].value) : null;
-      if (sv && Array.isArray(sv.list)) fundData = sv.list.map(x => ({
+      // v9.75（正确性修复）：value 为 jsonb 已自动解析；且落库字段是 items（cron.js 写入时 JSON.stringify({date, items})），此前误读 sv.list 恒为空
+      const sv = streakR.rows[0]?.value ? (typeof streakR.rows[0].value === "string" ? JSON.parse(streakR.rows[0].value) : streakR.rows[0].value) : null;
+      const fundList = sv?.items ?? sv?.list ?? [];
+      if (Array.isArray(fundList)) fundData = fundList.map(x => ({
         name: x.board ?? x.name, mainNet: x.mainNet ?? 0, mainNet5d: x.mainNet5d ?? 0, pct: x.pct ?? 0,
       }));
     } catch { fundData = []; }
 
     // Step 3（1 次 LLM）：行情联动分析
+    // v9.75（正确性修复）：资金匹配从 exact（"芯片"≠"半导体"恒 null）改为关键词交集匹配 ——
+    // 主题组名(GROUP_ROOTS) 与 东财行业名 用 roots 关键词做包含判断，让 fundAnalysis 有真实数据可引用
+    const fundMatchForTheme = (theme) => {
+      const roots = GROUP_ROOTS.find(g => g.group === theme)?.roots ?? [];
+      if (roots.length === 0) return null;
+      let best = null, bestScore = 0;
+      for (const f of fundData) {
+        const name = String(f.name ?? "");
+        let score = 0;
+        for (const root of roots) { if (name.includes(root)) score++; }
+        if (score > bestScore) { bestScore = score; best = f; }
+      }
+      return best;
+    };
     const analysisPrompt = `你是10年A股游资分析师。基于以下主题热度+板块资金数据，对每个主题做行情联动分析。
 
 主题热度+资金：
 ${JSON.stringify(themes.map(t => ({
   theme: t.name, heat: t.heat, evidence: t.evidence,
-  fund: fundData.find(f => f.name === t.name) ?? null,
+  fund: fundMatchForTheme(t.name),
 })))}
 
 规则：
@@ -983,8 +1169,9 @@ ${JSON.stringify(themes.map(t => ({
     const themePicks = new Map(); // theme → picks
     const themeEtfs = new Map();  // theme → etfs
     try {
-      // zt_snapshot.date 存 bjDate()（无横杠 "20260808"）→ 用 date 变量（非 dateStr 带横杠）
-      const ztR = await pool.query(`SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1`, [date]);
+      // v9.75（正确性修复）：zt_snapshot.date 实际存储为带横杠 dateStr（fetchZTPool cron.js 返回）
+      // 原用无横杠 date 等值查询永不命中 → ztPool 恒空 → Step4 LLM 选股研判从未真正跑过（死代码）
+      const ztR = await pool.query(`SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1`, [dateStr]);
       // zt_snapshot.data 为 jsonb（pg 可能返回字符串或对象）→ 兼容两种
       const raw = ztR.rows[0]?.data;
       const ztPool = typeof raw === "string" ? JSON.parse(raw) : (raw ?? []);
@@ -1012,15 +1199,25 @@ ${JSON.stringify(themes.map(t => ({
     } catch { /* 无涨停池快照 → picks 空 */ }
 
     // ===== V13-5（P0）Step 4：LLM 批量研判 + 关联度验证（correlation<0.5 → 回避并过滤） =====
+    // v9.75（深化）：Step4 已激活（日期修复后 ztPool 非空），给 LLM 喂真实行情证据
+    // （连板数/封单额/涨幅/hybk），避免 correlation/stopLoss/risk 全靠模型记忆编造
     const allPicks = [...themePicks.entries()].flatMap(([theme, picks]) => picks.map(p => ({ ...p, theme })));
     let stockVerdicts = [];
     if (allPicks.length > 0) {
-      const stockPrompt = `对以下主题选股做关联度验证+研判。每只股票必须是该主题的高关联标的（不是蹭概念）。
-${JSON.stringify(allPicks.map(p => ({ theme: p.theme, code: p.code, name: p.name, role: p.role })))}
+      const pickRows = allPicks.map(p => {
+        const s = (Array.isArray(arr) ? arr : []).find(x => String(x.c) === p.code);
+        return {
+          theme: p.theme, code: p.code, name: p.name, role: p.role,
+          boards: s ? String(s.lbc ?? 1) : "?", sealFund: s ? String(s.fund ?? "?") : "?", pct: s ? String(s.zdp ?? "?") : "?", industry: s ? String(s.hybk ?? "?") : "?",
+        };
+      });
+      const stockPrompt = `对以下主题选股做关联度验证+研判。每只股票必须是该主题的高关联标的（不是蹭概念）。已给真实数据：连板数boards/封单额sealFund/涨幅pct/所属行业industry。
+${JSON.stringify(pickRows)}
 
 输出严格JSON数组：
 [{"code":"代码","correlation":0.0-1.0,"verdict":"可买|谨慎|回避","buyTrigger":"≤30字","stopLoss":"≤20字","risk":"≤30字"}]
-correlation<0.5 的标的是低关联度蹭概念，verdict 必须"回避"。`;
+correlation<0.5 的标的是低关联度蹭概念，verdict 必须"回避"。
+correlation 必须基于行业归属（industry）与主题关联度判断，不得凭空捏造。`;
       try {
         const stockText = await callLLM(stockPrompt, { maxTokens: 4000, temperature: 0.2 });
         try { stockVerdicts = JSON.parse(stockText); } catch {

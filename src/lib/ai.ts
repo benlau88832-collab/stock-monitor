@@ -502,16 +502,30 @@ function degradeResult<T extends AITask>(
 // ============== JSON 鲁棒解析 ==============
 /**
  * 解析 AI 返回的 JSON：
- * a. 剥除 ```代码围栏
- * b. 正则提取第一个 [ ... ] 或 { ... } 完整结构
- * c. JSON.parse 失败返回 null
- * d. 数组任务逐元素校验字段，坏元素丢弃保留其余
- */
+  * a. 剥除 ```代码围栏
+  * b. 正则提取第一个 [ ... ] 或 { ... } 完整结构
+  * c. JSON.parse 失败返回 null
+  * d. 数组任务逐元素校验字段，坏元素丢弃保留其余
+  * v9.75（阶段三）：增强容错 —— 完整 parse 失败时尝试"截到最后一个完整对象再补 ]"，
+  *   解决 LLM 输出被 max_tokens 截断导致尾部残缺数组整体丢失的问题
+  */
 export function parseAIJSON<T = unknown>(
   raw: string,
   requiredFields?: string[],
 ): T | null {
   if (!raw) return null;
+  const tryParse = (text: string): T | null => {
+    try { return JSON.parse(text) as T; } catch { return null; }
+  };
+  const validateArray = (arr: unknown[]): unknown[] | null => {
+    if (!requiredFields || requiredFields.length === 0) return arr;
+    const valid = arr.filter((item) => {
+      if (!item || typeof item !== "object") return false;
+      return requiredFields.every((f) => f in (item as Record<string, unknown>));
+    });
+    return valid.length > 0 ? valid : null;
+  };
+
   try {
     // a. 剥除代码围栏 ```json ... ``` 或 ``` ... ```
     let cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
@@ -531,16 +545,30 @@ export function parseAIJSON<T = unknown>(
 
     if (!target) return null;
 
-    // c. JSON.parse
-    const parsed = JSON.parse(target);
+    // c. JSON.parse（完整尝试）
+    const parsed = tryParse(target);
+    if (parsed !== null) {
+      if (Array.isArray(parsed)) return (validateArray(parsed) as unknown as T) ?? null;
+      return parsed;
+    }
+
+    // c2. v9.75（阶段三）：截断容错 —— LLM 输出被 max_tokens 截断时，
+    //     从最后一个 `}` 处截断并补 `]` 重试（数组场景），避免整段丢失
+    if (target.startsWith("[")) {
+      for (let idx = target.lastIndexOf("}"); idx > 0; idx = target.lastIndexOf("}", idx - 1)) {
+        const partial = target.slice(0, idx + 1) + "]";
+        const p = tryParse(partial);
+        if (p !== null) {
+          if (Array.isArray(p)) return (validateArray(p) as unknown as T) ?? null;
+          return p;
+        }
+      }
+    }
 
     // d. 数组任务校验字段
-    if (Array.isArray(parsed) && requiredFields && requiredFields.length > 0) {
-      const valid = parsed.filter((item) => {
-        if (!item || typeof item !== "object") return false;
-        return requiredFields.every((f) => f in item);
-      });
-      return valid.length > 0 ? (valid as unknown as T) : null;
+    if (Array.isArray(parsed)) {
+      const valid = validateArray(parsed);
+      return (valid as unknown as T) ?? null;
     }
 
     return parsed as T;
