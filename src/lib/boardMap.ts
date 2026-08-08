@@ -30,31 +30,47 @@ function indMap(): Record<string, string> {
 }
 
 export async function ensureBoardMap(): Promise<void> {
-  if (loadJSON<string>(DATE_KEY, "") === todayStr()) return;
+  // v9.75-fix（板块加载不出）：完整度校验 —— 若今天缓存过但 map 明显残缺（<5000 只），
+  // 说明是历史 bug（pz 截断/写死 40 页）产物 → 忽略日期缓存强制重建
+  const cachedMap = indMap();
+  const cachedDate = loadJSON<string>(DATE_KEY, "");
+  const staleIncomplete = Object.keys(cachedMap).length > 0 && Object.keys(cachedMap).length < 5000;
+  if (cachedDate === todayStr() && !staleIncomplete) return;
   if (mapPromise) return mapPromise;
   mapPromise = (async () => {
     try {
       const indMapData = await fetchStockIndustryMap();
       const codeCount = Object.keys(indMapData).length;
-      // v9.61（V9-S3）：非 debug 日志收敛到 ?debug=1
-      if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
-        console.log(`[boardMap] 行业映射已加载: ${codeCount}个股票`);
+      // v9.75-fix（板块缺失）：拉取结果可能因网络中断而部分缺失 —— 若比现有缓存更全则保留，
+      // 且不低于 5000 才标记当日完成（否则明天重试补全）
+      if (codeCount >= Math.max(5000, Object.keys(indMap()).length)) {
+        // v9.61（V9-S3）：非 debug 日志收敛到 ?debug=1
+        if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
+          console.log(`[boardMap] 行业映射已加载: ${codeCount}个股票`);
+        }
+        const [ind, con] = await Promise.all([
+          fetchBoardFundFlow("industry", 100, { all: "full" }),
+          fetchBoardFundFlow("concept", 500, { all: "full" }),
+        ]);
+        const v = new Set<string>();
+        ind.forEach(b => b.name && v.add(b.name));
+        con.filter(b => isRealConceptBoard(b.name)).forEach(b => b.name && v.add(b.name));
+        if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
+          console.log(`[boardMap] 板块词表已构建: ${v.size}个 (行业${ind.length}+概念${con.length})`);
+        }
+        saveJSON(MAP_KEY, indMapData);
+        saveJSON(VOCAB_KEY, [...v]);
+        saveJSON(DATE_KEY, todayStr());
+        memVocab = [...v];
+        memMap = indMapData;
+      } else if (codeCount > Object.keys(indMap()).length) {
+        // 部分成功：先存部分结果（至少覆盖大部分股票），不标记当日完成 → 明天自动补全
+        if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
+          console.warn(`[boardMap] 行业映射部分成功(${codeCount})，保留部分结果待补全`);
+        }
+        saveJSON(MAP_KEY, indMapData);
+        memMap = indMapData;
       }
-      const [ind, con] = await Promise.all([
-        fetchBoardFundFlow("industry", 100),
-        fetchBoardFundFlow("concept", 500),
-      ]);
-      const v = new Set<string>();
-      ind.forEach(b => b.name && v.add(b.name));
-      con.filter(b => isRealConceptBoard(b.name)).forEach(b => b.name && v.add(b.name));
-      if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
-        console.log(`[boardMap] 板块词表已构建: ${v.size}个 (行业${ind.length}+概念${con.length})`);
-      }
-      saveJSON(MAP_KEY, indMapData);
-      saveJSON(VOCAB_KEY, [...v]);
-      saveJSON(DATE_KEY, todayStr());
-      memVocab = [...v];
-      memMap = indMapData;
     } catch (e) {
       // 网络失败沿用旧缓存，但打日志便于排错
       console.warn("[boardMap] 构建失败，沿用旧缓存:", e);
