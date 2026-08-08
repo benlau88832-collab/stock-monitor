@@ -169,7 +169,7 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
     return <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-6 text-rose-300">市场概览数据获取失败</div>;
   }
 
-  const { indices, breadth, sentiment, sentimentLabel, sentimentFactors, sentimentYesterday, limitPool, turnoverAmount, turnoverYesterday, turnoverAvg5d, premiumAvg, promotionRate, maxBoardHeight } = data;
+  const { indices, breadth, sentiment, sentimentLabel, sentimentFactors, sentimentYesterday, limitPool, turnoverAmount, turnoverYesterday, turnoverAvg5d, premiumAvg, promotionRate, maxBoardHeight, fetchedAt } = data;
 
   // 连板分布文字
   const boardDistText = limitPool ? Object.entries(limitPool.boardCounts)
@@ -202,7 +202,8 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
         {/* 涨跌家数 + 涨停池数据 */}
         <div className="rounded-xl border border-white/10 bg-white/5 p-3">
           {!breadth ? (
-            <div className="text-xs text-amber-300">市场宽度数据加载中…</div>
+            // v9.77（A5-P1-3）：区分"加载中"与"接口失败"——原静默挂"加载中"误导
+            <div className="text-xs text-amber-300">{loading ? "市场宽度数据加载中…" : "⚠ 市场宽度数据不可用（接口失败），情绪分基于指数/资金近似"}</div>
           ) : (
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
@@ -217,6 +218,13 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
                 {limitPool?.truncated && (
                   <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-bold text-amber-300" title={limitPool.truncated}>
                     ⚠ 可能截断
+                  </span>
+                )}
+                {/* v9.77（P0-6 修复）：涨停池数据非今日（接口失败静默回退）→ 明示数据日期，防止把昨日涨停数当今日 */}
+                {limitPool?.degraded && limitPool.qdate && (
+                  <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-xs font-bold text-rose-300"
+                    title="接口失败/异常时回退到最近有数据的交易日，当前涨停/炸板/连板均为该日数据，非今日实时">
+                    ⚠ 数据来自 {limitPool.qdate.slice(4, 6)}-{limitPool.qdate.slice(6, 8)}（接口异常）
                   </span>
                 )}
                 <span className="text-emerald-300">跌停 <b>{limitPool?.limitDownCount ?? 0}</b></span>
@@ -251,6 +259,8 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
               <div className="text-[11px] text-amber-300/60">
                 数据来源：东方财富push2行情+涨停池接口 ·{" "}
                 <a href={marketBreadthUrl()} target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-300">点击验证 →</a>
+                {/* v9.77（P0-5）：数据截至时间 —— 明确告知数据年龄，防止按旧数据决策 */}
+                {fetchedAt && <span className="text-slate-500"> · 数据截至 {new Date(fetchedAt).toTimeString().slice(0, 8)}</span>}
               </div>
             </div>
           )}

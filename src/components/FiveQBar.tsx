@@ -10,15 +10,19 @@ import { stageOfStrength, classifyStage } from "../lib/stageModel";
 import DisclaimerTag from "./DisclaimerTag";
 // v9.34（S2）：市场状态机（幻方"状态自适应"思想落地）
 import { classifyMarketState, MARKET_STATE_META, type MarketStateResult } from "../lib/marketStateMachine";
-import type { OverviewData } from "../App";
+// v9.77（P0-1 修复）：读取"昨日涨停数"真实快照，替代传 null（原 null → ztYoY 恒 null → 退潮/分歧分支永不触发）
+import { loadPrevZTSnapshot } from "../lib/ztSnapshot";
+import type { OverviewData, FundStructureData } from "../App";
 
 interface Props {
   battlePlan: BattlePlanData | null;
   /** v9.34（S2）：市场状态机输入（情绪/涨停/炸板/溢价） */
   overview?: OverviewData | null;
+  /** v9.77（P0-1 修复）：资金结构（真实主力净占比，替代伪造 0/1 代理） */
+  fund?: FundStructureData | null;
 }
 
-export default function FiveQBar({ battlePlan, overview }: Props) {
+export default function FiveQBar({ battlePlan, overview, fund }: Props) {
   const [, setTick] = useState(0);
   // 60s 自动刷新（v9.23-A1）
   useEffect(() => {
@@ -47,15 +51,24 @@ export default function FiveQBar({ battlePlan, overview }: Props) {
   const topStage = battlePlan?.marketStyle?.label ?? "—";
 
   // v9.37（V3-P1）：市场级阶段（classifyStage 综合判定：涨停环比/炸板/晋级率/高度/资金）
-  // 消除 classifyStage 死代码 —— 比 marketStyle.label（风格）更贴近"当前市场处于什么阶段"
+  // v9.77（P0-1 修复）：此前 ztCountYesterday 恒 null、mainNetPct 用 totalBoardStocks?1:0 伪造，
+  //   导致退潮(ztYoY<-0.3&&mainNetPct<0)/分歧/启动/发酵分支全部失真，退潮日可能误报"启动期"。
+  //   现在昨日涨停数读真实快照（loadPrevZTSnapshot(qdate) 找 qdate 之前最近一条），
+  //   主力净占比用 真实今日主力净额 / 两市成交额（fund 数据，缺失则 null → 相关分支不误触发）。
+  const prevPool = overview?.limitPool?.qdate ? loadPrevZTSnapshot(overview.limitPool.qdate) : null;
+  const ztCountYesterday = prevPool?.length ?? null;
+  const turnoverAmt = fund?.turnoverAmount ?? 0;
+  const todayMainNet = fund?.structure?.today?.mainNet ?? null;
+  const mainNetPct = turnoverAmt > 0 && todayMainNet != null ? (todayMainNet / turnoverAmt) * 100 : null;
   const marketStageVerdict = overview ? classifyStage({
     ztCountToday: overview.limitPool?.limitUpCount ?? 0,
-    ztCountYesterday: null, // 昨日涨停数未回传，退潮判定退化为资金维度
+    ztCountYesterday,
     heightToday: overview.maxBoardHeight ?? 0,
     blastedRateToday: overview.limitPool?.blastedRate ?? null,
     promotionRate: overview.promotionRate ?? null,
-    mainNetPct: overview.limitPool?.totalBoardStocks ? 1 : 0, // 资金占比由主线引擎单独判定
-    mainNet5dPct: 0,
+    // 数据缺失时传 0（非正非负）→ 资金相关分支（退潮/高潮/发酵/启动）不误触发，落"分歧/观察中"而非伪造阶段
+    mainNetPct: mainNetPct ?? 0,
+    mainNet5dPct: undefined,
   }) : null;
   const marketStageLabel = marketStageVerdict?.stage ?? topStage;
 

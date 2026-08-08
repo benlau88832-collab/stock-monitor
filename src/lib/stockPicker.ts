@@ -10,6 +10,10 @@
 import { detectTrap } from "./trapDetector";
 import { computePositionAdvice } from "./positionSizing";
 import { detectLeaderContend } from "./leaderContend";
+// v9.77（P0-4）：阶段判定统一到 stageModel.stageOfStrength（删除本地高度法 stageOf，消除与作战卡双口径打架）
+import { stageOfStrength } from "./stageModel";
+import type { DisciplineSettings } from "./discipline";
+import type { GateResult } from "./regimeGate";
 import type { MainlineGroup } from "./stockToMainline";
 import type { ThemeStock } from "./themeLadder";
 
@@ -54,6 +58,8 @@ export interface PickList {
   excluded: Array<{ code: string; name: string; role: string; reason: string }>;
   /** 卡位战提示（leaderContend） */
   contend: string;
+  /** v9.77（A2-P0-4）：卡位胶着 → 不硬点首选，等待"卡位胜出"占位 */
+  contendHold?: boolean;
 }
 
 /** 涨停池轻量评分（无个股资金流时用）：封单30 / 连板25 / 换手承接20 / 炸板-15 / 首板-10 */
@@ -68,24 +74,34 @@ function lightScore(s: ThemeStock): { score: number; sealFundRatio: number } {
   return { score: Math.max(0, Math.round(sealScore + ladderScore + turn + blast + firstBoard)), sealFundRatio: Math.round(sealRatio * 100) / 100 };
 }
 
-/** 主线阶段推导（MainlineGroup 无 stage 字段，按高度推） */
-function stageOf(g: MainlineGroup): string {
-  if (g.height >= 4) return "高潮期";
-  if (g.height >= 2) return "发酵期";
-  return "启动期";
-}
-
 /** 主入口：给一条主线 + 其涨停池 → 今日上车标的清单 */
 export function pickStocks(
   mainline: MainlineGroup,
   pool: ThemeStock[],
-  opts?: { gateMode?: string; strengthScore?: number | null; fundBoost?: Map<string, { mainNetPct: number; mainNet5dPct: number }> },
+  opts?: {
+    gateMode?: string;
+    strengthScore?: number | null;
+    fundBoost?: Map<string, { mainNetPct: number; mainNet5dPct: number }>;
+    /** v9.77（P0-4）：真实闸门（battlePlan.gate），替代硬编码 factor:0.7/positionLimit:100 */
+    gate?: GateResult | null;
+    /** v9.77（P0-4）：真实纪律设置（loadDisciplineState），替代硬编码 30%/100%/1000万 */
+    discipline?: DisciplineSettings | null;
+    /** v9.77（P0-4）：当前总持仓 %（剩余容量截断） */
+    currentTotalPct?: number;
+    /** v9.77（P0-4）：今日已开仓次数 */
+    todayNewPositions?: number;
+  },
 ): PickList {
   const byCode = new Map(pool.map(s => [s.code, s]));
   const leaders = mainline.leaders ?? [];
-  const stage = stageOf(mainline);
+  // v9.77（P0-4）：阶段判定统一 stageModel.stageOfStrength —— 与作战卡同口径（原本地高度法会导致同屏"高潮期观望 vs 发酵期21%买入"）
+  const stage = stageOfStrength({ strengthScore: opts?.strengthScore ?? mainline.strengthScore ?? mainline.score ?? 0, ztCount: mainline.ztCount, exitSignal: mainline.exitSignal });
   const gateMode = opts?.gateMode ?? "full";
   const strengthScore = opts?.strengthScore ?? mainline.strengthScore ?? null;
+  const discipline: DisciplineSettings = opts?.discipline ?? { maxSinglePct: 30, maxTotalPct: 100, maxNewPositionsPerDay: 3, totalCapital: 1e6, cooldownLossStreak: 3 };
+  const gate = opts?.gate;
+  const currentTotalPct = opts?.currentTotalPct ?? 0;
+  const todayNewPositions = opts?.todayNewPositions ?? 0;
   const picks: StockPick[] = [];
   const excluded: PickList["excluded"] = [];
 
@@ -97,9 +113,14 @@ export function pickStocks(
     firstBoardTime: byCode.get(l.code)?.firstBoardTime ?? "00:00:00",
   }));
   let contend = "";
+  let contendHold = false;
   try {
     const cr = detectLeaderContend({ mainline: mainline.mainline, leaders: contendInput });
-    if (cr.status === "卡位胶着") contend = `⚠ 卡位胶着：${cr.contenders.join("、")}封单接近，龙一未定`;
+    if (cr.status === "卡位胶着") {
+      contend = `⚠ 卡位胶着：${cr.contenders.join("、")}封单接近，龙一未定`;
+      // v9.77（A2-P0-4）：胶着时不硬点首选（避免"卡位确认·打板"追高文案与警示徽章同屏矛盾）
+      contendHold = true;
+    }
     else if (cr.status === "明确龙一") contend = `龙一地位明确（${cr.leader}）`;
   } catch { /* 卡位检测失败不阻塞 */ }
 
@@ -114,24 +135,25 @@ export function pickStocks(
       return { pick: undefined as unknown as StockPick, trap: `${trap.type}（置信${trap.confidence}）` };
     }
     const { score, sealFundRatio } = lightScore(s);
-    // 仓位：positionSizing（闸门×强度）
+    // 仓位：positionSizing（闸门×强度×真实纪律）
     let suggestedPct = 20, stopLoss = 5;
     try {
       const adv = computePositionAdvice({
         mainline: mainline.mainline,
         strengthScore: strengthScore ?? 60,
-        stage: stage as never,
-        gate: { mode: gateMode as never, factor: 0.7, positionLimit: 100, riskLevel: "low", label: "stockPicker", reason: [] },
-        discipline: { maxSinglePct: 30, maxTotalPct: 100, maxNewPositionsPerDay: 3, totalCapital: 1e6, cooldownLossStreak: 3 },
-        currentTotalPct: 0,
-        todayNewPositions: 0,
+        stage,
+        gate: gate ?? { mode: gateMode as never, factor: 0.7, positionLimit: 100, riskLevel: "low", label: "stockPicker", reason: [] },
+        discipline,
+        currentTotalPct,
+        todayNewPositions,
         mainlineTrap: false,
       });
       suggestedPct = adv.suggestedPct ?? 20;
       // v9.52 修正：标的清单语义 = "上这条主线就买这些、各配多少仓" —— 即使闸门收紧也保底 5% 参与仓
       // （0 仓 = 不买，清单即无意义；真正禁止应由上层"可上车"裁决拦截，而非引擎内部归零）
       suggestedPct = Math.max(5, suggestedPct);
-      stopLoss = role === "首选" ? 5 : role === "接力" ? 6 : 7; // 低吸给宽止损
+      // v9.77（P0-4）：止损统一用 positionSizing 阶段档位（原按角色硬编码 5/6/7 与作战卡/个股卡四套口径打架）
+      stopLoss = adv.stopLoss ?? (role === "首选" ? 5 : role === "接力" ? 6 : 7);
     } catch { /* 仓位失败用默认 */ }
 
     // 资金增强（potential 命中）
@@ -167,9 +189,10 @@ export function pickStocks(
 
   // ---- 角色分桶 ----
   const handled = new Set<string>();
-  // 首选：龙一（无卡位胶着时）；胶着时给"首选=卡位胜出提示"但仍列最强
+  // 首选：龙一（无卡位胶着时）
+  // v9.77（A2-P0-4）：卡位胶着时不硬点首选（追高文案"卡位确认·打板"与"龙一未定"徽章同屏矛盾会诱导追高被杀）
   const leader1 = leaders[0];
-  if (leader1 && byCode.has(leader1.code)) {
+  if (leader1 && byCode.has(leader1.code) && !contendHold) {
     const s = byCode.get(leader1.code)!;
     const r = evaluate(s, "首选");
     if (r?.pick) { picks.push(r.pick); handled.add(s.code); }
@@ -203,6 +226,25 @@ export function pickStocks(
     if (r?.pick) { picks.push(r.pick); handled.add(s.code); }
   }
 
+  // v9.77（A2-P0-2 修复）：仓位聚合截断 —— 每只独立算 30% 会让清单五只累加 150%（原脚注却写"合计≤30%"）。
+  // 按角色降权（首选1 / 接力0.7 / 低吸0.5）并截断到 闸门上限 ∩ 总仓上限，保证同主线合计不爆仓。
+  {
+    const capPct = Math.min(gate?.positionLimit || discipline.maxTotalPct || 100, discipline.maxTotalPct);
+    const roleWeight = { "首选": 1, "接力": 0.7, "低吸": 0.5 } as const;
+    const ordered = [...picks].sort((a, b) => {
+      const w = { "首选": 0, "接力": 1, "低吸": 2 } as const;
+      return w[a.role] - w[b.role];
+    });
+    let used = 0;
+    for (const p of ordered) {
+      const scaled = Math.round(p.suggestedPct * (roleWeight[p.role] ?? 1));
+      const allowed = Math.max(0, capPct - used);
+      const capped = Math.min(scaled, allowed);
+      p.suggestedPct = capped < 5 && allowed >= 5 ? 5 : capped; // 保底 5% 参与仓（若有容量）
+      used += p.suggestedPct;
+    }
+  }
+
   return {
     mainline: mainline.mainline,
     stage,
@@ -211,5 +253,6 @@ export function pickStocks(
     picks,
     excluded,
     contend,
+    contendHold,
   };
 }

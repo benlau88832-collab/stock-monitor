@@ -4,6 +4,47 @@
 
 ---
 
+## v9.77 — V2 游资/机构视角审查修复：假信号/死代码清理（2026-08-09）
+
+> 依据 `022_股票监控项目/deekseek-v4-flash审查报告V2.md`（77 项痛点：23 P0 / 37 P1 / 17 P2），本批次落地 P0 全部 + 高价值 P1/P2。核心：**修"看起来像信号的错误信号"**——假输入判阶段、张冠李戴裁决、静默回退昨日数据、死代码纪律拦截、离场零推送、龙虎榜错日。
+
+### 🔴 P0（数据可信/决策/逃生）
+- **P0-1 五问条阶段判定假输入修复**：`FiveQBar` 回传真实昨日涨停数（loadPrevZTSnapshot）+ 真实主力净占比（fund），退潮/分歧分支不再永久死掉；数据缺失时落"观察中"而非伪造"启动期"（此前退潮日可能误报启动诱导追涨）
+- **P0-2 裁决卡"张冠李戴"修复**：`agentMainline` 传入卡片，主标题主线切换后 AI 结论不再配错主线——黄条告警 + 大号结论降级规则 + 日志记 AI 实际裁决主线
+- **P0-5 全站数据截至时间**：TopNav 渲染 `lastUpdated` 相对年龄（原死参数）+ MarketOverview 显示"数据截至 HH:mm:ss"；数据>120s 变黄提示
+- **P0-6 涨停池静默回退昨日修复**：`fetchLimitPoolSummary` 标记 `degraded`（非今日 qdate），UI 显式"⚠数据来自{date}（接口异常）"，情绪分抑制池子因子、高低切检测禁用
+- **P0-7 主线切换即时复裁**：candidates[0] 变化检查移到 5 分钟节流之前，主线切换立即重跑 Agent
+- **P0-8 个股离场信号接推送**：checkStockExit red → alertBus critical → pushGateway 推手机（破成本/诱多出货/龙头熄火离屏也能收到）
+- **P0-10 封单红档重标定**：红档脱离 500万 绝对额（基准×10% 相对判定），封单归零补红牌，逐步撤单累计检测；告警 id 按代码维度（第二只票炸板不被聚合冷却压制）
+- **P0-11 复活主线退潮前兆规则1**：读 server 落库 market_daily 昨日炸板率喂 checkExitSignal（炸板率环比+15pp 规则复活）
+- **P0-13 reconcileFundNews 修复**：todayMainNet 从 fund_streak/ctx.mainNet 注入真实值（原硬编码 0 → 强利好主线恒判"资金背离→禁止"）
+- **P0-14 纪律硬拦截死代码修复**：PostButtons 匹配 discipline 实际文本（"单票上限/总仓位"）+ level==='critical'，超限拍板真正触发拦截
+- **P0-15 拍板仓位真实上下文**：hookDecisionPost 传真实 stage/闸门/强度（原硬编码"观察中"→仓位恒 0%）；agentTools 纪律参数读真实设置；0% 仓不再推"仓位建议 0%"假数字
+- **P0-16 回测诚实化**：senti_high 正面判定收紧为"次日不跌"；"有效"门槛样本≥20（原≥6 冒充有效）；窗口 14→30 天
+- **A1-P3 decision_log 去抖**：按裁决语义（mainline+action+confidence）合并写入，18s 刷屏不再冲光历史；key 用本地日期
+- **A7-01 龙虎榜错日修复**：fetchLhbDaily 按 TRADE_DATE 过滤当日 + 携带 tradeDate；17:30/18:30 补抓；前端交叉前校验数据日=今日
+- **A8-01 盘中公告零刷新修复**：去 isAnnouncementPeak 早退，盘中每 10 分钟拉公告
+- **P0-12 自选/盯价 × 公告/黑天鹅告警**：server cron 抓完公告后与 price_watch 匹配 → 利空 critical 推送 + 利好事件（price_watch_events 前端轮询可见）
+
+### 🟠 P1
+- **P0-4 阶段/仓位/止损三口径统一**：stockPicker 删本地高度法 stageOf → stageModel.stageOfStrength；止损统一 positionSizing 阶段档；纪律读真实 settings（消除同屏"作战卡观望 vs 清单21%买入"）
+- **A2-P0-2 仓位聚合截断**：清单按角色降权（首选1/接力0.7/低吸0.5）并截断到闸门∩总仓上限（原五只可累加 150% 却注脚"合计≤30%"）
+- **A2-P0-4 卡位胶着降级**：胶着时不硬点首选，改"等卡位胜出"占位（消除"卡位确认·打板"追高文案矛盾）
+- **A2-P1-7 闸门 empty 降级标识**：StockPickList empty 时红字"非正式推荐"；'closed' 非法值修复
+- **A7-02 拍板闭环出数据**：主线拍板自动携带代表标的 code+现价（backfillPostPnl 不再恒拒，"拍板真实盈亏"可产出）
+- **A7-04 席位画像新鲜度**：新增 lastActiveDate/last30dCount，DragonTiger 显示"活跃/沉寂"（应对顶级游资退网画像过时）
+- **A4-03 核按钮 10/20cm 分档**：主板-9%/20cm-19%/30cm-29%（20cm 普通回调不再误报"退潮信号"狼来了）
+- **A8-04 rankMainlinesWithLLM 节流**：20 分钟硬节流落地（原每 60s 烧 analysis 桶）
+- **A9-5 decision_log 保留级**：storageQuota 提为 rank1（审计留痕不再被配额清理先删）
+- **A9-8 新闻去重维度**：code+标题（同股多条款不再互相吞掉）
+- **A3-P2-9**：拍板推送 severity info→warning（默认 minSeverity 下可送达）+ 核按钮时间戳
+
+### 🟡 P2
+- **A9-9 审计导出白名单**：exportAllData 排除 AI Key/推送密钥（防导出即泄露）
+- **A5-P1-3 涨跌家数三态**：失败显示"数据不可用"而非永久"加载中"
+
+---
+
 ## v9.74 — GLM5.2-V14 全部落地：全面体检清算（9/9 指令）(2026-08-08)
 
 > 依据 `022_股票监控项目/GLM5.2建议-v14.txt`（221 行）逐条执行，9 条修改指令全部完成（P0×2 / P1×3 / P2×4）。

@@ -38,15 +38,17 @@ function cutoffDate(): string {
 
 // ============== 公共接口 ==============
 
-/** 追加/去重新闻（按 code 去重，summary 截断） */
+/** 追加/去重新闻（v9.77 A9-8：去重维度 code+标题，原按 code 单维度会把同一股票后续多条新闻互相吞掉） */
 export function upsertNews(items: NewsItem[]): void {
   try {
     const existing = loadArr<NewsItem>(NEWS_KEY);
-    const codes = new Set(existing.map(n => n.code));
+    // 去重键：code + 标题前 30 字（同一条重复推送去重，不同内容保留）
+    const seen = new Set(existing.map(n => `${n.code}|${(n.title ?? "").slice(0, 30)}`));
     let changed = false;
     for (const item of items) {
-      if (!item.code || codes.has(item.code)) continue;
-      codes.add(item.code);
+      const k = `${item.code}|${(item.title ?? "").slice(0, 30)}`;
+      if (!item.code || seen.has(k)) continue;
+      seen.add(k);
       existing.push({
         ...item,
         summary: (item.summary ?? "").slice(0, SUMMARY_MAX),

@@ -204,19 +204,24 @@ export function getAgentTools(): AgentTool[] {
       execute: async (ctx: ToolContext) => {
         const { computePositionAdvice } = await import("./positionSizing");
         // v9.64（V2-P0-3）：真实资金地基 —— totalCapital 用 discipline 设置，不再硬编码 1e6（假数据算真仓位=地基沙子）
-        let totalCapital = 1000000;
+        // v9.77（P0-15 修复）：单票/总仓上限、当前持仓%、今日开仓 全部读真实纪律，替代硬编码 30%/100%/0
+        let discipline = { maxSinglePct: 30, maxTotalPct: 100, maxNewPositionsPerDay: 3, totalCapital: 1000000, cooldownLossStreak: 3 };
+        let currentTotalPct = 0;
         try {
           const { loadDisciplineState } = await import("./discipline");
           const ds = loadDisciplineState();
-          if (ds.settings && ds.settings.totalCapital > 0) totalCapital = ds.settings.totalCapital;
+          if (ds.settings) discipline = { ...discipline, ...ds.settings };
+          currentTotalPct = ds.positions.length > 0
+            ? Math.min(100, ds.positions.reduce((s, p) => s + (p.value ?? 0), 0) / Math.max(1, discipline.totalCapital) * 100)
+            : 0;
         } catch { /* 读不到设置时保持默认 */ }
         const r = computePositionAdvice({
           mainline: ctx.mainline ?? "—",
           strengthScore: ctx.strengthScore ?? null,
           stage: (ctx.stage ?? "观察中") as never,
           gate: { mode: (ctx.gateMode ?? "empty") as never, factor: ctx.marketFactor ?? 0.5, positionLimit: 100, riskLevel: "low", label: "Agent", reason: [] },
-          discipline: { maxSinglePct: 30, maxTotalPct: 100, maxNewPositionsPerDay: 3, totalCapital, cooldownLossStreak: 3 },
-          currentTotalPct: 0,
+          discipline,
+          currentTotalPct,
           todayNewPositions: ctx.todayNewPositions ?? 0,
           mainlineTrap: ctx.trapFlagged,
         });
@@ -331,11 +336,25 @@ export function getAgentTools(): AgentTool[] {
       } : null,
       execute: async (ctx: ToolContext) => {
         const { reconcileFundNews } = await import("./fundNewsReconcile");
+        // v9.77（P0-13 修复）：此前 todayMainNet 硬编码 0 → 强利好主线永远命中
+        //   "消息利好但主力净流出"→ 观望/禁止，资金-消息对账引擎结构性判负。
+        //   现从 fund_streak 真实落库读该板块今日主力净额 + 连续流入天数；非本地/未落库回退 ctx.mainNet。
+        let todayMainNet = ctx.mainNet ?? 0;
+        let streakDays = ctx.fundStreakInflow ? 2 : -1;
+        try {
+          const { buildFundStreaks } = await import("./fundStreak");
+          const list = await buildFundStreaks();
+          const hit = list?.find(s => s.board === (ctx.board ?? ctx.mainline));
+          if (hit) {
+            if (hit.todayMainNet != null) todayMainNet = hit.todayMainNet;
+            if (hit.consecutiveInflowDays != null) streakDays = hit.consecutiveInflowDays;
+          }
+        } catch { /* 非本地/未落库 → 用 ctx 兜底 */ }
         const r = reconcileFundNews({
           board: ctx.board ?? ctx.mainline ?? "—",
           newsScore: ctx.strengthScore ?? 50,
-          todayMainNet: 0,
-          streakDays: ctx.fundStreakInflow ? 2 : -1,
+          todayMainNet,
+          streakDays,
         });
         return { status: r.status, conclusion: r.conclusion, action: r.action };
       },

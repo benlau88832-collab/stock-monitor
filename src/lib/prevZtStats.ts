@@ -3,6 +3,9 @@
 // 计算：溢价均值 / 溢价4档分布 / 核按钮预警 / 晋级率
 // 输入昨日涨停快照 + 今日行情 brief + 今日涨停池 → 输出统计结果
 // ============================================================
+// v9.77（A4-03 修复）：核按钮按涨跌幅限制分档（主板-9%/20cm-19%/30cm-29%），
+//   消除 20cm 股普通回调（-9%）被误报"退潮信号"的狼来了效应
+import { stockLimitPct } from "./api";
 
 export interface PrevZtStatsInput {
   /** 昨日涨停快照（loadPrevZTSnapshot 结果，含 c/n/lbc） */
@@ -51,14 +54,18 @@ export function computePrevZtStats(input: PrevZtStatsInput): PrevZtStatsResult {
     if (pctCount > 0) result.premiumDist = dist;
   }
 
-  // 核按钮检测：昨≥2板 今日跌≤-9%（秒跌停 = 退潮最强信号）
+  // 核按钮检测：昨≥2板 今日跌近跌停（秒跌停 = 退潮最强信号）
+  // v9.77（A4-03）：按涨跌幅限制分档 —— 原固定 -9% 把 20cm 股普通回调误报为核按钮
   const nukes: string[] = [];
   for (const s of prevZTPool) {
     const lbc = s.lbc ?? 1;
     if (lbc >= 2) {
-      const brief = briefMap.get(String(s.c));
-      if (brief && brief.pct <= -9) {
-        nukes.push(`${s.n ?? s.c}(${lbc}板跌${brief.pct.toFixed(1)}%)`);
+      const code = String(s.c);
+      const brief = briefMap.get(code);
+      // 主板 -9%（近跌停-10%）；20cm -19%（近跌停-20%）；30cm -29%
+      const limit = stockLimitPct(code);
+      if (brief && brief.pct <= -Math.max(8, limit - 1)) {
+        nukes.push(`${s.n ?? code}(${lbc}板跌${brief.pct.toFixed(1)}%)`);
       }
     }
   }

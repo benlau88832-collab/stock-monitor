@@ -180,13 +180,19 @@ export interface SeatProfile {
   winRateT1: number | null;  // T+1 胜率（>0%）
   sampleCount: number;       // 有 T+1 数据的样本数
   premiumLevel: "high" | "negative" | "normal"; // 溢价分级
+  /** v9.77（A7-04）：最后活跃日期 —— 顶级游资退网/换马甲后，画像应标记"已沉寂"而非永久挂名 */
+  lastActiveDate: string;
+  /** v9.77（A7-04）：近 30 天上榜次数 —— 区分"当前活跃"与"历史画像" */
+  last30dCount: number;
 }
 
 /** 聚合近 N 天的席位画像 */
 export function buildSeatProfiles(maxDays = 120): SeatProfile[] {
   const dates = getAllSeatDates().slice(0, maxDays);
+  // v9.77（A7-04）：近 30 天活跃窗口（用于标注"当前活跃/已沉寂"）
+  const recentDates = new Set(dates.slice(0, 30));
   // 按 deptName 聚合
-  const agg = new Map<string, { appearances: number; t1s: number[] }>();
+  const agg = new Map<string, { appearances: number; t1s: number[]; lastActive: string; recent30: number }>();
   for (const date of dates) {
     const records = loadDayRecords(date);
     // 同一天同一席位只算一次出现
@@ -195,8 +201,10 @@ export function buildSeatProfiles(maxDays = 120): SeatProfile[] {
       if (r.direction !== "买") continue; // 只统计买入方
       if (!seen.has(r.deptName)) {
         seen.add(r.deptName);
-        const entry = agg.get(r.deptName) ?? { appearances: 0, t1s: [] };
+        const entry = agg.get(r.deptName) ?? { appearances: 0, t1s: [], lastActive: date, recent30: 0 };
         entry.appearances++;
+        entry.lastActive = date; // dates 遍历到最新 → 最后写入即最近活跃日
+        if (recentDates.has(date)) entry.recent30++;
         agg.set(r.deptName, entry);
       }
       if (r.pctT1 != null) {
@@ -221,7 +229,10 @@ export function buildSeatProfiles(maxDays = 120): SeatProfile[] {
       else if (avgPctT1 < -1) premiumLevel = "negative";
     }
 
-    profiles.push({ deptName, appearances: data.appearances, avgPctT1, winRateT1, sampleCount, premiumLevel });
+    profiles.push({
+      deptName, appearances: data.appearances, avgPctT1, winRateT1, sampleCount, premiumLevel,
+      lastActiveDate: data.lastActive, last30dCount: data.recent30,
+    });
   }
 
   // 按出现次数降序

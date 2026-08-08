@@ -109,6 +109,7 @@ function SeatProfileCard({ profiles, behaviors }: { profiles: SeatProfile[]; beh
                 <th className="px-2 py-1 text-right">T+1均值</th>
                 <th className="px-2 py-1 text-right">胜率</th>
                 <th className="px-2 py-1 text-center">分级</th>
+                <th className="px-2 py-1 text-center">活跃度</th>
               </tr>
             </thead>
             <tbody>
@@ -158,6 +159,20 @@ function SeatProfileCard({ profiles, behaviors }: { profiles: SeatProfile[]; beh
                         )}
                         {p.premiumLevel === "negative" && (
                           <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-slate-500/20 text-slate-400">负溢价</span>
+                        )}
+                      </td>
+                      {/* v9.77（A7-04）：席位新鲜度 —— 顶级游资退网/换马甲后，老画像不应被当当下判断 */}
+                      <td className="px-2 py-1 text-center">
+                        {p.last30dCount > 0 ? (
+                          <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-emerald-500/15 text-emerald-300"
+                            title={`最近活跃 ${p.lastActiveDate} · 近30日 ${p.last30dCount} 次上榜`}>
+                            活跃
+                          </span>
+                        ) : (
+                          <span className="rounded px-1 py-0.5 text-[10px] font-bold bg-slate-600/20 text-slate-500"
+                            title={`最后活跃 ${p.lastActiveDate}（近30日未上榜，画像可能已过时）`}>
+                            沉寂
+                          </span>
                         )}
                       </td>
                     </tr>

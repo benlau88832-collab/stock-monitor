@@ -130,19 +130,26 @@ async function fetchNuclearCount(pool, todayStr) {
 
 // ---------- v9.36（A3）：龙虎榜采集（与涨停池交叉，识别席位加持） ----------
 // 涨停 + 龙虎榜净买入 = 次日溢价增强信号；RPT_DAILYBILLBOARD_DETAILSNEW 当日盘后数据
-async function fetchLhbDaily() {
+// v9.77（A7-01 修复）：① 只取指定交易日（默认当日）的行 —— 原 15:40 抓时当日榜单未公布
+//   （东财 16:00 起更新），接口按 TRADE_DATE 倒序返回全为昨日数据，被原样存进"今日"key，
+//   导致交叉面板整晚错日对齐、伪造"席位加持"；② 每条携带 tradeDate 日期自证。
+async function fetchLhbDaily(dateStr) {
   const url = `https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_DAILYBILLBOARD_DETAILSNEW&columns=ALL&pageSize=300&source=WEB&client=WEB&sortColumns=TRADE_DATE&sortTypes=-1`;
   const j = await httpsGet(url);
   const rows = j?.result?.data ?? [];
-  return rows.map(r => ({
-    code: String(r.SECURITY_CODE ?? ""),
-    name: String(r.SECURITY_NAME_ABBR ?? ""),
-    pct: Number(r.CHANGE_RATE ?? 0),
-    buyAmt: Number(r.BILLBOARD_BUY_AMT ?? 0),   // 龙虎榜买入额（元）
-    sellAmt: Number(r.BILLBOARD_SELL_AMT ?? 0),
-    netBuy: Number(r.BILLBOARD_BUY_AMT ?? 0) - Number(r.BILLBOARD_SELL_AMT ?? 0),
-    explain: String(r.EXPLANATION ?? r.EXPLAIN ?? ""),  // 上榜原因（如"日涨幅偏离值达7%"）
-  }));
+  const want = dateStr || bjDateStr();
+  return rows
+    .filter(r => String(r.TRADE_DATE ?? "").slice(0, 10) === want)
+    .map(r => ({
+      code: String(r.SECURITY_CODE ?? ""),
+      name: String(r.SECURITY_NAME_ABBR ?? ""),
+      pct: Number(r.CHANGE_RATE ?? 0),
+      buyAmt: Number(r.BILLBOARD_BUY_AMT ?? 0),   // 龙虎榜买入额（元）
+      sellAmt: Number(r.BILLBOARD_SELL_AMT ?? 0),
+      netBuy: Number(r.BILLBOARD_BUY_AMT ?? 0) - Number(r.BILLBOARD_SELL_AMT ?? 0),
+      explain: String(r.EXPLANATION ?? r.EXPLAIN ?? ""),  // 上榜原因（如"日涨幅偏离值达7%"）
+      tradeDate: String(r.TRADE_DATE ?? "").slice(0, 10), // v9.77：日期自证（前端交叉前校验）
+    }));
 }
 
 // ---------- v9.38（V3-11）：盘中市场快照（加速信号回测样本积累） ----------
@@ -191,6 +198,66 @@ const { saveFactorIc } = require("./lib/factorIc");
 
 function bjDate(offset = 0) {  const d = new Date(Date.now() + 8 * 3600 * 1000 + offset * 86400000);
   return d.toISOString().slice(0, 10).replace(/-/g, "");
+}
+
+/** v9.77（A7-01）：北京时间日期串（YYYY-MM-DD，龙虎榜 TRADE_DATE 对齐用） */
+function bjDateStr(offset = 0) {  const d = new Date(Date.now() + 8 * 3600 * 1000 + offset * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+// v9.77（P0-12 修复）：盯价股 × 公告/黑天鹅 主动告警 —— "自选/盯价股出利空赶紧叫我"
+// 采集（cron 20min）、推送通道（pushGateway/Server酱/Bark）、事件表（price_watch_events 前端 5s 轮询）
+// 全就绪，唯独缺这层胶水。每轮抓完公告/黑天鹅后与 price_watch 活跃清单做 code 交集：
+//   利空（black_swan）→ critical 推送 + 事件；强利好（正则）→ 事件。
+const GOOD_ANN_RE = /(重大合同|中标|业绩预增|大幅预增|预盈|回购|增持计划|获批|重组|收购|签署|中标)/;
+async function notifyWatchedStockAlerts(pool, blackSwans, anns) {
+  try {
+    const wRes = await pool.query(`SELECT code, name FROM price_watch WHERE status='active'`);
+    const watched = new Map(wRes.rows.map(r => [String(r.code), String(r.name || r.code)]));
+    if (watched.size === 0) return 0;
+    let fired = 0;
+    for (const bs of blackSwans || []) {
+      const code = String(bs.code ?? bs.stockCode ?? "");
+      if (!watched.has(code)) continue;
+      // 当日已推过同类 → 跳过（20min cron 每轮都会抓到同一条）
+      const dup = await pool.query(
+        `SELECT 1 FROM price_watch_events WHERE code=$1 AND event_text LIKE '🚨 利空%' AND created_at >= now() - interval '1 day' LIMIT 1`, [code],
+      ).catch(() => ({ rows: [] }));
+      if (dup.rows.length > 0) continue;
+      await pool.query(
+        `INSERT INTO price_watch_events(code,name,price,mid_price,deviation_pct,event_text)
+         VALUES($1,$2,0,0,0,$3)`,
+        [code, watched.get(code), `🚨 利空公告：${String(bs.title ?? "").slice(0, 80)}`],
+      ).catch(() => {});
+      fired++;
+      try {
+        const pushReq = require("./routes/push");
+        if (typeof pushReq.sendPushIfConfigured === "function") {
+          await pushReq.sendPushIfConfigured({
+            title: `🚨 盯价股利空：${watched.get(code)}`,
+            body: `${String(bs.title ?? "").slice(0, 120)}`,
+            severity: "critical",
+          }, pool);
+        }
+      } catch { /* 推送失败静默（事件已落库，前端可见） */ }
+    }
+    for (const a of anns || []) {
+      const code = String(a.stockCode ?? "");
+      if (!watched.has(code) || !GOOD_ANN_RE.test(String(a.title ?? ""))) continue;
+      const dup = await pool.query(
+        `SELECT 1 FROM price_watch_events WHERE code=$1 AND event_text LIKE '🟢 利好%' AND created_at >= now() - interval '1 day' LIMIT 1`, [code],
+      ).catch(() => ({ rows: [] }));
+      if (dup.rows.length > 0) continue;
+      await pool.query(
+        `INSERT INTO price_watch_events(code,name,price,mid_price,deviation_pct,event_text)
+         VALUES($1,$2,0,0,0,$3)`,
+        [code, watched.get(code), `🟢 利好公告：${String(a.title ?? "").slice(0, 80)}`],
+      ).catch(() => {});
+      fired++;
+    }
+    if (fired > 0) console.log(`[cron] 盯价股公告告警: ${fired} 条`);
+    return fired;
+  } catch (e) { console.error("[cron] notifyWatchedStockAlerts:", e.message); return 0; }
 }
 
 // ---------- 1. 抓涨停池快照 → zt_snapshot ----------
@@ -811,6 +878,25 @@ function startCron({ pool }) {
     cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
+  // v9.77（A7-01 修复）：龙虎榜盘后补抓 —— 东财当日榜单 16:00 起陆续公布，15:40 首抓多为空/昨日；
+  // 17:30 / 18:30 重抓当日（fetchLhbDaily 已按 TRADE_DATE 过滤今日）幂等覆盖 lhb:今日。
+  const saveLhbToday = async () => {
+    try {
+      const lhb = await fetchLhbDaily();
+      if (lhb.length > 0) {
+        const lDateStr = bjDateStr();
+        await pool.query(
+          `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+          [`lhb:${lDateStr}`, JSON.stringify({ date: lDateStr, items: lhb })],
+        );
+        console.log(`[cron] lhb 补抓 ${lDateStr}: ${lhb.length} 只`);
+      }
+    } catch (e) { console.error("[cron] lhb 补抓失败:", e.message); }
+  };
+  cron.schedule("30 17 * * 1-5", async () => { await saveLhbToday(); }, { timezone: "Asia/Shanghai" });
+  cron.schedule("30 18 * * 1-5", async () => { await saveLhbToday(); }, { timezone: "Asia/Shanghai" });
+
   // 交易日每 20 分钟抓快讯+公告自动落库（9:00 - 16:40，v9.26.10 修正 */20 9-16 会在 16:40 触发却注释到 16:30）
   cron.schedule("*/20 9-16 * * 1-5", async () => {
     if (!isTradingDayCN()) { console.log("[cron] 非交易日（节假日），跳过快讯抓取"); return; }
@@ -873,10 +959,11 @@ function startCron({ pool }) {
 
       // v9.32：黑天鹅公告落库（kv_store: black_swan:YYYY-MM-DD）—— 利空向公告实时采集
       // v9.75（阶段二）：正则初筛 → LLM 二级确认（yes 保留 + 影响级别；失败静默用正则结果）
+      let blackSwans = [];
       try {
         const regexHits = anns.filter(a => BLACK_ANN_RE.test(a.title || ""));
         const llmConfirmed = await confirmBlackSwansWithLLM(pool, anns);
-        const blackSwans = llmConfirmed !== null ? llmConfirmed : regexHits.map(a => ({ code: a.stockCode, name: a.stockName, title: a.title, time: a.time, url: a.url }));
+        blackSwans = llmConfirmed !== null ? llmConfirmed : regexHits.map(a => ({ code: a.stockCode, name: a.stockName, title: a.title, time: a.time, url: a.url }));
         if (blackSwans.length > 0) {
           const bsDate = bjDate();
           const bsDateStr = `${bsDate.slice(0, 4)}-${bsDate.slice(4, 6)}-${bsDate.slice(6, 8)}`;
@@ -888,6 +975,11 @@ function startCron({ pool }) {
           console.log(`[cron] black_swan ${bsDateStr}: ${blackSwans.length} 条`);
         }
       } catch (e) { console.error("[cron] black_swan fetch failed:", e.message); }
+
+      // v9.77（P0-12 修复）：盯价股 × 公告/黑天鹅 主动告警（利空 critical 推送 + 利好事件）
+      try {
+        await notifyWatchedStockAlerts(pool, blackSwans, anns);
+      } catch (e) { console.error("[cron] 盯价股公告告警失败:", e.message); }
     } catch (e) { console.error("[cron] fetch failed:", e.message); }
 
     // v9.38（V3-11）：盘中市场快照（每小时一次，加速回测样本）

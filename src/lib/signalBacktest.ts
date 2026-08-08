@@ -86,7 +86,8 @@ const SIGNALS: SignalDef[] = [
     id: "senti_high", name: "情绪高位≥70",
     condition: "情绪分≥70（亢奋）",
     trigger: r => r.sentiment != null && r.sentiment >= SENTI_EXTREME,
-    positive: (cur, n) => n.sentiment != null && n.sentiment >= cur.sentiment! - 10, // 次日不崩超10分
+    // v9.77（P0-16 修复）：原"次日不崩超10分"过松（跌9分也算赢）→ 收紧为"次日不跌"
+    positive: (cur, n) => n.sentiment != null && n.sentiment >= cur.sentiment!,
   },
   {
     id: "senti_low", name: "情绪冰点≤30",
@@ -131,8 +132,9 @@ const SIGNALS: SignalDef[] = [
 /**
  * 信号回测主入口：本地部署时读取历史数据，计算每个信号的历史表现。
  * 返回 null = 非本地部署或有效数据日不足。
+ * v9.77（P0-16 修复）：窗口 14→30 天，让样本有积累空间；"有效"门槛样本≥20（原 ≥6 冒充有效）。
  */
-export async function backtestSignals(days = 14): Promise<SignalStat[] | null> {
+export async function backtestSignals(days = 30): Promise<SignalStat[] | null> {
   if (!isLocalServer()) return null;
   const rows = await loadHistory(days);
   const valid = rows.filter(r => r.sentiment != null);
@@ -155,16 +157,18 @@ export async function backtestSignals(days = 14): Promise<SignalStat[] | null> {
     }
     const winRate = samples > 0 ? Math.round(positives / samples * 100) : 0;
     const avgNextChange = cntNext > 0 ? Math.round(sumNextChange / cntNext * 10) / 10 : 0;
+    // v9.77（P0-16）：有效门槛从样本≥6 提到 ≥20 —— 6 样本+宽松正面口径会骗机构加仓
     let verdict: SignalStat["verdict"] = "样本不足";
-    if (samples >= 6) {
+    if (samples >= 20) {
       if (winRate >= 60) verdict = "有效";
-      else if (winRate >= 45) verdict = "存疑";
       else verdict = "存疑";
+    } else if (samples >= 10) {
+      verdict = "存疑";
     }
     const note =
-      verdict === "有效" ? `历史${samples}次，次日正面率${winRate}%${avgNextChange >= 0 ? "，情绪均+" : "，情绪均"}${Math.abs(avgNextChange).toFixed(1)}分` :
-      verdict === "样本不足" ? `仅${samples}次样本，每日自动积累中` :
-      `历史${samples}次正面率${winRate}%，该信号谨慎使用`;
+      verdict === "有效" ? `历史${samples}次，次日正面率${winRate}%（指标回归口径，非赚钱预测）` :
+      verdict === "存疑" ? `历史${samples}次正面率${winRate}%，样本不足或胜率不稳，谨慎使用` :
+      `仅${samples}次样本，每日自动积累中（≥20 次才认定有效）`;
     stats.push({
       id: sig.id, name: sig.name, condition: sig.condition,
       samples, winRate, avgNextChange, verdict, note,

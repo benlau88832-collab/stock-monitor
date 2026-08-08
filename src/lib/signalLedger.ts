@@ -261,11 +261,16 @@ export function loadDiaries(): DiaryEntry[] {
 }
 
 // ============== 数据导出/导入 ==============
+// v9.77（A9-9 修复）：导出排除敏感密钥 —— 原全量 dump 会把用户明文 Agnes API Key / 推送渠道密钥
+// 一起导出，文件外发即泄露。与 cloudStore 的 SKIP_UPLOAD_PREFIXES 同口径并补推送密钥。
+const EXPORT_BLACKLIST = ["ai_settings", "llm_api_key", "push_settings_v1", "push_cooldown_v1", "local_token"];
 export function exportAllData(): string {
   const data: Record<string, string> = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (key) data[key] = localStorage.getItem(key) || "";
+    if (!key) continue;
+    if (EXPORT_BLACKLIST.some(p => key.startsWith(p))) continue; // 密钥不导出
+    data[key] = localStorage.getItem(key) || "";
   }
   return JSON.stringify(data, null, 2);
 }

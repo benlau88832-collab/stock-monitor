@@ -96,7 +96,9 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
           ? { label: "谨慎参与", color: "bg-amber-500/20 text-amber-300 border-amber-500/40" }
           : { label: "观望", color: "bg-slate-500/20 text-slate-400 border-slate-500/40" };
 
-  // 置信度：数据完整度近似（有否决=低置信，有量比/换手=高置信）
+  // v9.77（P0-3 修复）：置信度诚实化 —— 原公式 65+有量比10+有换手5 是"数据字段覆盖近似"，
+  // 被大字当"置信度"展示会让游资误以为=历史胜率。改标"数据完整度"并脚注说明非胜率。
+  // （历史真实命中率回灌见 decisionAttribution，当前样本积累中显示"样本积累中"）
   const confidence = vetoed ? 40 : 65 + (stock.volumeRatio ? 10 : 0) + (stock.turnoverRate ? 5 : 0);
 
   const Row = ({ k, children }: { k: string; children: React.ReactNode }) => (
@@ -142,7 +144,7 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
         <Row k="止损/止盈参考">
           <span className="text-slate-300">损 {ref.stop} / 盈 {ref.take}（仅参考）</span>
         </Row>
-        <Row k="置信度">
+        <Row k="数据完整度">
           <span className="text-violet-300">{confidence}%</span>
         </Row>
         {/* v9.32：快速下单（券商 URL Scheme 直通，秒级执行） */}
@@ -155,7 +157,7 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
         </Row>
       </div>
       <div className="pt-1 border-t border-white/5 flex items-center justify-between">
-        <span className="text-[10px] text-slate-600">规则引擎基于实时数据生成 · 资金按委托金额口径，无法识别拆单</span>
+        <span className="text-[10px] text-slate-600">规则引擎基于实时数据生成 · 资金按委托金额口径，无法识别拆单 · 数据完整度为字段覆盖近似，非历史胜率</span>
         <DisclaimerTag />
       </div>
     </div>

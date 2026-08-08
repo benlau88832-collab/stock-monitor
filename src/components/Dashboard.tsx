@@ -57,7 +57,7 @@ import StockPickList from "./StockPickList";
 // v11-4（P1）：GlobalSignals 移出驾驶舱 → fundline Tab"🌐外围信号"（App.tsx 已渲染，此处不再 import）
 // v11-5（P1）：事件三级研判回驾驶舱
 import EventClassifyPanel from "./EventClassifyPanel";
-import { fmtMoney, fmtPct, pctColor, localDateStrOffset } from "../lib/format";
+import { fmtMoney, fmtPct, pctColor, localDateStrOffset, localDateStr } from "../lib/format";
 import { loadIntradaySeries, computeMomentum, suggestPosition } from "../lib/sentimentStore";
 import { buildThemeLadder, type ZTPoolItem } from "../lib/themeLadder";
 import { getFeed, type AlertEvent } from "../lib/alertBus";
@@ -632,17 +632,25 @@ export default function Dashboard({
     if (cands.length === 0 || agentLoading) return;
     // 自动触发节流：5 分钟内不重复跑（省配额）；手动按钮不受限
     if (auto) {
-      const now = Date.now();
-      if (now - agentLastRunRef.current < 5 * 60 * 1000) return;
-      agentLastRunRef.current = now;
-      // v11-3（P0）：数据未显著变化时复用上次裁决（防前后矛盾）
-      // 判据：强度分变化 <10 且 涨停数变化 <3 → 保持上次结果，不重跑 Agent
-      if (agentResults.length > 0) {
-        const last = agentResults[0];
-        const top0 = cands[0];
-        const scoreDelta = Math.abs((top0.strengthScore ?? 0) - (last.snap?.strengthScore ?? 0));
-        const ztDelta = Math.abs((top0.ztCount ?? 0) - (last.snap?.ztCount ?? 0));
-        if (scoreDelta < 10 && ztDelta < 3) return;
+      // v9.77（P0-7 修复）：主线切换 → 跳过 5 分钟节流立即复裁。
+      // 原实现节流检查在数据变化检查之前，盘中主线切换要等满 5 分钟才重跑，
+      // 导致"9:38 主线切换 → 9:35 旧裁决仍置顶到 9:45"的时效脱节。
+      const switched = agentResults.length > 0 && agentResults[0].mainline !== cands[0]?.mainline;
+      if (!switched) {
+        const now = Date.now();
+        if (now - agentLastRunRef.current < 5 * 60 * 1000) return;
+        agentLastRunRef.current = now;
+        // v11-3（P0）：数据未显著变化时复用上次裁决（防前后矛盾）
+        // 判据：强度分变化 <10 且 涨停数变化 <3 → 保持上次结果，不重跑 Agent
+        if (agentResults.length > 0) {
+          const last = agentResults[0];
+          const top0 = cands[0];
+          const scoreDelta = Math.abs((top0.strengthScore ?? 0) - (last.snap?.strengthScore ?? 0));
+          const ztDelta = Math.abs((top0.ztCount ?? 0) - (last.snap?.ztCount ?? 0));
+          if (scoreDelta < 10 && ztDelta < 3) return;
+        }
+      } else {
+        agentLastRunRef.current = Date.now(); // 记录本轮时间，避免切换后连刷
       }
     }
     setAgentLoading(true);
@@ -667,6 +675,10 @@ export default function Dashboard({
             sealYellow: (sealAlerts ?? []).filter(a => a.level === "yellow").length,
             ztCount: overview?.limitPool?.limitUpCount ?? 0,
             premiumAvg: overview?.premiumAvg ?? null,
+            // v9.77（P0-13 修复）：注入该主线真实主力净额/5日净额 —— reconcileFundNews 资金-消息对账
+            //   不再拿硬编码 0 当"净流出"（对账引擎此前对强利好主线恒判"资金背离→观望/禁止"）
+            mainNet: top.mainNet ?? undefined,
+            mainNet5d: top.mainNet5d ?? undefined,
           },
           // v9.40（V4-D）：默认开 Critic 挑刺；自洽投票默认关省配额
           { useCritic: true, selfConsistency: false },
@@ -712,7 +724,7 @@ export default function Dashboard({
       try {
         // 1. 信号回测胜率 → 门控
         const { backtestSignals } = await import("../lib/signalBacktest");
-        const stats = await backtestSignals(14);
+        const stats = await backtestSignals(30);
         if (stats && alive) {
           setSignalGates(stats.map(s => ({ name: s.name, winRate: s.verdict === "样本不足" ? null : s.winRate, samples: s.samples })));
         }
@@ -761,8 +773,15 @@ export default function Dashboard({
           const v = await r.json();
           const items = v?.value?.items;
           if (Array.isArray(items) && items.length > 0) {
-            const crossed = items.filter((x: any) => ztCodes.has(String(x.code)));
-            if (alive) setLhbBoost(crossed.length > 0);
+            // v9.77（A7-01）：lhb 数据日 ≠ 今日 → 不视为"席位加持"（防昨日榜单×今日涨停伪造信号）
+            const lhbDate = String(v?.value?.date ?? key.slice(4));
+            const isTodayLhb = lhbDate === localDateStr();
+            if (isTodayLhb) {
+              const crossed = items.filter((x: any) => ztCodes.has(String(x.code)));
+              if (alive) setLhbBoost(crossed.length > 0);
+            } else {
+              if (alive) setLhbBoost(false);
+            }
             break;
           }
         }
@@ -964,7 +983,7 @@ export default function Dashboard({
       {/* 驾驶舱 + 今日作战卡 + Agent 重审 + Top 摘要 —— 任何阶段（盘前/盘中/盘后/午休）都置顶 */}
       <div className="space-y-2">
         {/* v9.23-3：游资五问条（驾驶舱顶部常驻） */}
-        <FiveQBar battlePlan={battlePlan ?? null} overview={overview} />
+        <FiveQBar battlePlan={battlePlan ?? null} overview={overview} fund={fund ?? null} />
         {/* v9.37（V3-7）：AI 终裁决（多源共识，替代决策的可见终点） */}
         <DecisionVerdictCard
           mainline={battlePlan?.candidates?.[0]?.mainline ?? "—"}
@@ -974,6 +993,24 @@ export default function Dashboard({
           factorStats={factorStats ?? undefined}
           // v11-3（P0）：上次裁决 action（变化提示用）
           prevAction={lastActionRef.current}
+          // v9.77（P0-2 修复）：Agent 实际裁决的主线 —— 主标题切换后卡片检测错配，AI 结论不再张冠李戴
+          agentMainline={agentResults[0]?.mainline ?? null}
+          // v9.77（P0-15 修复）：拍板联动传真实 stage/闸门/强度（原硬编码"观察中"→仓位恒 0%）
+          hookCtx={{
+            gate: battlePlan?.gate ?? undefined,
+            strengthScore: battlePlan?.candidates?.[0]?.strengthScore ?? null,
+          }}
+          // v9.77（A7-02 修复）：主线拍板带代表标的（龙一 + 涨停池现价）→ 拍板 T+5 盈亏回填从"永远积累中"变为可产出
+          representCode={(() => {
+            const lead = battlePlan?.candidates?.[0]?.leaders?.[0];
+            return lead ? lead.code : null;
+          })()}
+          representPrice={(() => {
+            const lead = battlePlan?.candidates?.[0]?.leaders?.[0];
+            if (!lead) return null;
+            const z = (overview?.limitPool?.rawZTPool ?? []).find((s: any) => String(s.c) === String(lead.code));
+            return z && Number(z.p) > 0 ? Number(z.p) / 1000 : null;
+          })()}
         />
         {/* v10-3（P0）：选股清单紧贴裁决 —— "可上车→买这些"一气呵成，中间不插 BattlePlan/LimitTempBar */}
         <StockPickList

@@ -12,6 +12,9 @@ import { pickStocks, type PickList } from "../lib/stockPicker";
 import { decideForStock, type StockVerdict } from "../lib/aiAgent";
 // v12-2（P0）：conceptGroupOf 旧路径 → 全站唯一分类器 classifyStock（V12-2）
 import { classifyStock } from "../lib/classifyStock";
+// v9.77（P0-4）：真实纪律设置（单票上限/总仓上限/总资金）替代引擎硬编码
+import { loadDisciplineState } from "../lib/discipline";
+import type { GateResult } from "../lib/regimeGate";
 import DisclaimerTag from "./DisclaimerTag";
 
 const roleColor: Record<string, string> = {
@@ -54,7 +57,8 @@ interface Props {
   rawPool: ZTPoolItem[];
   /** 板块成分股候选池资金增强（mainline.potential → fundBoost） */
   potential?: PickFundBoost[];
-  gate?: { mode?: string; factor?: number | null } | null;
+  /** v9.77（P0-4）：完整闸门（battlePlan.gate）—— 含 factor/positionLimit 供仓位截断 */
+  gate?: GateResult | null;
 }
 
 export default function StockPickList({ candidate, rawPool, potential, gate }: Props) {
@@ -80,10 +84,20 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
     for (const p of potential ?? []) {
       if (!p.vetoed) fundBoost.set(p.code, { mainNetPct: p.mainNetPct, mainNet5dPct: p.mainNet5dPct });
     }
+    // v9.77（P0-4 / A2-P0-2）：传入真实闸门 + 真实纪律 + 当前持仓/今日开仓 ——
+    // 仓位建议不再按硬编码 30%/100%/1000万 计算；清单合计截断到闸门∩总仓上限
+    const ds = loadDisciplineState();
+    const currentTotalPct = ds.positions.length > 0
+      ? Math.min(100, ds.positions.reduce((s, p) => s + (p.value ?? 0), 0) / Math.max(1, ds.settings.totalCapital) * 100)
+      : 0;
     return pickStocks(candidate, pool, {
       gateMode: gate?.mode ?? "full",
       strengthScore: candidate.strengthScore ?? null,
       fundBoost,
+      gate: gate ?? null,
+      discipline: ds.settings,
+      currentTotalPct,
+      todayNewPositions: ds.todayNewPositions ?? 0,
     });
   }, [candidate, rawPool, potential, gate]);
 
@@ -181,7 +195,8 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
   if (!pick || pick.picks.length === 0) return null;
 
   // v11-7（P2）：降级透明展示 —— 主线强度不足/闸门收紧时，不藏着候选，明示"候选参考（非正式推荐）"
-  const downgraded = (candidate?.strengthScore ?? 0) < 60 || gate?.mode === "low" || gate?.mode === "closed";
+  // v9.77（A2-P1-7 修复）：'closed' 非合法 GateMode（合法 full/cautious/low/empty）；闸门数据不足(empty)也应标降级
+  const downgraded = (candidate?.strengthScore ?? 0) < 60 || gate?.mode === "low" || gate?.mode === "cautious" || gate?.mode === "empty";
 
   return (
     <div className="rounded-xl border border-rose-500/25 bg-rose-950/10 p-3">
@@ -208,6 +223,18 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
       {aiRateLimited && (
         <div className="mb-2 rounded border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-xs font-bold text-rose-200">
           ⏸ AI 配额受限，标的研判为规则降级（非 AI 主导）
+        </div>
+      )}
+      {/* v9.77（A2-P1-7 修复）：闸门数据不足 → 明确"非正式推荐"，原 empty 无降级标识、5% 保底仓被当正式建议 */}
+      {gate?.mode === "empty" && (
+        <div className="mb-2 rounded border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-xs font-bold text-rose-200">
+          ⚠ 闸门数据不足（情绪分缺失），下方标的仓位为兜底估计，非正式推荐
+        </div>
+      )}
+      {/* v9.77（A2-P0-4）：卡位胶着 → 不硬点首选，等待"卡位胜出"占位 */}
+      {pick.contendHold && (
+        <div className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-xs font-bold text-amber-300">
+          ⏳ 卡位胶着（{pick.contend.replace("⚠ ", "")}）：龙一未定，不硬点首选。等封单差 &gt;20% 胜出后再上，避免追高被杀。
         </div>
       )}
 
@@ -276,7 +303,10 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
         </div>
       )}
       <div className="mt-1.5 text-xs text-slate-600">
-        💡 规则引擎按「龙一打板 → 龙二/三接力 → 首板低吸」分桶；仓位联动闸门（合计≤30%）；诱多/否决已剔除。仅供参考，不构成投资建议。
+        💡 规则引擎按「龙一打板 → 龙二/三接力 → 首板低吸」分桶；{(() => {
+          const total = pick.picks.reduce((s, p) => s + p.suggestedPct, 0);
+          return `本主线合计仓位 ${total}%（已按角色降权并截断到闸门/总仓上限）`;
+        })()}；诱多/否决已剔除。仅供参考，不构成投资建议。
       </div>
     </div>
   );

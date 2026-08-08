@@ -8,6 +8,7 @@
 import { useRef, useState } from "react";
 import { buildPost, savePost, hasPosted, type HumanAction, type DecisionPost } from "../lib/decisionPost";
 import { emit as emitAlert } from "../lib/alertBus";
+import type { PostHookCtx } from "../lib/hookDecisionPost";
 import DisclaimerTag from "./DisclaimerTag";
 
 interface Props {
@@ -21,9 +22,11 @@ interface Props {
   code?: string | null;
   /** 拍价（个股时可填） */
   priceAtPost?: number | null;
+  /** v9.77（P0-15）：真实 stage/闸门/强度 —— 拍板联动算仓位不再用硬编码"观察中" */
+  hookCtx?: PostHookCtx;
 }
 
-export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = null, priceAtPost = null }: Props) {
+export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = null, priceAtPost = null, hookCtx }: Props) {
   const [posted, setPosted] = useState<HumanAction | null>(null);
   const [note, setNote] = useState("");
   const lastTicketId = useRef<string | null>(null);
@@ -48,11 +51,14 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
       return;
     }
     // P2-1：纪律硬约束 —— confirm 前检查单票/总仓位超限（拦截确认，允许强确认）
+    // v9.77（P0-14 修复）：原匹配"单票仓位上限/总仓位上限"两个子串，而 discipline 实际文本是
+    //   "超过单票上限 30%" / "总仓位 X% 超过上限 Y%" → 拦截永不触发（死代码）。
+    //   改为匹配"单票上限/总仓位"，且仅 level==='critical'（超限）才拦，开仓次数警告不拦。
     if (action === "confirm") {
       try {
         const { computeDisciplineViolations, loadDisciplineState } = await import("../lib/discipline");
         const violations = computeDisciplineViolations(loadDisciplineState());
-        const blockV = violations.find(v => v.text.includes("单票仓位上限") || v.text.includes("总仓位上限"));
+        const blockV = violations.find(v => v.level === "critical" && (v.text.includes("单票上限") || v.text.includes("总仓位")));
         if (blockV) {
           if (!window.confirm(`⚠ 违反纪律：${blockV.text}\n\n确定仍要拍板？（此操作会写入纪律审计）`)) return;
           emitAlert({ id: `post_block_${code ?? mainline}`, severity: "critical", message: `🚨 拍板突破纪律：${blockV.text}` });
@@ -80,7 +86,7 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
     if (action === "confirm") {
       try {
         const { runPostHook } = await import("../lib/hookDecisionPost");
-        const hook = await runPostHook(post as DecisionPost);
+        const hook = await runPostHook(post as DecisionPost, hookCtx);
         if (hook.addedToDiscipline) {
           emitAlert({ id: `post_disc_${post.ticketId}`, severity: "info", message: `已加入纪律面板持仓（默认 20% 仓位，可到纪律面板修订）` });
         }

@@ -27,7 +27,10 @@ export function estimateLocalStorageBytes(): number {
 function valueRank(key: string): number {
   if (key.startsWith("ai:cache:")) return 3;          // AI 缓存：重算即可，最先淘汰
   if (key.startsWith("ztpool:") || key.startsWith("fund_streak:")) return 2; // 快照：可重抓
-  if (key.startsWith("decision_log:") || key.startsWith("factor_ic:")) return 2; // 日志快照
+  if (key.startsWith("factor_ic:")) return 2; // 因子快照可重算
+  // v9.77（A9-5 修复）：decision_log 审计留痕提为 rank1 —— 原 rank2 会在配额清理时最先被删，
+  //   机构复盘"AI 为什么这么判"的证据链静默消失；与 decision_post 同级保留
+  if (key.startsWith("decision_log:")) return 1;
   // P0：拍板/成交台账是闭环关键数据，比缓存高价值（rank=1 不会被先淘汰）
   if (key.startsWith("decision_post:") || key.startsWith("trade_ledger_v1")) return 1;
   // P0-4：推送设置高价值（用户配的密钥）

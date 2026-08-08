@@ -12,6 +12,8 @@ import { callAI, hasAvailableAI, hasAIOptimistic, APIKEY_STORAGE_KEY, setApiKey 
 import { checkStockExit, exitBadge } from "../lib/stockExit";
 import { loadDisciplineState } from "../lib/discipline";
 import StockDecisionCard from "./StockDecisionCard";
+// v9.77（P0-8 修复）：个股离场信号接入告警/推送 —— 破成本/诱多出货/龙头熄火 red 级推手机
+import { emit as emitAlert } from "../lib/alertBus";
 
 // ============== 数据结构 ==============
 interface WatchStock {
@@ -326,6 +328,46 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   const [marginInfo, setMarginInfo] = useState<Record<string, StockMarginInfo | null>>({});
   // v9.27（P1-7）：持仓纪律（成本止损用）；随行情刷新重读，保证成本最新
   const disciplineState = useMemo(() => loadDisciplineState(), [stocks]);
+
+  // v9.77（P0-8 修复）：个股离场信号接入告警/推送 —— 此前 checkStockExit 只在界面画徽章，
+  // 离开终端/切 Tab 就收不到"破成本止损/诱多出货/龙头熄火"。现在 red 级 emit alertBus critical
+  // → 走现有 alertBus→pushGateway 链路推手机。按 code 去重：同一只股 red 只报一次，转绿复位可再报。
+  const exitedRedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const nowRed = new Set<string>();
+    for (const [code, s] of Object.entries(stocks)) {
+      if (!s) continue;
+      const pos = disciplineState.positions.find(p => p.code === code);
+      const exit = checkStockExit({
+        code, name: s.name,
+        cost: pos?.cost ?? null, price: s.price, pct: s.pct,
+        mainNetPct: s.mainNetPct, retailNetPct: s.smallNet > 0 ? 1 : 0,
+        mainNet: s.mainNet, mainNet5d: s.mainNet5d, mainNet10d: s.mainNet10d,
+      });
+      if (exit.shouldExit && exit.level === "red") nowRed.add(code);
+    }
+    for (const code of nowRed) {
+      if (!exitedRedRef.current.has(code)) {
+        exitedRedRef.current.add(code);
+        const s = stocks[code];
+        const exit = s ? checkStockExit({
+          code, name: s.name,
+          cost: disciplineState.positions.find(p => p.code === code)?.cost ?? null,
+          price: s.price, pct: s.pct,
+          mainNetPct: s.mainNetPct, retailNetPct: s.smallNet > 0 ? 1 : 0,
+          mainNet: s.mainNet, mainNet5d: s.mainNet5d, mainNet10d: s.mainNet10d,
+        }) : null;
+        emitAlert({
+          severity: "critical", id: `exit_red_${code}`,
+          message: `🚨 ${s?.name ?? code}(${code}) 触发离场：${exit?.reasons.join("；") ?? "立即离场（减仓/清仓）"}`,
+        });
+      }
+    }
+    for (const code of [...exitedRedRef.current]) {
+      if (!nowRed.has(code)) exitedRedRef.current.delete(code);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stocks, disciplineState]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 

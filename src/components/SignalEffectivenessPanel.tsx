@@ -21,7 +21,7 @@ export default function SignalEffectivenessPanel() {
         return;
       }
       try {
-        const s = await backtestSignals(14);
+        const s = await backtestSignals(30);
         if (alive) { setStats(s); setError(null); }
       } catch {
         if (alive) setError("历史数据读取失败");
@@ -60,13 +60,13 @@ export default function SignalEffectivenessPanel() {
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-2">
       <div className="flex items-center justify-between">
         <div className="text-sm font-bold text-slate-100">
-          🧪 信号有效性回测 <span className="ml-1 text-[10px] text-slate-500 font-normal">幻方"因子验证" · 近14交易日 · 每日自动积累</span>
+          🧪 信号有效性回测 <span className="ml-1 text-[10px] text-slate-500 font-normal">幻方"因子验证" · 近30交易日 · 每日自动积累</span>
         </div>
         <DisclaimerTag />
       </div>
 
       <div className="text-[11px] text-slate-500">
-        每个信号用历史数据验证"触发后次日表现"——只信样本≥6 且正面率≥60% 的信号。样本不足的信号会随每日落库自动积累。
+        每个信号用历史数据验证"触发后次日表现"——样本≥20 且正面率≥60% 才认定有效（正面率为指标回归口径，非赚钱预测）。样本不足的信号会随每日落库自动积累。
       </div>
 
       <div className="overflow-x-auto">
@@ -104,12 +104,12 @@ export default function SignalEffectivenessPanel() {
 
       <div className="text-[10px] text-slate-600">
         {stats.filter(s => s.verdict === "有效").length > 0 && (
-          <span className="text-emerald-400/80">✅ 当前可信信号：{stats.filter(s => s.verdict === "有效").map(s => s.name).join("、")}　</span>
+          <span className="text-emerald-400/80">✅ 有效信号（样本≥20）：{stats.filter(s => s.verdict === "有效").map(s => s.name).join("、")}　</span>
         )}
         {stats.filter(s => s.verdict === "存疑").length > 0 && (
           <span className="text-amber-400/80">⚠️ 谨慎信号：{stats.filter(s => s.verdict === "存疑").map(s => s.name).join("、")}　</span>
         )}
-        <span className="text-slate-500">数据每日自动 +1 日，样本≥6 后自动出结论</span>
+        <span className="text-slate-500">数据每日自动 +1 日，样本≥20 后自动出结论</span>
       </div>
     </div>
   );

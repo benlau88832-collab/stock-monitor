@@ -50,12 +50,18 @@ interface Props {
   fund?: FundStructureData | null;
 }
 
-export default function TopNav({ active, onChange, loading, autoRefresh, onToggleAutoRefresh, onRefreshNow, countdown, nextRefreshAt, overview, fund }: Props) {
+export default function TopNav({ active, onChange, loading, autoRefresh, onToggleAutoRefresh, onRefreshNow, countdown, nextRefreshAt, lastUpdated, overview, fund }: Props) {
   const [soundOn, _setSoundOn] = useState(isSoundOn);
   const [notifyOn, _setNotifyOn] = useState(isNotifyOn);
   const [showBell, setShowBell] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // v9.77（P0-5 修复）：数据年龄展示 —— lastUpdated 原为死参数从未渲染；每 5s tick 一次更新相对年龄
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, []);
   // 修复：之前直接 const unread = getUnreadCount() 在每次 render 取值，bus 变化不会重渲染。
   // 改为订阅 alertBus，emit 触发时强制重渲染 → 角标实时更新。
   const [unread, setUnread] = useState(0);
@@ -143,6 +149,20 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
               className="rounded px-1.5 py-1 bg-white/10 text-slate-300 hover:bg-white/20 disabled:opacity-40">
               {loading ? "…" : "刷新"}
             </button>
+            {/* v9.77（P0-5 修复）：数据年龄 —— "3秒决策"的前提是知道数据有多旧 */}
+            {lastUpdated && (() => {
+              const t = new Date(lastUpdated).getTime();
+              if (Number.isNaN(t)) return <span className="text-[10px] text-slate-600" title={lastUpdated}>🕒 {lastUpdated}</span>;
+              const sec = Math.max(0, Math.round((nowMs - t) / 1000));
+              const age = sec < 60 ? `${sec}秒前` : sec < 3600 ? `${Math.floor(sec / 60)}分前` : new Date(lastUpdated).toTimeString().slice(0, 5);
+              const stale = sec > 120;
+              return (
+                <span className={`text-[10px] ${stale ? "text-amber-400" : "text-slate-500"}`}
+                  title={`上次数据刷新 ${new Date(lastUpdated).toTimeString().slice(0, 8)}${stale ? "（数据可能已过期）" : ""}`}>
+                  🕒 {age}
+                </span>
+              );
+            })()}
             {/* 声音/通知开关 */}
             <button onClick={toggleSound} title={soundOn ? "关闭声音" : "开启声音"}
               className={`rounded px-1.5 py-1 text-[11px] ${soundOn ? "bg-amber-500/20 text-amber-300" : "bg-slate-500/20 text-slate-500"}`}>

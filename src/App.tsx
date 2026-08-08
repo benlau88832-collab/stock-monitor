@@ -60,6 +60,8 @@ import { recordRecommendation, runAttribution } from "./lib/recTracker";
 import { getCurrentSession, type SessionPhase } from "./lib/tradingSession";
 import { emit as emitAlert } from "./lib/alertBus";
 import { localDateStr, localDateStrOffset } from "./lib/format";
+// v9.77（P0-11 修复）：读 server 已落库的 market_daily（昨日炸板率）→ 复活主线退潮前兆"炸板率环比+15pp"规则
+import { kvGet } from "./lib/cloudStore";
 
 // 告警跃迁护栏：只在 false→true 时报一次，避免每分钟刷屏
 const lastSignalActive: Record<string, boolean> = {};
@@ -135,6 +137,8 @@ export interface OverviewData {
   } | null;           // v9.32.1：溢价分布（游资看第一眼的是分布不是均值）
   promotionRate: number | null;    // 2板→3板晋级率(0~1)
   maxBoardHeight: number | null;   // 今日最高连板
+  /** v9.77（P0-5 修复）：本轮 overview 抓取完成的时间戳（ms），供组件显示"数据截至 X 秒前" */
+  fetchedAt?: number;
 }
 
 export interface FundStructureData {
@@ -221,6 +225,8 @@ export default function App() {
   const [overview, setOverview] = useState<OverviewData | null>(null);
   // v9.32.1（缺口1）：核按钮预警（昨高位涨停今日秒跌停，退潮信号）
   const [nuclearAlerts, setNuclearAlerts] = useState<string[]>([]);
+  // v9.77（A3-P2-9）：核按钮触发时间戳（横幅显示"HH:MM 触发"，防止把早盘警报当当下信号）
+  const nuclearTsRef = useRef<number>(0);
   const [fundStructure, setFundStructure] = useState<FundStructureData | null>(null);
   const [darkPool, setDarkPool] = useState<DarkPoolData | null>(null);
   const [globalData, setGlobalData] = useState<GlobalData | null>(null);
@@ -241,6 +247,9 @@ export default function App() {
   const inFlight = useRef(false);
   // v9.26.9：LLM 主线精排竞态护栏（慢响应不覆盖新一轮结果）
   const llmRankSeq = useRef(0);
+  // v9.77（A8-04）：主线精排时间节流 —— 注释声称"每 20-30 分钟"实际每次 refreshAll(60s) 都跑，
+  // 与 5 分钟 Agent/个股研判抢 analysis 桶；加 20 分钟硬节流（规则排序即时展示，精排异步补位）
+  const lastLLMRankAt = useRef(0);
   // F-02 修复：refreshAll 空依赖，闭包需读最新 state → 用 ref 镜像（避免陈旧闭包）
   const overviewRef = useRef(overview);
   useEffect(() => { overviewRef.current = overview; }, [overview]);
@@ -303,7 +312,13 @@ export default function App() {
               const stats = computePrevZtStats({ prevZTPool, todayRawPool: limitPool?.rawZTPool ?? null, briefMap });
               premiumAvg = stats.premiumAvg;
               premiumDist = stats.premiumDist;
-              if (stats.nuclearAlerts.length > 0) setNuclearAlerts(stats.nuclearAlerts);
+              // v9.77（A3-P2-9）：核按钮带时间戳 + 消失即清空（原只增不清，早盘横幅挂到收盘被误读为实时）
+              if (stats.nuclearAlerts.length > 0) {
+                setNuclearAlerts(stats.nuclearAlerts);
+                nuclearTsRef.current = Date.now();
+              } else {
+                setNuclearAlerts([]);
+              }
               promotionRate = stats.promotionRate;
             }
           } catch { /* 查询失败 → premiumAvg 保持 null */ }
@@ -313,10 +328,13 @@ export default function App() {
       let sentiment: number | null = null;
       let sentimentLabel = "数据不足";
       let sentimentFactors: SentimentFactors | null = null;
+      // v9.77（P0-6 修复）：涨停池被静默回退到昨日（接口失败）→ 池子派生的情绪因子失真，
+      // 抑制 limitDiff/limitUpBonus/blastedPenalty，避免把昨日涨停数当今日判断情绪强弱。
+      const lpDegraded = Boolean(limitPool?.degraded);
       if (brData && brData.total > 0) {
         const upRatio = brData.up / brData.total;
         const upDownScore = Math.round(upRatio * 40 * 10) / 10;
-        const limitDiff = limitPool ? limitPool.limitUpCount - limitPool.limitDownCount : 0;
+        const limitDiff = lpDegraded ? 0 : limitPool ? limitPool.limitUpCount - limitPool.limitDownCount : 0;
         const limitScore = Math.round(Math.max(-15, Math.min(15, limitDiff * 0.3)) * 10) / 10;
         const avgPctScore = Math.round(Math.max(-15, Math.min(15, brData.avgPct * 3)) * 10) / 10;
         let indexScore = 0;
@@ -324,10 +342,10 @@ export default function App() {
           const avgIdxPct = idxData.reduce((s, idx) => s + (idx.pct ?? 0), 0) / idxData.length;
           indexScore = Math.round(Math.max(-15, Math.min(15, avgIdxPct * 5)) * 10) / 10;
         }
-        // 涨停池加分（涨停多=市场活跃）
-        const limitUpBonus = limitPool ? Math.round(Math.min(10, limitPool.limitUpCount * 0.1) * 10) / 10 : 0;
-        // 炸板率扣分（炸板多=情绪不稳）
-        const blastedPenalty = limitPool ? Math.round(Math.min(8, limitPool.blastedRate * 0.15) * 10) / 10 : 0;
+        // 涨停池加分（涨停多=市场活跃）—— degraded 时不计
+        const limitUpBonus = lpDegraded ? 0 : limitPool ? Math.round(Math.min(10, limitPool.limitUpCount * 0.1) * 10) / 10 : 0;
+        // 炸板率扣分（炸板多=情绪不稳）—— degraded 时不计
+        const blastedPenalty = lpDegraded ? 0 : limitPool ? Math.round(Math.min(8, limitPool.blastedRate * 0.15) * 10) / 10 : 0;
         // 主力资金方向加减分
         const fundFlowScore = fm0 ? Math.round(Math.max(-8, Math.min(8, fm0.mainNet / 1e10)) * 10) / 10 : 0;
 
@@ -411,6 +429,7 @@ export default function App() {
         premiumDist,
         promotionRate,
         maxBoardHeight,
+        fetchedAt: Date.now(), // v9.77（P0-5）：抓取完成时间，供"数据截至 X 秒前"展示
       });
 
       // === Fund Structure ===
@@ -676,6 +695,20 @@ export default function App() {
               }
             }
           }
+          // v9.77（P0-11 修复）：读 server 已落库的 market_daily（昨日炸板率）→ 复活退潮前兆
+          // "炸板率环比+15pp"规则（原 blastedRateYesterday 硬编码 null，规则永久失明）。
+          // 向后回看 3 天取最近一个有 market_daily 的交易日（跳过周末/节假日）；服务端不可用保持 null。
+          let yesterdayBlastedRate: number | null = null;
+          try {
+            for (let back = 1; back <= 3; back++) {
+              const mdKey = `market_daily:${localDateStrOffset(back)}`;
+              const mdVal = await kvGet(mdKey) as { blastedRate?: number } | null;
+              if (mdVal && typeof mdVal === "object" && mdVal.blastedRate != null) {
+                yesterdayBlastedRate = mdVal.blastedRate;
+                break;
+              }
+            }
+          } catch { /* 服务端不可用 → 保持 null */ }
           for (const c of candidates) {
             // v9.26 A.4：快照抓取时间（每条候选打同一时间戳，可回放审计）
             c.observedAt = new Date().toISOString();
@@ -696,7 +729,7 @@ export default function App() {
             // v9.26 F-12：数据完整度 + 缺失字段（UI 显示"数据缺失"与置信度下调）
             c.strengthCompleteness = strength.dataCompleteness;
             c.strengthMissing = strength.missingFields;
-            // v9.23.1-fix：离场信号接入昨日数据（涨停数/高度环比）
+            // v9.23.1-fix：离场信号接入昨日数据（涨停数/高度环比 + v9.77 炸板率环比）
             const yesterday = yesterdayZtByMainline.get(c.mainline);
             const exit = checkExitSignal({
               mainline: c.mainline,
@@ -705,9 +738,9 @@ export default function App() {
               heightToday: c.height,
               heightYesterday: yesterday?.height ?? null,
               blastedRateToday: limitPool?.blastedRate ?? null,
-              blastedRateYesterday: null, // 昨日炸板率无快照，暂缺
+              blastedRateYesterday: yesterdayBlastedRate, // v9.77：复活"炸板率环比+15pp"退潮规则
               mainNetToday: c.mainNet,
-              mainNetYesterday: null, // 昨日资金无快照，暂缺
+              mainNetYesterday: null, // 昨日资金 market_daily 未存 mainNet，规则4 待数据积累
             });
             c.exitSignal = exit.triggered;
             c.exitSignalText = exit.text;
@@ -817,9 +850,9 @@ export default function App() {
         // ---- LLM 主线精排（异步补位，不阻塞首次渲染） ----
         // 调用频率：规则渲染后 1 次 + 每 20-30 分钟（payload 变化时，由调用方节流）；
         // 失败自动降级回规则排序（rankMainlinesWithLLM 内部处理）
-        // v9.25：聚合深度催化（业绩/收入指引/政策/中标）注入 LLM payload，
-        //        让"医药生物 - 药明康德业绩大增"类强催化被识别到
-        if (candidates.length > 0) {
+        // v9.77（A8-04）：20 分钟时间节流落地（原注释写了但未实现，每 60s 都烧 analysis 桶）
+        if (candidates.length > 0 && Date.now() - lastLLMRankAt.current >= 20 * 60 * 1000) {
+          lastLLMRankAt.current = Date.now();
           const { news: catNews, ann: catAnn } = getAllSince(localDateStrOffset(3));
           const catalystsMap = buildMainlineCatalysts(candidates.map(c => c.mainline), catNews, catAnn);
           (async () => {
@@ -1142,6 +1175,9 @@ export default function App() {
     }
     const boards = mainline?.boards;
     const todayPool = overview?.limitPool?.rawZTPool as ZTPoolItem[] | undefined;
+    // v9.77（P0-6 修复）：涨停池被静默回退到昨日时，'今日池'与'昨日池'都是昨日 → 高低切检测永久失效，
+    // 且把昨日涨停当今日脉冲，直接禁用检测。
+    if (overview?.limitPool?.degraded) return null;
     if (!boards || !todayPool || todayPool.length === 0) return null;
     return detectHighLowSwitch(
       boards.filter(b => { const k = classifyBoard(b.name); return k === "theme" || k === "industry"; }).map(b => ({ name: b.name, pct: b.pct, mainNet5d: b.mainNet5d })),
@@ -1153,21 +1189,26 @@ export default function App() {
   // 构建三级警报列表
   const alerts: AlertItem[] = [];
   // v9.34（S1）：封单衰减预警（龙一开板前兆，最高优先级）
+  // v9.77（P0-10）：告警 id 从聚合 seal_red 改为按代码维度 —— 原聚合 id 使 alertBus 15min 冷却
+  //   压制第二只票的炸板推送；现每票独立 id，逐只崩落都能提醒，且横幅逐票显示更清晰
   if (sealAlerts.length > 0) {
-    const red = sealAlerts.filter(a => a.level === "red");
-    const yellow = sealAlerts.filter(a => a.level === "yellow");
-    if (red.length > 0) {
-      alerts.push({ id: "seal_red", level: "critical", message: `💥 封单崩落：${red.slice(0, 3).map(a => `${a.name}(${a.boardCount}板)${a.changePct.toFixed(0)}%`).join("、")} 即将炸板！` });
-    }
-    if (yellow.length > 0) {
-      alerts.push({ id: "seal_yellow", level: "warning", message: `⚠️ 封单衰减：${yellow.slice(0, 3).map(a => `${a.name}${a.changePct.toFixed(0)}%`).join("、")} 关注开板风险` });
+    for (const a of sealAlerts) {
+      if (a.level === "red") {
+        alerts.push({ id: `seal_red_${a.code}`, level: "critical",
+          message: `💥 ${a.name}(${a.boardCount}板) 封单崩落 ${a.changePct.toFixed(0)}%${a.nowFund <= 0 ? "，炸板确认！" : "，即将炸板！"}` });
+      } else {
+        alerts.push({ id: `seal_yellow_${a.code}`, level: "warning",
+          message: `⚠️ ${a.name} 封单衰减 ${a.changePct.toFixed(0)}%，关注开板风险` });
+      }
     }
   }
   // v9.32.1（缺口1）：核按钮预警（昨高位涨停今日秒跌停）
+  // v9.77（A3-P2-9）：消息带触发时间戳，避免把早盘警报当当下信号
+  const nuclearTsText = nuclearTsRef.current > 0 ? `（${new Date(nuclearTsRef.current).toTimeString().slice(0, 5)}触发）` : "";
   if (nuclearAlerts.length >= 2) {
-    alerts.push({ id: "nuclear", level: "critical", message: `⚠️ 核按钮预警：${nuclearAlerts.slice(0, 3).join("、")}${nuclearAlerts.length > 3 ? ` 等${nuclearAlerts.length}只` : ""}，退潮信号` });
+    alerts.push({ id: "nuclear", level: "critical", message: `⚠️ 核按钮预警${nuclearTsText}：${nuclearAlerts.slice(0, 3).join("、")}${nuclearAlerts.length > 3 ? ` 等${nuclearAlerts.length}只` : ""}，退潮信号` });
   } else if (nuclearAlerts.length === 1) {
-    alerts.push({ id: "nuclear_1", level: "warning", message: `⚠️ 核按钮：${nuclearAlerts[0]}` });
+    alerts.push({ id: "nuclear_1", level: "warning", message: `⚠️ 核按钮${nuclearTsText}：${nuclearAlerts[0]}` });
   }
   // v9.32：系统性风险预警（最高优先级，置顶）
   if (overview) {

@@ -910,17 +910,27 @@ export interface LimitPoolSummary {
   totalCount: number;
   /** v9.26.10：是否交易日（穷尽回退后仍空则 false） */
   isTradingDay?: boolean;
+  /**
+   * v9.77（P0-6 修复）：涨停池数据非"请求的交易日"（接口失败静默回退到昨日/更早）。
+   * 请求日 ≠ 返回 qdate → true。UI 应显示"⚠ 数据来自 {qdate}"，决策层应抑制基于池子的信号，
+   * 避免把昨日涨停数当今日判断情绪强弱。
+   */
+  degraded?: boolean;
 }
 
 // 获取涨停池统计摘要（供多个模块共享）
 // v9.26.10：节假日/非交易日空池时自动回退最近交易日（最多 10 天）
 export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSummary> {
   let d = date || tradeDateStr();
+  const requested = d;
   let last: LimitPoolSummary | null = null;
   for (let attempt = 0; attempt < 10; attempt++) {
     const summary = await fetchZTPoolForDate(d);
     if (summary.totalCount > 0 || attempt === 9) {
-      return summary; // 有数据或穷尽回退 → 返回
+      // v9.77（P0-6）：请求的是今天、返回的是非今日 qdate → 接口失败被静默回退，
+      // 标记 degraded，让 UI 明示"数据来自昨日/接口异常"，不再把昨日涨停数当今日。
+      const degraded = summary.qdate != null && requested !== summary.qdate;
+      return { ...summary, degraded };
     }
     // 空池（节假日）→ 往前一天再试
     const prev = new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`);

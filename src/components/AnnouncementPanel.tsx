@@ -265,12 +265,9 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
       const cached = loadCache();
       const now = Date.now();
 
-      // 非高峰且有缓存 → 直接用缓存，不发请求（进入时拉一次除外）
-      if (isAutoRefresh && !isAnnouncementPeak() && cached) {
-        return;
-      }
-
-      // 高峰期 10 分钟内有缓存 → 不重复拉
+      // v9.77（A8-01 修复）：盘中公告也每 10 分钟刷新 —— 原"非高峰且有缓存直接 return"导致
+      // 9:30-15:05 午间（11:30-12:30 减持/立案公告高发）根本不拉新，13:00 开盘该股低开才看到利空。
+      // 东财公告接口轻量，统一按 10 分钟缓存节流即可。
       if (isAutoRefresh && cached && now - cached.lastFetch < 10 * 60 * 1000) {
         return;
       }
