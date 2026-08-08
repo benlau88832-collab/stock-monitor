@@ -35,8 +35,10 @@ app.use(cors({
   },
 }));
 // v9.67：1mb → 2mb —— AI 长上下文+history+toolDefs+researchCtx 累积常超 1mb（PM2 日志反复 PayloadTooLargeError），2mb 在安全范围
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+// v9.77：2mb → 10mb —— localStorage 全量迁移（migrateLocalStorageToCloud，~4.5MB）批量 POST 仍超 2mb → 413 静默丢数据；
+//   仅监听 127.0.0.1 本机，10mb 安全
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // ---------- 健康检查 ----------
 app.get("/api/health", async (req, res) => {

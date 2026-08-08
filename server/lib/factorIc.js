@@ -53,7 +53,9 @@ function computeWindowIc(factor, pairs) {
     ic = factor.expectedDir * raw;
   }
   ic = Math.round(ic * 1000) / 1000;
-  const decayed = (n >= 5 && Math.abs(ic) < 0.05) || n < 5;
+  // v9.77（A9-7 修复）：样本不足(n<5) ≠ 因子失效 —— 原 `|| n < 5` 把数据积累期全标"失效"，
+  //   导致启动日志"9/11 因子失效"、AI 预注入被误导降置信。只有 n≥5 且 |IC|<0.05 才算真失效。
+  const decayed = n >= 5 && Math.abs(ic) < 0.05;
   const reversed = n >= 5 && ic <= -0.05; // v9.42：方向反转（持续负 IC → 需复核/反向使用）
   return { ic, samples: n, decayed, reversed };
 }

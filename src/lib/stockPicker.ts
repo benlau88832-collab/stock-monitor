@@ -227,22 +227,23 @@ export function pickStocks(
   }
 
   // v9.77（A2-P0-2 修复）：仓位聚合截断 —— 每只独立算 30% 会让清单五只累加 150%（原脚注却写"合计≤30%"）。
-  // 按角色降权（首选1 / 接力0.7 / 低吸0.5）并截断到 闸门上限 ∩ 总仓上限，保证同主线合计不爆仓。
+  // 只做"截断到 闸门 positionLimit ∩ 总仓上限"，不做角色降权（降权会把 positionSizing 的 5% 保底仓
+  // 打折到 4%/3% 造成清单塌缩）；容量耗尽后的标的不列出，脚注显示真实合计。
   {
     const capPct = Math.min(gate?.positionLimit || discipline.maxTotalPct || 100, discipline.maxTotalPct);
-    const roleWeight = { "首选": 1, "接力": 0.7, "低吸": 0.5 } as const;
-    const ordered = [...picks].sort((a, b) => {
-      const w = { "首选": 0, "接力": 1, "低吸": 2 } as const;
-      return w[a.role] - w[b.role];
-    });
+    const roleOrder = { "首选": 0, "接力": 1, "低吸": 2 } as const;
+    const ordered = [...picks].sort((a, b) => roleOrder[a.role] - roleOrder[b.role]);
     let used = 0;
+    const cappedPicks: StockPick[] = [];
     for (const p of ordered) {
-      const scaled = Math.round(p.suggestedPct * (roleWeight[p.role] ?? 1));
       const allowed = Math.max(0, capPct - used);
-      const capped = Math.min(scaled, allowed);
-      p.suggestedPct = capped < 5 && allowed >= 5 ? 5 : capped; // 保底 5% 参与仓（若有容量）
+      const pct = Math.min(p.suggestedPct, allowed);
+      p.suggestedPct = pct > 0 ? pct : 0; // 剩余容量为 0 → 该标的不列出
+      if (p.suggestedPct > 0) cappedPicks.push(p);
       used += p.suggestedPct;
     }
+    picks.length = 0;
+    picks.push(...cappedPicks);
   }
 
   return {

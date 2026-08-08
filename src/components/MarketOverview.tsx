@@ -220,11 +220,11 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
                     ⚠ 可能截断
                   </span>
                 )}
-                {/* v9.77（P0-6 修复）：涨停池数据非今日（接口失败静默回退）→ 明示数据日期，防止把昨日涨停数当今日 */}
+                {/* v9.77（P0-6 修复）：涨停池数据非今日（接口失败静默回退/周末）→ 明示数据日期，防止把昨日涨停数当今日 */}
                 {limitPool?.degraded && limitPool.qdate && (
                   <span className="rounded bg-rose-500/15 px-1.5 py-0.5 text-xs font-bold text-rose-300"
-                    title="接口失败/异常时回退到最近有数据的交易日，当前涨停/炸板/连板均为该日数据，非今日实时">
-                    ⚠ 数据来自 {limitPool.qdate.slice(4, 6)}-{limitPool.qdate.slice(6, 8)}（接口异常）
+                    title="接口失败/非交易日时回退到最近有数据的交易日，当前涨停/炸板/连板均为该日数据，非今日实时">
+                    ⚠ 涨停池数据来自 {limitPool.qdate.slice(4, 6)}-{limitPool.qdate.slice(6, 8)}
                   </span>
                 )}
                 <span className="text-emerald-300">跌停 <b>{limitPool?.limitDownCount ?? 0}</b></span>

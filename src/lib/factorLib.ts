@@ -125,7 +125,9 @@ export function computeFactorIC(factor: FactorDef, rows: FactorDayRow[]): Factor
   }
   // 滚动 IC（历史由调用方传入最近 N 日；此处用单批样本近似 ic20d）
   const ic20d = n >= 5 ? ic : null;
-  const decayed = (ic20d != null && Math.abs(ic20d) < 0.05) || n < 5;
+  // v9.77（A9-7 修复）：样本不足(n<5) ≠ 失效 —— 原 `|| n < 5` 在数据积累期把因子全标失效，
+  //   decisionBus/AI 预注入被误导降置信；只有 n≥5 且 |IC|<0.05 才算真失效，样本不足由 samples 字段诚实展示。
+  const decayed = ic20d != null && Math.abs(ic20d) < 0.05;
   return {
     factorId: factor.id,
     factorName: factor.name,
