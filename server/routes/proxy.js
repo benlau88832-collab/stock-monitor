@@ -56,6 +56,8 @@ const ALLOWED_HOSTS = [
   "push2his.eastmoney.com",
   // v9.31：同花顺人气榜（dq.10jqka.com.cn 热度接口，GET JSON）
   "dq.10jqka.com.cn",
+  // v9.84.4：search-api-web（个股新闻全文检索，JSONP 壳）—— jsonpQueue 本地 proxy 化后必须放行
+  "search-api-web.eastmoney.com",
 ];
 
 /** 校验目标 URL 是否在白名单内，返回 { ok, url?, err? } */
