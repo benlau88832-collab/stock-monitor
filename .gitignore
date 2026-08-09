@@ -11,3 +11,4 @@ backups/
 022_股票监控项目/
 tdx-mcp-server/
 server/tmp/
+server/.mimosa/
