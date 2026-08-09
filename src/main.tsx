@@ -3,6 +3,12 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
+// v9.83.1（修复）：页面标题跟随 version.ts —— 原 index.html 静态 <title> 停更在 v9.79，
+// 每次发版只改 version.ts 导致浏览器标签页标题显示旧版本；挂载时同步一次，杜绝再漏
+import { APP_VERSION } from "./lib/version";
+if (typeof document !== "undefined") {
+  document.title = `A股实时交易辅助终端 ${APP_VERSION}`;
+}
 // v9.25-local：本地部署云端同步（PG 双写 + localStorage 迁移 + 定时增量）
 import { syncLocalWithCloud, startAutoSync } from "./lib/cloudStore";
 import { syncNewsFromCloud } from "./lib/dataStore";

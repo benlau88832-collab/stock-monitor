@@ -1,7 +1,8 @@
 // P3-3：PWA Service Worker —— 离线缓存 + 可安装
 // 注意：本项目是 vite-plugin-singlefile 单文件产物（docs/index.html 内联全部 JS/CSS），
 // SW 只需缓存 index.html 本体即可实现"离线打开最近一次版本"。
-const CACHE = "stock-monitor-v1";
+// v9.83.1：CACHE v1→v2 —— 触发 SW 更新并清掉旧缓存（activate 删除非当前 CACHE）
+const CACHE = "stock-monitor-v2";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {
