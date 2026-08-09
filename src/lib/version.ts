@@ -26,6 +26,8 @@
 //   4.2 异动前端接入（30s 轮询 kv anomaly → alertBus 横幅/声音/标题闪烁）
 //   4.3 封单衰减下沉 server（detectSealDecay 同构，关页不失）
 //   4.4 推送多通道并发（Server酱/企微/Bark/飞书 webhook/Qmsg 酱 QQ，hostGuard 白名单）
+// v9.84.3：半成品清理（阶段5）—— ETF matchScore 随机数→真实评分 + MarketOverview 历史分位数接 PG 250 日 + LOCAL_TOKEN 默认启用
+// v9.84.4：数据链与AI链路修复 —— JSONP 本地优先走服务端 /api/proxy（浏览器直连 10-15s 超时 vs 服务端秒回）+ callAgentChat 补带 x-local-token
 // ============================================================
-export const APP_VERSION = "v9.84.2";
+export const APP_VERSION = "v9.84.4";
 export const BUILD_DATE = "2026-08-09";
