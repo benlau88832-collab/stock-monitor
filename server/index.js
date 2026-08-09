@@ -44,7 +44,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.get("/api/health", async (req, res) => {
   let db = "down";
   try { await pool.query("SELECT 1"); db = "up"; } catch {}
-  res.json({ ok: true, db, version: "v9.84.2-local", time: new Date().toISOString() });
+  res.json({ ok: true, db, version: "v9.84.3-local", time: new Date().toISOString() });
 });
 
 // ---------- 静态托管（前端单文件产物） ----------
@@ -78,10 +78,36 @@ require("./cron")({ pool });
 
 // ---------- 启动 ----------
 // v9.75（安全修复）：只监听 127.0.0.1（本机），不再暴露 0.0.0.0 —— 局域网其他设备无法访问，恶意网页无法触碰
-initDb().then(() => {
+// v9.84.3（5.4）：LOCAL_TOKEN 默认启用 —— 未配置 env 时自动生成随机 token 落 kv（local_token），
+//   前端自动读取并在 /api/ai/* 携带 x-local-token（防局域网/公网白嫖 AI 配额，V1 遗留半成品收尾）
+async function ensureLocalToken(p) {
+  if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
+  try {
+    const r = await p.query("SELECT value FROM kv_store WHERE key='local_token'");
+    if (r.rows.length && r.rows[0].value) {
+      const v = r.rows[0].value;
+      const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
+      if (t) return String(t);
+    }
+    const token = require("crypto").randomBytes(24).toString("hex");
+    await p.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES('local_token',$1,now())
+       ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=now()`,
+      [JSON.stringify({ token })],
+    );
+    console.log("[server] LOCAL_TOKEN 自动生成并落库（/api/ai 接口鉴权已启用）");
+    return token;
+  } catch (e) {
+    console.warn("[server] LOCAL_TOKEN 初始化失败（鉴权未启用）:", e.message);
+    return null;
+  }
+}
+
+initDb().then(async () => {
+  const token = await ensureLocalToken(pool);
   app.listen(PORT, "127.0.0.1", () => {
     console.log(`[server] stock-monitor local server on port ${PORT}`);
-    console.log(`[server] 本机访问:   http://localhost:${PORT}`);
+    console.log(`[server] 本机访问:   http://localhost:${PORT}${token ? "（x-local-token 已启用）" : ""}`);
   });
 }).catch(err => {
   console.error("[server] DB init failed:", err.message);

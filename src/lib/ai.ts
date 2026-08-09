@@ -4,7 +4,7 @@
 import { type AITask, type AITaskPayload, FALLBACKS, buildPrompt, TASK_CONFIG } from "./aiPrompts";
 import { loadSettings, saveSettings } from "./aiSettings";
 import { localDateStr } from "./format";
-import { isLocalServer } from "./cloudStore";
+import { isLocalServer, getLocalToken } from "./cloudStore";
 
 // ============== Agnes 备用域名（仅 provider=agnes 时作 fallback） ==============
 // v9.26.2：官方公告国际站用户改 Endpoint 为 .cn 继续用原 Key（apihub.agnes-ai.cn 是国际站镜像端点）
@@ -251,10 +251,12 @@ export async function streamChat(
   signal?: AbortSignal,
 ): Promise<{ text: string } | null> {
   if (!isLocalServer()) return null;
+  // v9.84.3（5.4）：服务端 LOCAL_TOKEN 自动携带（服务端未启用鉴权时带也无害）
+  const token = await getLocalToken();
   try {
     const resp = await fetch("/api/ai/stream", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
       body: JSON.stringify({
         system: opts.system,
         user: opts.user,
@@ -334,6 +336,8 @@ async function callAIviaServer(
   config: { temperature: number; maxTokens: number; thinking: boolean },
 ): Promise<{ text: string; error?: string } | null> {
   if (!isLocalServer()) return null;
+  // v9.84.3（5.4）：服务端 LOCAL_TOKEN 自动携带（服务端未启用鉴权时带也无害）
+  const token = await getLocalToken();
   // v9.26.5：加 35s 超时（服务端 postJSON 30s 超时兜底；避免 fetch 无限等待拖垮页面）
   // v9.83.2：35s→50s —— 服务端超时已提至 45s（DeepSeek 推理模型长思考），前端兜底需更大
   const ctrl = new AbortController();
@@ -341,7 +345,7 @@ async function callAIviaServer(
   try {
     const resp = await fetch("/api/ai/call", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
       body: JSON.stringify({
         task,
         system,

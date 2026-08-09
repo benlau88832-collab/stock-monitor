@@ -1508,10 +1508,19 @@ ${JSON.stringify(themes.map(t => ({
       { code: "512400", name: "有色金属ETF", kws: ["有色金属", "稀土"] },
       { code: "516110", name: "汽车ETF", kws: ["智能驾驶", "汽车"] },
     ];
-    const matchMiniETF = (theme) => ETF_POOL_MINI
+    // v9.84.3（5.1）：真实评分替代随机数 —— 主题热度(50%) + 涨停联动(30%) + 基础(20%)
+    // 原实现 80+random*15：同一主题每次刷新分数漂移、与前端 etfScore 口径不一致（半成品清理）
+    const matchMiniETF = (theme, heat, themeZtCount) => ETF_POOL_MINI
       .filter(e => e.kws.some(k => theme.includes(k) || k.includes(theme)))
       .slice(0, 2)
-      .map(e => ({ code: e.code, name: e.name, matchScore: 80 + Math.floor(Math.random() * 15) }));
+      .map(e => ({
+        code: e.code, name: e.name,
+        matchScore: Math.round(Math.min(100,
+          Math.min(50, (heat ?? 50) * 0.5) +     // 主题热度贡献 50%（热度100 → 50分）
+          Math.min(30, themeZtCount * 6) +        // 涨停联动贡献 30%（每只涨停 +6）
+          20,                                     // 基础分
+        )),
+      }));
 
     const themePicks = new Map(); // theme → picks
     const themeEtfs = new Map();  // theme → etfs
@@ -1540,8 +1549,8 @@ ${JSON.stringify(themes.map(t => ({
             correlation: 0, buyTrigger: `竞价/回踩企稳再考虑（主题热度${th.heat}）`, stopLoss: "跌破前低-5%", risk: "追高回落",
           }));
         themePicks.set(th.name, picks);
-        // 3c. ETF 匹配（主题→ETF 映射表）
-        themeEtfs.set(th.name, matchMiniETF(th.name));
+        // 3c. ETF 匹配（主题→ETF 映射表；真实评分 = 热度 + 涨停联动）
+        themeEtfs.set(th.name, matchMiniETF(th.name, th.heat, themeStocks.length));
       }
     } catch { /* 无涨停池快照 → picks 空 */ }
 

@@ -6,14 +6,27 @@
 const https = require("https");
 const http = require("http");
 const { URL } = require("url");
+const { pool } = require("../db");
 
 // v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
 // 所有 /api/proxy 请求必须携带 header `x-local-token` 且匹配；未配置则放行（本地默认）。
-// 防止部署到局域网/公网时被人白嫖成开放代理（虽已有 host 白名单）。
-const LOCAL_TOKEN = process.env.LOCAL_TOKEN || null;
-function checkAuth(req, res) {
-  if (!LOCAL_TOKEN) return true;
-  if (req.headers["x-local-token"] === LOCAL_TOKEN) return true;
+// v9.84.3（5.4）：未配置 env 时读 kv local_token（index.js ensureLocalToken 自动生成）—— 与 ai.js 同口径
+let storedTokenCache = { t: null, ts: 0 };
+async function effectiveToken() {
+  if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
+  if (storedTokenCache.t && Date.now() - storedTokenCache.ts < 30000) return storedTokenCache.t;
+  try {
+    const r = await pool.query("SELECT value FROM kv_store WHERE key='local_token'");
+    const v = r.rows[0]?.value;
+    const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
+    storedTokenCache = { t: t ? String(t) : null, ts: Date.now() };
+    return storedTokenCache.t;
+  } catch { return null; }
+}
+async function checkAuth(req, res) {
+  const token = await effectiveToken();
+  if (!token) return true;
+  if (req.headers["x-local-token"] === token) return true;
   res.status(401).json({ error: "unauthorized: missing/invalid x-local-token" });
   return false;
 }

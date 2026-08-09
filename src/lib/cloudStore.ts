@@ -33,7 +33,7 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
   try {
     const resp = await fetch(path, {
       method,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await localTokenHeader()) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (!resp.ok) return null;
@@ -41,6 +41,32 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
   } catch {
     return null;
   }
+}
+
+// ============== v9.84.3（5.4）：LOCAL_TOKEN 自动携带 ==============
+// 服务端未配置 env LOCAL_TOKEN 时自动生成并存 kv local_token（index.js ensureLocalToken）。
+// 前端 /api/ai/* 与 /api/proxy/* 请求自动带 x-local-token —— 服务端未启用鉴权时带也无害（放行）。
+// 注意：getLocalToken 用原生 fetch 而非 api()（api 会回调 localTokenHeader 形成递归）
+let tokenCache: { t: string | null; ts: number } = { t: null, ts: 0 };
+export async function getLocalToken(): Promise<string | null> {
+  if (!isLocalServer()) return null;
+  if (tokenCache.t && Date.now() - tokenCache.ts < 10 * 60 * 1000) return tokenCache.t;
+  try {
+    const resp = await fetch("/api/db/kv?key=local_token", { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return null;
+    const r = await resp.json();
+    const v = r?.value;
+    const t = v && typeof v === "object" && "token" in v ? (v as { token: string }).token
+      : (typeof v === "string" ? v : null);
+    tokenCache = { t, ts: Date.now() };
+    return t;
+  } catch { return null; }
+}
+async function localTokenHeader(): Promise<Record<string, string>> {
+  try {
+    const t = await getLocalToken();
+    return t ? { "x-local-token": t } : {};
+  } catch { return {}; }
 }
 
 // ============== 通用 kv ==============

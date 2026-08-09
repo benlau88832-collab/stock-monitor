@@ -103,7 +103,11 @@ async function fetchQtBatch(codes: string[]): Promise<QtRow[]> {
   for (const chunk of chunks) {
     try {
       const url = QT_BASE + chunk.map(toQtSymbol).join(",");
-      const r = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`);
+      // v9.84.3（5.4）：/api/proxy 鉴权 token 自动携带（服务端未启用时无害）
+      const token = await import("./cloudStore").then(m => m.getLocalToken()).catch(() => null);
+      const r = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, {
+        headers: token ? { "x-local-token": token } : {},
+      });
       if (!r.ok) continue;
       const buf = await r.arrayBuffer();
       // 腾讯接口 GBK 编码（用 TextDecoder 解码避免 iconv 兼容性）

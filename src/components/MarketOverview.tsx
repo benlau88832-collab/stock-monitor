@@ -1,7 +1,9 @@
+import { useState, useEffect } from "react";
 import { fmtPct, fmtMoney, pctColor } from "../lib/format";
 import { indexRealUrl, marketBreadthUrl } from "../lib/realLinks";
 import type { OverviewData, SentimentFactors } from "../App";
 import FreshnessTag from "./FreshnessTag";
+import { isLocalServer } from "../lib/cloudStore";
 
 // ============== 五级色阶 ==============
 function sentimentColor(value: number): string {
@@ -31,6 +33,35 @@ function SentimentGauge({ value, label, factors, yesterday, premiumAvg, promotio
 }) {
   const color = sentimentColor(value);
   const delta = yesterday != null ? value - yesterday : null;
+
+  // v9.84.3（5.2）：历史分位数 —— 接 PG market_daily/sentiment 250 日序列，
+  // 算当前情绪分在历史中的百分位（本地部署；线上降级隐藏）
+  const [percentile, setPercentile] = useState<{ pct: number; n: number } | null>(null);
+  useEffect(() => {
+    if (!isLocalServer()) return;
+    let alive = true;
+    (async () => {
+      try {
+        const resp = await fetch("/api/brain/pg", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool: "marketDaily", args: { limit: 250 } }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!resp.ok) return;
+        const j = await resp.json();
+        const items: Array<{ date?: string; sentiment?: number | null; ztCount?: number | null }> = Array.isArray(j?.items) ? j.items : [];
+        const seq = items
+          .map(i => (typeof i.sentiment === "number" && Number.isFinite(i.sentiment) ? i.sentiment : null))
+          .filter((x): x is number => x != null);
+        if (seq.length >= 20 && alive) {
+          const below = seq.filter(x => x <= value).length;
+          setPercentile({ pct: Math.round((below / seq.length) * 100), n: seq.length });
+        }
+      } catch { /* 历史不可用 → 保持占位 */ }
+    })();
+    return () => { alive = false; };
+  }, [value]);
 
   return (
     <div className={`rounded-xl border p-4 ${sentimentBgClass(value)} space-y-3`}>
@@ -69,10 +100,16 @@ function SentimentGauge({ value, label, factors, yesterday, premiumAvg, promotio
               </div>
             ))}
           </div>
-          {/* v12-7（P1）：历史分位数 —— 显式标注"开发中"（原暗色 text-slate-700 几乎不可见，用户误以为数据缺失异常） */}
+          {/* v9.84.3（5.2）：历史分位数 —— 接 PG 250 日情绪序列（原"开发中"占位） */}
           <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-bold text-amber-300">开发中</span>
-            <span>历史分位数（接入 250 日历史数据后启用）</span>
+            {percentile ? (
+              <span className={`rounded px-1.5 py-0.5 font-bold ${percentile.pct >= 90 ? "bg-red-500/20 text-red-300" : percentile.pct >= 75 ? "bg-amber-500/20 text-amber-300" : percentile.pct <= 10 ? "bg-violet-500/20 text-violet-300" : "bg-white/10 text-slate-300"}`}
+                title={`当前 ${value} 分在近 ${percentile.n} 个交易日的情绪序列中的位置`}>
+                历史分位 P{percentile.pct}（{percentile.n} 日）
+              </span>
+            ) : (
+              <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-500">历史分位数（数据积累中，≥20 日启用）</span>
+            )}
           </div>
         </div>
       </div>
