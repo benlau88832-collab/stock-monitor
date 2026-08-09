@@ -5,6 +5,8 @@ import { APP_VERSION, BUILD_DATE } from "./lib/version";
 import { TURNOVER_CROWDED, TURNOVER_OVERHEAT } from "./lib/thresholds";
 import { saveTodaySentiment, loadPrevTradingDaySentiment, recordIntradaySentiment } from "./lib/sentimentStore";
 import TopNav, { type TabKey } from "./components/TopNav";
+// v9.79（韧性）：ErrorBoundary 包裹主内容 —— 单数据模块崩溃不再整树白屏（原组件存在但从未使用）
+import ErrorBoundary from "./components/ErrorBoundary";
 import MainlineRanking from "./components/MainlineRanking";
 import FundStructure from "./components/FundStructure";
 import DarkPool from "./components/DarkPool";
@@ -904,9 +906,17 @@ export default function App() {
   }, [active]);
 
   // 首次加载
-  useEffect(() => { refreshAll(); }, [refreshAll]);
-  // 每日构建板块映射表（数据驱动，零硬编码）
-  useEffect(() => { ensureBoardMap().catch(e => console.warn("[boardMap] 首次构建失败:", e)); }, []);
+  // v9.79（性能修复）：首帧 refreshAll 完成后延迟构建板块映射表 —— 原 ensureBoardMap 与 refreshAll
+  // 挂载时并发，fetchStockIndustryMap(最多10页×2000只)+concept500 大请求与 refreshAll 的 ~30 个 JSONP
+  // 抢同一 jsonpQueue（并发3），大请求占满队列 → 关键数据模块排队加载不出来。合并为"先数据、后映射"。
+  useEffect(() => {
+    let cancelled = false;
+    const build = () => { if (!cancelled) ensureBoardMap().catch(e => console.warn("[boardMap] 构建失败:", e)); };
+    // refreshAll 无拒绝（try/finally 包裹），完成后再构建；异常兜底 8s 后重试
+    Promise.resolve(refreshAll()).then(() => setTimeout(build, 1500)).catch(() => setTimeout(build, 8000));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshAll]);
   // v9.55（V7-20）：localStorage 全局用量巡检（启动 + 每小时；超限自动淘汰低价值 key 并提示）
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -931,7 +941,14 @@ export default function App() {
     if (phase !== "trading" && phase !== "auction") return;
     try {
       const limitPool = await fetchLimitPoolSummary();
-      setOverview(prev => (prev ? { ...prev, limitPool } : prev));
+      // v9.79（性能/韧性）：18s 高频通道接口抖动时，不要用空池/降级池覆盖上一轮有效池
+      // （原无条件 setOverview 会用 totalCount=0 的空池或昨日回退池打空白涨停/情绪模块）
+      setOverview(prev => {
+        if (!prev) return prev;
+        const hasData = (limitPool?.rawZTPool?.length ?? 0) > 0 || (limitPool?.totalCount ?? 0) > 0;
+        const isWorse = Boolean(limitPool?.degraded) || (!hasData && (prev.limitPool?.totalCount ?? 0) > 0);
+        return { ...prev, limitPool: isWorse ? prev.limitPool : limitPool };
+      });
       // v12-6（P1）：涨停池可能截断 → 全局 console 警告（五问条/温度条等主显示点不逐个透传，落一条日志兜底）
       if (limitPool?.truncated) console.warn(`[ztpool] ${limitPool.truncated}`);
       // v9.34（S1）：封单衰减检测（与上一轮 18s 快照对比）
@@ -1296,7 +1313,10 @@ export default function App() {
       {/* 三级警报横幅 */}
       <AlertBanner alerts={alerts} />
 
-      <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-4">
+      {/* v9.79（韧性）：ErrorBoundary 包裹主内容 —— 单个数据模块抛错时显示兜底而非整树白屏，
+          TopNav/AIConsole/footer 保持存活，用户仍可切换 Tab/刷新 */}
+      <ErrorBoundary>
+        <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-4">
         {/* ====== 驾驶舱 ====== */}
         {active === "dashboard" && (
           <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
@@ -1410,6 +1430,7 @@ export default function App() {
           </Suspense>
         )}
       </main>
+      </ErrorBoundary>
 
       {/* v9.58（V8-8）：全局 AI 助手 —— 根层挂载，所有 Tab 可见；siteContext 打包当前页面状态 */}
       <AIConsole siteContext={{
