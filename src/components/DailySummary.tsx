@@ -117,7 +117,7 @@ export default function DailySummary({ overview, fund }: {
         </div>
       )}
 
-      <div className="text-[11px] text-violet-400/50">数据来自当日实时接口，AI 由 Agnes 2.5 生成。</div>
+      <div className="text-[11px] text-violet-400/50">数据来自当日实时接口，AI 由服务端 LLM 生成。</div>
     </div>
   );
 }

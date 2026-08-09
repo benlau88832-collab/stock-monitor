@@ -611,7 +611,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
 
       {showKeyInput && (
         <div className="mb-3 flex gap-2 items-center">
-          <input value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" placeholder="输入 Agnes AI API Key"
+          <input value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" placeholder="输入服务端 AI API Key（本地部署建议直接配置 server/.env）"
             className="flex-1 rounded bg-black/30 border border-white/10 px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:border-amber-400/50 outline-none" />
           <button onClick={() => { persistApiKey(apiKey); setShowKeyInput(false); }}
             className="rounded px-3 py-1.5 text-xs bg-amber-500/20 text-amber-300 hover:bg-amber-500/30">保存</button>
@@ -749,7 +749,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
           {(llmResult || chatHistory.length > 2) && selected && (
             <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2 max-h-72 overflow-y-auto">
               <div className="flex items-center gap-1">
-                <span className="text-[11px] font-bold text-violet-400">🤖 AI 研判（Agnes AI · 六段式）</span>
+                <span className="text-[11px] font-bold text-violet-400">🤖 AI 研判（服务端 LLM · 六段式）</span>
                 {stocks[selected]?.llmDegraded && (
                   <span className="rounded px-1 text-[10px] bg-rose-500/20 text-rose-300">⚡ 规则版</span>
                 )}
@@ -760,7 +760,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                   {m.content}
                 </div>
               ))}
-              <div className="text-[11px] text-violet-400/60">AI 研判由 Agnes 2.5 生成</div>
+              <div className="text-[11px] text-violet-400/60">AI 研判由服务端 LLM 生成</div>
             </div>
           )}
 
@@ -809,7 +809,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
 
       <div className="mt-3 text-[11px] text-slate-600">
         自选股池（{codes.length}/30）保存在浏览器本地。异动信号：主力出散户进/涨跌停/量比&gt;2.5/换手&gt;15%/持续流出。
-        AI研判由 Agnes AI 提供，追问支持多轮对话。
+        AI研判由服务端 LLM 提供，追问支持多轮对话。
       </div>
     </section>
   );

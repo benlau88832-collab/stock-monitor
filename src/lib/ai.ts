@@ -335,8 +335,9 @@ async function callAIviaServer(
 ): Promise<{ text: string; error?: string } | null> {
   if (!isLocalServer()) return null;
   // v9.26.5：加 35s 超时（服务端 postJSON 30s 超时兜底；避免 fetch 无限等待拖垮页面）
+  // v9.83.2：35s→50s —— 服务端超时已提至 45s（DeepSeek 推理模型长思考），前端兜底需更大
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 35_000);
+  const timer = setTimeout(() => ctrl.abort(), 50_000);
   try {
     const resp = await fetch("/api/ai/call", {
       method: "POST",
@@ -690,8 +691,9 @@ export async function callAgentChat(
   },
 ): Promise<AgentChatResult | null> {
   if (!isLocalServer()) return null;
+  // v9.83.2：35s→50s（服务端 45s 兜底，DeepSeek 推理模型长思考）
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 35_000);
+  const timer = setTimeout(() => ctrl.abort(), 50_000);
   try {
     const resp = await fetch("/api/ai/call", {
       method: "POST",

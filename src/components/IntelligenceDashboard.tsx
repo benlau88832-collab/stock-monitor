@@ -296,7 +296,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
 
       {noAI && !memo && (
         <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-[11px] text-amber-300">
-          ⚠️ AI 暂不可用：浏览器未填 API Key 且本地服务端 AI 中转未启用。请检查：① 右上角 ⚙️ 设置（推荐 Agnes 2.5 Flash） ② 服务端 server/.env 是否配置 AI_API_KEY
+          ⚠️ AI 暂不可用：浏览器未填 API Key 且本地服务端 AI 中转未启用。请检查：① 右上角 ⚙️ 设置（本地部署推荐服务端中转） ② 服务端 server/.env 是否配置 AI_API_KEY
         </div>
       )}
 

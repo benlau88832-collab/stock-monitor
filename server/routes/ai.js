@@ -118,7 +118,8 @@ module.exports = function aiRoutes(app) {
       }
 
       // v9.67：30s → 20s（PM2 日志反复 upstream timeout 30s，缩短超时让前端快速拿到降级响应而不是 35s 卡死）
-      const json = await postJSON(baseUrl, body, 20000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
+      // v9.83.2：20s → 45s —— 切换到 DeepSeek 推理模型后思考会占时间，20s 会把正常长思考截成 upstream timeout
+      const json = await postJSON(baseUrl, body, 45000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
       const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
       // v9.41：Agent 需要 tool_calls（LLM 决定下一步调哪个工具）
       const toolCalls = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0
@@ -221,7 +222,8 @@ module.exports = function aiRoutes(app) {
     upstream.on("error", () => {
       try { res.write(`data: ${JSON.stringify({ error: "upstream error" })}\n\n`); res.end(); } catch { /* 静默 */ }
     });
-    upstream.setTimeout(25000, () => { try { upstream.destroy(); } catch { /* 静默 */ } });
+    // v9.83.2：SSE 上游超时 25s→45s（DeepSeek 推理模型长思考场景）
+    upstream.setTimeout(45000, () => { try { upstream.destroy(); } catch { /* 静默 */ } });
     upstream.write(payload);
     upstream.end();
     // 客户端断开 → 终止上游

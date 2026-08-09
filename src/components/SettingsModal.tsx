@@ -26,6 +26,14 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
     fetchServerAIConfig().then(c => { setServerCfg(c); setServerChecked(true); });
   }, []);
   const serverMode = serverChecked && serverCfg?.enabled === true;
+  // v9.83.2（模型切换）：服务端中转模式下，表单显示服务端实际配置（不再显示 localStorage 旧值 Agnes）
+  // 按服务端 model 匹配预置（deepseek-v4-flash → DeepSeek V4 Flash 预置），匹配不到回退 custom
+  const serverPreset = serverMode && serverCfg
+    ? (Object.entries(PROVIDERS).find(([, p]) => p.model === serverCfg.model) ?? null)
+    : null;
+  const displayS: AISettings = serverPreset
+    ? { ...s, provider: serverPreset[0] as ProviderId, baseUrl: serverPreset[1].baseUrl, model: serverCfg!.model }
+    : s;
 
   const onTest = async () => {
     setTesting(true); setTestRes(null);
@@ -57,24 +65,24 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <label className="text-xs text-slate-400">模型厂商</label>
         <select className="mb-3 w-full rounded bg-slate-800 px-3 py-2 text-sm"
-          value={s.provider}
+          value={displayS.provider}
           disabled={serverMode}
           onChange={e => setS({ ...s, ...applyProvider(e.target.value as ProviderId), apiKey: s.apiKey })}>
           {Object.entries(PROVIDERS).map(([id, p]) => (
             <option key={id} value={id}>{p.label}{p.corsOk ? "" : "（需代理）"}</option>
           ))}
         </select>
-        {!PROVIDERS[s.provider].corsOk && !serverMode && (
+        {!PROVIDERS[displayS.provider].corsOk && !serverMode && (
           <p className="mb-3 rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
             ⚠️ 该厂商浏览器直连通常被 CORS 拦截；本地部署请走服务端中转（Key 配置在 server/.env，不落地浏览器）。
           </p>
         )}
 
         <label className="text-xs text-slate-400">Base URL</label>
-        <input className="mb-3 w-full rounded bg-slate-800 px-3 py-2 text-sm disabled:opacity-50" value={s.baseUrl} disabled={serverMode} onChange={e => upd({ baseUrl: e.target.value })} />
+        <input className="mb-3 w-full rounded bg-slate-800 px-3 py-2 text-sm disabled:opacity-50" value={displayS.baseUrl} disabled={serverMode} onChange={e => upd({ baseUrl: e.target.value })} />
 
         <label className="text-xs text-slate-400">模型名称</label>
-        <input className="mb-3 w-full rounded bg-slate-800 px-3 py-2 text-sm disabled:opacity-50" value={s.model} disabled={serverMode} onChange={e => upd({ model: e.target.value })} />
+        <input className="mb-3 w-full rounded bg-slate-800 px-3 py-2 text-sm disabled:opacity-50" value={displayS.model} disabled={serverMode} onChange={e => upd({ model: e.target.value })} />
 
         <label className="text-xs text-slate-400">API Key {serverMode && <span className="text-emerald-400">（🔒 服务端已配置）</span>}</label>
         <div className="mb-3 flex gap-2">
@@ -86,7 +94,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <div className="mb-3 flex items-center gap-4 flex-wrap">
           <label className="flex items-center gap-1 text-xs">
-            <input type="checkbox" checked={s.thinking} disabled={serverMode || !PROVIDERS[s.provider].supportsThinking} onChange={e => upd({ thinking: e.target.checked })} /> 思考模式
+            <input type="checkbox" checked={displayS.thinking} disabled={serverMode || !PROVIDERS[displayS.provider].supportsThinking} onChange={e => upd({ thinking: e.target.checked })} /> 思考模式
           </label>
           <label className="text-xs">maxTokens 上限
             <input type="number" className="ml-1 w-24 rounded bg-slate-800 px-2 py-1 text-xs" value={s.maxTokens} onChange={e => upd({ maxTokens: Number(e.target.value) || 0 })} />

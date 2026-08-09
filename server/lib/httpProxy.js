@@ -100,7 +100,7 @@ function callModelText(payloadText, opts = {}) {
     stream: false,
   };
   if (isAgnes) body.chat_template_kwargs = { enable_thinking: opts.thinking ?? false };
-  return postJSON(baseUrl, body, 40000, {
+  return postJSON(baseUrl, body, 60000, {
     Authorization: "Bearer " + (process.env.AI_API_KEY || ""),
   }).then(json => {
     const content = (json.choices?.[0]?.message?.content || "").trim();
