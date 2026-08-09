@@ -183,6 +183,93 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // v9.84（分类统一）：个股概念查询 —— 查 PG stock_concepts，未命中实时抓东财并落库
+  app.get("/api/db/concepts", async (req, res) => {
+    try {
+      const codes = String(req.query.codes || "").split(",").filter(Boolean);
+      const { getConcepts } = require("../lib/stockConcepts");
+      const out = await getConcepts(pool, codes);
+      res.json(out);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // v9.84（分类统一）：单股全景端点 —— 一次聚合 概念/新闻/公告/调研/盯价/席位/涨停历史。
+  // 前端个股详情页（AIConsole 上下文 / 个股雷达）一请求拿全，不再 N 个串行小接口。
+  app.get("/api/db/stock/:code", async (req, res) => {
+    try {
+      const code = String(req.params.code || "").trim();
+      if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
+      const { getConcepts } = require("../lib/stockConcepts");
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const daysAgo = new Date(Date.now() - 45 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+      // 各块并行且互不阻塞（某一源挂不影响其余）
+      const [conceptsR, newsR, annsR, reportsR, watchR, watchLogR, seatsR, ztR] = await Promise.allSettled([
+        getConcepts(pool, [code]),
+        pool.query("SELECT title,summary,boards,sentiment,stars,time,url FROM news WHERE code=$1", [code]),
+        pool.query("SELECT art_code,stock_name,title,column_name,score,time,url FROM announcements WHERE stock_code=$1 ORDER BY time DESC LIMIT 20", [code]),
+        pool.query("SELECT report_date,phase,summary_json,valuation_json,levels_json,full_text,created_at FROM research_reports WHERE code=$1 ORDER BY report_date DESC LIMIT 5", [code]),
+        pool.query("SELECT code,name,buy_low,buy_high,stop_loss,trigger_pct,note,updated_at FROM price_watch WHERE code=$1 AND status='active'", [code]),
+        pool.query("SELECT date,price,mid_price,deviation_pct,triggered,event_text FROM price_watch_log WHERE code=$1 ORDER BY date DESC LIMIT 30", [code]),
+        pool.query("SELECT key,value FROM kv_store WHERE key LIKE 'seats:%' AND key >= $1 ORDER BY key DESC LIMIT 45", [daysAgo]),
+        pool.query("SELECT date,data FROM zt_snapshot ORDER BY date DESC LIMIT 30"),
+      ]);
+
+      // 概念
+      const concepts = conceptsR.status === "fulfilled" && conceptsR.value[code]
+        ? conceptsR.value[code] : null;
+
+      // 席位（kv seats:YYYY-MM-DD → SeatRecord[]，兼容 {__raw} 字符串形态）
+      const seats = [];
+      if (seatsR.status === "fulfilled") {
+        for (const row of seatsR.value.rows) {
+          const v = row.value;
+          const list = Array.isArray(v) ? v
+            : (v && typeof v === "object" && "__raw" in v) ? safeParse(v.__raw) : [];
+          if (!Array.isArray(list)) continue;
+          const date = String(row.key).replace("seats:", "");
+          for (const r of list) {
+            if (r && String(r.stockCode ?? "") === code) {
+              seats.push({ date, deptName: r.deptName, direction: r.direction, net: r.net,
+                pctT1: r.pctT1 ?? null, pctT5: r.pctT5 ?? null });
+            }
+          }
+        }
+      }
+
+      // 涨停历史（zt_snapshot data.pool → c === code）
+      const ztHistory = [];
+      if (ztR.status === "fulfilled") {
+        for (const row of ztR.value.rows) {
+          const poolArr = Array.isArray(row.data) ? row.data : row.data?.pool;
+          if (!Array.isArray(poolArr)) continue;
+          for (const p of poolArr) {
+            // fetchZTPool 落库形态用 code，前端 limitPool 用 c —— 兼容两种
+            if (String(p?.c ?? p?.code ?? "") === code) {
+              ztHistory.push({ date: row.date, name: p.n, lbc: p.lbc ?? 1, hybk: p.hybk ?? "" });
+              break;
+            }
+          }
+        }
+      }
+
+      res.json({
+        code,
+        concepts,                                     // { themes, allBoards, hybk } | null
+        news: newsR.status === "fulfilled" ? newsR.value.rows : [],
+        announcements: annsR.status === "fulfilled" ? annsR.value.rows : [],
+        reports: reportsR.status === "fulfilled" ? reportsR.value.rows : [],
+        watch: watchR.status === "fulfilled" ? watchR.value.rows : [],
+        watchLog: watchLogR.status === "fulfilled" ? watchLogR.value.rows : [],
+        seats,                                        // 近 45 天席位净买/卖记录
+        ztHistory,                                    // 近 30 个交易日涨停记录
+        asOf: todayStr,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
   app.post("/api/db/zt", async (req, res) => {
     try {
       const { date, data } = req.body || {};

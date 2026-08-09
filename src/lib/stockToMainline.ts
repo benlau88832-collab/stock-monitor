@@ -13,7 +13,9 @@ import type { ZTPoolItem } from "./themeLadder";
 import { fetchBoardFundFlow, fetchBoardConstituents } from "./api";
 import { isRealConceptBoard } from "./boardTaxonomy";
 import { fetchStocksBoards } from "./stockBoards";
-import { foldConcepts, foldBoardFunds, conceptGroupOf, CONCEPT_GROUPS } from "./conceptGroups";
+import { foldConcepts, foldBoardFunds, conceptGroupOf } from "./conceptGroups";
+// v9.84（分类统一）：24 大类词表从共享源导入（服务端 cron 同源）
+import { CONCEPT_GROUPS } from "../shared/concept-groups.js";
 // v12-4（P1）：资金匹配统一走全站唯一分类器（与上游分类同口径）
 import { classifyStock } from "./classifyStock";
 

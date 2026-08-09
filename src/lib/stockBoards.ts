@@ -35,11 +35,14 @@ export interface StockBoards {
 
 // ============== 批量查询 ==============
 const DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get";
+import { isLocalServer } from "./cloudStore";
 
 // v9.84（性能根治）：F10 概念查询 —— 按 code 60s 缓存 + 4s 超时。
 // 原实现无 AbortSignal：datacenter 挂起时 refreshAll 关键路径（classifyStocksToMainlines 快路径）
 // 无限等待 → inFlight 锁死整轮刷新（用户"几乎无法加载"的根因之一）。
 // 60s 缓存让同一只股票在同一轮/相邻轮次内不再重复打 datacenter。
+// v9.84（分类统一）：本地部署优先走服务端 /api/db/concepts —— PG stock_concepts 持久化，
+// 未命中由服务端实时抓取并落库（增量积累，跨刷新/跨会话复用，前端不再重复打东财）
 const boardsCache = new Map<string, { data: StockBoards; ts: number }>();
 const BOARDS_TTL = 60 * 1000;
 
@@ -50,6 +53,23 @@ const BOARDS_TTL = 60 * 1000;
 export async function fetchStocksBoards(codes: string[]): Promise<Map<string, StockBoards>> {
   const result = new Map<string, StockBoards>();
   if (codes.length === 0) return result;
+
+  // 本地部署 → 服务端持久化查询（含未命中抓取落库）
+  if (isLocalServer()) {
+    try {
+      const resp = await fetch(`/api/db/concepts?codes=${encodeURIComponent(codes.slice(0, 120).join(","))}`, { signal: AbortSignal.timeout(8000) });
+      if (resp.ok) {
+        const json: Record<string, { themes?: string[]; allBoards?: string[] }> = await resp.json();
+        const now = Date.now();
+        for (const [code, v] of Object.entries(json)) {
+          const sb: StockBoards = { code, themes: v.themes ?? [], allBoards: v.allBoards ?? [] };
+          result.set(code, sb);
+          boardsCache.set(code, { data: sb, ts: now });
+        }
+        return result;
+      }
+    } catch { /* 服务端不可用 → 回退浏览器直连 */ }
+  }
 
   // 命中缓存直接返回（按 code 粒度，跨调用方共享）
   const now = Date.now();

@@ -1,7 +1,9 @@
 // v11-8（P0）：概念折叠验收测试 —— 光通信/CPO → 通信（LLM 主线名折叠的根基）
 // v11-13（P1）：大类表校准验收（华为昇腾→算力、半导体设备→芯片、宠物经济→大消费）
 import { describe, it, expect } from "vitest";
-import { conceptGroupOf, CONCEPT_GROUPS } from "../conceptGroups";
+// v9.84（分类统一）：词表数据移至 shared，测试从共享源导入
+import { conceptGroupOf } from "../conceptGroups";
+import { CONCEPT_GROUPS } from "../../shared/concept-groups.js";
 
 describe("V11-8 概念折叠（LLM 主线名折叠根基）", () => {
   it("光通信/CPO → 通信（不再与'通信'并存两条主线）", () => {

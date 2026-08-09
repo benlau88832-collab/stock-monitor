@@ -5,6 +5,9 @@ import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 // v9.58（V8-9）：AI 结论全站联动 store
 import { getStockAI } from "../lib/aiConclusionStore";
+// v9.84（分类统一）：自选股雷达显示权威主线标签 —— F10 概念(服务端持久化优先) → classifyStock 唯一分类器
+import { fetchStocksBoards } from "../lib/stockBoards";
+import { classifyStock, type StockClassification } from "../lib/classifyStock";
 
 // ============== LLM 配置（引用 AI 中枢的统一常量） ==============
 import { callAI, hasAvailableAI, hasAIOptimistic, APIKEY_STORAGE_KEY, setApiKey as persistApiKey } from "../lib/ai";
@@ -310,6 +313,24 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   const [vetoList, setVetoList] = useState<VetoItem[]>([]);
   const [inputCode, setInputCode] = useState("");
   const [sortByAlert, setSortByAlert] = useState(false);
+
+  // v9.84（分类统一）：自选股 → 权威主线标签。
+  // fetchStocksBoards 本地部署走服务端 /api/db/concepts（PG 持久化 + 60s 缓存），
+  // 非本地回退东财直连（4s 超时），对自选股列表零额外请求压力。
+  const [classMap, setClassMap] = useState<Map<string, StockClassification>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    fetchStocksBoards(codes).then(boards => {
+      if (!alive) return;
+      const m = new Map<string, StockClassification>();
+      for (const [code, sb] of boards) {
+        m.set(code, classifyStock(code, sb.themes));
+      }
+      setClassMap(m);
+    }).catch(() => { /* 分类失败不阻塞行情，标签缺省不显示 */ });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codes.join(",")]);
 
   // AI 状态
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(APIKEY_STORAGE) || "");
@@ -670,7 +691,19 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                           return <span className={`rounded px-1 py-px text-xs font-bold ${cls}`} title={`AI 研判：${ai.reason}`}>AI:{ai.verdict}</span>;
                         })()}
                       </div>
-                      <div className="text-[11px] text-slate-500">{code}</div>
+                      <div className="flex items-center gap-1 text-[11px] text-slate-500">
+                        {code}
+                        {/* v9.84（分类统一）：权威主线标签（classifyStock 折叠到 24 大类） */}
+                        {(() => {
+                          const cls = classMap.get(code);
+                          if (!cls || cls.mainline === "其他") return null;
+                          const hit = mainlines.includes(cls.mainline);
+                          return <span className={`rounded px-1 py-px text-[10px] font-bold ${hit ? "bg-amber-500/25 text-amber-300" : "bg-slate-700/40 text-slate-300"}`}
+                            title={`主线：${cls.mainline}（${cls.source === "f10_concepts" ? "F10概念" : cls.source === "hybk" ? "涨停池行业" : "申万"}${hit ? "，呼应当前主线" : ""}）`}>
+                            {cls.mainline}{hit ? "⚡" : ""}
+                          </span>;
+                        })()}
+                      </div>
                     </div>
                     <div className="text-right">
                       {s ? (

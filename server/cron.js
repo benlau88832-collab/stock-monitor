@@ -1174,29 +1174,9 @@ function startCron({ pool }) {
 async function runThemeAnalysis({ pool, label = "手动" }) {
   const date = bjDate();
   const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
-  // 读取主题规则：服务端内联（等价 src/lib/themeAnalysis.ts extractThemeHeat 的 conceptGroupOf 折叠）
-  const GROUP_ROOTS = [
-    { group: "通信", roots: ["通信", "5G", "6G", "光模块", "光通信", "CPO", "卫星通信", "光缆", "光纤", "交换机", "毫米波"] },
-    { group: "芯片", roots: ["芯片", "半导体", "存储", "封测", "光刻", "EDA", "GPU", "CPU", "晶圆", "碳化硅", "先进封装"] },
-    { group: "AI应用", roots: ["AI应用", "AI智能体", "AI眼镜", "数字人", "智能体", "多模态", "AIGC", "大模型", "人工智能", "计算机", "软件", "互联网"] },
-    { group: "算力", roots: ["算力", "服务器", "液冷", "散热", "数据中心", "IDC", "东数西算", "边缘计算"] },
-    { group: "智能驾驶", roots: ["智能驾驶", "无人驾驶", "自动驾驶", "激光雷达", "车载", "智能座舱", "车路云", "Robotaxi"] },
-    { group: "机器人", roots: ["机器人", "减速器", "执行器", "灵巧手", "伺服", "人形机器人"] },
-    { group: "新能源车", roots: ["新能源车", "电动汽车", "锂电池", "动力电池", "固态电池", "充电桩", "氢能源"] },
-    { group: "新能源", roots: ["光伏", "风电", "储能", "特高压", "电网", "逆变器", "硅料"] },
-    { group: "医药", roots: ["医药", "创新药", "减肥药", "GLP-1", "CXO", "疫苗", "医疗器械"] },
-    { group: "低空经济", roots: ["低空经济", "飞行", "无人机", "eVTOL"] },
-    { group: "军工", roots: ["军工", "航天", "卫星", "大飞机", "C919", "商业航天"] },
-    { group: "消费电子", roots: ["消费电子", "折叠屏", "AR眼镜", "MR", "苹果", "可穿戴", "光学"] },
-    { group: "大消费", roots: ["白酒", "食品", "饮料", "零售", "旅游", "免税", "宠物经济"] },
-    { group: "金融", roots: ["证券", "券商", "保险", "银行", "金融科技", "数字货币"] },
-    { group: "房地产", roots: ["房地产", "地产", "建材", "物业"] },
-    { group: "传媒", roots: ["传媒", "影视", "游戏", "短剧", "动漫"] },
-    { group: "教育", roots: ["教育", "职业教育", "在线教育", "知识付费"] },
-    { group: "有色金属", roots: ["稀土", "黄金", "白银", "有色金属", "铜", "锂矿"] },
-    { group: "化工", roots: ["化工", "化肥", "化纤", "磷化工", "钛白粉"] },
-    { group: "材料", roots: ["新材料", "碳纤维", "石墨烯", "玻璃", "超材料"] },
-  ];
+  // v9.84（分类统一）：主题词表与前端共享同一份（src/shared/concept-groups.js）——
+  // 原内联 20 组与前端 24 组词根漂移（低空经济/数据要素/核能核电等分类不一致），同一新闻两种口径
+  const { CONCEPT_GROUPS: GROUP_ROOTS } = require("../src/shared/concept-groups.js");
   const conceptGroupOf = (t) => {
     if (!t) return null;
     let best = null;

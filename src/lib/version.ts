@@ -13,6 +13,9 @@
 //   + 涨停池断源回退深度受限 + refreshFast防重叠 + 龙虎榜161请求风暴收敛 + 渲染路径memo化
 //   + dataStore内存缓存 + cloudStore增量同步(修复bulk 100条截断) + AIConsole打字机降频 + Recharts memo
 //   + 服务端加固（启动补抓链互斥/非交易日跳LLM/盯价与主题分析防重叠/proxy 6s/theme-analysis异步化）
+// v9.84.1：分类体系统一（阶段2）—— 词表单源 CONCEPT_GROUPS 共享(.js 前后端同require, 消灭 cron 词根漂移)
+//   + F10概念持久化(stock_concepts 表 + /api/db/concepts 服务端抓取落库) + 自选股雷达主线标签(classifyStock)
+//   + 单股全景端点 /api/db/stock/:code(概念/新闻/公告/调研/盯价/席位/涨停历史一次聚合)
 // ============================================================
-export const APP_VERSION = "v9.84.0";
+export const APP_VERSION = "v9.84.1";
 export const BUILD_DATE = "2026-08-09";

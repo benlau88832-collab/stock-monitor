@@ -146,6 +146,15 @@ CREATE TABLE IF NOT EXISTS trade_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_tl_code ON trade_ledger(code);
 CREATE INDEX IF NOT EXISTS idx_tl_date ON trade_ledger(date);
+-- v9.84（分类统一）：个股所属概念持久化（F10 datacenter 抓取落库，前端 classifyStock/个股雷达读取，
+-- 避免每次刷新重复打东财；按需增量积累）
+CREATE TABLE IF NOT EXISTS stock_concepts (
+  code       TEXT PRIMARY KEY,
+  concepts   JSONB NOT NULL DEFAULT '[]',
+  all_boards JSONB NOT NULL DEFAULT '[]',
+  hybk       TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 async function initDb() {
