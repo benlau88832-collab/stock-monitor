@@ -695,13 +695,16 @@ export async function callAgentChat(
   },
 ): Promise<AgentChatResult | null> {
   if (!isLocalServer()) return null;
+  // v9.84.3-fix（5.4 补漏）：callAgentChat 此前漏带 x-local-token —— LOCAL_TOKEN 启用后
+  // 全站 ReAct（AIConsole/决策 Agent）全部 401 降级"AI 服务异常"，用户实测复现
+  const token = await getLocalToken();
   // v9.83.2：35s→50s（服务端 45s 兜底，DeepSeek 推理模型长思考）
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 50_000);
   try {
     const resp = await fetch("/api/ai/call", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
       body: JSON.stringify({
         task: "agentReason",
         system,

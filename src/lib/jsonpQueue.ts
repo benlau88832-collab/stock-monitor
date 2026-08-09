@@ -91,6 +91,42 @@ export function getJsonpQueueState(): { inflight: number; queueLength: number } 
   return { inflight, queueLength: queue.length };
 }
 
+// ============== v9.84.3-fix：本地部署优先走服务端 /api/proxy ==============
+// 背景：浏览器直连东财（script 标签 JSONP）在当前网络环境极慢（10-15s 甚至超时），
+//   而服务端 curl 直连秒回（0.2s）。proxy 转发让全部 JSONP 接口经服务端出网。
+// 实现：execJsonp 前先尝试 proxy（fetch + 6s 超时 + 剥 JSONP 壳），失败回退原 script 方案。
+// 注意：proxy 走 hostGuard 白名单（push2/push2delay/push2his/datacenter 等已放行），
+//   带 x-local-token（v9.84.3 LOCAL_TOKEN 默认启用后 /api/proxy 已鉴权）。
+async function fetchViaProxy(url: string, timeout: number): Promise<any> {
+  const { isLocalServer, getLocalToken } = await import("./cloudStore");
+  if (!isLocalServer()) throw new Error("not local");
+  const token = await getLocalToken();
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), Math.min(timeout + 2000, 7000));
+  try {
+    const resp = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, {
+      headers: token ? { "x-local-token": token } : {},
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) throw new Error("proxy HTTP " + resp.status);
+    const text = await resp.text();
+    // 剥 JSONP 壳（东财部分接口返回 cb({...}) 而非纯 JSON；proxy 原样转发）
+    let data: any = null;
+    try { data = JSON.parse(text); } catch {
+      const m = text.match(/^[\w.$]+\((.*)\)\s*;?\s*$/s);
+      if (m) { try { data = JSON.parse(m[1]); } catch { throw new Error("proxy bad jsonp"); } }
+      else throw new Error("proxy bad body");
+    }
+    if (data === null || (typeof data === "object" && "data" in data && data.data === null)) {
+      // 东财"无数据"响应（非错误）→ 原样返回，调用方自行处理
+      return data;
+    }
+    return data;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 function execJsonp(url: string, timeout: number, callbackParam: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const cbName = `jq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -110,6 +146,15 @@ function execJsonp(url: string, timeout: number, callbackParam: string): Promise
   });
 }
 
+/** 执行一次请求：本地 → proxy 优先（秒回），失败回退浏览器 JSONP script */
+async function execWithFallback(url: string, timeout: number, callbackParam: string): Promise<any> {
+  try {
+    return await fetchViaProxy(url, timeout);
+  } catch {
+    return execJsonp(url, timeout, callbackParam);
+  }
+}
+
 function processNext() {
   if (inflight >= MAX_INFLIGHT || queue.length === 0) return;
   // v9.80：熔断窗口内新请求快速失败（不发出，不重试）
@@ -122,7 +167,8 @@ function processNext() {
   const item = queue.shift()!;
   inflight++;
 
-  execJsonp(item.url, item.timeout, item.callbackParam)
+  // v9.84.3-fix：本地优先 proxy（服务端直连秒回），失败回退浏览器 JSONP
+  execWithFallback(item.url, item.timeout, item.callbackParam)
     .then(data => { recordSuccess(item.url); item.resolve(data); })
     .catch(err => {
       recordFail(item.url);

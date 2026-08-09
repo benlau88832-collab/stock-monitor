@@ -77,10 +77,12 @@ export async function fetchServerAIConfig(): Promise<ServerAIConfig | null> {
 /** 服务端中转实测（走 /api/ai/call，Key 在服务端 .env，浏览器不持有） */
 export async function testServerAI(): Promise<{ ok: boolean; msg: string }> {
   try {
+    // v9.84.3-fix：LOCAL_TOKEN 启用后必须携带 x-local-token（否则 401 误判"服务端不可用"）
+    const token = await import("./cloudStore").then(m => m.getLocalToken()).catch(() => null);
     const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 30000);
     const resp = await fetch("/api/ai/call", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
       body: JSON.stringify({
         task: "eventExplain",
         system: "你是一个严谨的A股分析师，回答不超过30字。",
