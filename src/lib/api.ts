@@ -30,7 +30,9 @@ export function hasMissingKeyFields(d: Record<string, unknown>, keys: string[]):
 }
 
 // 带遥测的 JSONP 包装：记录每次调用的成功/失败/耗时
-async function trackedJsonp<T>(name: string, url: string, timeout = 10000, cbParam = "cb"): Promise<T> {
+// v9.80（P0 卡顿修复）：默认超时 10s → 4s —— 东财断源时熔断已兜底，
+//   单请求超时只是最后防线，4s 足够正常响应（东财正常 <1s），断源时快速失败
+async function trackedJsonp<T>(name: string, url: string, timeout = 4000, cbParam = "cb"): Promise<T> {
   const start = Date.now();
   try {
     const result = await jsonp<T>(url, timeout, cbParam);
@@ -153,7 +155,7 @@ const BREADTH_SECIDS = ["1.000001", "0.399001", "0.899050"];
 
 export async function fetchMarketBreadth(): Promise<MarketBreadth> {
   const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f12,f104,f105,f106&secids=${BREADTH_SECIDS.join(",")}`;
-  const json = await trackedJsonp<any>("涨跌家数", url, 10000);
+  const json = await trackedJsonp<any>("涨跌家数", url, 4000);
   const diff = normalizeDiff(json?.data?.diff);
 
   let up = 0, down = 0, flat = 0;
@@ -217,7 +219,7 @@ export async function fetchCommodities(): Promise<GlobalIndex[]> {
   try {
     const secids = COMMODITY_INDICES.map((i) => i.secid).join(",");
     const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
-    const json = await trackedJsonp<any>("商品汇率", url, 10000);
+    const json = await trackedJsonp<any>("商品汇率", url, 4000);
     const diff = normalizeDiff(json?.data?.diff);
     return diff.map((d) => {
       const code = String(d.f12 ?? "");
@@ -231,7 +233,7 @@ export async function fetchGlobalIndices(): Promise<GlobalIndex[]> {
   try {
     const secids = GLOBAL_INDICES.map((i) => i.secid).join(",");
     const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
-    const json = await trackedJsonp<any>("全球指数", url, 10000);
+    const json = await trackedJsonp<any>("全球指数", url, 4000);
     const diff = normalizeDiff(json?.data?.diff);
     return diff.map((d) => {
       const code = String(d.f12 ?? "");
@@ -252,7 +254,7 @@ export async function fetchGlobalIndices(): Promise<GlobalIndex[]> {
 export async function fetchMarketTurnover(): Promise<{ amount: number; available: boolean }> {
   try {
     const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f12,f14,f6&secids=1.000001,0.399001`;
-    const json = await trackedJsonp<any>("成交额", url, 6000);
+    const json = await trackedJsonp<any>("成交额", url, 4000);
     const diff = normalizeDiff(json?.data?.diff);
     let totalAmount = 0;
     for (const d of diff) {
@@ -603,7 +605,7 @@ export async function fetchMarketFundHistory(days = 30): Promise<FundSnapshot[]>
   const fields2 = "f51,f52,f53,f54,f55,f56";
   async function fetchOne(secid: string): Promise<Map<string, number[]>> {
     const url = `${PUSH2HIS}/stock/fflow/daykline/get?ut=${EM_UT}&lmt=${days}&klt=101&secid=${secid}&fields1=f1,f2,f3,f7&fields2=${fields2}`;
-    const json = await jsonp<any>(url, 12000);
+    const json = await jsonp<any>(url, 4000);
     const klines: string[] = json?.data?.klines ?? [];
     const map = new Map<string, number[]>();
     for (const line of klines) {
@@ -678,7 +680,7 @@ export async function fetchFastNews(pageSize = 20): Promise<FastNewsItem[]> {
   // 注意：不能用 fetch（该域名不设置 CORS 头），只能用 JSONP
   const url = `https://np-weblist.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=${pageSize}&req_trace=${Date.now()}`;
   try {
-    const json = await jsonp<any>(url, 15000, "callback");
+    const json = await jsonp<any>(url, 6000, "callback");
     const list: any[] = json?.data?.fastNewsList ?? [];
     return list.map((item) => ({
       code: String(item.code ?? ""),
@@ -740,7 +742,7 @@ export async function fetchStockNews(keyword: string, pageSize = 10): Promise<St
   };
   const url = `https://search-api-web.eastmoney.com/search/jsonp?param=${encodeURIComponent(JSON.stringify(param))}`;
   try {
-    const json = await jsonp<any>(url, 10000, "cb");
+    const json = await jsonp<any>(url, 4000, "cb");
     const list: any[] = json?.result?.cmsArticleWebOld ?? [];
     return list.map((item) => ({
       code: String(item.code ?? ""),
@@ -768,7 +770,7 @@ export interface StockAnnouncement {
 export async function fetchStockAnnouncements(code: string, pageSize = 10): Promise<StockAnnouncement[]> {
   const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=${pageSize}&page_index=1&ann_type=A&client_source=web&f_node=0&s_node=0&stock_list=${code}`;
   try {
-    const json = await trackedJsonp<any>("个股公告", url, 10000);
+    const json = await trackedJsonp<any>("个股公告", url, 4000);
     const list: any[] = json?.data?.list ?? [];
     return list.map((item) => {
       const artCode = String(item.art_code ?? "");
@@ -818,7 +820,7 @@ export async function fetchDragonTigerList(pageSize = 50): Promise<DragonTigerIt
   const cols = "SECURITY_CODE,SECURITY_NAME_ABBR,TRADE_DATE,CLOSE_PRICE,CHANGE_RATE,EXPLAIN,BILLBOARD_NET_AMT,BILLBOARD_BUY_AMT,BILLBOARD_SELL_AMT,EXPLANATION,D1_CLOSE_ADJCHRATE,D2_CLOSE_ADJCHRATE,D5_CLOSE_ADJCHRATE,D10_CLOSE_ADJCHRATE";
   const url = `${DATACENTER}?sortColumns=TRADE_DATE,SECURITY_CODE&sortTypes=-1,1&pageSize=${pageSize}&pageNumber=1&reportName=RPT_DAILYBILLBOARD_DETAILSNEW&columns=${cols}&source=WEB&client=WEB`;
   try {
-    const json = await trackedJsonp<any>("龙虎榜", url, 12000, "callback");
+    const json = await trackedJsonp<any>("龙虎榜", url, 6000, "callback");
     const list: any[] = json?.result?.data ?? [];
     // 去重（同一只股票同一天可能有多条上榜原因）
     const seen = new Map<string, DragonTigerItem>();
@@ -862,8 +864,8 @@ export async function fetchDragonTigerSeats(code: string, tradeDate: string): Pr
     net: num(d.NET),
   });
   const [buyRes, sellRes] = await Promise.allSettled([
-    trackedJsonp<any>("龙虎榜席位", buyUrl, 10000, "callback"),
-    trackedJsonp<any>("龙虎榜席位", sellUrl, 10000, "callback"),
+    trackedJsonp<any>("龙虎榜席位", buyUrl, 6000, "callback"),
+    trackedJsonp<any>("龙虎榜席位", sellUrl, 6000, "callback"),
   ]);
   return {
     buy: buyRes.status === "fulfilled" ? (buyRes.value?.result?.data ?? []).map(parseSeat).slice(0, 5) : [],
@@ -1009,7 +1011,7 @@ export async function fetchTurnoverHistory(days = 10): Promise<TurnoverDay[]> {
     const url = `${PUSH2HIS}/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=${fields2}&klt=101&fqt=0&beg=${beg}&end=${end}&ut=${EM_UT}`;
     for (let a = 0; a < 2; a++) {
       try {
-        const json = await trackedJsonp<any>("成交额历史", url, 10000);
+        const json = await trackedJsonp<any>("成交额历史", url, 4000);
         const kl: string[] = json?.data?.klines ?? [];
         if (kl.length) {
           const m = new Map<string, number>();
@@ -1046,7 +1048,7 @@ export interface LiftBanItem {
 export async function fetchLiftBan(code: string): Promise<LiftBanItem[]> {
   const url = `https://datacenter-web.eastmoney.com/api/data/v1/get?sortColumns=FREE_DATE&sortTypes=1&pageSize=5&pageNumber=1&reportName=RPT_LIFT_STAGE&columns=SECURITY_CODE,SECURITY_NAME_ABBR,FREE_DATE,LIFT_MARKET_CAP,FREE_RATIO&source=WEB&client=WEB&filter=(SECURITY_CODE=%22${code}%22)`;
   try {
-    const json = await trackedJsonp<any>("解禁", url, 8000, "callback");
+    const json = await trackedJsonp<any>("解禁", url, 4000, "callback");
     const list: any[] = json?.result?.data ?? [];
     return list.map(d => ({
       code: String(d.SECURITY_CODE ?? ""),
@@ -1076,7 +1078,7 @@ export async function fetchMarketAnnouncements(pageSize = 100): Promise<MarketAn
   for (const ps of [pageSize, 50]) {
     try {
       const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=${ps}&page_index=1&ann_type=A&client_source=web&f_node=0&s_node=0`;
-      const json = await trackedJsonp<any>("全市场公告", url, 15000);
+      const json = await trackedJsonp<any>("全市场公告", url, 6000);
       const list: any[] = json?.data?.list ?? [];
       if (list.length === 0 && ps === pageSize) continue; // 100 条空 → 降级尝试 50
       return list.map((item) => {
@@ -1224,7 +1226,7 @@ export async function fetchStockBriefBatch(codes: string[]): Promise<Map<string,
     const secids = chunk.map(c => toSecid(c)).join(",");
     const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f6,f8,f10,f12,f14&secids=${secids}`;
     try {
-      const json = await trackedJsonp<any>("人气榜行情", url, 10000);
+      const json = await trackedJsonp<any>("人气榜行情", url, 4000);
       const diff = normalizeDiff(json?.data?.diff);
       for (const d of diff) {
         const code = String(d.f12 ?? "");
@@ -1252,7 +1254,7 @@ export async function fetchStockIndustryMap(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (let pn = 1; pn <= 10; pn++) {
     const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=${pn}&pz=2000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${fs}&fields=${fields}`;
-    const json = await jsonp<any>(url, 12000);
+    const json = await jsonp<any>(url, 4000);
     const diff = normalizeDiff(json?.data?.diff);
     if (diff.length === 0) break;
     for (const d of diff) {
@@ -1269,7 +1271,7 @@ export async function fetchStockIndustryMap(): Promise<Record<string, string>> {
 export async function fetchStockDailyCloses(code: string, days = 40): Promise<Map<string, number>> {
   try {
     const url = `${PUSH2HIS}/stock/kline/get?secid=${toSecid(code)}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55&klt=101&fqt=0&lmt=${days}&ut=${EM_UT}`;
-    const json = await jsonp<any>(url, 10000);
+    const json = await jsonp<any>(url, 4000);
     const kl: string[] = json?.data?.klines ?? [];
     const m = new Map<string, number>();
     for (const line of kl) {

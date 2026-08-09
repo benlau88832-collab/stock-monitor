@@ -20,9 +20,48 @@ const inflightMap = new Map<string, Promise<any>>();
 const queue: QueueItem[] = [];
 let inflight = 0;
 
+// v9.80（P0 卡顿修复）：熔断快速短路 —— 东财断源时不再逐请求重试等满 timeout
+// 连续失败 ≥ CIRCUIT_FAIL_THRESHOLD 次 → 进入熔断窗口（3s）：
+//   窗口内新请求立即 reject（快速失败，不等 10s timeout）
+//   窗口结束后放行试探 1 个请求，成功则恢复，失败则重新熔断
+// 效果：东财不可达时，单轮 refreshAll 从"8 请求×14s"降到"1-2s 快速失败"
+const CIRCUIT_FAIL_THRESHOLD = 6;   // 连续失败多少次触发熔断
+const CIRCUIT_OPEN_MS = 3000;       // 熔断窗口时长
+let circuitFailCount = 0;           // 连续失败计数
+let circuitOpenUntil = 0;           // 熔断窗口结束时间戳
+let circuitHalfOpen = false;        // 半开试探中（放行 1 个请求）
+
+/** 熔断状态导出（OpsPanel/横幅可观测） */
+export function getCircuitState(): { open: boolean; failCount: number; halfOpen: boolean } {
+  return { open: Date.now() < circuitOpenUntil, failCount: circuitFailCount, halfOpen: circuitHalfOpen };
+}
+
 // v9.65（V2-P2）：队列状态导出（OpsPanel 可观测用）
 export function getJsonpQueueState(): { inflight: number; queueLength: number } {
   return { inflight, queueLength: queue.length };
+}
+
+function recordFail(): void {
+  circuitFailCount++;
+  if (circuitFailCount >= CIRCUIT_FAIL_THRESHOLD) {
+    circuitOpenUntil = Date.now() + CIRCUIT_OPEN_MS;
+    circuitHalfOpen = false;
+  }
+}
+
+function recordSuccess(): void {
+  circuitFailCount = 0;
+  circuitOpenUntil = 0;
+  circuitHalfOpen = false;
+}
+
+/** 当前是否熔断（熔断窗口内且非半开试探） */
+function isCircuitOpen(): boolean {
+  if (circuitOpenUntil === 0) return false;
+  if (Date.now() < circuitOpenUntil) return true;
+  // 窗口结束 → 半开试探一次
+  if (!circuitHalfOpen) { circuitHalfOpen = true; return false; }
+  return true;
 }
 
 function execJsonp(url: string, timeout: number, callbackParam: string): Promise<any> {
@@ -46,13 +85,21 @@ function execJsonp(url: string, timeout: number, callbackParam: string): Promise
 
 function processNext() {
   if (inflight >= MAX_INFLIGHT || queue.length === 0) return;
+  // v9.80：熔断窗口内新请求快速失败（不发出，不重试）
+  if (isCircuitOpen()) {
+    const item = queue.shift()!;
+    item.reject(new Error("circuit open (data source unavailable)"));
+    setTimeout(processNext, 20);
+    return;
+  }
   const item = queue.shift()!;
   inflight++;
 
   execJsonp(item.url, item.timeout, item.callbackParam)
-    .then(data => { item.resolve(data); })
+    .then(data => { recordSuccess(); item.resolve(data); })
     .catch(err => {
-      if (item.retryCount < item.maxRetries) {
+      recordFail();
+      if (item.retryCount < item.maxRetries && !isCircuitOpen()) {
         // 重试退避：1s / 3s / 8s + ±30% 随机抖动，重新入队不插队
         const base = [1000, 3000, 8000][item.retryCount] ?? 8000;
         const jitter = base * (0.7 + Math.random() * 0.6);

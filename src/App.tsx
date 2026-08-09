@@ -47,6 +47,8 @@ import { detectSealDecay, type SealAlert } from "./lib/sealMonitor";
 // v9.36（B2）：昨日涨停统计纯函数（溢价/核按钮/晋级率）
 import { computePrevZtStats } from "./lib/prevZtStats";
 import { fetchPopularityRank } from "./lib/api";
+import { getOverallHealth } from "./lib/apiHealth";
+import { getCircuitState } from "./lib/jsonpQueue";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
 // v9.50（G2）：StatusBar 已并入 TopNav 顶部通栏，App 不再独立渲染
@@ -1282,6 +1284,22 @@ export default function App() {
         id: "hl_switch_pulse",
         level: "info",
         message: `新题材首板脉冲：${hlSwitch.pulseNew.join("/")}`,
+      });
+    }
+  }
+
+  // ============== v9.80（P0 卡顿修复）：数据源异常横幅 ==============
+  // 东财断源/熔断/涨停池 degraded 时置顶醒目提示（"数据来自 N 分钟前"），不再静默显示旧数据
+  // 数据源：apiHealth 整体健康 + jsonpQueue 熔断状态 + limitPool.degraded
+  if (overview) {
+    const health = getOverallHealth();
+    const circuit = getCircuitState();
+    const degradedPool = overview.limitPool?.degraded === true;
+    if (health === "red" || circuit.open || degradedPool) {
+      alerts.push({
+        id: "data_source_issue",
+        level: "critical",
+        message: `⚠ 数据源异常${degradedPool ? "：涨停池数据来自历史日期（接口不可达/非交易日），情绪与梯队数据可能失真" : "：东方财富行情接口连续失败，当前显示数据可能滞后"}${circuit.open ? "（已触发快速熔断，恢复后自动刷新）" : ""}`,
       });
     }
   }

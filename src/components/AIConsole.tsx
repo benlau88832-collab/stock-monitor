@@ -71,47 +71,61 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
       }
     }
 
-    setMsgs(m => [...m, { role: "user", text: q }]);
-    setBusy(true);
-    setMsgs(m => [...m, { role: "ai", text: "🔍 正在调全站数据调研…" }]);
-    try {
-      // 最近对话历史（清洗工具轨迹/系统标记）
-      const history = msgs
-        .filter(m => m.role === "user" || (m.role === "ai" && !m.text.startsWith("🔍")))
-        .slice(-8)
-        .map(m => ({ role: m.role === "user" ? "user" as const : "assistant" as const, content: m.text.slice(0, 800) }));
-      const r = await runAssistantAgent(q, siteContext, { history, researchCtx: ctx });
-      // 回复后推进会话状态
-      const nextCtx = updateResearchCtxAfterReply(ctx, r.reply, r.toolsCalled);
-      if (nextCtx) setResearchCtx(nextCtx);
-      // v10-7（P2）：调研完成（Phase 4 有结论）→ 自动落库 research_reports（选股清单可显示"🔬 深度调研"）
-      if (nextCtx && nextCtx.phase >= 4 && nextCtx.conclusion && !r.degraded) {
-        try {
-          await fetch("/api/research/report", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              code: nextCtx.code,
-              name: nextCtx.name,
-              phase: 4,
-              summary_json: { conclusion: nextCtx.conclusion, collected: nextCtx.collected.slice(-5) },
-              full_text: nextCtx.conclusion,
-            }),
-          }).catch(() => {});
-        } catch { /* 落库失败不阻塞对话 */ }
+      setMsgs(m => [...m, { role: "user", text: q }]);
+      setBusy(true);
+      setMsgs(m => [...m, { role: "ai", text: "🔍 正在调全站数据调研…" }]);
+      try {
+        // 最近对话历史（清洗工具轨迹/系统标记）
+        const history = msgs
+          .filter(m => m.role === "user" || (m.role === "ai" && !m.text.startsWith("🔍")))
+          .slice(-8)
+          .map(m => ({ role: m.role === "user" ? "user" as const : "assistant" as const, content: m.text.slice(0, 800) }));
+        const r = await runAssistantAgent(q, siteContext, { history, researchCtx: ctx });
+        // 回复后推进会话状态
+        const nextCtx = updateResearchCtxAfterReply(ctx, r.reply, r.toolsCalled);
+        if (nextCtx) setResearchCtx(nextCtx);
+        // v10-7（P2）：调研完成（Phase 4 有结论）→ 自动落库 research_reports（选股清单可显示"🔬 深度调研"）
+        if (nextCtx && nextCtx.phase >= 4 && nextCtx.conclusion && !r.degraded) {
+          try {
+            await fetch("/api/research/report", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                code: nextCtx.code,
+                name: nextCtx.name,
+                phase: 4,
+                summary_json: { conclusion: nextCtx.conclusion, collected: nextCtx.collected.slice(-5) },
+                full_text: nextCtx.conclusion,
+              }),
+            }).catch(() => {});
+          } catch { /* 落库失败不阻塞对话 */ }
+        }
+        // v9.80（A8-06 改进）：最终答复打字机渐显（视觉流式 —— ReAct 多轮工具调用无法真正 SSE，
+        // 但答复"逐字出现"消除"等待 20s 无反馈"的焦虑；降级回复同样渐显但保留 degraded 标）
+        const finalText = r.reply || "（空回复）";
+        setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "", tools: r.toolsCalled, degraded: r.degraded }));
+        // 打字机：每 8ms 追加 2-4 字符（长回复 600 字约 2-3s，避免用户等 20s 无感知）
+        const full = finalText;
+        let idx = 0;
+        await new Promise<void>(resolve => {
+          const tick = () => {
+            idx = Math.min(full.length, idx + 2 + Math.floor(Math.random() * 3));
+            setMsgs(m => {
+              const last = m[m.length - 1];
+              if (!last || last.role !== "ai") return m;
+              return [...m.slice(0, -1), { ...last, text: full.slice(0, idx) }];
+            });
+            if (idx >= full.length) resolve();
+            else setTimeout(tick, 8);
+          };
+          tick();
+        });
+      } catch {
+        setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "⚠ 助手调用失败，请稍后重试", degraded: true }));
+      } finally {
+        setBusy(false);
       }
-      setMsgs(m => m.slice(0, -1).concat({
-        role: "ai",
-        text: r.reply,
-        tools: r.toolsCalled,
-        degraded: r.degraded,
-      }));
-    } catch {
-      setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "⚠ 助手调用失败，请稍后重试", degraded: true }));
-    } finally {
-      setBusy(false);
-    }
-  };
+    };
 
   return (
     <>

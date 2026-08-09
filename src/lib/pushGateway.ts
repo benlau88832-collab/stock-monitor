@@ -59,6 +59,18 @@ export async function pushMessage(p: PushPayload): Promise<boolean> {
       signal: ctrl.signal,
     });
     clearTimeout(timer);
-    return resp.ok;
+    // v9.80（A3-P1-5 修复）：校验业务结果而非仅 HTTP 状态 ——
+    // Server酱/企业微信等渠道"请求发出但业务失败"时返回 HTTP 200 + {ok:false}，
+    // 原仅检查 resp.ok 会把失败当成功（发送前已写冷却 → 失败无法重试）
+    if (!resp.ok) return false;
+    try {
+      const j = await resp.json();
+      if (j && j.ok === true) return true;
+      // {ok:false, skipped:true}（未配置/通道错）与业务失败都返回 false
+      return false;
+    } catch {
+      // 响应不是 JSON（异常）→ 视为失败
+      return false;
+    }
   } catch { return false; }
 }

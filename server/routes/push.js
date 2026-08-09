@@ -99,7 +99,7 @@ async function sendPushIfConfigured(p, poolArg) {
   } else {
     return { ok: false, skipped: true, reason: "channel misconfigured" };
   }
-  const ok = result && result.status >= 200 && result.status < 300;
+  const ok = result && result.status >= 200 && result.status < 300 && businessOk(result, cfg.channel);
   // 写推送日志（防重复，可审计）
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -110,6 +110,33 @@ async function sendPushIfConfigured(p, poolArg) {
     );
   } catch { /* log 失败不影响主链 */ }
   return { ok, status: result?.status };
+}
+
+/**
+ * v9.80（A3-P1-5 修复）：渠道业务码校验 —— HTTP 2xx 不代表推送成功
+ * Server酱：返回 JSON {code, message}，code!==0 为失败
+ * 企业微信机器人：返回 JSON {errcode, errmsg}，errcode!==0 为失败
+ * Bark：200 + 空/JSON 视为成功（无业务错误码）
+ */
+function businessOk(result, channel) {
+  if (!result || !result.body) return false;
+  const body = result.body.trim();
+  if (!body) return true; // 空 body（Bark 成功通常无 body 或空）
+  try {
+    const j = JSON.parse(body);
+    if (channel === "serverchan") {
+      // 成功: {"code":0,"message":"","data":{...}}
+      return j.code === 0;
+    }
+    if (channel === "wechatbot") {
+      // 成功: {"errcode":0,"errmsg":"ok"}
+      return j.errcode === 0;
+    }
+    // bark/其他：无业务码 → HTTP 2xx 即成功
+    return true;
+  } catch {
+    return true; // body 非 JSON（如 Bark 的明文）→ 视为成功
+  }
 }
 
 function pushRoutes(app) {
