@@ -1061,9 +1061,40 @@ export async function fetchTurnoverHistory(days = 10): Promise<TurnoverDay[]> {
     }
     return new Map();
   }
+  // v9.84.5：push2his 完全不可达（HTTP 000）→ 腾讯 fqkline 兜底（指数日K，成交额≈收盘×量×100 近似）
+  async function oneTencent(qSymbol: string): Promise<Map<string, number>> {
+    try {
+      const txUrl = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${qSymbol},day,,,${days + 5},qfq`;
+      // 本地部署走服务端 proxy（浏览器直连腾讯在当前网络环境同样慢）；线上直连
+      const { isLocalServer, getLocalToken } = await import("./cloudStore");
+      const token = await getLocalToken();
+      const resp = isLocalServer()
+        ? await fetch(`/api/proxy?url=${encodeURIComponent(txUrl)}`, {
+            headers: token ? { "x-local-token": token } : {},
+            signal: AbortSignal.timeout(7000),
+          })
+        : await fetch(txUrl, { signal: AbortSignal.timeout(6000) });
+      if (!resp.ok) return new Map();
+      const j = await resp.json();
+      const rows: string[][] = j?.data?.[qSymbol]?.qfqday ?? j?.data?.[qSymbol]?.day ?? [];
+      const m = new Map<string, number>();
+      for (const row of rows) {
+        // 腾讯日K列：date, open, close, high, low, volume(手), ...
+        const amt = Number(row[5]) * Number(row[2]) * 100; // 手×100股×收盘价 ≈ 成交额
+        if (row[0] && Number.isFinite(amt)) m.set(row[0], amt);
+      }
+      return m;
+    } catch { return new Map(); }
+  }
   try {
     // v9.84（性能）：沪深两市并行（原顺序 await sh→sz，串行 2×超时+重试）
-    const [sh, sz] = await Promise.all([one("1.000001"), one("0.399001")]);
+    let [sh, sz] = await Promise.all([one("1.000001"), one("0.399001")]);
+    // v9.84.5：push2his 断源 → 腾讯兜底
+    if (sh.size === 0 || sz.size === 0) {
+      const [tSh, tSz] = await Promise.all([oneTencent("sh000001"), oneTencent("sz399001")]);
+      if (sh.size === 0 && tSh.size > 0) sh = tSh;
+      if (sz.size === 0 && tSz.size > 0) sz = tSz;
+    }
     const dates = new Set([...sh.keys(), ...sz.keys()]);
     const res = [...dates].map(date => ({ date, amount: (sh.get(date) ?? 0) + (sz.get(date) ?? 0) }));
     res.sort((a, b) => b.date.localeCompare(a.date));
@@ -1325,6 +1356,30 @@ export async function fetchStockDailyCloses(code: string, days = 40): Promise<Ma
       const p = line.split(",");
       const c = Number(p[2]);
       if (p[0] && Number.isFinite(c)) m.set(p[0], c);
+    }
+    // v9.84.5：push2his 断源（HTTP 000）→ 腾讯 fqkline 兜底
+    if (m.size === 0) {
+      try {
+        const qSymbol = /^(6|5|9)/.test(code) ? `sh${code}` : `sz${code}`;
+        const txUrl = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${qSymbol},day,,,${days},qfq`;
+        const { isLocalServer, getLocalToken } = await import("./cloudStore");
+        const token = await getLocalToken();
+        const resp = isLocalServer()
+          ? await fetch(`/api/proxy?url=${encodeURIComponent(txUrl)}`, {
+              headers: token ? { "x-local-token": token } : {},
+              signal: AbortSignal.timeout(7000),
+            })
+          : await fetch(txUrl, { signal: AbortSignal.timeout(6000) });
+        if (resp.ok) {
+          const j = await resp.json();
+          const rows: string[][] = j?.data?.[qSymbol]?.qfqday ?? j?.data?.[qSymbol]?.day ?? [];
+          for (const row of rows) {
+            // 腾讯日K列：date, open, close, high, low, volume
+            const c2 = Number(row[2]);
+            if (row[0] && Number.isFinite(c2)) m.set(row[0], c2);
+          }
+        }
+      } catch { /* 腾讯兜底失败 → 保持空 */ }
     }
     return m;
   } catch {

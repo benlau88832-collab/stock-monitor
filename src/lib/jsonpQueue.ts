@@ -91,39 +91,51 @@ export function getJsonpQueueState(): { inflight: number; queueLength: number } 
   return { inflight, queueLength: queue.length };
 }
 
-// ============== v9.84.3-fix：本地部署优先走服务端 /api/proxy ==============
+// ============== v9.84.4-fix：本地部署优先走服务端 /api/proxy ==============
 // 背景：浏览器直连东财（script 标签 JSONP）在当前网络环境极慢（10-15s 甚至超时），
 //   而服务端 curl 直连秒回（0.2s）。proxy 转发让全部 JSONP 接口经服务端出网。
 // 实现：execJsonp 前先尝试 proxy（fetch + 6s 超时 + 剥 JSONP 壳），失败回退原 script 方案。
 // 注意：proxy 走 hostGuard 白名单（push2/push2delay/push2his/datacenter 等已放行），
 //   带 x-local-token（v9.84.3 LOCAL_TOKEN 默认启用后 /api/proxy 已鉴权）。
+// v9.84.5：push2.eastmoney.com 完全不可达（HTTP 000，2026-08-10 实测）→ host fallback 到
+//   push2delay.eastmoney.com（延迟行情域，ulist/clist 全支持：指数/成交额/主力资金/个股行情/板块资金）。
+//   push2his 的 kline 类接口不在 fallback 范围（push2delay 无 kline）。
 async function fetchViaProxy(url: string, timeout: number): Promise<any> {
   const { isLocalServer, getLocalToken } = await import("./cloudStore");
   if (!isLocalServer()) throw new Error("not local");
   const token = await getLocalToken();
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), Math.min(timeout + 2000, 7000));
-  try {
-    const resp = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, {
-      headers: token ? { "x-local-token": token } : {},
-      signal: ctrl.signal,
-    });
-    if (!resp.ok) throw new Error("proxy HTTP " + resp.status);
-    const text = await resp.text();
-    // 剥 JSONP 壳（东财部分接口返回 cb({...}) 而非纯 JSON；proxy 原样转发）
-    let data: any = null;
-    try { data = JSON.parse(text); } catch {
-      const m = text.match(/^[\w.$]+\((.*)\)\s*;?\s*$/s);
-      if (m) { try { data = JSON.parse(m[1]); } catch { throw new Error("proxy bad jsonp"); } }
-      else throw new Error("proxy bad body");
-    }
-    if (data === null || (typeof data === "object" && "data" in data && data.data === null)) {
-      // 东财"无数据"响应（非错误）→ 原样返回，调用方自行处理
+  const attempt = async (target: string): Promise<any> => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), Math.min(timeout + 2000, 7000));
+    try {
+      const resp = await fetch(`/api/proxy?url=${encodeURIComponent(target)}`, {
+        headers: token ? { "x-local-token": token } : {},
+        signal: ctrl.signal,
+      });
+      if (!resp.ok) throw new Error("proxy HTTP " + resp.status);
+      const text = await resp.text();
+      // 剥 JSONP 壳（东财部分接口返回 cb({...}) 而非纯 JSON；proxy 原样转发）
+      let data: any = null;
+      try { data = JSON.parse(text); } catch {
+        const m = text.match(/^[\w.$]+\((.*)\)\s*;?\s*$/s);
+        if (m) { try { data = JSON.parse(m[1]); } catch { throw new Error("proxy bad jsonp"); } }
+        else throw new Error("proxy bad body");
+      }
       return data;
+    } finally {
+      clearTimeout(t);
     }
-    return data;
-  } finally {
-    clearTimeout(t);
+  };
+  try {
+    return await attempt(url);
+  } catch (err) {
+    // push2 不可达 → push2delay 重试一次（仅非 kline 路径）
+    if (url.includes("push2.eastmoney.com") && !url.includes("/stock/kline/") && !url.includes("daykline")) {
+      try {
+        return await attempt(url.replace("push2.eastmoney.com", "push2delay.eastmoney.com"));
+      } catch { /* 双源都失败 → 交给上层回退 script */ }
+    }
+    throw err;
   }
 }
 
