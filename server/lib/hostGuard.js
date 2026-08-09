@@ -22,10 +22,12 @@ const ALLOWED_HOSTS = new Set([
   // AI 网关（Agnes 备用 / DeepSeek via OpenCode）
   "apihub.agnes-ai.cn",
   "opencode.ai",
-  // 推送网关（Server酱 / 企业微信 / Bark）
+  // 推送网关（Server酱 / 企业微信 / Bark / v9.84.2 飞书 / QQ Qmsg 酱）
   "sctapi.ftqq.com",
   "qyapi.weixin.qq.com",
   "api.day.app",
+  "open.feishu.cn",
+  "qmsg.zndx.net",
 ]);
 
 /** 校验 URL 的 host 是否在白名单内；不在则抛错（调用方 catch 后降级） */

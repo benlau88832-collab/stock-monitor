@@ -1,10 +1,11 @@
 // ============================================================
 // P0-4：推送渠道配置（仅前端 localStorage，敏感 key 不上传 git）
-// 三种通道任选其一：Server酱 / 企业微信机器人 Webhook / Bark
+// v9.84.2（4.4）：多通道扩展 —— Server酱 / 企业微信 / Bark / 飞书 webhook / QQ（Qmsg 酱）
+// 通道仍单选（channel 字段兼容旧逻辑），但可同时填写多个 key —— 服务端按"已配置"推导全部渠道并发推送
 // 用户在 SettingsModal 配置；服务端 routes/push.js 透传至各渠道
 // ============================================================
 
-export type PushChannel = "serverchan" | "wechatbot" | "bark";
+export type PushChannel = "serverchan" | "wechatbot" | "bark" | "feishu" | "qq";
 export type PushSeverity = "info" | "warning" | "critical";
 
 export interface PushSettings {
@@ -16,6 +17,10 @@ export interface PushSettings {
   wechatbotKey?: string;
   /** Bark 设备 key */
   barkKey?: string;
+  /** v9.84.2（4.4）：飞书自定义机器人 webhook 完整 URL（含 access_token） */
+  feishuWebhook?: string;
+  /** v9.84.2（4.4）：QQ 推送 —— Qmsg 酱 key（qmsg.zndx.net/send/{key}） */
+  qmsgKey?: string;
   /** 最低推送等级（小于此等级不推） */
   minSeverity: PushSeverity;
 }
@@ -54,4 +59,15 @@ export function savePushSettings(s: PushSettings): void {
 export function shouldPush(s: PushSettings, severity: PushSeverity): boolean {
   const order: PushSeverity[] = ["info", "warning", "critical"];
   return order.indexOf(severity) >= order.indexOf(s.minSeverity);
+}
+
+/** v9.84.2（4.4）：从设置推导"已配置渠道"列表（channel 单选 + 多 key 并存 → 服务端并发推全部） */
+export function configuredChannels(s: PushSettings): PushChannel[] {
+  const out: PushChannel[] = [];
+  if (s.serverchanSctKey) out.push("serverchan");
+  if (s.wechatbotKey) out.push("wechatbot");
+  if (s.barkKey) out.push("bark");
+  if (s.feishuWebhook) out.push("feishu");
+  if (s.qmsgKey) out.push("qq");
+  return out;
 }

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 // v9.47（L3）：footer 版本号从常量读（去硬编码 v9.41）
 import { APP_VERSION, BUILD_DATE } from "./lib/version";
+// v9.84.3（4.2）：盘中板块集体异动轮询 → alertBus 强提示
+import { startAnomalyPolling } from "./lib/intradayAnomaly";
 // v9.62（V9-L1）：换手率拥挤阈值统一引用 thresholds.ts
 import { TURNOVER_CROWDED, TURNOVER_OVERHEAT } from "./lib/thresholds";
 import { saveTodaySentiment, loadPrevTradingDaySentiment, recordIntradaySentiment } from "./lib/sentimentStore";
@@ -1056,6 +1058,12 @@ export default function App() {
   useEffect(() => {
     const t = setInterval(() => setCurrentPhase(getCurrentSession().phase), 60000);
     return () => clearInterval(t);
+  }, []);
+
+  // v9.84.3（4.2）：盘中板块集体异动轮询（30s）→ alertBus 强提示（横幅/声音/标题闪烁）
+  useEffect(() => {
+    const stop = startAnomalyPolling();
+    return stop;
   }, []);
 
   // v9.33（缺口3）：LLM 盘后三剧本 + 竞价龙头预判 + 风险雷达（LLM 可用时自动触发一次）

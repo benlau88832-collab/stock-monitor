@@ -173,6 +173,212 @@ async function fetchMarketIntraday() {
   };
 }
 
+// ---------- v9.84.2/3（3.6+4.1）：盘中大脑快照 + 板块集体异动引擎 ----------
+// 每 5 分钟（9:30-15:00 交易日）：
+//   ① 服务端情绪分落库 sentiment_intraday:日期（页面关掉也不断链，AI 大脑/异动引擎数据源）
+//   ② 板块资金快照 fund_streak_intraday:日期（板块涨跌幅+主力净额）
+//   ③ 板块集体异动检测：同板块≥3涨停 / 板块涨幅>3%+主力净额>3亿 → kv anomaly:日期 + 推送
+//   ④ v9.84.3（4.3）：封单衰减检测下沉（原只在前端内存态，关页即失）—— 同构 detectSealDecay
+// 数据源全部东财公开接口，走 httpsGet（6s 超时），单轮失败不阻塞后续
+
+// 封单衰减内存态（模块级，跨轮比较；与前端 src/lib/sealMonitor.ts 同构）
+let sealPrevMap = new Map();
+function detectSealDecayServer(poolArr) {
+  const now = Date.now();
+  const alerts = [];
+  const current = new Map();
+  const STALE_MS = 120000;
+  for (const s of poolArr) {
+    const code = String(s?.c ?? s?.code ?? "");
+    const fund = Number(s?.fund ?? 0);
+    if (!code) continue;
+    const prev = sealPrevMap.get(code);
+    if (!prev || now - prev.ts > STALE_MS || prev.fund <= 0) {
+      current.set(code, { fund, ts: now, base: fund });
+      continue;
+    }
+    const base = fund > prev.base ? fund : prev.base;
+    const changePct = fund > 0 ? (fund - base) / base : -1;
+    let alert = null;
+    if (fund <= 0) {
+      alert = { code, name: String(s?.n ?? s?.name ?? code), prevFund: prev.fund, nowFund: 0, changePct: -100, level: "red", boardCount: Number(s?.lbc ?? 1) };
+    } else if (changePct <= -0.8 && fund < Math.max(5e6, base * 0.1)) {
+      alert = { code, name: String(s?.n ?? s?.name ?? code), prevFund: prev.fund, nowFund: fund, changePct: Math.round(changePct * 100), level: "red", boardCount: Number(s?.lbc ?? 1) };
+    } else if (changePct <= -0.5) {
+      alert = { code, name: String(s?.n ?? s?.name ?? code), prevFund: prev.fund, nowFund: fund, changePct: Math.round(changePct * 100), level: "yellow", boardCount: Number(s?.lbc ?? 1) };
+    }
+    if (alert) { alerts.push(alert); current.set(code, { fund, ts: now, base: fund }); }
+    else current.set(code, { fund, ts: now, base });
+  }
+  sealPrevMap = current;
+  return alerts;
+}
+async function fetchBoardQuotes() {
+  // 行业板块行情+资金（m:90+t:2）：f3 涨跌幅 / f12 代码 / f14 名称 / f62 主力净额
+  const fs = encodeURIComponent("m:90+t:2");
+  const url = `${HOST_FUND}/api/qt/clist/get?ut=${EM_UT}&pn=1&pz=100&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${fs}&fields=f12,f14,f3,f62`;
+  const j = await httpsGet(url);
+  const d = j?.data?.diff;
+  const arr = Array.isArray(d) ? d : (d && typeof d === "object" ? Object.values(d) : []);
+  return arr.map(it => ({
+    code: String(it?.f12 ?? ""), name: String(it?.f14 ?? ""),
+    pct: Number(it?.f3 ?? 0), mainNet: Number(it?.f62 ?? 0),
+  })).filter(x => x.code && x.name);
+}
+
+async function runIntradayBrain(pool, force = false) {
+  // 交易时段防护：仅北京 9:15-15:05 且非周末才采集（防手动误触/跨日数据误报；force 用于测试）
+  const nowBJ = new Date(Date.now() + 8 * 3600 * 1000);
+  const hhmm = nowBJ.getHours() * 100 + nowBJ.getMinutes();
+  const weekday = nowBJ.getDay();
+  if (!force && (weekday === 0 || weekday === 6 || hhmm < 915 || hhmm > 1505)) {
+    return { sentiment: null, anomalies: 0, skipped: "非交易时段" };
+  }
+  const ds = bjDateStr();
+  // ① 涨停池 + 炸板池（并行，互不阻塞）
+  const [ztRes, zbRes, boardRes] = await Promise.allSettled([
+    fetchZTPool(),
+    httpsGet(`https://push2ex.eastmoney.com/getTopicZBPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=200&sort=fbt%3Aasc&date=${bjDate()}`),
+    fetchBoardQuotes(),
+  ]);
+  const ztPool = ztRes.status === "fulfilled" ? (ztRes.value?.pool ?? []) : [];
+  const zbPool = (zbRes.status === "fulfilled" && Array.isArray(zbRes.value?.data?.pool)) ? zbRes.value.data.pool : [];
+  const boards = boardRes.status === "fulfilled" ? boardRes.value : [];
+
+  // ② 服务端情绪分（简化同构前端 computeSentimentNow 池子因子，供关页断链场景）
+  let sentiment = null;
+  let sentimentLabel = "数据不足";
+  if (ztPool.length > 0 || boards.length > 0) {
+    const ztCount = ztPool.length;
+    const blastedRate = ztCount + zbPool.length > 0 ? Math.round(zbPool.length / (ztCount + zbPool.length) * 1000) / 10 : 0;
+    const maxBoard = ztPool.length > 0 ? Math.max(0, ...ztPool.map(p => Number(p?.lbc ?? 1))) : 0;
+    const totalNet = boards.reduce((s, b) => s + b.mainNet, 0);
+    const s = 50
+      + Math.min(12, ztCount * 0.15)               // 涨停加分（0-12）
+      - Math.min(10, blastedRate * 0.2)            // 炸板扣分
+      + Math.max(-10, Math.min(10, (maxBoard - 3) * 2)) // 高度加分
+      + Math.max(-6, Math.min(6, totalNet / 1e11 * 3));  // 板块资金方向（±6）
+    sentiment = Math.max(0, Math.min(100, Math.round(s)));
+    sentimentLabel = sentiment >= 80 ? "极度贪婪" : sentiment >= 65 ? "贪婪" : sentiment >= 45 ? "中性" : sentiment >= 25 ? "恐慌" : "极度恐慌";
+  }
+  await pool.query(
+    `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+    [`sentiment_intraday:${ds}`, JSON.stringify({ date: ds, ts: new Date().toISOString(), sentiment, label: sentimentLabel })],
+  );
+
+  // ③ 板块资金快照（top30）
+  const boardTop = boards.slice(0, 30).map(b => ({ board: b.name, code: b.code, pct: b.pct, mainNet: b.mainNet }));
+  await pool.query(
+    `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+    [`fund_streak_intraday:${ds}`, JSON.stringify({ date: ds, ts: new Date().toISOString(), items: boardTop })],
+  );
+
+  // ④ 板块集体异动检测（游资"强势资金批量接入"信号）
+  const anomalies = [];
+  // 规则 A：同板块 ≥3 只涨停（按 hybk 聚合，取 top 板块）
+  const byBoard = new Map();
+  for (const p of ztPool) {
+    const b = String(p?.hybk || "未分类");
+    byBoard.set(b, (byBoard.get(b) ?? []).concat(p));
+  }
+  for (const [board, list] of byBoard) {
+    if (list.length >= 3) {
+      const lbc = Math.max(...list.map(x => Number(x?.lbc ?? 1)));
+      anomalies.push({
+        type: "集体涨停", board, count: list.length, lbc,
+        stocks: list.slice(0, 5).map(x => `${x.n}(${x.lbc ?? 1}板)`).join("、"),
+        ts: Date.now(), severity: "critical",
+      });
+    }
+  }
+  // 规则 B：板块涨幅 >3% 且 主力净额 >3 亿（资金脉冲）
+  for (const b of boards) {
+    if (b.pct > 3 && b.mainNet > 3e8) {
+      anomalies.push({
+        type: "资金脉冲", board: b.name, pct: b.pct, mainNet: b.mainNet,
+        stocks: "", ts: Date.now(), severity: "warning",
+      });
+    }
+  }
+  if (anomalies.length > 0) {
+    // 去重：同板块同类型 30 分钟内不重复报
+    const seenR = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`anomaly_seen:${ds}`]).catch(() => ({ rows: [] }));
+    const seen = new Map();
+    try {
+      const sv = seenR.rows[0]?.value;
+      const obj = sv && typeof sv === "object" && "__raw" in sv ? JSON.parse(sv.__raw) : sv;
+      if (obj && typeof obj === "object") for (const [k, v] of Object.entries(obj)) seen.set(k, Number(v));
+    } catch { /* 兼容坏值 */ }
+    const nowHHmm = `${String(new Date(Date.now() + 8 * 3600 * 1000).getHours()).padStart(2, "0")}${String(new Date(Date.now() + 8 * 3600 * 1000).getMinutes()).padStart(2, "0")}`;
+    const fresh = anomalies.filter(a => {
+      const k = `${a.board}|${a.type}`;
+      const last = seen.get(k);
+      if (last != null && nowHHmm - last < 30) return false; // 30 分钟内已报
+      seen.set(k, nowHHmm);
+      return true;
+    });
+    if (fresh.length > 0) {
+      // 落库 anomaly:日期（前端轮询展示）
+      const prevR = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`anomaly:${ds}`]).catch(() => ({ rows: [] }));
+      let prev = [];
+      try {
+        const pv = prevR.rows[0]?.value;
+        prev = Array.isArray(pv) ? pv : (pv && typeof pv === "object" && "__raw" in pv ? JSON.parse(pv.__raw) : []);
+      } catch { prev = []; }
+      await pool.query(
+        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+         ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+        [`anomaly:${ds}`, JSON.stringify([...prev.slice(-20), ...fresh])],
+      );
+      await pool.query(
+        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+         ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+        [`anomaly_seen:${ds}`, JSON.stringify(Object.fromEntries(seen))],
+      );
+      // 推送（多通道并发：飞书/QQ/Server酱 等已配置渠道全推）
+      // 频率保护：每轮最多推 3 条（critical 优先），落库保留全部 —— 防首轮 40 条刷屏
+      const { sendPushIfConfigured } = require("./routes/push");
+      const toPush = [...fresh].sort((a, b) => (a.severity === "critical" ? 0 : 1) - (b.severity === "critical" ? 0 : 1)).slice(0, 3);
+      for (const a of toPush) {
+        const title = a.type === "集体涨停" ? `⚡ 板块集体涨停：${a.board}` : `💥 资金脉冲：${a.board}`;
+        const body = a.type === "集体涨停"
+          ? `${a.board} ${a.count} 只涨停（最高 ${a.lbc} 板）\n${a.stocks}`
+          : `${a.board} 涨 ${a.pct}% · 主力净流入 ${(a.mainNet / 1e8).toFixed(1)} 亿`;
+        try { await sendPushIfConfigured({ title, body, severity: a.severity }); } catch { /* 推送失败不影响主链 */ }
+      }
+      console.log(`[cron] ⚡ 盘中板块异动 ${ds}: ${fresh.map(a => `${a.board}(${a.type})`).join(" | ")}`);
+    }
+  }
+  // ⑤ v9.84.3（4.3）：封单衰减检测（server 下沉，关页不失）→ kv seal_alerts:日期 + 推送
+  const sealAlerts = detectSealDecayServer(ztPool);
+  if (sealAlerts.length > 0) {
+    const prevSealR = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`seal_alerts:${ds}`]).catch(() => ({ rows: [] }));
+    let prevSeal = [];
+    try {
+      const pv = prevSealR.rows[0]?.value;
+      prevSeal = Array.isArray(pv) ? pv : (pv && typeof pv === "object" && "__raw" in pv ? JSON.parse(pv.__raw) : []);
+    } catch { prevSeal = []; }
+    await pool.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      [`seal_alerts:${ds}`, JSON.stringify([...prevSeal.slice(-20), ...sealAlerts])],
+    );
+    // 推送（red 必推；yellow 最多 2 条防刷屏）
+    const { sendPushIfConfigured } = require("./routes/push");
+    const sealToPush = sealAlerts.filter(a => a.level === "red").slice(0, 3)
+      .concat(sealAlerts.filter(a => a.level === "yellow").slice(0, 2));
+    for (const a of sealToPush) {
+      const title = a.level === "red" ? `🚨 炸板预警：${a.name}(${a.code})` : `⚠ 封单衰减：${a.name}(${a.code})`;
+      const body = `封单 ${(a.prevFund / 1e8).toFixed(2)}亿 → ${(a.nowFund / 1e4).toFixed(0)}万（-${Math.abs(a.changePct)}%${a.changePct === -100 ? "，已开板" : ""}）· ${a.boardCount}板`;
+      try { await sendPushIfConfigured({ title, body, severity: a.level === "red" ? "critical" : "warning" }); } catch { /* 静默 */ }
+    }
+    console.log(`[cron] 🚨 封单衰减 ${ds}: ${sealAlerts.map(a => `${a.name}(${a.changePct}%)`).join(" | ")}`);
+  }
+  return { sentiment, anomalies: anomalies.length, sealAlerts: sealAlerts.length };
+}
+
 // ---------- 通用 https GET ----------
 // v9.81（性能）：默认超时 15s→6s —— 东财断源时服务端外部等待快速失败，不再占连接池
 function httpsGet(url, timeout = 6000) {
@@ -781,6 +987,8 @@ let cronBusy = false; // v9.26.10：防重叠执行（20min 任务与启动抓�
 // v9.81（性能/运维）：盯价/主题分析任务独立防重叠 —— node-cron 同任务前一轮未跑完会再触发
 let watchRunning = false;
 let themeRunning = false;
+// v9.84.2/3：盘中大脑快照防重叠
+let intradayBusy = false;
 // v9.54（V7-15）：A股交易日历 —— 节假日休市判定（2026 年法定休市区间；与前端 tradeCalendar.ts 口径一致）
 const HOLIDAY_RANGES_2026 = [
   ["2026-01-01", "2026-01-02"], ["2026-02-16", "2026-02-22"], ["2026-04-04", "2026-04-06"],
@@ -1122,6 +1330,20 @@ function startCron({ pool }) {
       } finally { watchRunning = false; }
     } catch (e) { console.error("[cron] 盘中盯价失败:", e.message); }
   });
+
+  // v9.84.2/3（3.6+4.1）：盘中大脑快照 + 板块集体异动 —— 每 5 分钟（9:30-15:00 交易日）
+  // 情绪分/板块资金快照落库（关页不断链）+ 同板块≥3涨停/资金脉冲 → kv anomaly + 多通道推送
+  cron.schedule("*/5 9-15 * * 1-5", async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      if (intradayBusy) return; // 防重叠
+      intradayBusy = true;
+      try {
+        const r = await runIntradayBrain(pool);
+        if (r.sentiment != null) console.log(`[cron] 盘中快照 ${bjDateStr()}: 情绪${r.sentiment} 异动${r.anomalies}`);
+      } finally { intradayBusy = false; }
+    } catch (e) { console.error("[cron] 盘中大脑快照失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
 
   // ---------- P0-3：拍板盈亏自动回填（15:50 盘后） ----------
   // 对 decision_post 表中"已拍 confirm 且执行未标记"的样本，用真实日 K 回填 T+5 PnL
@@ -1609,3 +1831,4 @@ module.exports.fetchBlockTrades = fetchBlockTrades;
 module.exports.fetchMarketDaily = fetchMarketDaily;
 module.exports.fetchLhbDaily = fetchLhbDaily;
 module.exports.fetchMarketIntraday = fetchMarketIntraday;
+module.exports.runIntradayBrain = runIntradayBrain; // v9.84.2/3：盘中大脑快照+板块异动（手动触发/测试）

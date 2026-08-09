@@ -246,7 +246,7 @@ module.exports = function dbRoutes(app) {
           for (const p of poolArr) {
             // fetchZTPool 落库形态用 code，前端 limitPool 用 c —— 兼容两种
             if (String(p?.c ?? p?.code ?? "") === code) {
-              ztHistory.push({ date: row.date, name: p.n, lbc: p.lbc ?? 1, hybk: p.hybk ?? "" });
+              ztHistory.push({ date: row.date, name: p.n ?? p.name, lbc: p.lbc ?? 1, hybk: p.hybk ?? "" });
               break;
             }
           }
@@ -269,6 +269,128 @@ module.exports = function dbRoutes(app) {
   });
 
   function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+  // ============== v9.84.2（AI大脑层）：大脑快照 + PG 查询工具 ==============
+  // /api/brain/context —— AIConsole 与决策 Agent 共享注入的全站快照（一次打包）
+  app.get("/api/brain/context", async (req, res) => {
+    try {
+      const { buildBrainContext } = require("../lib/brainContext");
+      const date = String(req.query.date || "");
+      const ctx = await buildBrainContext(pool, date || undefined);
+      res.json(ctx);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // /api/brain/pg —— Agent PG 查询工具组（阶段3.2）
+  // 工具名白名单，入参仅透传原语，杜绝任意 SQL
+  const PG_TOOLS = new Set([
+    "newsByKeyword", "annsByStock", "ztHistory", "seatsByStock", "researchByStock", "marketDaily",
+  ]);
+  app.post("/api/brain/pg", async (req, res) => {
+    try {
+      const tool = String(req.body?.tool || "");
+      const args = (req.body?.args && typeof req.body.args === "object") ? req.body.args : {};
+      if (!PG_TOOLS.has(tool)) return res.status(403).json({ error: "tool not allowed: " + tool });
+      const limit = Math.max(1, Math.min(Number(args.limit) || 20, 100));
+      const keyword = String(args.keyword || "").slice(0, 60);
+
+      switch (tool) {
+        case "newsByKeyword": {
+          // 快讯按关键词/板块检索（标题或摘要匹配）
+          if (!keyword) return res.json({ items: [] });
+          const r = await pool.query(
+            `SELECT code,title,summary,boards,sentiment,stars,time,url FROM news
+             WHERE title ILIKE '%'||$1||'%' OR summary ILIKE '%'||$1||'%' OR boards::text ILIKE '%'||$1||'%'
+             ORDER BY time DESC LIMIT $2`, [keyword, limit]);
+          return res.json({ items: r.rows });
+        }
+        case "annsByStock": {
+          const code = String(args.code || "").replace(/[^0-9]/g, "");
+          if (code.length !== 6) return res.json({ items: [] });
+          const r = await pool.query(
+            `SELECT art_code,stock_code,stock_name,title,column_name,score,time,url FROM announcements
+             WHERE stock_code=$1 ORDER BY time DESC LIMIT $2`, [code, limit]);
+          return res.json({ items: r.rows });
+        }
+        case "ztHistory": {
+          // 历史涨停快照检索：按日期区间（近N日）或个股代码
+          const code = String(args.code || "").replace(/[^0-9]/g, "");
+          const days = Math.max(1, Math.min(Number(args.days) || 10, 60));
+          const r = await pool.query(
+            "SELECT date,data FROM zt_snapshot ORDER BY date DESC LIMIT $1", [days]);
+          const out = [];
+          for (const row of r.rows) {
+            const poolArr = Array.isArray(row.data) ? row.data : row.data?.pool;
+            if (!Array.isArray(poolArr)) continue;
+            const rows = code
+              ? poolArr.filter(p => String(p?.c ?? p?.code ?? "") === code)
+              : poolArr;
+            for (const p of rows.slice(0, 50)) {
+              out.push({ date: row.date, code: p?.c ?? p?.code, name: p?.n ?? p?.name, lbc: p?.lbc ?? 1, hybk: p?.hybk ?? "" });
+            }
+            if (out.length >= 200) break;
+          }
+          return res.json({ items: out });
+        }
+        case "seatsByStock": {
+          const code = String(args.code || "").replace(/[^0-9]/g, "");
+          if (code.length !== 6) return res.json({ items: [] });
+          const days = Math.max(1, Math.min(Number(args.days) || 30, 90));
+          const from = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString().slice(0, 10);
+          const r = await pool.query(
+            "SELECT key,value FROM kv_store WHERE key LIKE 'seats:%' AND key >= $1 ORDER BY key DESC", [from]);
+          const items = [];
+          for (const row of r.rows) {
+            const v = row.value;
+            const list = Array.isArray(v) ? v
+              : (v && typeof v === "object" && "__raw" in v) ? safeParse(v.__raw) : [];
+            if (!Array.isArray(list)) continue;
+            const date = String(row.key).replace("seats:", "");
+            for (const s of list) {
+              if (s && String(s.stockCode ?? "") === code) {
+                items.push({ date, deptName: s.deptName, direction: s.direction, net: s.net, pctT1: s.pctT1 ?? null, pctT5: s.pctT5 ?? null });
+              }
+            }
+          }
+          return res.json({ items: items.slice(0, limit) });
+        }
+        case "researchByStock": {
+          const code = String(args.code || "").replace(/[^0-9]/g, "");
+          if (code.length !== 6) return res.json({ items: [] });
+          const r = await pool.query(
+            `SELECT code,name,report_date,phase,summary_json,valuation_json,levels_json,full_text,created_at
+             FROM research_reports WHERE code=$1 ORDER BY report_date DESC LIMIT $2`, [code, limit]);
+          return res.json({ items: r.rows });
+        }
+        case "marketDaily": {
+          // 市场日指标序列（涨停/炸板/溢价/最高板/情绪，信号回测与次日闸门用）
+          const r = await pool.query(
+            `SELECT key,value FROM kv_store
+             WHERE (key LIKE 'market_daily:%' OR key LIKE 'sentiment:%')
+               AND key ~ '^[a-z_]+:[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+             ORDER BY key DESC LIMIT $1`, [limit * 2]);
+          const out = [];
+          for (const row of r.rows) {
+            const [kind, date] = String(row.key).split(":");
+            const v = row.value && typeof row.value === "object" && "__raw" in row.value ? safeParse(row.value.__raw) : row.value;
+            if (kind === "sentiment") out.push({ date, sentiment: typeof v === "number" ? v : v?.sentiment ?? null });
+            else if (v && typeof v === "object") out.push({ date, ...v });
+          }
+          // 按日期归并（sentiment 与 market_daily 同日合并一行）
+          const byDate = new Map();
+          for (const item of out) {
+            const row2 = byDate.get(item.date) ?? {};
+            Object.assign(row2, item);
+            byDate.set(item.date, row2);
+          }
+          const merged = [...byDate.values()].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+          return res.json({ items: merged.slice(0, limit) });
+        }
+        default:
+          return res.status(400).json({ error: "unhandled tool" });
+      }
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 
   app.post("/api/db/zt", async (req, res) => {
     try {

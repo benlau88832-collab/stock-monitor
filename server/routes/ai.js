@@ -163,8 +163,12 @@ module.exports = function aiRoutes(app) {
       max_tokens: Math.min(Number(maxTokens) || 2000, 8000),
       temperature: temperature != null ? Number(temperature) : 0.2,
       stream: true,
-      chat_template_kwargs: { enable_thinking: Boolean(thinking) },
     };
+    // v9.84.2（3.4）：chat_template_kwargs 是 Agnes 专属参数 —— 与 /api/ai/call 同口径，
+    // 仅 Agnes 传（DeepSeek 网关不识别），v9.83 修了 call 漏了 stream
+    if ((process.env.AI_PROVIDER || "agnes") === "agnes") {
+      body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
+    }
     const u = new URL(baseUrl);
     const payload = JSON.stringify(body);
     const reqOpts = {
@@ -206,7 +210,10 @@ module.exports = function aiRoutes(app) {
           }
           try {
             const j = JSON.parse(dataStr);
-            const delta = j?.choices?.[0]?.delta?.content ?? "";
+            const choice = j?.choices?.[0]?.delta ?? {};
+            // v9.84.2（3.4）：DeepSeek 推理模型流式返回 reasoning_content（思考过程）——
+            // 不转发给前端（只渲染 content 增量）
+            const delta = choice.content ?? "";
             if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
           } catch { /* 跳过坏行 */ }
         }

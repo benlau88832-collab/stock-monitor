@@ -2,11 +2,15 @@
 // 收盘后引导填写：今日主线/龙头/参与个股/盈亏/一句话反思
 // 支持按题材检索 + 题材盈亏统计（沉淀打法体系）
 // v9.33（缺口2）：新增服务端自动复盘展示 + 历史回放（本地部署 /api/db/kv + /api/db/zt）
+// v9.84.2（AI大脑层 · 3.5）：接线 dailyReviewAuto 死任务 —— "立即 AI 复盘"按钮，
+//   用大脑快照真实数据喂前端模板生成复盘（不等 cron 15:40），结果并入本地复盘库
 import { useState, useEffect } from "react";
 import { loadReviews, saveReviews, upsertReview, searchReviews, statByMainline, computeLossStreak, type DailyReview } from "../lib/dailyReview";
 import { localDateStr } from "../lib/format";
 import { getCurrentSession } from "../lib/tradingSession";
 import { isLocalServer } from "../lib/cloudStore";
+import { callAI } from "../lib/ai";
+import { fetchBrainContext } from "../lib/assistantAgent";
 
 export default function ReviewPanel() {
   const [reviews, setReviews] = useState<DailyReview[]>(loadReviews);
@@ -21,6 +25,42 @@ export default function ReviewPanel() {
   const [autoReview, setAutoReview] = useState<{ date: string; text: string } | null>(null);
   const [replayDate, setReplayDate] = useState<string>(localDateStr());
   const [replayText, setReplayText] = useState<string | null>(null);
+  // v9.84.2（3.5）：立即 AI 复盘（dailyReviewAuto 前端模板 + 大脑快照真实数据）
+  const [aiReviewing, setAiReviewing] = useState(false);
+
+  // 🤖 立即 AI 复盘：大脑快照（情绪/涨停/主线/黑天鹅/强催化）→ 前端模板 → 结果并入本地复盘库
+  const runAIReview = async () => {
+    if (aiReviewing) return;
+    setAiReviewing(true);
+    try {
+      const brain = await fetchBrainContext(true);
+      const m = brain?.market ?? ({} as NonNullable<NonNullable<Awaited<ReturnType<typeof fetchBrainContext>>>["market"]>);
+      const top = brain?.mainlines?.top ?? [];
+      const ladder = brain?.limitLadder?.ladder ?? [];
+      const r = await callAI("dailyReviewAuto", {
+        date: localDateStr(),
+        mainlines: top.map(t => `${t.theme}(${t.heat ?? "?"}分)`).join("、") || "暂无",
+        topStocks: ladder.slice(0, 8).map(x => `${x.name ?? x.code}(${x.lbc}板)`).join("、") || "暂无",
+        missedThemes: "",
+        sentiment: m.sentiment ?? 50,
+        blastedRate: m.blastedRate ?? 0,
+        blackSwans: (brain?.blackSwans ?? []).slice(0, 3).map(b => b.title).join("；") || "无",
+        annHighlights: (brain?.strongNews ?? []).slice(0, 3).map(a => `${a.name ?? ""}${a.title}`).join("；") || "无",
+        userReview: todayReview?.reflection ?? "",
+      });
+      if (!r.text) return;
+      setAutoReview({ date: localDateStr(), text: r.text });
+      // 并入本地复盘库（今日未手填时兜底；已有手填则跳过避免覆盖）
+      if (!todayReview) {
+        const review: DailyReview = {
+          date: today, mainline: top[0]?.theme ?? "—", leader: ladder[0]?.name ?? "",
+          myStocks: "", pnl: null, reflection: r.text.slice(0, 200), createdAt: Date.now(),
+        };
+        update(upsertReview(review, reviews));
+      }
+    } catch { /* AI 复盘失败静默 */ }
+    finally { setAiReviewing(false); }
+  };
 
   // 自动复盘（本地服务端 kv review:YYYY-MM-DD，回退最近3个自然日）
   useEffect(() => {
@@ -116,10 +156,19 @@ export default function ReviewPanel() {
         <div className="rounded border border-violet-500/25 bg-violet-500/10 p-2">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[10px] font-bold text-violet-300">🤖 自动复盘 {autoReview.date}（LLM/规则版）</span>
-            <span className="text-xs text-slate-500">服务端 cron 15:40 生成</span>
+            <span className="text-xs text-slate-500">服务端 cron 15:40 生成 · 或手动触发</span>
           </div>
           <pre className="whitespace-pre-wrap text-[10px] text-slate-300 leading-relaxed">{autoReview.text}</pre>
         </div>
+      )}
+
+      {/* v9.84.2（3.5）：立即 AI 复盘 —— dailyReviewAuto 前端模板 + 大脑快照数据，不等 cron */}
+      {isLocalServer() && (
+        <button onClick={runAIReview} disabled={aiReviewing}
+          className="rounded bg-violet-500/15 px-2 py-1 text-[10px] font-bold text-violet-300 hover:bg-violet-500/25 disabled:opacity-40"
+          title="用今日大脑快照（情绪/涨停/主线/黑天鹅）立即生成 AI 复盘，结果并入本地复盘库">
+          {aiReviewing ? "🤖 AI 复盘生成中…" : "🤖 立即 AI 复盘"}
+        </button>
       )}
 
       {/* v9.33（缺口2）：历史主线回放 */}

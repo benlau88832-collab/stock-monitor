@@ -10,6 +10,8 @@ import { useState, useEffect, useRef } from "react";
 import { isLocalServer, kvGet } from "../lib/cloudStore";
 import { getAllSince } from "../lib/dataStore";
 import DisclaimerTag from "./DisclaimerTag";
+// v9.84.2（AI大脑层 · 3.5）：接线死任务 —— policyDiff（政策解读）/ eventClassify（LLM 精分级）
+import { callAI, parseAIJSON } from "../lib/ai";
 
 interface ClassifiedEvent {
   title: string;
@@ -66,6 +68,52 @@ export default function EventClassifyPanel({ onOpenNews }: {
   const [showAll, setShowAll] = useState(false);
   // 上一轮 heat 对比（热度箭头 🔥/❄️/🆕）—— 组件内缓存上次的 heat map
   const prevHeatRef = useRef<Map<string, number> | null>(null);
+
+  // v9.84.2（3.5）：policyDiff 政策解读 + eventClassify LLM 精分级
+  const [policyDive, setPolicyDive] = useState<Record<string, string>>({});
+  const [policyLoading, setPolicyLoading] = useState<string | null>(null);
+  const [refining, setRefining] = useState(false);
+
+  // 🏛️ 政策解读（policyDiff 模板 —— 政策文本 → 利好/利空板块/资金方向）
+  const divePolicy = async (title: string) => {
+    if (policyLoading || policyDive[title]) return;
+    setPolicyLoading(title);
+    try {
+      const r = await callAI("policyDiff", { policyText: title });
+      setPolicyDive(d => ({ ...d, [title]: r.text || "（空回复）" }));
+    } catch { setPolicyDive(d => ({ ...d, [title]: "政策解读失败（AI 不可用）" })); }
+    finally { setPolicyLoading(null); }
+  };
+
+  // 🤖 LLM 精分级（eventClassify 模板 —— 对当前轻量分级的事件批量精分，≤6 条防配额）
+  const refineWithLLM = async () => {
+    if (refining || !items) return;
+    setRefining(true);
+    try {
+      const targets = items.filter(i => !i.reason?.startsWith("LLM")).slice(0, 6)
+        .map(i => ({ title: i.title, source: i.level }));
+      if (targets.length === 0) return;
+      const r = await callAI("eventClassify", { events: targets });
+      const j = parseAIJSON<Array<{ title: string; level?: string; beneficiaries?: string[]; catalystScore?: number; timeSensitivity?: string; reason?: string }>>(r.text);
+      const list = Array.isArray(j) ? j : [];
+      if (list.length > 0) {
+        const byTitle = new Map(list.filter(x => x.title).map(x => [x.title, x]));
+        setItems(prev => (prev ?? []).map(e => {
+          const hit = byTitle.get(e.title);
+          if (!hit || !hit.level) return e;
+          return {
+            ...e,
+            level: (["政策", "行业", "事件"].includes(hit.level) ? hit.level : e.level) as ClassifiedEvent["level"],
+            beneficiaries: hit.beneficiaries ?? e.beneficiaries,
+            catalystScore: hit.catalystScore ?? e.catalystScore,
+            timeSensitivity: hit.timeSensitivity ?? e.timeSensitivity,
+            reason: `LLM 精分级：${hit.reason ?? ""}`,
+          };
+        }));
+      }
+    } catch { /* 精分级失败保持原分级 */ }
+    finally { setRefining(false); }
+  };
 
   // v13-4：加载最新 theme_analysis + 30 分钟自动刷新
   useEffect(() => {
@@ -362,6 +410,11 @@ export default function EventClassifyPanel({ onOpenNews }: {
           <span className="text-[10px] text-slate-500">{items.length} 事件</span>
           <DisclaimerTag />
         </div>
+        {/* v9.84.2（3.5）：LLM 精分级 —— 盘中轻量规则分级 → 一键 LLM 精分（≤6条） */}
+        <button onClick={refineWithLLM} disabled={refining || !isLocalServer()}
+          className="rounded border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-bold text-violet-300 hover:bg-violet-500/20 disabled:opacity-40">
+          {refining ? "🤖 精分中…" : "🤖 LLM 精分级"}
+        </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
         {grouped.map(({ lv, list }) => {
@@ -387,11 +440,26 @@ export default function EventClassifyPanel({ onOpenNews }: {
                     </span>
                     <span className={`shrink-0 text-[10px] font-bold ${dirCls}`}>{dir === "利好" ? "↑" : dir === "利空" ? "↓" : "→"}</span>
                     <ScoreBadge s={e.catalystScore} />
+                    {/* v9.84.2（3.5）：政策级事件 → 政策解读（policyDiff 死任务接线） */}
+                    {lv === "政策" && isLocalServer() && (
+                      <button onClick={e2 => { e2.stopPropagation(); divePolicy(e.title); }}
+                        disabled={policyLoading != null}
+                        className="shrink-0 rounded bg-rose-500/10 px-1 py-0.5 text-[10px] font-bold text-rose-300 hover:bg-rose-500/20 disabled:opacity-40"
+                        title="LLM 分析该政策对 A 股板块的影响（利好/利空/资金方向）">
+                        {policyLoading === e.title ? "解读中…" : policyDive[e.title] ? "已解读" : "📊 解读"}
+                      </button>
+                    )}
                   </div>
                   {e.beneficiaries && e.beneficiaries.length > 0 && (
                     <div className="text-xs text-slate-500 mt-0.5">
                       → {e.beneficiaries.slice(0, 3).join(" / ")}
                       <span className="text-slate-600">（{e.beneficiaries.length} 受益）</span>
+                    </div>
+                  )}
+                  {/* v9.84.2（3.5）：政策解读结果（policyDiff） */}
+                  {lv === "政策" && policyDive[e.title] && (
+                    <div className="mt-1 whitespace-pre-wrap rounded bg-rose-500/5 border border-rose-500/20 px-1.5 py-1 text-[10px] text-rose-200/80">
+                      {policyDive[e.title]}
                     </div>
                   )}
                 </div>

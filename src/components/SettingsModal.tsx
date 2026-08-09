@@ -126,13 +126,13 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
         {/* P0-4：外部推送通道配置 */}
         <div className="mt-4 border-t border-white/10 pt-3">
           <h3 className="mb-2 text-sm font-bold text-slate-200">📲 外部推送通道（手机接收 critical 事件）</h3>
-          <p className="mb-3 text-xs text-slate-500">本地部署时通过服务端中转推送至 Server酱/企业微信/Bark（仅本地生效；线上无 server 静默不推）。Key 仅存 localStorage，不上 git。</p>
+          <p className="mb-3 text-xs text-slate-500">本地部署时通过服务端中转推送（v9.84.2 支持多通道并发：可同时填多个 key 全推）。Key 仅存 localStorage，不上 git。</p>
           <label className="flex items-center gap-2 text-xs">
             <input type="checkbox" checked={push.enabled} onChange={e => updPush({ enabled: e.target.checked })} />
             启用推送
           </label>
           <div className="mt-2 grid grid-cols-1 gap-2">
-            <label className="text-xs text-slate-400">通道选择</label>
+            <label className="text-xs text-slate-400">通道选择（可同时配置多个 key 并发推送）</label>
             <select className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
               value={push.channel ?? ""}
               onChange={e => updPush({ channel: (e.target.value || null) as PushChannel | null })}>
@@ -140,6 +140,8 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
               <option value="serverchan">Server酱（SCTSendKey）</option>
               <option value="wechatbot">企业微信群机器人 Webhook</option>
               <option value="bark">Bark（iOS 推送）</option>
+              <option value="feishu">飞书自定义机器人 Webhook</option>
+              <option value="qq">QQ（Qmsg 酱 qmsg.zndx.net）</option>
             </select>
             {push.channel === "serverchan" && (
               <input type="password" className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
@@ -155,6 +157,16 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
               <input type="password" className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
                 value={push.barkKey ?? ""} placeholder="Bark 设备 key"
                 onChange={e => updPush({ barkKey: e.target.value })} />
+            )}
+            {push.channel === "feishu" && (
+              <input type="password" className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
+                value={push.feishuWebhook ?? ""} placeholder="飞书机器人 webhook 完整 URL（https://open.feishu.cn/open-apis/bot/v2/hook/...）"
+                onChange={e => updPush({ feishuWebhook: e.target.value })} />
+            )}
+            {push.channel === "qq" && (
+              <input type="password" className="w-full rounded bg-slate-800 px-3 py-2 text-sm"
+                value={push.qmsgKey ?? ""} placeholder="Qmsg 酱 key（qmsg.zndx.net/send/{key}）"
+                onChange={e => updPush({ qmsgKey: e.target.value })} />
             )}
             <label className="text-xs text-slate-400">最低推送等级
               <select className="ml-2 rounded bg-slate-800 px-2 py-1 text-xs"

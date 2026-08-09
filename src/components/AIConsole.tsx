@@ -6,12 +6,15 @@
 //   每轮注入 LLM + 对话历史持久化 —— "像真人对话一样"记住上下文，刷新不丢
 // ============================================================
 import { useState, useRef, useEffect } from "react";
-import { runAssistantAgent, type AssistantSiteContext } from "../lib/assistantAgent";
+import { runAssistantAgent, isSimpleQuestion, buildQuickSystem, type AssistantSiteContext } from "../lib/assistantAgent";
+import { streamChat } from "../lib/ai";
 import {
   loadResearchCtx, saveResearchCtx, updateResearchCtxAfterReply,
   extractStockCode, isNewResearchRequest, isContinueResearch,
   type ResearchCtx,
 } from "../lib/researchTools";
+// v9.84.2（AI大脑层 · 3.3）：对话结论回写 —— 个股裁决→雷达旁标，动作判断→决策审计
+import { digestConsoleReply } from "../lib/consoleDigest";
 
 interface Msg {
   role: "user" | "ai";
@@ -76,6 +79,38 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
 
       setMsgs(m => [...m, { role: "user", text: q }]);
       setBusy(true);
+
+      // v9.84.2（AI大脑层 · 3.4）：简单问答 → 真 SSE 流式（逐字渲染，无工具轮）；
+      // 失败（非本地/上游异常）→ 静默回退 ReAct 完整链路
+      if (isSimpleQuestion(q)) {
+        try {
+          const system = await buildQuickSystem(siteContext);
+          typingRef.current = true; // 流式期间跳过对话历史持久化（每帧 setState 不落盘）
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 60000); // 前端兜底：上游 45s + 缓冲
+          const streamed = await streamChat(
+            { system, user: q, maxTokens: 2000 },
+            (delta) => {
+              // 增量追加到当前最后一条 ai 消息
+              setMsgs(m => {
+                const last = m[m.length - 1];
+                if (!last || last.role !== "ai") return [...m, { role: "ai", text: delta }];
+                return [...m.slice(0, -1), { ...last, text: last.text + delta }];
+              });
+            },
+            ctrl.signal,
+          );
+          clearTimeout(t);
+          typingRef.current = false;
+          if (streamed && streamed.text) {
+            // 完整文本落一次盘（打字机持久化由 msgs effect 处理）
+            try { digestConsoleReply(streamed.text, [], siteContext.topMainline); } catch { /* 静默 */ }
+            setBusy(false);
+            return;
+          }
+        } catch { /* 回退 ReAct */ } finally { typingRef.current = false; }
+      }
+
       setMsgs(m => [...m, { role: "ai", text: "🔍 正在调全站数据调研…" }]);
       try {
         // 最近对话历史（清洗工具轨迹/系统标记）
@@ -106,6 +141,8 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
         // v9.80（A8-06 改进）：最终答复打字机渐显（视觉流式 —— ReAct 多轮工具调用无法真正 SSE，
         // 但答复"逐字出现"消除"等待 20s 无反馈"的焦虑；降级回复同样渐显但保留 degraded 标）
         const finalText = r.reply || "（空回复）";
+        // v9.84.2（AI大脑层 · 3.3）：对话结论回写（个股裁决→雷达旁标 / 动作判断→决策审计）
+        try { digestConsoleReply(finalText, r.toolsCalled, siteContext.topMainline); } catch { /* 回写失败不阻塞 */ }
         setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "", tools: r.toolsCalled, degraded: r.degraded }));
         // v9.81（性能）：打字机 8ms→40ms、每帧 2-4→4-7 字符（整体速度不变，主线程 setState/重渲染频率降 5 倍）
         const full = finalText;
