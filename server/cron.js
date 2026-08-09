@@ -1663,8 +1663,22 @@ async function runTradeBackfill(pool) {
 async function backfillOnePost(post) {
   const secid = /^(60|68|5)/.test(post.code) ? `1.${post.code}` : `0.${post.code}`;
   const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55&klt=101&fqt=0&lmt=10&ut=${EM_UT}`;
-  const j = await httpsGet(url, 10000);
-  const kl = j?.data?.klines ?? [];
+  let kl = [];
+  try {
+    const j = await httpsGet(url, 10000);
+    const arr = j?.data?.klines ?? [];
+    if (Array.isArray(arr)) kl = arr;
+  } catch { /* push2his 断源 → 腾讯兜底 */ }
+  // v9.84.5：push2his 断源（HTTP 000）→ 腾讯 fqkline 兜底（列格式 date,open,close,high,low,volume 兼容）
+  if (kl.length === 0) {
+    try {
+      const qSymbol = /^(60|68|5)/.test(post.code) ? `sh${post.code}` : `sz${post.code}`;
+      const txUrl = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${qSymbol},day,,,10,qfq`;
+      const tj = await httpsGet(txUrl, 10000);
+      const rows = tj?.data?.[qSymbol]?.qfqday ?? tj?.data?.[qSymbol]?.day ?? [];
+      if (Array.isArray(rows)) kl = rows.map(r => (Array.isArray(r) ? r.join(",") : String(r)));
+    } catch { /* 腾讯也失败 → 返回 null */ }
+  }
   if (!Array.isArray(kl) || kl.length < 2) return null;
   const dates = kl.map(line => String(line).split(",")[0]);
   // 定位拍板日（含当日）在日K的位置
