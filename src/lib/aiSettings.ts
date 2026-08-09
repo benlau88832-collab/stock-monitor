@@ -7,7 +7,9 @@ export interface ProviderPreset {
 }
 export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
   agnes:    { label: "Agnes 2.5 Flash", baseUrl: "https://apihub.agnes-ai.cn/v1/chat/completions", model: "agnes-2.5-flash", thinking: false, supportsThinking: true, corsOk: true, note: "官方Key·改cn端点·免费flash模型" },
-  deepseek: { label: "DeepSeek",        baseUrl: "https://api.deepseek.com/v1/chat/completions", model: "deepseek-chat", thinking: false, supportsThinking: false, corsOk: false, note: "需后端代理" },
+  // v9.83（模型切换）：本地部署默认走服务端 .env 中转（OpenCode Go 套餐 DeepSeek V4 Flash）；
+  // 前端直连选项仅作 fallback，Key 不内嵌、不入库、不上传
+  deepseek: { label: "DeepSeek V4 Flash", baseUrl: "https://opencode.ai/zen/go/v1/chat/completions", model: "deepseek-v4-flash", thinking: false, supportsThinking: true, corsOk: false, note: "OpenCode Go 套餐·仅服务端中转（Key 在 server/.env）" },
   zhipu:    { label: "智谱 GLM",          baseUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions", model: "glm-4-flash", thinking: false, supportsThinking: true, corsOk: false, note: "需后端代理" },
   moonshot: { label: "Moonshot Kimi",    baseUrl: "https://api.moonshot.cn/v1/chat/completions", model: "moonshot-v1-8k", thinking: false, supportsThinking: false, corsOk: false, note: "需后端代理" },
   qwen:     { label: "通义千问 Qwen",     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", model: "qwen-plus", thinking: false, supportsThinking: true, corsOk: false, note: "需后端代理" },

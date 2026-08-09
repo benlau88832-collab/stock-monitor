@@ -80,23 +80,26 @@ function postJSON(url, body, timeoutMs = 30000, extraHeaders = {}) {
   });
 }
 
-// ---------- 调 Agnes 拿纯文本（cron.js 的 callLLM 语义） ----------
+// ---------- 调 LLM 拿纯文本（cron.js 的 callLLM 语义） ----------
 // opts: { system?, maxTokens?, temperature?, thinking? }
 // 返回 message.content 字符串（空则 reject）
+// v9.83（模型切换）：支持 DeepSeek 推理模型 —— max_tokens 600→2000（推理模型思考会占用 token，
+// 实测 600 时思考占满导致 content 为空）；chat_template_kwargs 是 Agnes 专属参数，非 agnes 不传
 function callModelText(payloadText, opts = {}) {
   const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
   const model = process.env.AI_MODEL || "agnes-2.5-flash";
+  const isAgnes = (process.env.AI_PROVIDER || "agnes") === "agnes";
   const body = {
     model,
     messages: [
       { role: "system", content: opts.system || "你是A股资深盘面分析师。基于今日快讯与公告数据，输出当日市场速览（≤150字）：1) 主线方向 2) 强催化公告要点 3) 风险提示。直接输出正文，不要markdown。" },
       { role: "user", content: payloadText },
     ],
-    max_tokens: opts.maxTokens || 600,
+    max_tokens: opts.maxTokens || 2000,
     temperature: opts.temperature ?? 0.2,
     stream: false,
-    chat_template_kwargs: { enable_thinking: opts.thinking ?? false },
   };
+  if (isAgnes) body.chat_template_kwargs = { enable_thinking: opts.thinking ?? false };
   return postJSON(baseUrl, body, 40000, {
     Authorization: "Bearer " + (process.env.AI_API_KEY || ""),
   }).then(json => {

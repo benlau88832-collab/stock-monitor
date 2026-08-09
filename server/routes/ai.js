@@ -98,14 +98,18 @@ module.exports = function aiRoutes(app) {
           ...history,
           { role: "user", content: String(user || "") },
         ],
-        max_tokens: Math.min(Number(maxTokens) || 1200, 8000),
+        max_tokens: Math.min(Number(maxTokens) || 2000, 8000),
         temperature: temperature != null ? Number(temperature) : 0.2,
         stream: false,
       };
       // 2026-08-04 公告后：Endpoint=.cn + agnes-2.5-flash（免费）；thinking 显式关闭才有 content。
       // 必须显式传 enable_thinking:false 才返回 content（JSON 任务尤其需要）。
       // 任务要求 thinking=true 时（复盘/周教练）才开启。
-      body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
+      // v9.83（模型切换）：chat_template_kwargs 是 Agnes 专属参数，DeepSeek 等 OpenAI 兼容网关不传
+      // （DeepSeek 推理模型自身决定思考，max_tokens 已给足 2000 保证 content 完整输出）
+      if ((process.env.AI_PROVIDER || "agnes") === "agnes") {
+        body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
+      }
       // v9.41（V4-A）：Agent 原生 tool_calls 透传（Agnes OpenAI 兼容 /v1/chat/completions）
       if (Array.isArray(tools) && tools.length > 0) {
         // OpenAI 格式要求 {type:"function", function:{name,description,parameters}} 包装层

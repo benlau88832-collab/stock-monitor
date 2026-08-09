@@ -66,7 +66,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
         </select>
         {!PROVIDERS[s.provider].corsOk && !serverMode && (
           <p className="mb-3 rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            ⚠️ 该厂商浏览器直连通常被 CORS 拦截，线上静态页可能无法使用，建议选 Agnes 或等本地部署后端代理。
+            ⚠️ 该厂商浏览器直连通常被 CORS 拦截；本地部署请走服务端中转（Key 配置在 server/.env，不落地浏览器）。
           </p>
         )}
 

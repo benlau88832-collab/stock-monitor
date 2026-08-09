@@ -19,8 +19,9 @@ const ALLOWED_HOSTS = new Set([
   // 腾讯/新浪备用
   "qt.gtimg.cn",
   "hq.sinajs.cn",
-  // AI 网关（Agnes）
+  // AI 网关（Agnes 备用 / DeepSeek via OpenCode）
   "apihub.agnes-ai.cn",
+  "opencode.ai",
   // 推送网关（Server酱 / 企业微信 / Bark）
   "sctapi.ftqq.com",
   "qyapi.weixin.qq.com",
