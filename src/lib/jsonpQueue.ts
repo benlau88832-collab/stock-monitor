@@ -127,11 +127,12 @@ function processNext() {
     .catch(err => {
       recordFail(item.url);
       if (item.retryCount < item.maxRetries && !isCircuitOpen(item.url)) {
-        // 重试退避：1s / 3s / 8s + ±30% 随机抖动，重新入队不插队
-        const base = [1000, 3000, 8000][item.retryCount] ?? 8000;
+        // v9.84（性能）：重试退避 1s（原 1s/3s/8s 三级）+ 队首插入（原排到队尾）——
+        // 间歇网络下 37 个请求互相拖尾是单轮 4-9s 的主因；1 次重试 + 队首插队让失败项最快重发
+        const base = 1000;
         const jitter = base * (0.7 + Math.random() * 0.6);
         item.retryCount++;
-        setTimeout(() => { queue.push(item); processNext(); }, jitter);
+        setTimeout(() => { queue.unshift(item); processNext(); }, jitter);
       } else {
         item.reject(err);
       }
@@ -143,9 +144,9 @@ function processNext() {
     });
 }
 
-/** 通过全局队列发起 JSONP 请求（并发≤2，自动重试，URL去重） */
+/** 通过全局队列发起 JSONP 请求（并发≤3，自动重试 1 次，URL去重） */
 export function queuedJsonp<T = any>(
-  url: string, timeout = 6000, callbackParam = "cb", maxRetries = 2,
+  url: string, timeout = 6000, callbackParam = "cb", maxRetries = 1,
 ): Promise<T> {
   // URL 去重：相同 URL 在途只发一次，复用同一个 Promise
   const dedupeKey = url.replace(/&_=\d+/, "");

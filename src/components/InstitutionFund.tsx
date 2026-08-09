@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { fmtMoney, pctColor } from "../lib/format";
+// v9.84（性能）：裸 script JSONP 并入全局 jsonpQueue —— 原绕开并发3/熔断/重试，是全站唯一裸手写 JSONP
+import { queuedJsonp } from "../lib/jsonpQueue";
 
 // 机构资金观察卡片（宽基ETF资金流）
 export default function InstitutionFund() {
@@ -9,19 +11,9 @@ export default function InstitutionFund() {
   const load = useCallback(async () => {
     try {
       // 宽基ETF主力资金：510300/510500/588000/159915/512100
-      // v9.82（性能）：超时 8s→3s —— push2 断源时快速失败，不再挂"加载中…"8 秒
+      // v9.82：超时 8s→3s；v9.84：走 queuedJsonp（受并发3/熔断/URL去重约束）
       const url = "https://push2.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f12,f14,f62&secids=1.510300,1.510500,1.588000,0.159915,1.512100";
-      const cbName = `etf_${Date.now()}`;
-      const data = await new Promise<any>((resolve, reject) => {
-        const script = document.createElement("script");
-        const timer = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 3000);
-        function cleanup() { clearTimeout(timer); delete (window as any)[cbName]; script.parentNode?.removeChild(script); }
-        (window as any)[cbName] = (d: any) => { cleanup(); resolve(d); };
-        script.src = `${url}&cb=${cbName}&_=${Date.now()}`;
-        script.referrerPolicy = "no-referrer";
-        script.onerror = () => { cleanup(); reject(new Error("error")); };
-        document.head.appendChild(script);
-      });
+      const data = await queuedJsonp<any>(url, 3000, "cb", 1);
       const diff: any[] = Array.isArray(data?.data?.diff) ? data.data.diff : [];
       let t = 0;
       const names: Record<string, string> = { "510300": "沪深300ETF", "510500": "中证500ETF", "588000": "科创50ETF", "159915": "创业板ETF", "512100": "中证1000ETF" };

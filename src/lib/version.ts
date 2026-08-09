@@ -14,5 +14,5 @@
 //   + dataStore内存缓存 + cloudStore增量同步(修复bulk 100条截断) + AIConsole打字机降频 + Recharts memo
 //   + 服务端加固（启动补抓链互斥/非交易日跳LLM/盯价与主题分析防重叠/proxy 6s/theme-analysis异步化）
 // ============================================================
-export const APP_VERSION = "v9.83";
+export const APP_VERSION = "v9.84.0";
 export const BUILD_DATE = "2026-08-09";

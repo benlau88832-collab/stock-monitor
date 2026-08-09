@@ -82,6 +82,11 @@ export interface WatchStockBrief {
   limitPct?: number;
 }
 
+// v9.84（性能）：因子行缓存（10min）—— loadFactorRows 跨挂载/跨 effect 共享，首屏不再反复打 40+ kv
+let factorRowsCache: Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }> | null = null;
+let factorRowsCacheTs = 0;
+const FACTOR_ROWS_TTL = 10 * 60 * 1000;
+
 // ============== 指数光带（极薄通栏） ==============
 function IndexStripImpl({ overview }: { overview: OverviewData | null }) {
   if (!overview) return null;
@@ -643,6 +648,8 @@ export default function Dashboard({
   const [agentResults, setAgentResults] = useState<Array<{ mainline: string; verdict: AgentVerdict; snap: { strengthScore: number; ztCount: number } }>>([]);
   const [agentLoading, setAgentLoading] = useState(false);
   const agentLastRunRef = useRef(0); // 自动触发节流（5 分钟）
+  // v9.84（性能）：龙虎榜交叉/资金连续流入检查 60s 节流（原依赖 rawZTPool 引用被 18s 快刷触发级联）
+  const crossCheckAtRef = useRef(0);
   // v11-3（P0）：上次裁决 action（变化提示用）—— ref 在 setAgentResults 前存旧值
   const lastActionRef = useRef<string | null>(null);
   const runAgent = async (auto = false) => {
@@ -782,6 +789,11 @@ export default function Dashboard({
   }, []);
   useEffect(() => {
     if (!isLocalServer()) return;
+    // v9.84（性能）：消灭 18s kv 级联 —— refreshFast 每 18s 换 rawZTPool 引用导致本 effect 每 18s 重跑
+    // ~10 个顺序 kv；龙虎榜/资金连续流入是慢变量（分钟级），60s 节流足够
+    const now = Date.now();
+    if (now - crossCheckAtRef.current < 60 * 1000) return;
+    crossCheckAtRef.current = now;
     let alive = true;
     (async () => {
       // 1. 龙虎榜 × 涨停交叉（与 LhbCrossPanel 同口径：lhb:日期 净买 ∩ 今日涨停池）
@@ -841,21 +853,29 @@ export default function Dashboard({
     nuclearCount?: number | null;
   }
   async function loadFactorRows(): Promise<Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }>> {
-    const out: Array<{ date: string; sentiment: number | null; blastedRate: number | null; ztCount: number | null; maxBoardHeight: number | null; premiumAvg: number | null; promotionRate: number | null; sealDecayCount: number | null; lhbBoostCount: number | null; fundInflowStreak: number | null; nuclearCount: number | null }> = [];
+    // v9.84（性能）：交易日间并行 + 10min 缓存 —— 原 14 交易日 × 3 kv 顺序 await = 首屏 42 个串行请求
+    const now = Date.now();
+    if (factorRowsCache && now - factorRowsCacheTs < FACTOR_ROWS_TTL) return factorRowsCache;
+    const daysList: Array<{ ds: string; t: Date }> = [];
     const d = new Date();
     for (let i = 13; i >= 0; i--) {
       const t = new Date(d); t.setDate(t.getDate() - i);
       if (!isTradingDay(t)) continue; // 周末/节假日跳过（北京时间）
-      const ds = bjDateStr(t);
+      daysList.push({ ds: bjDateStr(t), t });
+    }
+    const out = await Promise.all(daysList.map(async ({ ds, t }) => {
       const row: any = { date: ds, sentiment: null, blastedRate: null, ztCount: null, maxBoardHeight: null, premiumAvg: null, promotionRate: null, sealDecayCount: null, lhbBoostCount: null, fundInflowStreak: null, nuclearCount: null };
       try {
-        const sv = await kvGet(`sentiment:${ds}`);
+        const nxt = new Date(t); nxt.setDate(nxt.getDate() + 1);
+        // v9.84：当日 3 个 kv 并行（sentiment / market_daily / 次日 market_daily）
+        const [sv, md, nxtMd] = await Promise.all([
+          kvGet(`sentiment:${ds}`).catch(() => null),
+          kvGet(`market_daily:${ds}`).catch(() => null) as Promise<MarketDailyLite | null>,
+          kvGet(`market_daily:${bjDateStr(nxt)}`).catch(() => null) as Promise<MarketDailyLite | null>,
+        ]);
         const num = Number(sv ?? NaN);
         if (Number.isFinite(num)) row.sentiment = num;
-      } catch { /* 静默 */ }
-      try {
         // v14-9（P2）：market_daily 用精确接口替代 as any
-        const md = await kvGet(`market_daily:${ds}`) as MarketDailyLite | null;
         if (md) {
           row.ztCount = md.ztCount ?? null;
           row.blastedRate = md.blastedRate ?? null;
@@ -869,15 +889,15 @@ export default function Dashboard({
           row.nuclearCount = md.nuclearCount ?? null;
         }
         // v9.57（V8-1）：读次日 market_daily（ztCount/maxBoardHeight）→ "主线延续"标签数据
-        const nxt = new Date(t); nxt.setDate(nxt.getDate() + 1);
-        const nxtMd = await kvGet(`market_daily:${bjDateStr(nxt)}`) as MarketDailyLite | null;
         if (nxtMd) {
           row.nextZtCount = nxtMd.ztCount ?? null;
           row.nextHeight = nxtMd.maxBoardHeight ?? null;
         }
       } catch { /* 静默 */ }
-      out.push(row);
-    }
+      return row;
+    }));
+    factorRowsCache = out;
+    factorRowsCacheTs = now;
     return out;
   }
 

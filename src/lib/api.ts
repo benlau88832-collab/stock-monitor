@@ -340,11 +340,24 @@ const BOARD_FS: Record<string, string> = {
   concept: "m:90+t:3",
 };
 
+// v9.84（性能根治）：板块资金流 60s 缓存 —— 单轮 refreshAll 中暗盘(concept60)/主线(industry30,concept30,region10)/
+// 作战引擎(industry all)对同一 boardType 多次调用合并为 1 次请求。
+// 缓存键忽略 limit（统一 pz=100 拉全量、按需截断），concept60 与 concept30 共享同一份数据。
+const boardFlowCache = new Map<string, { data: BoardFlowItem[]; ts: number }>();
+const BOARD_FLOW_TTL = 60 * 1000;
+const BOARD_FLOW_PZ = 100;
+
 export async function fetchBoardFundFlow(
   boardType: "industry" | "concept" | "region",
   limit = 15,
   opts?: { all?: boolean },
 ): Promise<BoardFlowItem[]> {
+  const cacheKey = `${boardType}|${opts?.all ? "all" : "top"}`;
+  const cached = boardFlowCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now - cached.ts < BOARD_FLOW_TTL) {
+    return limit >= cached.data.length ? cached.data : cached.data.slice(0, limit);
+  }
   const fs = BOARD_FS[boardType];
   const fields = "f12,f14,f3,f62,f66,f72,f78,f84,f164,f165,f174,f175,f184";
   const parse = (json: any): BoardFlowItem[] => {
@@ -379,7 +392,7 @@ export async function fetchBoardFundFlow(
   //      流出行业被挤出结果集 → 资金走势图"主力净流出"永远为 0。
   // 注意：不能靠 pz=500 拉全量 —— 东财对 pz 有上限（约100），且排序后仅返回头部。
   if (opts?.all) {
-    const base = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=300&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
+    const base = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${BOARD_FLOW_PZ}&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
     const [inflowRes, outflowRes] = await Promise.allSettled([
       trackedJsonp<any>("板块资金流入", `${base}&po=1`),
       trackedJsonp<any>("板块资金流出", `${base}&po=0`),
@@ -390,12 +403,17 @@ export async function fetchBoardFundFlow(
         for (const it of parse(r.value)) if (it.code) merged.set(it.code, it);
       }
     }
-    return [...merged.values()].sort((a, b) => b.mainNet - a.mainNet);
+    const result = [...merged.values()].sort((a, b) => b.mainNet - a.mainNet);
+    boardFlowCache.set(cacheKey, { data: result, ts: now });
+    return limit >= result.length ? result : result.slice(0, limit);
   }
 
-  const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
+  // v9.84：统一 pz=BOARD_FLOW_PZ(100) 拉全量再按 limit 截断 —— 使同 boardType 不同 limit 的调用共享缓存
+  const url = `${PUSH2}/clist/get?ut=${EM_UT}&pn=1&pz=${BOARD_FLOW_PZ}&po=1&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
   const json = await trackedJsonp<any>("板块资金流", url);
-  return parse(json);
+  const result = parse(json);
+  boardFlowCache.set(cacheKey, { data: result, ts: now });
+  return limit >= result.length ? result : result.slice(0, limit);
 }
 
 // ============== 板块名称过滤（去除非真正概念板块的指数成分/风格标签） ==============
@@ -922,7 +940,16 @@ export interface LimitPoolSummary {
 
 // 获取涨停池统计摘要（供多个模块共享）
 // v9.26.10：节假日/非交易日空池时自动回退最近交易日（最多 10 天）
+// v9.84（性能）：15s 模块级缓存 —— 60s 主刷/18s 快刷/LimitBoard挂载/情报面板 5 处调用收敛；
+// 仅缓存"成功且非 degraded"结果（失败态不缓存，下轮重试；18s 快刷语义：15s 内复用可接受）
+const limitPoolCache = { data: null as LimitPoolSummary | null, ts: 0 };
+const LIMIT_POOL_TTL = 15 * 1000;
+
 export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSummary> {
+  const now = Date.now();
+  if (limitPoolCache.data && now - limitPoolCache.ts < LIMIT_POOL_TTL && !limitPoolCache.data.degraded) {
+    return limitPoolCache.data;
+  }
   let d = date || tradeDateStr();
   const requested = d;
   let last: LimitPoolSummary | null = null;
@@ -941,7 +968,9 @@ export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSum
       // v9.77（P0-6）：请求的是今天、返回的是非今日 qdate → 接口失败被静默回退，
       // 标记 degraded，让 UI 明示"数据来自昨日/接口异常"，不再把昨日涨停数当今日。
       const degraded = summary.qdate != null && requested !== summary.qdate;
-      return { ...summary, degraded };
+      const out = { ...summary, degraded };
+      if (!degraded) { limitPoolCache.data = out; limitPoolCache.ts = now; }
+      return out;
     }
     // 空池（节假日）→ 往前一天再试
     const prev = new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`);
@@ -1033,8 +1062,8 @@ export async function fetchTurnoverHistory(days = 10): Promise<TurnoverDay[]> {
     return new Map();
   }
   try {
-    const sh = await one("1.000001");
-    const sz = await one("0.399001");
+    // v9.84（性能）：沪深两市并行（原顺序 await sh→sz，串行 2×超时+重试）
+    const [sh, sz] = await Promise.all([one("1.000001"), one("0.399001")]);
     const dates = new Set([...sh.keys(), ...sz.keys()]);
     const res = [...dates].map(date => ({ date, amount: (sh.get(date) ?? 0) + (sz.get(date) ?? 0) }));
     res.sort((a, b) => b.date.localeCompare(a.date));

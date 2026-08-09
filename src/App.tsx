@@ -541,11 +541,13 @@ export default function App() {
 
         const marketFlowType = fm ? judgeFlowType(marketOpenNet, marketDarkNet) : "数据不足";
 
-        // Fetch constituents for ALL top10 boards
+        // v9.84（性能）：成分股预取 10→6 板块 × 8→6 只 —— 10 个成分请求是 darkPool 模块最慢环节
+        //（队列并发3下串行排队 3-5s）；暗盘面板其余板块展开时无成分数据（boardStocks 缺省显示"暂无"）
+        const prefetchBoards = top10.slice(0, 6);
         const boardStocks: Record<string, BoardStock[]> = {};
-        const stockFetchPromises = top10.map(async (b) => {
+        const stockFetchPromises = prefetchBoards.map(async (b) => {
           try {
-            const stocks = await fetchBoardConstituents(b.code, 8);
+            const stocks = await fetchBoardConstituents(b.code, 6);
             boardStocks[b.code] = stocks;
           } catch {
             boardStocks[b.code] = [];

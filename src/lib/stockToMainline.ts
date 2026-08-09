@@ -521,7 +521,9 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
     //   ① 全量涨停（原 slice(0,50) 截断 → 后 70 只涨停全部丢失 = 通信/算力主线消失的元凶）
     //   ② 词根折叠（概念名 → 用户大类："光模块/CPO/华为"→"通信"）
     //   ③ 一对多展开（一只涨停股的所有折叠概念都参与聚合，不再"择优取1"）
-    const ztCodes = input.rawPool.map(p => String(p.c ?? "")).filter(Boolean);
+    // v9.84（性能）：限 120 只 —— 涨停 >120 的极端行情下防 5+ 个 datacenter 串行请求拖垮快路径；
+    // 正常涨停数（<100）不受影响；fetchStocksBoards 已并行分块 + 4s 超时 + 60s 缓存
+    const ztCodes = input.rawPool.slice(0, 120).map(p => String(p.c ?? "")).filter(Boolean);
     const boardsMap = await fetchStocksBoards(ztCodes);
     if (boardsMap.size > 0) {
       // 每只股 → 折叠后的概念大类列表（一对多）
@@ -625,18 +627,20 @@ async function fallbackByHybk(input: ClassifyInput): Promise<ClassifyResult> {
     const concepts = await fetchBoardFundFlow("concept", 300);
     // 过滤：非真实题材 + "新股/次新股/最近强势/活跃小盘" 等板块分类（非题材主线）
     const NON_THEME = /新股|次新|最近|强势|活跃|破净|转股|高送转|填权|st|ST|预增|预亏|含权|含H|含B|AH|AB|CDR|B股|H股|百元|低价|微盘|大盘|小盘|中盘|融资|融券|深股通|沪股通|MSCI|富时|标普|QFII|社保|证金|汇金|基金重仓|券商重仓|保险重仓|信托重仓|QFII重仓/;
+    // v9.84（性能）：兜底 A 硬上限 80→20 概念、每概念 50→30 只成分 ——
+    // 原 80 概念 × 6 并发 = 14 批串行，datacenter 抖动时可拖 30s+（且本路径仅在 F10 直查失败时触发）
     const hot = concepts
       .filter(b => isRealConceptBoard(b.name) && !NON_THEME.test(b.name) && b.pct > 0 && (b.mainNet > 0))
-      .slice(0, 80);
+      .slice(0, 20);
 
-    // 2. 并行拉每个概念的成分股（v9.21-A：50 只/概念，并发 6 避免限速）
+    // 2. 并行拉每个概念的成分股（v9.21-A：30 只/概念，并发 6 避免限速）
     const stockToConcepts = new Map<string, Set<string>>(); // code → 多个概念名
     const chunks: typeof hot[] = [];
     for (let i = 0; i < hot.length; i += 6) chunks.push(hot.slice(i, i + 6));
     for (const chunk of chunks) {
       await Promise.all(chunk.map(async (c) => {
         try {
-          const constituents = await fetchBoardConstituents(c.code, 50);
+          const constituents = await fetchBoardConstituents(c.code, 30);
           for (const s of constituents) {
             if (!stockToConcepts.has(s.code)) stockToConcepts.set(s.code, new Set());
             stockToConcepts.get(s.code)!.add(c.name);

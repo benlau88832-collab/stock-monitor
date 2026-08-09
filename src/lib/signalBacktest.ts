@@ -34,27 +34,35 @@ interface DayRow {
 }
 
 /** 读取最近 N 个交易日的数据序列（v9.55 V7-19：按北京时间交易日历，节假日/时区不再偏移） */
+// v9.84（性能）：交易日间并行 + 10min 缓存 —— 原 14 交易日 × 2 kv 顺序 await = 首屏 28 个串行请求
+const historyCache = { data: null as DayRow[] | null, ts: 0 };
+const HISTORY_TTL = 10 * 60 * 1000;
+
 async function loadHistory(days = 14): Promise<DayRow[]> {
-  const out: DayRow[] = [];
+  const now = Date.now();
+  if (historyCache.data && now - historyCache.ts < HISTORY_TTL) return historyCache.data;
+  const daysList: Array<{ ds: string }> = [];
   const d = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const t = new Date(d);
     t.setDate(t.getDate() - i);
     if (!isTradingDay(t)) continue; // 周末/节假日跳过
-    const ds = bjDateStr(t);
+    daysList.push({ ds: bjDateStr(t) });
+  }
+  const out = await Promise.all(daysList.map(async ({ ds }) => {
     const row: DayRow = { date: ds, sentiment: null, ztCount: null, dtCount: null, blastedRate: null, maxBoardHeight: null };
     try {
-      const r = await fetch(`/api/db/kv?key=${encodeURIComponent(`sentiment:${ds}`)}`);
-      if (r.ok) {
-        const v = await r.json();
+      const [sr, mr] = await Promise.all([
+        fetch(`/api/db/kv?key=${encodeURIComponent(`sentiment:${ds}`)}`).catch(() => null),
+        fetch(`/api/db/kv?key=${encodeURIComponent(`market_daily:${ds}`)}`).catch(() => null),
+      ]);
+      if (sr && sr.ok) {
+        const v = await sr.json();
         const num = Number(v?.value ?? NaN);
         if (Number.isFinite(num)) row.sentiment = num;
       }
-    } catch { /* 静默 */ }
-    try {
-      const r = await fetch(`/api/db/kv?key=${encodeURIComponent(`market_daily:${ds}`)}`);
-      if (r.ok) {
-        const v = await r.json();
+      if (mr && mr.ok) {
+        const v = await mr.json();
         const md = v?.value;
         if (md) {
           row.ztCount = md.ztCount ?? null;
@@ -64,8 +72,10 @@ async function loadHistory(days = 14): Promise<DayRow[]> {
         }
       }
     } catch { /* 静默 */ }
-    out.push(row);
-  }
+    return row;
+  }));
+  historyCache.data = out;
+  historyCache.ts = now;
   return out;
 }
 

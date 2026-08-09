@@ -36,6 +36,13 @@ export interface StockBoards {
 // ============== 批量查询 ==============
 const DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get";
 
+// v9.84（性能根治）：F10 概念查询 —— 按 code 60s 缓存 + 4s 超时。
+// 原实现无 AbortSignal：datacenter 挂起时 refreshAll 关键路径（classifyStocksToMainlines 快路径）
+// 无限等待 → inFlight 锁死整轮刷新（用户"几乎无法加载"的根因之一）。
+// 60s 缓存让同一只股票在同一轮/相邻轮次内不再重复打 datacenter。
+const boardsCache = new Map<string, { data: StockBoards; ts: number }>();
+const BOARDS_TTL = 60 * 1000;
+
 /**
  * 批量查询多只股票的所属概念（一次 IN 查询，最多 30 只）
  * @param codes 股票代码（如 ["002896","002230"]）
@@ -44,16 +51,28 @@ export async function fetchStocksBoards(codes: string[]): Promise<Map<string, St
   const result = new Map<string, StockBoards>();
   if (codes.length === 0) return result;
 
-  // 分块：每批 30 只
-  const chunks: string[][] = [];
-  for (let i = 0; i < codes.length; i += 30) chunks.push(codes.slice(i, i + 30));
+  // 命中缓存直接返回（按 code 粒度，跨调用方共享）
+  const now = Date.now();
+  const miss: string[] = [];
+  for (const c of codes) {
+    const hit = boardsCache.get(c);
+    if (hit && now - hit.ts < BOARDS_TTL) result.set(c, hit.data);
+    else miss.push(c);
+  }
+  if (miss.length === 0) return result;
 
-  for (const chunk of chunks) {
+  // 分块：每批 30 只；v9.84：各块**并行**（datacenter 独立域名，不受 jsonpQueue 并发3约束，
+  // 串行 6 块 × 4s = 24s 最坏；并行总耗时 = 单块耗时 ≤4s）
+  const chunks: string[][] = [];
+  for (let i = 0; i < miss.length; i += 30) chunks.push(miss.slice(i, i + 30));
+
+  await Promise.allSettled(chunks.map(async (chunk) => {
     const codeList = chunk.map(c => `"${c}"`).join(",");
     // v9.26.17：pageSize 5000（30 只/批 × 多板块可能 > 500；避免尾部股概念被静默截断）
     const url = `${DATACENTER}?reportName=RPT_F10_CORETHEME_BOARDTYPE&columns=ALL&filter=(SECURITY_CODE%20in%20(${encodeURIComponent(codeList).replace(/%22/g, '"')}))&pageSize=5000&source=HSF10&client=WEB`;
     try {
-      const resp = await fetch(url, { headers: { Referer: "https://emweb.securities.eastmoney.com/" } });
+      // v9.84：补 4s 超时（datacenter 挂起不再无限等）
+      const resp = await fetch(url, { headers: { Referer: "https://emweb.securities.eastmoney.com/" }, signal: AbortSignal.timeout(4000) });
       const json = await resp.json();
       const data: any[] = json?.result?.data ?? [];
       // 按 code 聚合
@@ -68,11 +87,13 @@ export async function fetchStocksBoards(codes: string[]): Promise<Map<string, St
       for (const code of chunk) {
         const allBoards = byCode.get(code) ?? [];
         const themes = allBoards.filter(isThemeBoard);
-        result.set(code, { code, themes, allBoards });
+        const sb: StockBoards = { code, themes, allBoards };
+        result.set(code, sb);
+        boardsCache.set(code, { data: sb, ts: now });
       }
     } catch (e) {
       console.warn(`[fetchStocksBoards] 查询失败 chunk=${chunk.length}只:`, e);
     }
-  }
+  }));
   return result;
 }
