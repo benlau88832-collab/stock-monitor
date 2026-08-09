@@ -73,6 +73,11 @@ function checkTarget(target) {
 }
 
 /** 核心转发（GET/POST 共用） */
+// v9.85.0（P1-3）：响应上限 5MB + 缓存按字节估算裁剪 —— 防单条大响应/大量缓存耗尽进程内存；
+//   移除显式 ACAO:*（交由 index.js 统一 CORS 收敛，任意 Origin 不再可读代理结果）
+const MAX_RESP_BYTES = 5 * 1024 * 1024;
+const CACHE_MAX_BYTES = 40 * 1024 * 1024;
+let cacheBytes = 0;
 function forward(req, res, target, bodyBuf) {
   const { url: u } = checkTarget(target);
   // 缓存命中（v9.26.10：剔除 req_trace/时间戳类动态参数；POST 不缓存）
@@ -109,20 +114,34 @@ function forward(req, res, target, bodyBuf) {
     servername: u.hostname, // TLS SNI（HTTPS 必须，避免证书校验失败）
   }, r => {
     const chunks = [];
-    r.on("data", c => chunks.push(c));
+    let total = 0;
+    let overLimit = false;
+    r.on("data", c => {
+      total += c.length;
+      if (total > MAX_RESP_BYTES) { overLimit = true; upstream.destroy(); return; }
+      chunks.push(c);
+    });
     r.on("end", () => {
+      if (overLimit) { done(() => res.status(502).json({ error: "upstream response too large" })); return; }
       const body = Buffer.concat(chunks);
       const type = r.headers["content-type"] || "application/json";
       if (cacheKey) {
+        const old = cache.get(cacheKey);
+        if (old) cacheBytes -= old.body.length;
         cache.set(cacheKey, { ts: Date.now(), body, type });
-        if (cache.size > 200) {
-          const keys = [...cache.keys()].slice(0, 100);
-          keys.forEach(k => cache.delete(k));
+        cacheBytes += body.length;
+        // 按总字节裁剪（超出 40MB 删最旧一半）
+        if (cacheBytes > CACHE_MAX_BYTES || cache.size > 200) {
+          const keys = [...cache.keys()].slice(0, Math.ceil(cache.size / 2));
+          for (const k of keys) {
+            const v = cache.get(k);
+            if (v) { cacheBytes -= v.body.length; cache.delete(k); }
+          }
         }
       }
       done(() => {
         res.set("Content-Type", type);
-        res.set("Access-Control-Allow-Origin", "*");
+        // v9.85.0（P1-3）：不再设置 ACAO:* —— 统一由 index.js CORS 中间件管控（仅 localhost）
         res.send(body);
       });
     });
@@ -135,8 +154,9 @@ function forward(req, res, target, bodyBuf) {
 }
 
 module.exports = function proxyRoutes(app) {
-  app.get("/api/proxy", (req, res) => {
-    if (!checkAuth(req, res)) return;
+  app.get("/api/proxy", async (req, res) => {
+    // v9.85.0（P0-1）：async 鉴权必须 await
+    if (!(await checkAuth(req, res))) return;
     const t = req.query.url;
     const c = checkTarget(t);
     if (!c.ok) {
@@ -147,8 +167,9 @@ module.exports = function proxyRoutes(app) {
   });
 
   // v9.27：POST 转发（人气榜 emappdata POST 接口 CORS 失效，本地部署经此绕行）
-  app.post("/api/proxy", (req, res) => {
-    if (!checkAuth(req, res)) return;
+  app.post("/api/proxy", async (req, res) => {
+    // v9.85.0（P0-1）：async 鉴权必须 await
+    if (!(await checkAuth(req, res))) return;
     const t = req.query.url;
     const c = checkTarget(t);
     if (!c.ok) {

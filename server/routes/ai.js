@@ -81,7 +81,8 @@ module.exports = function aiRoutes(app) {
   });
 
   app.post("/api/ai/call", async (req, res) => {
-    if (!checkAuth(req, res)) return;
+    // v9.85.0（P0-1）：checkAuth 是 async，必须 await —— 原 `!checkAuth(...)` 恒为真导致鉴权形同虚设
+    if (!(await checkAuth(req, res))) return;
     try {
       const { task, system, user, temperature, maxTokens, thinking, tools, toolChoice } = req.body || {};
 
@@ -157,7 +158,8 @@ module.exports = function aiRoutes(app) {
   // 响应：SSE 流，每行 data: {"delta":"..."}；结束 data: [DONE]
   // 失败：非 2xx + {error}
   app.post("/api/ai/stream", async (req, res) => {
-    if (!checkAuth(req, res)) return;
+    // v9.85.0（P0-1）：async 鉴权必须 await
+    if (!(await checkAuth(req, res))) return;
     const { system, user, temperature, maxTokens, thinking } = req.body || {};
     if (!process.env.AI_API_KEY) {
       return res.status(400).json({ error: "server AI key not configured" });
@@ -193,24 +195,42 @@ module.exports = function aiRoutes(app) {
         "Authorization": "Bearer " + (process.env.AI_API_KEY || ""),
       },
     };
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-    });
+    // v9.85.0（P0-4）：不再先写 200 —— 先发上游请求，收到上游响应头后再决定状态码。
+    // 原实现先 writeHead(200)，上游 4xx/5xx 只能伪装成 SSE error 流（前端当成功）。
+    // 同时加 buf 上限（1MB）与背压（res.write 返回 false 时 pause 上游）。
     const upstream = https.request(u, reqOpts, (r) => {
       if (r.statusCode && (r.statusCode < 200 || r.statusCode >= 300)) {
+        // 上游失败：透传真实状态码 + JSON error（前端 fetch 会 !resp.ok → 明确失败）
         const chunks = [];
-        r.on("data", c => chunks.push(c));
+        let total = 0;
+        r.on("data", c => { total += c.length; if (total <= 4096) chunks.push(c); });
         r.on("end", () => {
-          try { res.write(`data: ${JSON.stringify({ error: Buffer.concat(chunks).toString("utf8").slice(0, 200) })}\n\n`); } catch { /* 客户端可能已断开 */ }
-          res.end();
+          const detail = Buffer.concat(chunks).toString("utf8").slice(0, 300);
+          try { res.status(r.statusCode).json({ error: `upstream ${r.statusCode}`, detail }); } catch { /* 客户端已断开 */ }
         });
         return;
       }
+      // 上游 2xx：此时才写 SSE 头
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      });
       let buf = "";
+      const MAX_BUF = 1024 * 1024; // 1MB 缓冲上限（防异常长行内存压力）
+      const safeWrite = (chunk) => {
+        try {
+          if (res.writableEnded) return false;
+          return res.write(chunk);
+        } catch { return false; }
+      };
       r.on("data", (c) => {
         buf += c.toString("utf8");
+        if (buf.length > MAX_BUF) {
+          // 缓冲超限：终止上游，断流（防内存无限增长）
+          try { upstream.destroy(); res.end(); } catch { /* 静默 */ }
+          return;
+        }
         // 按行解析 SSE（OpenAI 格式：data: {...}）
         let idx;
         while ((idx = buf.indexOf("\n")) >= 0) {
@@ -219,7 +239,7 @@ module.exports = function aiRoutes(app) {
           if (!line || !line.startsWith("data:")) continue;
           const dataStr = line.slice(5).trim();
           if (dataStr === "[DONE]") {
-            try { res.write(`data: [DONE]\n\n`); } catch { /* 静默 */ }
+            safeWrite(`data: [DONE]\n\n`);
             continue;
           }
           try {
@@ -228,20 +248,24 @@ module.exports = function aiRoutes(app) {
             // v9.84.2（3.4）：DeepSeek 推理模型流式返回 reasoning_content（思考过程）——
             // 不转发给前端（只渲染 content 增量）
             const delta = choice.content ?? "";
-            if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+            if (delta && !safeWrite(`data: ${JSON.stringify({ delta })}\n\n`)) {
+              // 背压：客户端消费慢 → pause 上游，等 drain 再恢复
+              r.pause();
+              res.once("drain", () => r.resume());
+            }
           } catch { /* 跳过坏行 */ }
         }
       });
       r.on("end", () => {
-        try { res.write(`data: [DONE]\n\n`); } catch { /* 静默 */ }
-        res.end();
+        safeWrite(`data: [DONE]\n\n`);
+        try { res.end(); } catch { /* 静默 */ }
       });
       r.on("error", () => {
         try { res.end(); } catch { /* 静默 */ }
       });
     });
     upstream.on("error", () => {
-      try { res.write(`data: ${JSON.stringify({ error: "upstream error" })}\n\n`); res.end(); } catch { /* 静默 */ }
+      try { res.status(502).json({ error: "upstream error" }); } catch { /* 客户端已断开 */ }
     });
     // v9.83.2：SSE 上游超时 25s→45s（DeepSeek 推理模型长思考场景）
     upstream.setTimeout(45000, () => { try { upstream.destroy(); } catch { /* 静默 */ } });

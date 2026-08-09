@@ -7,6 +7,7 @@
 // 线上 GitHub Pages（无 server）→ 静默不推，仅浏览器通知兜底
 // ============================================================
 import { loadPushSettings, shouldPush, type PushSeverity } from "./pushSettings";
+import { apiFetch } from "./cloudStore";
 import { isLocalServer } from "./cloudStore";
 
 export interface PushPayload {
@@ -52,7 +53,7 @@ export async function pushMessage(p: PushPayload): Promise<boolean> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
-    const resp = await fetch("/api/push/send", {
+    const resp = await apiFetch("/api/push/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(p),

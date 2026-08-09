@@ -5,6 +5,7 @@
 // 作用：补全决策闭环中"人类决策"环节的留痕，配合 P0-3 做真实盈亏归因
 // ============================================================
 import { isLocalServer } from "./cloudStore";
+import { apiFetch } from "./cloudStore";
 import { localDateStr } from "./format";
 
 export type HumanAction = "confirm" | "watch" | "reject";
@@ -72,7 +73,7 @@ export async function savePost(post: DecisionPost): Promise<void> {
   try { localStorage.setItem(key, JSON.stringify(arr)); } catch { /* 容量满：静默 */ }
   if (isLocalServer()) {
     try {
-      await fetch("/api/db/decision_post", {
+      await apiFetch("/api/db/decision_post", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(post),

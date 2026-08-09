@@ -154,7 +154,9 @@ async function sendPushIfConfigured(p, poolArg) {
   const ok = okResults > 0;
   // 写推送日志（防重复，可审计）
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    // v9.85.0（P1-15）：日志日期用北京时间（原 UTC 日期在凌晨 8 点前归档到前一天）
+    const bjNow = new Date(Date.now() + 8 * 3600 * 1000);
+    const today = bjNow.toISOString().slice(0, 10);
     await (poolArg ?? pool).query(
       `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
        ON CONFLICT (key) DO UPDATE SET value=kv_store.value || $2, updated_at=now()`,

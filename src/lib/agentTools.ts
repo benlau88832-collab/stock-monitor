@@ -413,9 +413,13 @@ export function getAgentTools(): AgentTool[] {
             beneficiaries: ctx.beneficiaries ?? [],
           });
           const j = parseAIJSON<{ chain: string; targets: Array<{ name: string; reason: string }>; risk: string; confirm: string; conclusion: string }>(r.text);
+          // v9.85.0（P1-13）：LLM 降级/失败时显式标记 degraded —— 主 Agent 不得把规则 fallback 当深度证据
+          if (r.degraded || !j?.chain) {
+            return { deep: true, degraded: true, chain: r.degraded ? "LLM 降级（配额受限），以下为规则参考" : "LLM 深挖失败", targets: [], risk: "", confirm: "看板块主力资金", conclusion: "深挖暂不可用，按分级结果参考" };
+          }
           return { deep: true, ...j };
         } catch {
-          return { deep: true, chain: "LLM 深挖失败", targets: [], risk: "", confirm: "看板块主力资金", conclusion: "深挖暂不可用，按分级结果参考" };
+          return { deep: true, degraded: true, chain: "LLM 深挖失败", targets: [], risk: "", confirm: "看板块主力资金", conclusion: "深挖暂不可用，按分级结果参考" };
         }
       },
     },

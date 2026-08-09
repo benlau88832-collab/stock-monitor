@@ -5,6 +5,7 @@
 // 接入方式：各触发源调 emitEvent 即可（alertBus 可同时 emit 做通知）
 // ============================================================
 import { localDateStr } from "./format";
+import { apiFetch } from "./cloudStore";
 import { isLocalServer } from "./cloudStore";
 
 export type UniEventType = "watch" | "veto" | "seal" | "nuclear" | "auction" | "lhb" | "ai_post" | "sys_risk" | "sentiment";
@@ -46,7 +47,7 @@ export function emitEvent(e: Omit<UniEvent, "ts">): UniEvent {
   if (isLocalServer()) {
     try {
       const key = `unievent_log:${localDateStr()}`;
-      fetch("/api/db/kv", {
+      apiFetch("/api/db/kv", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key, value: JSON.stringify(events.filter(x => x.ts > Date.now() - 86400000)) }),

@@ -16,20 +16,26 @@ const { pool } = require("../db");
 module.exports = function dbRoutes(app) {
 
   // ---------- 通用 kv ----------
+  // v9.85.0（P0-2）：敏感 key 脱敏 —— local_token / 推送凭据等禁止通过通用 KV 读取
+  // （审查报告：GET /api/db/kv?key=local_token 可直读鉴权 token、push_settings_v1 可读全部推送 webhook/key）
+  const SENSITIVE_KV_RE = /^(local_token|push_settings_v1|.*(api[_-]?key|token|webhook|secret).*)$/i;
   app.get("/api/db/kv", async (req, res) => {
     try {
       const key = String(req.query.key || "");
       if (!key) return res.status(400).json({ error: "key required" });
+      if (SENSITIVE_KV_RE.test(key)) {
+        return res.json({ key, sensitive: true, value: null });
+      }
       const r = await pool.query("SELECT value FROM kv_store WHERE key=$1", [key]);
       res.json({ key, value: r.rows.length ? r.rows[0].value : null });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // v9.26.6：列出全部 key（供前端启动时批量拉回历史数据：seats/playbook/rec_tracker 等）
+  // v9.85.0（P0-2）：keys 列表同样过滤敏感 key 名
   app.get("/api/db/kv/keys", async (req, res) => {
     try {
       const r = await pool.query("SELECT key, updated_at FROM kv_store ORDER BY key");
-      res.json({ keys: r.rows.map(x => x.key) });
+      res.json({ keys: r.rows.map(x => x.key).filter(k => !SENSITIVE_KV_RE.test(k)) });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -143,9 +149,17 @@ module.exports = function dbRoutes(app) {
   // 现 202 立即返回，后台执行，前端轮询 kv theme_analysis:latest（key 变化即新结果）
   app.post("/api/theme-analysis/trigger", async (req, res) => {
     try {
-      const { runThemeAnalysis } = require("../cron");
+      const cronMod = require("../cron");
+      const { runThemeAnalysis } = cronMod;
+      // v9.85.0（P1-4）：并发锁 —— 原手动触发绕过 themeRunning，重复点击可并发叠加多轮 LLM 管线（每轮 2 次 LLM 最长 30 分钟+）
+      if (cronMod.getThemeBusy && cronMod.getThemeBusy()) {
+        return res.status(409).json({ error: "theme analysis already running", running: true });
+      }
+      if (cronMod.setThemeBusy) cronMod.setThemeBusy(true);
       res.json({ ok: true, started: true });
-      runThemeAnalysis({ pool, label: "手动" }).catch(e => console.error("[api] theme-analysis 后台执行失败:", e.message));
+      runThemeAnalysis({ pool, label: "手动" })
+        .catch(e => console.error("[api] theme-analysis 后台执行失败:", e.message))
+        .finally(() => { if (cronMod.setThemeBusy) cronMod.setThemeBusy(false); });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -200,8 +214,10 @@ module.exports = function dbRoutes(app) {
       const code = String(req.params.code || "").trim();
       if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
       const { getConcepts } = require("../lib/stockConcepts");
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const daysAgo = new Date(Date.now() - 45 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      // v9.85.0（P1-15）：北京时间日期（原 UTC 日期在凌晨 8 点前与北京日期错一天，seats 查询窗口偏移）
+      const bjNow = new Date(Date.now() + 8 * 3600 * 1000);
+      const todayStr = bjNow.toISOString().slice(0, 10);
+      const daysAgo = new Date(bjNow.getTime() - 45 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
       // 各块并行且互不阻塞（某一源挂不影响其余）
       const [conceptsR, newsR, annsR, reportsR, watchR, watchLogR, seatsR, ztR] = await Promise.allSettled([
@@ -336,7 +352,8 @@ module.exports = function dbRoutes(app) {
           const code = String(args.code || "").replace(/[^0-9]/g, "");
           if (code.length !== 6) return res.json({ items: [] });
           const days = Math.max(1, Math.min(Number(args.days) || 30, 90));
-          const from = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString().slice(0, 10);
+          // v9.85.0（P1-15）：北京时间日期（seats key 为北京日期，UTC 计算会错一天）
+          const from = new Date(Date.now() + 8 * 3600 * 1000 - days * 24 * 3600 * 1000).toISOString().slice(0, 10);
           const r = await pool.query(
             "SELECT key,value FROM kv_store WHERE key LIKE 'seats:%' AND key >= $1 ORDER BY key DESC", [from]);
           const items = [];

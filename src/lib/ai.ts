@@ -153,7 +153,10 @@ function reserveSlot(): number | null {
     recentCalls.shift();
   }
   if (recentCalls.length >= AI_RATE_PER_MIN) return null;
-  const token = now * 1000 + (recentCalls.length % 1000); // 时间戳+序号，保证唯一
+  // v9.85.0（P1-18）：token 必须与淘汰阈值同单位（毫秒）。
+  // 原 `now*1000 + seq`（微秒量级）恒大于 `now-60000` → 滑动窗口永不淘汰 → 成功 10 次后永久"每分钟限速"降级。
+  // 序号 <100 不影响毫秒级比较（同毫秒多个占位仍唯一）。
+  const token = now + (recentCalls.length % 100);
   recentCalls.push(token);
   return token;
 }
@@ -249,7 +252,7 @@ export async function streamChat(
   opts: { system: string; user: string; temperature?: number; maxTokens?: number; thinking?: boolean },
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
-): Promise<{ text: string } | null> {
+): Promise<{ text: string; ok: boolean; error?: string } | null> {
   if (!isLocalServer()) return null;
   // v9.84.3（5.4）：服务端 LOCAL_TOKEN 自动携带（服务端未启用鉴权时带也无害）
   const token = await getLocalToken();
@@ -266,12 +269,18 @@ export async function streamChat(
       }),
       signal,
     });
-    if (!resp.ok) return null;
+    // v9.85.0（P1-6）：非 2xx（鉴权 401/限流 429/上游错误透传状态码）→ 明确失败
+    if (!resp.ok) {
+      let errMsg = `HTTP ${resp.status}`;
+      try { const j = await resp.json(); if (j?.error) errMsg = String(j.error).slice(0, 120); } catch { /* keep */ }
+      return { text: "", ok: false, error: errMsg };
+    }
     if (!resp.body) return null;
     const reader = resp.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let buf = "";
     let full = "";
+    let sawDone = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -282,16 +291,18 @@ export async function streamChat(
         buf = buf.slice(idx + 1);
         if (!line.startsWith("data:")) continue;
         const dataStr = line.slice(5).trim();
-        if (dataStr === "[DONE]") continue;
+        if (dataStr === "[DONE]") { sawDone = true; continue; }
         try {
           const j = JSON.parse(dataStr);
-          if (j.error) return { text: full };
+          // v9.85.0（P1-6）：流中途错误 → 部分文本不再当成功（返回 ok:false，调用方删除部分渲染）
+          if (j.error) return { text: full, ok: false, error: String(j.error).slice(0, 120) };
           const delta = j.delta ?? "";
           if (delta) { full += delta; onDelta(delta); }
         } catch { /* 跳过坏行 */ }
       }
     }
-    return { text: full };
+    // v9.85.0（P1-6）：必须收到 [DONE] 才算完整成功（Abort/断流 → ok:false）
+    return { text: full, ok: sawDone, error: sawDone ? undefined : "stream interrupted" };
   } catch {
     return null;
   }
@@ -356,14 +367,17 @@ async function callAIviaServer(
       }),
       signal: ctrl.signal,
     });
-    clearTimeout(timer);
+    // v9.85.0（P1-7）：clearTimeout 移到 json 解析之后 —— 原 fetch resolve 即清 timer，
+    // 服务端发完 header 后 body 悬挂时 resp.json() 无限等待（AIConsole 长期 busy）
     if (!resp.ok) {
       // v9.26.5：429/403 等错误透传给上层（不再静默 return null 导致误判"服务端不可用"去走本地Key降级）
       let errMsg = `服务端拒绝(HTTP ${resp.status})`;
       try { const j = await resp.json(); if (j?.error) errMsg = j.error; } catch { /* keep */ }
+      clearTimeout(timer);
       return { text: "", error: errMsg };
     }
     const j = await resp.json();
+    clearTimeout(timer);
     if (j.error) return { text: "", error: j.error };
     return { text: j.text ?? "" };
   } catch (e) {
@@ -544,8 +558,9 @@ async function fetchWithTimeout(
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    clearTimeout(timer);
+    // v9.85.0（P1-7）：timer 覆盖 json 解析（原 fetch resolve 即清，body 悬挂时无限等）
     const json = await resp.json();
+    clearTimeout(timer);
     if (json.error) {
       return { text: "", error: json.error.message || "API错误", status: resp.status };
     }
@@ -717,20 +732,22 @@ export async function callAgentChat(
       }),
       signal: ctrl.signal,
     });
-    clearTimeout(timer);
+    // v9.85.0（P1-7）：timer 覆盖 json 解析（原 fetch resolve 即清，body 悬挂时无限等）
     if (!resp.ok) {
       // v9.45（V5-1）：429 配额受限 → 显式标记（区别于"服务端不可用"），AI 不再静默退回规则
       if (resp.status === 429) {
-        try { const j = await resp.json(); if (j?.rateLimited) return { text: "", rateLimited: true, reason: "rateLimited" }; } catch { /* keep */ }
+        try { const j = await resp.json(); if (j?.rateLimited) { clearTimeout(timer); return { text: "", rateLimited: true, reason: "rateLimited" }; } } catch { /* keep */ }
       }
       // v9.67：502/500 区分降级原因
       try {
         const j = await resp.json();
         const reason = (j?.reason === "timeout" || j?.reason === "network" || j?.reason === "model") ? j.reason : "model";
+        clearTimeout(timer);
         return { text: "", rateLimited: false, reason };
-      } catch { return { text: "", reason: "model" }; }
+      } catch { clearTimeout(timer); return { text: "", reason: "model" }; }
     }
     const j = await resp.json();
+    clearTimeout(timer);
     if (j.error) return { text: "", reason: "model" };
     return { text: j.text ?? "", toolCalls: j.toolCalls };
   } catch {

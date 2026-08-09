@@ -212,12 +212,20 @@ async function quickStockVerdictAndPush(p, w, price, dev, eventType) {
 请给出一句话短线结论（≤40字）：直接写"可关注/观望/回避"开头 + 理由，不要多余格式。`;
     const verdict = await callModelText(prompt, { system: "你是A股短线盯盘助手，只输出一句话结论（≤40字），不输出任何其他内容。", maxTokens: 80, temperature: 0.2 });
     // 更新事件文本（追加 AI 结论）
+    // v9.85.0（P1-21）：PostgreSQL 的 UPDATE 不支持 ORDER BY/LIMIT —— 原 SQL 语法错误且 .catch 静默吞掉，
+    // AI 结论从未写入；改子查询定行 + 保留失败日志（不再静默）
     if (verdict) {
-      await p.query(
-        `UPDATE price_watch_events SET event_text = event_text || ' 🤖 ' || $1
-         WHERE code=$2 AND read_at IS NULL ORDER BY id DESC LIMIT 1`,
-        [verdict.slice(0, 60), w.code],
-      ).catch(() => {});
+      try {
+        await p.query(
+          `UPDATE price_watch_events SET event_text = event_text || ' 🤖 ' || $1
+           WHERE id = (
+             SELECT id FROM price_watch_events
+             WHERE code = $2 AND read_at IS NULL
+             ORDER BY id DESC LIMIT 1
+           )`,
+          [verdict.slice(0, 60), w.code],
+        );
+      } catch (e) { console.error(`[watch] AI结论追加失败 ${w.code}:`, e.message); }
     }
     // 推送（写 kv push_settings 判断；失败静默）
     try {

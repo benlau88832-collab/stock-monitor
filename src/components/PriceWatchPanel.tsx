@@ -5,6 +5,7 @@
 // 触发：轮询 /api/watch/events → alertBus.emit()（声音+系统通知+标题闪烁）
 // ============================================================
 import { useState, useEffect, useCallback, type ReactElement } from "react";
+import { apiFetch } from "../lib/cloudStore";
 import { emit as alertEmit } from "../lib/alertBus";
 
 interface WatchItem {
@@ -51,7 +52,7 @@ export default function PriceWatchPanel() {
           return fresh.length > 0 ? [...fresh, ...prev].slice(0, 20) : prev;
         });
         // 标记已读
-        fetch("/api/watch/events/read", {
+        apiFetch("/api/watch/events/read", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ids: j.items.map((e: WatchEvent) => e.id) }),
         }).catch(() => {});
@@ -80,14 +81,14 @@ export default function PriceWatchPanel() {
   }, [selected]);
 
   const setStatus = async (code: string, status: string) => {
-    await fetch("/api/watch/update", {
+    await apiFetch("/api/watch/update", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code, status }),
     }).catch(() => {});
     refresh();
   };
   const remove = async (code: string) => {
-    await fetch("/api/watch/remove", {
+    await apiFetch("/api/watch/remove", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
     }).catch(() => {});

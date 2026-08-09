@@ -44,7 +44,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.get("/api/health", async (req, res) => {
   let db = "down";
   try { await pool.query("SELECT 1"); db = "up"; } catch {}
-  res.json({ ok: true, db, version: "v9.84.6-local", time: new Date().toISOString() });
+  res.json({ ok: true, db, version: "v9.85.0-local", time: new Date().toISOString() });
 });
 
 // ---------- 静态托管（前端单文件产物） ----------
@@ -53,6 +53,59 @@ app.use(express.static(DOCS_DIR));
 // SPA fallback：未知路径回 index.html
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(path.join(DOCS_DIR, "index.html"));
+});
+
+// ============== v9.85.0（P0-2）：本地 token 专用读取端点 ==============
+// 背景：kv 敏感 key 已脱敏（local_token 不再可经 /api/db/kv 读取），前端改走本端点。
+// 安全：严格校验 Origin 必须为本服务自身（localhost:8080/127.0.0.1:8080 或同源无 Origin）——
+//   其他 localhost 端口网页（恶意）拿不到 token；服务端仅监听 127.0.0.1。
+app.get("/api/auth/local-token", async (req, res) => {
+  try {
+    const origin = req.headers.origin;
+    if (origin) {
+      let u;
+      try { u = new URL(origin); } catch { return res.status(403).json({ error: "forbidden" }); }
+      const selfPort = req.socket.localPort || 8080;
+      const isSelf = (u.hostname === "localhost" || u.hostname === "127.0.0.1")
+        && (u.port === String(selfPort) || u.port === "8080");
+      if (!isSelf) return res.status(403).json({ error: "forbidden origin" });
+    }
+    const r = await pool.query("SELECT value FROM kv_store WHERE key='local_token'");
+    const v = r.rows[0]?.value;
+    const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
+    res.json({ token: t ? String(t) : null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============== v9.85.0（P0-2）：/api 写操作统一鉴权中间件 ==============
+// 背景（审查报告 P0-2）：此前仅 /api/ai/* 与 /api/proxy/* 有 LOCAL_TOKEN 鉴权（且因 P0-1 未生效），
+//   /api/db、/api/watch、/api/push、/api/research、/api/theme-analysis 等写接口全部裸奔——
+//   localhost 任意网页可覆盖 PG 数据、读推送凭据、触发付费 LLM/推送。
+// 策略：POST/PUT/DELETE 必须携带 x-local-token（前端 cloudStore.apiFetch 自动带）；
+//   GET 读端点维持 localhost-only（与现状一致，全量收敛列入 backlog）。
+// 白名单：/api/ai/call|stream 自带鉴权（P0-1 已修复）；/api/brain/pg 是工具名白名单只读查询。
+const WRITE_AUTH_WHITELIST = new Set(["/api/ai/call", "/api/ai/stream", "/api/brain/pg"]);
+let writeTokenCache = { t: null, ts: 0 };
+async function effectiveWriteToken() {
+  if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
+  if (writeTokenCache.t && Date.now() - writeTokenCache.ts < 30000) return writeTokenCache.t;
+  try {
+    const r = await pool.query("SELECT value FROM kv_store WHERE key='local_token'");
+    const v = r.rows[0]?.value;
+    const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
+    writeTokenCache = { t: t ? String(t) : null, ts: Date.now() };
+    return writeTokenCache.t;
+  } catch { return null; }
+}
+app.use("/api", async (req, res, next) => {
+  const method = req.method;
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
+  if (WRITE_AUTH_WHITELIST.has(req.path)) return next();
+  const token = await effectiveWriteToken();
+  if (!token || req.headers["x-local-token"] !== token) {
+    return res.status(401).json({ error: "unauthorized: missing/invalid x-local-token" });
+  }
+  next();
 });
 
 // ---------- DB 读写路由 ----------

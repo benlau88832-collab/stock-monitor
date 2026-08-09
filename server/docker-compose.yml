@@ -9,6 +9,8 @@ services:
       POSTGRES_USER: stock
       POSTGRES_PASSWORD: ${PG_PASSWORD:-stock_pwd}
       POSTGRES_DB: stock_monitor
+      # v9.85.0（P1-15）：容器默认 UTC → 时区混用导致北京时间凌晨判错日期/周末；统一 Asia/Shanghai
+      TZ: Asia/Shanghai
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -30,6 +32,8 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       AI_PROVIDER: ${AI_PROVIDER:-}
       LOCAL_TOKEN: ${LOCAL_TOKEN:-}
+      # v9.85.0（P1-15）：Node 运行时区统一北京时间（cron 内 getDay/getHours 等本地 getter 依赖此）
+      TZ: Asia/Shanghai
     ports:
       - "8080:8080"
     depends_on:

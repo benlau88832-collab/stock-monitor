@@ -6,6 +6,7 @@
 //   每轮注入 LLM + 对话历史持久化 —— "像真人对话一样"记住上下文，刷新不丢
 // ============================================================
 import { useState, useRef, useEffect } from "react";
+import { apiFetch } from "../lib/cloudStore";
 import { runAssistantAgent, isSimpleQuestion, buildQuickSystem, type AssistantSiteContext } from "../lib/assistantAgent";
 import { streamChat } from "../lib/ai";
 import {
@@ -102,11 +103,17 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           );
           clearTimeout(t);
           typingRef.current = false;
-          if (streamed && streamed.text) {
+          // v9.85.0（P1-6）：仅完整成功（收到 [DONE] 且无错误）才作为正常答复；
+          // 中途错误/断流 → 删除部分渲染文本并回退 ReAct（部分结论不得回写雷达/决策审计）
+          if (streamed && streamed.ok) {
             // 完整文本落一次盘（打字机持久化由 msgs effect 处理）
             try { digestConsoleReply(streamed.text, [], siteContext.topMainline); } catch { /* 静默 */ }
             setBusy(false);
             return;
+          }
+          if (streamed && !streamed.ok && streamed.text) {
+            // 清除已渲染的部分文本（错误流不应残留半截答案）
+            setMsgs(m => m.filter(x => x.text !== streamed.text || x.role !== "ai"));
           }
         } catch { /* 回退 ReAct */ } finally { typingRef.current = false; }
       }
@@ -125,7 +132,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
         // v10-7（P2）：调研完成（Phase 4 有结论）→ 自动落库 research_reports（选股清单可显示"🔬 深度调研"）
         if (nextCtx && nextCtx.phase >= 4 && nextCtx.conclusion && !r.degraded) {
           try {
-            await fetch("/api/research/report", {
+            await apiFetch("/api/research/report", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({

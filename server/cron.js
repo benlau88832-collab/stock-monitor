@@ -1115,8 +1115,9 @@ function startCron({ pool }) {
   // 节假日（isTradingDayCN false 且非周末）仍跳过
   cron.schedule("*/20 8-20 * * *", async () => {
     if (!isTradingDayCN()) {
-      const day = new Date().getDay();
-      if (day !== 0 && day !== 6) { console.log("[cron] 节假日，跳过快讯抓取"); return; }
+      // v9.85.0（P1-15）：周末判定用北京时间（原 new Date().getDay() 依赖运行时区，UTC 下凌晨 8 点前判错前一天）
+      const bjDay = new Date(Date.now() + 8 * 3600 * 1000).getUTCDay();
+      if (bjDay !== 0 && bjDay !== 6) { console.log("[cron] 节假日，跳过快讯抓取"); return; }
     }
     if (cronBusy) { console.log("[cron] busy, skip 20min fetch"); return; }
     cronBusy = true;
@@ -1861,3 +1862,6 @@ module.exports.fetchMarketDaily = fetchMarketDaily;
 module.exports.fetchLhbDaily = fetchLhbDaily;
 module.exports.fetchMarketIntraday = fetchMarketIntraday;
 module.exports.runIntradayBrain = runIntradayBrain; // v9.84.2/3：盘中大脑快照+板块异动（手动触发/测试）
+// v9.85.0（P1-4）：主题分析并发锁暴露 —— db.js 手动触发与 cron 定时共用同一把锁（防并发耗尽 LLM 配额）
+module.exports.getThemeBusy = () => themeRunning;
+module.exports.setThemeBusy = (v) => { themeRunning = Boolean(v); };

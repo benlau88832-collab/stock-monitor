@@ -145,6 +145,8 @@ export interface OverviewData {
   maxBoardHeight: number | null;   // 今日最高连板
   /** v9.77（P0-5 修复）：本轮 overview 抓取完成的时间戳（ms），供组件显示"数据截至 X 秒前" */
   fetchedAt?: number;
+  /** v9.85.0（P0-5）：本轮刷新多数数据源失败 → 保留旧值并标记过期（UI 显示"数据已过期"而非误导为最新） */
+  stale?: boolean;
 }
 
 export interface FundStructureData {
@@ -390,20 +392,49 @@ export default function App() {
       };
 
       // ==== v9.81（性能修复）：首绘立即渲染（batch1 数据即可，premium 因子由并行任务补位）====
+      // v9.85.0（P0-5）：stale-while-revalidate —— 失败字段保留上一轮有效值，不再用空数据覆盖
+      //   （原无条件 setOverview：东财断源时 indices:[]/limitPool:null 抹掉上一轮快照，且 fetchedAt 更新误导为最新）
       const firstSentiment = computeSentimentNow(null, null);
-      setOverview({
-        indices: idxData, breadth: brData,
-        sentiment: firstSentiment.sentiment, sentimentLabel: firstSentiment.sentimentLabel,
-        sentimentFactors: firstSentiment.sentimentFactors, sentimentYesterday: prevSentiment,
-        limitPool,
-        turnoverAmount: turnoverData.amount,
-        turnoverYesterday: yesterdayAmount,
-        turnoverAvg5d,
-        premiumAvg: null,
-        premiumDist: null,
-        promotionRate: null,
-        maxBoardHeight,
-        fetchedAt: Date.now(), // v9.77（P0-5）：抓取完成时间，供"数据截至 X 秒前"展示
+      setOverview(prev => {
+        const failures = [indices.status, breadth.status, limitPoolRes.status, turnover.status]
+          .filter(s => s === "rejected").length;
+        if (!prev) {
+          // 首帧：全量写入（从未成功过才 null，无旧值可保留）
+          return {
+            indices: idxData, breadth: brData,
+            sentiment: firstSentiment.sentiment, sentimentLabel: firstSentiment.sentimentLabel,
+            sentimentFactors: firstSentiment.sentimentFactors, sentimentYesterday: prevSentiment,
+            limitPool,
+            turnoverAmount: turnoverData.amount,
+            turnoverYesterday: yesterdayAmount,
+            turnoverAvg5d,
+            premiumAvg: null,
+            premiumDist: null,
+            promotionRate: null,
+            maxBoardHeight,
+            fetchedAt: Date.now(), // v9.77（P0-5）：抓取完成时间，供"数据截至 X 秒前"展示
+            stale: failures >= 3,
+          };
+        }
+        // 非首帧：仅用本轮 fulfilled 的字段覆盖，rejected 保留旧值
+        const merged: OverviewData = { ...prev, fetchedAt: Date.now(), stale: failures >= 3 };
+        if (indices.status === "fulfilled") merged.indices = idxData;
+        if (breadth.status === "fulfilled") merged.breadth = brData;
+        if (limitPoolRes.status === "fulfilled") merged.limitPool = limitPool;
+        if (turnover.status === "fulfilled") merged.turnoverAmount = turnoverData.amount;
+        // 情绪/最高板等派生字段：仅当依赖的原始数据 fulfilled 才更新（否则保留旧值）
+        if (breadth.status === "fulfilled" || limitPoolRes.status === "fulfilled") {
+          merged.sentiment = firstSentiment.sentiment;
+          merged.sentimentLabel = firstSentiment.sentimentLabel;
+          merged.sentimentFactors = firstSentiment.sentimentFactors;
+          merged.sentimentYesterday = prevSentiment;
+          merged.maxBoardHeight = maxBoardHeight;
+        }
+        if (turnoverHistRes.status === "fulfilled") {
+          merged.turnoverYesterday = yesterdayAmount;
+          merged.turnoverAvg5d = turnoverAvg5d;
+        }
+        return merged;
       });
 
       // ==== v9.81（性能修复）：5 个模块并行化（原串行 await 链 → Promise.allSettled）====
@@ -846,10 +877,17 @@ export default function App() {
           for (const d of etfDiff) {
             const code = String(d.f12 ?? "");
             if (code) {
+              // v9.85.0（P0-3）：缺失字段不再静默归零 —— f164/f3 缺失/非数值 → 整只 ETF 跳过
+              // （原 `Number(x)||0 + valid:true` 让"无数据"冒充"资金为0"进入 etfScore 排序）
+              const f164 = Number(d.f164);
+              const f3 = Number(d.f3);
+              const f164Ok = d.f164 != null && Number.isFinite(f164);
+              const f3Ok = d.f3 != null && Number.isFinite(f3);
+              if (!f164Ok && !f3Ok) continue;
               etfQuotes.set(code, {
                 code,
-                mainNet5d: Number(d.f164) || 0,
-                pct: Number(d.f3) || 0,  // v9.22-fix: ETF 自身今日涨跌幅
+                mainNet5d: f164Ok ? f164 : 0,
+                pct: f3Ok ? f3 : 0,  // v9.22-fix: ETF 自身今日涨跌幅
                 valid: true,
               });
             }

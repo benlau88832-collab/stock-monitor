@@ -43,21 +43,21 @@ async function api(method: string, path: string, body?: unknown): Promise<any> {
   }
 }
 
-// ============== v9.84.3（5.4）：LOCAL_TOKEN 自动携带 ==============
+// ============== v9.85.0（P0-2）：LOCAL_TOKEN 自动携带 ==============
 // 服务端未配置 env LOCAL_TOKEN 时自动生成并存 kv local_token（index.js ensureLocalToken）。
-// 前端 /api/ai/* 与 /api/proxy/* 请求自动带 x-local-token —— 服务端未启用鉴权时带也无害（放行）。
+// 前端 /api/ai/*、/api/proxy/* 与全部写操作自动带 x-local-token —— 服务端未启用鉴权时带也无害（放行）。
+// v9.85.0：token 改经专用端点 /api/auth/local-token 读取（kv 敏感 key 已脱敏，通用 KV 不再返回 token；
+//   该端点校验同源 Origin，其他 localhost 端口网页拿不到）。
 // 注意：getLocalToken 用原生 fetch 而非 api()（api 会回调 localTokenHeader 形成递归）
 let tokenCache: { t: string | null; ts: number } = { t: null, ts: 0 };
 export async function getLocalToken(): Promise<string | null> {
   if (!isLocalServer()) return null;
   if (tokenCache.t && Date.now() - tokenCache.ts < 10 * 60 * 1000) return tokenCache.t;
   try {
-    const resp = await fetch("/api/db/kv?key=local_token", { signal: AbortSignal.timeout(5000) });
+    const resp = await fetch("/api/auth/local-token", { signal: AbortSignal.timeout(5000) });
     if (!resp.ok) return null;
     const r = await resp.json();
-    const v = r?.value;
-    const t = v && typeof v === "object" && "token" in v ? (v as { token: string }).token
-      : (typeof v === "string" ? v : null);
+    const t = r?.token ? String(r.token) : null;
     tokenCache = { t, ts: Date.now() };
     return t;
   } catch { return null; }
@@ -67,6 +67,21 @@ async function localTokenHeader(): Promise<Record<string, string>> {
     const t = await getLocalToken();
     return t ? { "x-local-token": t } : {};
   } catch { return {}; }
+}
+
+/**
+ * v9.85.0（P0-2）：统一鉴权 fetch —— 本地部署自动携带 x-local-token。
+ * 服务端写操作（POST/PUT/DELETE /api/*）统一鉴权中间件要求 token；所有写类调用改走本函数。
+ * 用法：apiFetch("/api/watch/update", { method: "POST", body: JSON.stringify(x) })
+ */
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (isLocalServer()) {
+    const t = await getLocalToken();
+    if (t) headers.set("x-local-token", t);
+  }
+  return fetch(path, { ...init, headers });
 }
 
 // ============== 通用 kv ==============

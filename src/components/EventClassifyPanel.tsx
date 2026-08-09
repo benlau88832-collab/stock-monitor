@@ -7,7 +7,7 @@
 // v12-5（P1）：盘中实时化 —— 盘后 kv 未生成时，用本地快讯流（getAllSince 今日）关键词轻量分级，不等盘后 LLM
 // ============================================================
 import { useState, useEffect, useRef } from "react";
-import { isLocalServer, kvGet } from "../lib/cloudStore";
+import { apiFetch, isLocalServer, kvGet } from "../lib/cloudStore";
 import { getAllSince } from "../lib/dataStore";
 import DisclaimerTag from "./DisclaimerTag";
 // v9.84.2（AI大脑层 · 3.5）：接线死任务 —— policyDiff（政策解读）/ eventClassify（LLM 精分级）
@@ -154,7 +154,7 @@ export default function EventClassifyPanel({ onOpenNews }: {
     try {
       const before = (await kvGet("theme_analysis:latest")) as { key?: string } | null;
       const beforeKey = before?.key ?? "";
-      const r = await fetch("/api/theme-analysis/trigger", { method: "POST" });
+      const r = await apiFetch("/api/theme-analysis/trigger", { method: "POST" });
       if (r.ok) {
         for (let i = 0; i < 30; i++) {
           await new Promise(res => setTimeout(res, 3000));

@@ -7,6 +7,7 @@
 // 联动失败不影响拍板落库（拍板台账是激动；联动是可选响应）
 // ============================================================
 import type { DecisionPost } from "./decisionPost";
+import { apiFetch } from "./cloudStore";
 
 export interface PostHookResult {
   addedToDiscipline: boolean;
@@ -70,7 +71,7 @@ export async function runPostHook(post: DecisionPost, ctx?: PostHookCtx): Promis
       const buyLow = post.priceAtPost * (1 - stopLossPct / 100);
       const buyHigh = post.priceAtPost * 1.02;
       const stopLoss = post.priceAtPost * (1 - (stopLossPct * 1.5) / 100);
-      await fetch("/api/watch/add", {
+      await apiFetch("/api/watch/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

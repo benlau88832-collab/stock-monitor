@@ -5,6 +5,7 @@
 // 核心价值：让"AI 提议 → 人类拍板 → 真实盈亏"闭环成立（不再只靠宏观情绪代理）
 // ============================================================
 import { isLocalServer } from "./cloudStore";
+import { apiFetch } from "./cloudStore";
 import { localDateStr } from "./format";
 
 export type TradeAction = "buy" | "sell" | "stop" | "adjust";
@@ -41,7 +42,7 @@ export async function saveTrade(t: TradeEntry): Promise<void> {
   try { localStorage.setItem(LS_KEY, JSON.stringify(arr)); } catch { /* 满 → 静默 */ }
   if (isLocalServer()) {
     try {
-      await fetch("/api/db/trade_ledger", {
+      await apiFetch("/api/db/trade_ledger", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(t),
@@ -130,7 +131,7 @@ export async function backfillAllPendingPosts(days = 30): Promise<number> {
         // 落 PG
         if (isLocalServer()) {
           try {
-            await fetch("/api/db/decision_post/pnl", {
+            await apiFetch("/api/db/decision_post/pnl", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ ticketId: post.ticketId, pnl: r.t5 ?? r.t1, executed: true }),
