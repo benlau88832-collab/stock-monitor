@@ -588,45 +588,45 @@ export default function DragonTiger() {
         dateGroups.set(item.tradeDate, arr);
       }
 
-      // 对每个日期组，获取席位并写入台账
-      for (const [date, dateItems] of dateGroups) {
-        const allRecords: SeatRecord[] = [];
-        const stockSeats: Record<string, { buy: Array<{ deptName: string; net: number }>; sell: Array<{ deptName: string; net: number }> }> = {};
-        const stockNames: Record<string, string> = {};
+      // v9.81（性能）：请求风暴收敛 —— 原实现对全部 80 只逐只串行 await 席位（≈161 JSONP 请求，
+      // 东财半坏时最坏 30-60 分钟且打爆全局熔断拖累 dashboard 各模块）。
+      // 现只对最新日期组前 15 只并行预取（受全局 jsonpQueue 并发 3 约束），
+      // 其余股票展开时按需取（toggleExpand 带缓存 + 补写台账，画像逐步补全）。
+      const latestDate = [...dateGroups.keys()].sort().pop() ?? "";
+      const latestItems = dateGroups.get(latestDate) ?? [];
+      const prefetchItems = latestItems.slice(0, 15);
+      const allRecords: SeatRecord[] = [];
+      const stockSeats: Record<string, { buy: Array<{ deptName: string; net: number }>; sell: Array<{ deptName: string; net: number }> }> = {};
+      const stockNames: Record<string, string> = {};
 
-        for (const item of dateItems) {
-          stockNames[item.code] = item.name;
-          try {
-            const seatData = await fetchDragonTigerSeats(item.code, item.tradeDate);
-            stockSeats[item.code] = {
-              buy: seatData.buy.map(s => ({ deptName: s.deptName, net: s.net })),
-              sell: seatData.sell.map(s => ({ deptName: s.deptName, net: s.net })),
-            };
-            for (const s of seatData.buy) {
-              allRecords.push({
-                deptName: s.deptName, stockCode: item.code, stockName: item.name,
-                direction: "买", net: s.net, closeAtDay: item.closePrice,
-                priceT1: null, priceT5: null, pctT1: null, pctT5: null, backfilled: false,
-              });
-            }
-            for (const s of seatData.sell) {
-              allRecords.push({
-                deptName: s.deptName, stockCode: item.code, stockName: item.name,
-                direction: "卖", net: s.net, closeAtDay: item.closePrice,
-                priceT1: null, priceT5: null, pctT1: null, pctT5: null, backfilled: false,
-              });
-            }
-          } catch { /* 单股席位获取失败不影响整体 */ }
-        }
+      await Promise.allSettled(prefetchItems.map(async (item) => {
+        stockNames[item.code] = item.name;
+        try {
+          const seatData = await fetchDragonTigerSeats(item.code, item.tradeDate);
+          stockSeats[item.code] = {
+            buy: seatData.buy.map(s => ({ deptName: s.deptName, net: s.net })),
+            sell: seatData.sell.map(s => ({ deptName: s.deptName, net: s.net })),
+          };
+          for (const s of seatData.buy) {
+            allRecords.push({
+              deptName: s.deptName, stockCode: item.code, stockName: item.name,
+              direction: "买", net: s.net, closeAtDay: item.closePrice,
+              priceT1: null, priceT5: null, pctT1: null, pctT5: null, backfilled: false,
+            });
+          }
+          for (const s of seatData.sell) {
+            allRecords.push({
+              deptName: s.deptName, stockCode: item.code, stockName: item.name,
+              direction: "卖", net: s.net, closeAtDay: item.closePrice,
+              priceT1: null, priceT5: null, pctT1: null, pctT5: null, backfilled: false,
+            });
+          }
+        } catch { /* 单股席位获取失败不影响整体 */ }
+      }));
 
-        writeSeatRecords(date, allRecords);
-
-        // 检测当日合力/独食（只对最新日期）
-        if (date === [...dateGroups.keys()].sort().pop()) {
-          const signals = detectSeatSignals(date, stockSeats, stockNames);
-          setSeatSignals(signals);
-        }
-      }
+      writeSeatRecords(latestDate, allRecords);
+      const signals = detectSeatSignals(latestDate, stockSeats, stockNames);
+      setSeatSignals(signals);
 
       // 构建席位画像 + 行为模式（v9.12：长期跟踪自动打标）
       const profiles = buildSeatProfiles();
@@ -650,6 +650,25 @@ export default function DragonTiger() {
       const result = await fetchDragonTigerSeats(item.code, item.tradeDate);
       setSeats(prev => ({ ...prev, [key]: result }));
       setSeatsLoading(prev => ({ ...prev, [key]: false }));
+      // v9.81：展开即补写席位台账（预取裁剪后，未预取股票的画像数据靠展开逐步补全）
+      try {
+        const records: SeatRecord[] = [];
+        for (const s of result.buy) {
+          records.push({
+            deptName: s.deptName, stockCode: item.code, stockName: item.name,
+            direction: "买", net: s.net, closeAtDay: item.closePrice,
+            priceT1: null, priceT5: null, pctT1: null, pctT5: null, backfilled: false,
+          });
+        }
+        for (const s of result.sell) {
+          records.push({
+            deptName: s.deptName, stockCode: item.code, stockName: item.name,
+            direction: "卖", net: s.net, closeAtDay: item.closePrice,
+            priceT1: null, priceT5: null, pctT1: null, pctT5: null, backfilled: false,
+          });
+        }
+        if (records.length > 0) writeSeatRecords(item.tradeDate, records);
+      } catch { /* 台账写入失败不影响展开显示 */ }
     }
   };
 

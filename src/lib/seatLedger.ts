@@ -97,7 +97,7 @@ async function fetchRecentCloses(code: string, days = 10): Promise<Map<string, n
   const secid = toSecid(code);
   const url = `${PUSH2HIS}/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=0&beg=0&end=20500000&lmt=${days}&ut=${EM_UT}`;
   try {
-    const json = await queuedJsonp<any>(url, 8000, "cb", 1);
+    const json = await queuedJsonp<any>(url, 5000, "cb", 1);
     const klines: string[] = json?.data?.klines ?? [];
     const map = new Map<string, number>();
     for (const line of klines) {

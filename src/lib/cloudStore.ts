@@ -91,11 +91,18 @@ export async function pushAnnsCloud(items: any[]): Promise<void> {
 /** 不应上传到 PG 的 key 前缀（含明文 API Key / 敏感凭据的本地配置） */
 const SKIP_UPLOAD_PREFIXES = ["ai_settings", "llm_api_key"];
 
-/** 把所有 localStorage key 上传到 PG（首次部署时调用） */
+// v9.81（性能）：增量同步 —— 记录上次成功上传的原始字符串，只上传变更 key。
+// 原实现每 5 分钟全量扫描 + 全量 JSON.parse + stringify 全部 localStorage（MB 级主线程卡顿），
+// 且服务端 kv/bulk 限 100 条/请求 —— 超出的 key 被静默截断（潜在数据丢失）。
+// 现在：字符串比对（不 parse）→ 只传变更 → 分批 ≤100 → 成功后才记 lastRaw（失败下次重试）。
+const lastRawByKey = new Map<string, string>();
+const BULK_CHUNK = 100;
+
+/** 把所有本地变更的 key 上传到 PG（首次调用全量，之后只传变更；幂等 upsert） */
 export async function migrateLocalStorageToCloud(): Promise<number> {
   if (!isLocalServer()) return 0;
   try {
-    const items: Array<{ key: string; value: unknown }> = [];
+    const changed: Array<{ key: string; value: unknown }> = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key) continue;
@@ -105,13 +112,31 @@ export async function migrateLocalStorageToCloud(): Promise<number> {
       try {
         const raw = localStorage.getItem(key);
         if (raw == null) continue;
+        if (lastRawByKey.get(key) === raw) continue; // v9.81：未变更 → 跳过（不 parse）
         // 尝试 JSON 解析，失败存原始字符串
         let value: unknown;
         try { value = JSON.parse(raw); } catch { value = raw; }
-        items.push({ key, value });
+        changed.push({ key, value });
       } catch { /* skip */ }
     }
-    return await kvBulk(items);
+    if (changed.length === 0) return 0;
+    // 分批上传（服务端 kv/bulk 限 100 条/请求，超量静默截断 → 必须分块）
+    let uploaded = 0;
+    for (let i = 0; i < changed.length; i += BULK_CHUNK) {
+      const batch = changed.slice(i, i + BULK_CHUNK);
+      const n = await kvBulk(batch);
+      if (n > 0) {
+        // 成功后才记 lastRaw（失败不记 → 下轮重试）
+        for (const { key } of batch) {
+          try {
+            const raw = localStorage.getItem(key);
+            if (raw != null) lastRawByKey.set(key, raw);
+          } catch { /* skip */ }
+        }
+        uploaded += n;
+      }
+    }
+    return uploaded;
   } catch {
     return 0;
   }

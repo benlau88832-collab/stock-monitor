@@ -2,6 +2,39 @@
 
 本文件记录 `stock-monitor` 项目各版本的提交哈希和内容摘要，方便追溯与回滚。
 
+## v9.81 — 卡顿整改（性能发布）：模块加载并行化 + 渲染/存储瘦身 + 服务端加固（2026-08-09）
+
+> 针对"很多模块加载还是很卡"。审查结论：东财断源仍在（v9.80 熔断已兜底），卡顿三层根因——① refreshAll 串行模块链（Σ 串行等待，任一模块慢全链等）；② 18s 快刷整树重渲染 + 渲染路径同步重活；③ cloudStore 每 5 分钟全量序列化 localStorage + 龙虎榜 161 请求风暴。本版三层全修。
+
+### 🔴 网络加载层（Σ→max，单轮刷新 30-60s → 5-12s）
+- **refreshAll 模块链并行化**：溢价/资金结构/全球/暗盘/主线 5 模块改为 Promise.allSettled 并行任务（互不等待，各自独立 setState）；首绘秒出（batch1 数据即可，premium 因子异步补位）；battlePlan 语义不变（battleSeq 竞态护栏保留）
+- **熔断按 host 分桶**（jsonpQueue）：阈值 6→3，各域名独立熔断窗口——龙虎榜/快讯单源故障不再殃及 dashboard 的 push2 数据
+- **长超时收紧**：两融 10s→5s、快讯兜底 fetch 10s→5s、腾讯指数兜底补 AbortSignal.timeout(6s)（原无超时）、ETF/席位回填 8s→5s
+- **涨停池断源快速放弃**：连续 3 天请求失败（假空池）即停，不再 10 天逐日回退白等（最坏 90 请求 → ~9）；refreshFast 加 fastInFlight 防重叠
+- **龙虎榜请求风暴收敛**：只预取最新日期组前 15 只席位（161 请求 → ~31），其余展开时按需取（toggleExpand 补写台账，画像逐步补全）
+- **顺带修复 v9.80 隐患**：queuedJsonp 的 promise.finally 孤儿 Promise 传播 rejection（Node/vitest unhandledRejection，浏览器 console 噪音）
+
+### 🟡 渲染层（18s 快刷不再抖动）
+- **渲染路径 memo 化**：loadPrevZTSnapshot（每次渲染全量扫 localStorage+JSON.parse ~500 条）、buildThemeLadder、loadIntradaySeries/computeMomentum、classifyAnomaly 循环全部 useMemo
+- **18s 快刷状态隔离**：IndexStrip/GateGauge 字段级 React.memo（不消费涨停池的面板跳过重渲染）
+- **dataStore 内存缓存**：ds_news/ds_ann（峰值各近万条）不再每 60s 主刷全量 JSON.parse（每轮 4 次 MB 级解析 → 0），storage 事件跨标签失效
+- **AIConsole 打字机降频**：8ms→40ms（主线程 setState 频率降 5 倍）+ 打字期间跳过 localStorage 全量持久化（结束落盘一次）
+- **Recharts memo**：FundStructure/MarginPanel 不再被 18s 快刷拖动整图重绘
+
+### 🟢 存储同步（cloudStore 增量）
+- **增量同步**：记录上次成功上传原始字符串，只传变更 key（原每 5 分钟全量扫描 + parse + stringify 全部 localStorage → MB 级主线程卡顿）
+- **修复数据丢失隐患**：服务端 kv/bulk 限 100 条/请求，原全量上传超 100 条被静默截断 → 现分块 ≤100 上传
+
+### 🔵 服务端加固（server/）
+- 启动补抓链：cronBusy 互斥（不与 20min/15:40 并发抢东财+AI 配额）+ 非交易日跳过 LLM 链（周末启动不再烧 5-10 分钟）+ analyzeDaily 补 try/catch（原裸 await 抛错中断后续补抓）
+- 盯价 */5、主题分析 */30 任务加 running 防重叠（node-cron 同任务会叠加）
+- /api/proxy 上游超时 12s→6s；httpsGet 默认 15s→6s
+- /api/theme-analysis/trigger 异步化：202 立即返回 + 后台执行，前端按钮轮询 kv（原同步挂 80-120s）
+
+### ✅ 验证
+- tsc 0 error / **230 单测全绿**（29 文件，v9.80 224 → 新增 6：熔断按 host 分桶隔离 + cloudStore 增量 5 项）/ 服务端 node --check 通过
+- 说明：东财断源仍在（HTTP 000），功能数据为空属预期（v9.80 横幅兜底）；本轮验证以"快速失败 + UI 流畅"为准，数据源韧性下一轮专项做
+
 ---
 
 ## v9.78 — 性能修复：渐进式渲染 + AI 并发限流（2026-08-09）

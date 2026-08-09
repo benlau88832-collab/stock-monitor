@@ -257,6 +257,8 @@ export default function App() {
   // v9.78（性能修复）：主线引擎轮次护栏 —— 渐进式渲染（快路径 hybk → 异步 LLM 升级）时，
   // 慢的 LLM 升级不覆盖更新的轮次
   const battleSeq = useRef(0);
+  // v9.81（性能）：18s 快刷在飞护栏（防与自身/refreshAll 叠加放大请求）
+  const fastInFlight = useRef(false);
   // F-02 修复：refreshAll 空依赖，闭包需读最新 state → 用 ref 镜像（避免陈旧闭包）
   const overviewRef = useRef(overview);
   useEffect(() => { overviewRef.current = overview; }, [overview]);
@@ -290,11 +292,8 @@ export default function App() {
       const fm0 = fundMain.status === "fulfilled" ? fundMain.value : null;
       
       // ============== 溢价/晋级率/最高板计算（修改点1） ==============
-      let premiumAvg: number | null = null;
-      let promotionRate: number | null = null;
+      // 今日最高板（同步，不依赖网络）
       let maxBoardHeight: number | null = null;
-
-      // 今日最高板
       if (limitPool && limitPool.rawZTPool && limitPool.rawZTPool.length > 0) {
         let maxLbc = 0;
         for (const s of limitPool.rawZTPool) {
@@ -306,111 +305,10 @@ export default function App() {
 
       // 昨日快照 → 溢价 + 晋级率（v9.36 B2：逻辑抽到 lib/prevZtStats.ts）
       const prevZTPool = loadPrevZTSnapshot(limitPool?.qdate ?? null);
-      // v9.32.1（缺口1）：溢价分布 4 档（游资看第一眼的是分布不是均值）
-      let premiumDist: OverviewData["premiumDist"] = null;
-      if (prevZTPool && prevZTPool.length > 0) {
-        // v9.26.17：取全部代码去重（push2 批量单接口 100 只限制改分批处理；昨日涨停常 > 100 不应截断）
-        const codes = [...new Set(prevZTPool.map(s => String(s.c)))];
-        if (codes.length > 0) {
-          try {
-            const briefMap = await fetchStockBriefBatch(codes);
-            if (briefMap.size > 0) {
-              // v9.36（B2）：溢价均值/4档分布/核按钮/晋级率 全部抽到纯函数
-              const stats = computePrevZtStats({ prevZTPool, todayRawPool: limitPool?.rawZTPool ?? null, briefMap });
-              premiumAvg = stats.premiumAvg;
-              premiumDist = stats.premiumDist;
-              // v9.77（A3-P2-9）：核按钮带时间戳 + 消失即清空（原只增不清，早盘横幅挂到收盘被误读为实时）
-              if (stats.nuclearAlerts.length > 0) {
-                setNuclearAlerts(stats.nuclearAlerts);
-                nuclearTsRef.current = Date.now();
-              } else {
-                setNuclearAlerts([]);
-              }
-              promotionRate = stats.promotionRate;
-            }
-          } catch { /* 查询失败 → premiumAvg 保持 null */ }
-        }
-      }
 
-      let sentiment: number | null = null;
-      let sentimentLabel = "数据不足";
-      let sentimentFactors: SentimentFactors | null = null;
-      // v9.77（P0-6 修复）：涨停池被静默回退到昨日（接口失败）→ 池子派生的情绪因子失真，
-      // 抑制 limitDiff/limitUpBonus/blastedPenalty，避免把昨日涨停数当今日判断情绪强弱。
-      const lpDegraded = Boolean(limitPool?.degraded);
-      if (brData && brData.total > 0) {
-        const upRatio = brData.up / brData.total;
-        const upDownScore = Math.round(upRatio * 40 * 10) / 10;
-        const limitDiff = lpDegraded ? 0 : limitPool ? limitPool.limitUpCount - limitPool.limitDownCount : 0;
-        const limitScore = Math.round(Math.max(-15, Math.min(15, limitDiff * 0.3)) * 10) / 10;
-        const avgPctScore = Math.round(Math.max(-15, Math.min(15, brData.avgPct * 3)) * 10) / 10;
-        let indexScore = 0;
-        if (idxData.length > 0) {
-          const avgIdxPct = idxData.reduce((s, idx) => s + (idx.pct ?? 0), 0) / idxData.length;
-          indexScore = Math.round(Math.max(-15, Math.min(15, avgIdxPct * 5)) * 10) / 10;
-        }
-        // 涨停池加分（涨停多=市场活跃）—— degraded 时不计
-        const limitUpBonus = lpDegraded ? 0 : limitPool ? Math.round(Math.min(10, limitPool.limitUpCount * 0.1) * 10) / 10 : 0;
-        // 炸板率扣分（炸板多=情绪不稳）—— degraded 时不计
-        const blastedPenalty = lpDegraded ? 0 : limitPool ? Math.round(Math.min(8, limitPool.blastedRate * 0.15) * 10) / 10 : 0;
-        // 主力资金方向加减分
-        const fundFlowScore = fm0 ? Math.round(Math.max(-8, Math.min(8, fm0.mainNet / 1e10)) * 10) / 10 : 0;
-
-        // 溢价因子：premiumAvg 为 null 计 0；否则 clamp 到 ±5
-        const premiumScore = premiumAvg != null
-          ? Math.round(Math.max(PREMIUM_SCORE_MIN, Math.min(PREMIUM_SCORE_MAX, premiumAvg)) * 10) / 10
-          : 0;
-        // 晋级率因子
-        let promotionScore = 0;
-        if (promotionRate != null) {
-          let matched = false;
-          for (const tier of PROMO_TIER) {
-            if (promotionRate >= tier.threshold) { promotionScore = tier.score; matched = true; break; }
-          }
-          if (!matched) promotionScore = PROMO_FLOOR_SCORE;
-        }
-
-        sentimentFactors = { upDownScore, limitScore, avgPctScore, indexScore, limitUpBonus, blastedPenalty, fundFlowScore, premiumScore, promotionScore };
-        sentiment = Math.round(upDownScore + limitScore + avgPctScore + indexScore + limitUpBonus - blastedPenalty + fundFlowScore + premiumScore + promotionScore + 15);
-        sentiment = Math.max(0, Math.min(100, sentiment));
-
-        if (sentiment >= 80) sentimentLabel = "极度贪婪";
-        else if (sentiment >= 65) sentimentLabel = "贪婪";
-        else if (sentiment >= 45) sentimentLabel = "中性";
-        else if (sentiment >= 25) sentimentLabel = "恐慌";
-        else sentimentLabel = "极度恐慌";
-        // 信号账本：情绪分穿越关键阈值时记录
-        if (sentiment >= 80 || sentiment <= 25) {
-          const today = localDateStr();
-          appendSignal({
-            date: today, type: "sentiment_cross", typeLabel: sentiment >= 80 ? "极度贪婪" : "极度恐慌",
-            code: "MARKET", name: "全市场", priceAtSignal: idxData[0]?.price ?? 0,
-            description: `情绪温度计${sentiment}分(${sentimentLabel})`,
-          });
-        }
-      }
-      // 情绪分按交易日冻结存储（有效值才保存，null 不保存）
-      if (sentiment != null) {
-        saveTodaySentiment(sentiment);
-        // P2：日内轨迹采样（5分钟节流），供情绪动量折线/仓位建议使用
-        recordIntradaySentiment(sentiment);
-      }
-      const prevData = loadPrevTradingDaySentiment();
-      const prevSentiment = prevData?.score ?? null;
-
-      // 若当前情绪为 null（数据缺失），尝试用昨日情绪填充，仍为 null 则保持 null
-      if (sentiment == null) {
-        sentiment = prevSentiment; // 可能为 null（首日无数据）
-        if (sentiment != null) {
-          // 从存储恢复的昨日情绪，需要反推 sentimentLabel
-          if (sentiment >= 80) sentimentLabel = "极度贪婪";
-          else if (sentiment >= 65) sentimentLabel = "贪婪";
-          else if (sentiment >= 45) sentimentLabel = "中性";
-          else if (sentiment >= 25) sentimentLabel = "恐慌";
-          else sentimentLabel = "极度恐慌";
-        } else {
-          sentimentLabel = "数据不足";
-        }
+      // 涨停池快照写入主刷新管道（与 Tab 解耦，确保高低切/断板检测次日有数据）
+      if (limitPool && limitPool.rawZTPool && limitPool.rawZTPool.length > 0) {
+        saveZTSnapshot(limitPool.qdate ?? tradeDateStr(), limitPool.rawZTPool);
       }
 
       // 计算昨日成交额和近5日均值
@@ -420,25 +318,129 @@ export default function App() {
       const avg5dArr = turnoverHist.slice(1, 6); // 排除今天，取前5天
       const turnoverAvg5d = avg5dArr.length > 0 ? avg5dArr.reduce((s, t) => s + t.amount, 0) / avg5dArr.length : null;
 
-      // 涨停池快照写入主刷新管道（与 Tab 解耦，确保高低切/断板检测次日有数据）
-      if (limitPool && limitPool.rawZTPool && limitPool.rawZTPool.length > 0) {
-        saveZTSnapshot(limitPool.qdate ?? tradeDateStr(), limitPool.rawZTPool);
-      }
+      // v9.81（性能修复）：情绪计算提为纯函数 —— 首绘（premium 缺省）与补位（premium 就绪）各调用一次，
+      // 溢价/晋级率因子依赖 fetchStockBriefBatch（昨日涨停>100 只时最多 9 个 JSONP），不再阻塞首帧渲染
+      const prevSentiment = loadPrevTradingDaySentiment()?.score ?? null;
+      const computeSentimentNow = (pAvg: number | null, pRate: number | null): { sentiment: number | null; sentimentLabel: string; sentimentFactors: SentimentFactors | null } => {
+        let sentiment: number | null = null;
+        let sentimentLabel = "数据不足";
+        let sentimentFactors: SentimentFactors | null = null;
+        // v9.77（P0-6 修复）：涨停池被静默回退到昨日（接口失败）→ 池子派生的情绪因子失真，
+        // 抑制 limitDiff/limitUpBonus/blastedPenalty，避免把昨日涨停数当今日判断情绪强弱。
+        const lpDegraded = Boolean(limitPool?.degraded);
+        if (brData && brData.total > 0) {
+          const upRatio = brData.up / brData.total;
+          const upDownScore = Math.round(upRatio * 40 * 10) / 10;
+          const limitDiff = lpDegraded ? 0 : limitPool ? limitPool.limitUpCount - limitPool.limitDownCount : 0;
+          const limitScore = Math.round(Math.max(-15, Math.min(15, limitDiff * 0.3)) * 10) / 10;
+          const avgPctScore = Math.round(Math.max(-15, Math.min(15, brData.avgPct * 3)) * 10) / 10;
+          let indexScore = 0;
+          if (idxData.length > 0) {
+            const avgIdxPct = idxData.reduce((s, idx) => s + (idx.pct ?? 0), 0) / idxData.length;
+            indexScore = Math.round(Math.max(-15, Math.min(15, avgIdxPct * 5)) * 10) / 10;
+          }
+          // 涨停池加分（涨停多=市场活跃）—— degraded 时不计
+          const limitUpBonus = lpDegraded ? 0 : limitPool ? Math.round(Math.min(10, limitPool.limitUpCount * 0.1) * 10) / 10 : 0;
+          // 炸板率扣分（炸板多=情绪不稳）—— degraded 时不计
+          const blastedPenalty = lpDegraded ? 0 : limitPool ? Math.round(Math.min(8, limitPool.blastedRate * 0.15) * 10) / 10 : 0;
+          // 主力资金方向加减分
+          const fundFlowScore = fm0 ? Math.round(Math.max(-8, Math.min(8, fm0.mainNet / 1e10)) * 10) / 10 : 0;
 
+          // 溢价因子：pAvg 为 null 计 0；否则 clamp 到 ±5
+          const premiumScore = pAvg != null
+            ? Math.round(Math.max(PREMIUM_SCORE_MIN, Math.min(PREMIUM_SCORE_MAX, pAvg)) * 10) / 10
+            : 0;
+          // 晋级率因子
+          let promotionScore = 0;
+          if (pRate != null) {
+            let matched = false;
+            for (const tier of PROMO_TIER) {
+              if (pRate >= tier.threshold) { promotionScore = tier.score; matched = true; break; }
+            }
+            if (!matched) promotionScore = PROMO_FLOOR_SCORE;
+          }
+
+          sentimentFactors = { upDownScore, limitScore, avgPctScore, indexScore, limitUpBonus, blastedPenalty, fundFlowScore, premiumScore, promotionScore };
+          sentiment = Math.round(upDownScore + limitScore + avgPctScore + indexScore + limitUpBonus - blastedPenalty + fundFlowScore + premiumScore + promotionScore + 15);
+          sentiment = Math.max(0, Math.min(100, sentiment));
+
+          if (sentiment >= 80) sentimentLabel = "极度贪婪";
+          else if (sentiment >= 65) sentimentLabel = "贪婪";
+          else if (sentiment >= 45) sentimentLabel = "中性";
+          else if (sentiment >= 25) sentimentLabel = "恐慌";
+          else sentimentLabel = "极度恐慌";
+        }
+        // 若当前情绪为 null（数据缺失），尝试用昨日情绪填充，仍为 null 则保持 null
+        if (sentiment == null) {
+          sentiment = prevSentiment; // 可能为 null（首日无数据）
+          if (sentiment != null) {
+            // 从存储恢复的昨日情绪，需要反推 sentimentLabel
+            if (sentiment >= 80) sentimentLabel = "极度贪婪";
+            else if (sentiment >= 65) sentimentLabel = "贪婪";
+            else if (sentiment >= 45) sentimentLabel = "中性";
+            else if (sentiment >= 25) sentimentLabel = "恐慌";
+            else sentimentLabel = "极度恐慌";
+          } else {
+            sentimentLabel = "数据不足";
+          }
+        }
+        return { sentiment, sentimentLabel, sentimentFactors };
+      };
+
+      // ==== v9.81（性能修复）：首绘立即渲染（batch1 数据即可，premium 因子由并行任务补位）====
+      const firstSentiment = computeSentimentNow(null, null);
       setOverview({
-        indices: idxData, breadth: brData, sentiment, sentimentLabel,
-        sentimentFactors, sentimentYesterday: prevSentiment,
+        indices: idxData, breadth: brData,
+        sentiment: firstSentiment.sentiment, sentimentLabel: firstSentiment.sentimentLabel,
+        sentimentFactors: firstSentiment.sentimentFactors, sentimentYesterday: prevSentiment,
         limitPool,
         turnoverAmount: turnoverData.amount,
         turnoverYesterday: yesterdayAmount,
         turnoverAvg5d,
-        premiumAvg,
-        premiumDist,
-        promotionRate,
+        premiumAvg: null,
+        premiumDist: null,
+        promotionRate: null,
         maxBoardHeight,
         fetchedAt: Date.now(), // v9.77（P0-5）：抓取完成时间，供"数据截至 X 秒前"展示
       });
 
+      // ==== v9.81（性能修复）：5 个模块并行化（原串行 await 链 → Promise.allSettled）====
+      // 各模块仅依赖 batch1 数据，互不等待；任一模块失败/超慢不再阻塞其他模块渲染
+      const [premiumRes, , globalRes, , mainlineRes] = await Promise.allSettled([
+        // ① 溢价/晋级率 + 核按钮（昨日涨停今日表现，需 fetchStockBriefBatch 分批拉取）
+        (async (): Promise<{ premiumAvg: number | null; premiumDist: OverviewData["premiumDist"]; promotionRate: number | null }> => {
+          let premiumAvg: number | null = null;
+          let promotionRate: number | null = null;
+          // v9.32.1（缺口1）：溢价分布 4 档（游资看第一眼的是分布不是均值）
+          let premiumDist: OverviewData["premiumDist"] = null;
+          if (prevZTPool && prevZTPool.length > 0) {
+            // v9.26.17：取全部代码去重（push2 批量单接口 100 只限制改分批处理；昨日涨停常 > 100 不应截断）
+            const codes = [...new Set(prevZTPool.map(s => String(s.c)))];
+            if (codes.length > 0) {
+              try {
+                const briefMap = await fetchStockBriefBatch(codes);
+                if (briefMap.size > 0) {
+                  // v9.36（B2）：溢价均值/4档分布/核按钮/晋级率 全部抽到纯函数
+                  const stats = computePrevZtStats({ prevZTPool, todayRawPool: limitPool?.rawZTPool ?? null, briefMap });
+                  premiumAvg = stats.premiumAvg;
+                  premiumDist = stats.premiumDist;
+                  // v9.77（A3-P2-9）：核按钮带时间戳 + 消失即清空（原只增不清，早盘横幅挂到收盘被误读为实时）
+                  if (stats.nuclearAlerts.length > 0) {
+                    setNuclearAlerts(stats.nuclearAlerts);
+                    nuclearTsRef.current = Date.now();
+                  } else {
+                    setNuclearAlerts([]);
+                  }
+                  promotionRate = stats.promotionRate;
+                }
+              } catch { /* 查询失败 → premiumAvg 保持 null */ }
+            }
+          }
+          return { premiumAvg, premiumDist, promotionRate };
+        })(),
+
+      // ② 资金结构（主力/散户结构 + 板块资金排行）
+      (async () => {
       // === Fund Structure ===
       if (fundMain.status === "fulfilled") {
         const fm = fundMain.value;
@@ -491,7 +493,10 @@ export default function App() {
           turnoverAmount: turnoverData.amount,
         });
       }
+      })(),
 
+      // ③ 全球指数 + 商品期货
+      (async (): Promise<{ commodities: GlobalIndex[] }> => {
       // === Global ===
       let commodities: GlobalIndex[] = [];
       try { commodities = await fetchCommodities(); } catch { /* skip */ }
@@ -500,7 +505,11 @@ export default function App() {
         commodities,
         turnover: turnover.status === "fulfilled" ? turnover.value : { amount: 0, available: false },
       });
+      return { commodities };
+      })(),
 
+      // ④ 暗盘（概念板块资金 + Top10 成分股）
+      (async () => {
       // === Dark Pool (concept boards) ===
       // 明暗盘判断逻辑（参照同花顺6种组合模型）：
       // 明盘 = 超大单+大单（明面上的大资金行为）
@@ -555,7 +564,10 @@ export default function App() {
         // 首次即失败才显示null→"数据不可用"
         if (!darkPoolRef.current) setDarkPool(null);
       }
+      })(),
 
+      // ⑤ 主线（行业/概念/地域资金流 + 龙头成分股）
+      (async (): Promise<{ boards: MainlineData["boards"] }> => {
       // === Mainline ===
       let mainlineBoards: MainlineData["boards"] = []; // 作战引擎需要引用
       try {
@@ -603,18 +615,51 @@ export default function App() {
         dedupedPotential.sort((a, b) => Number(a.vetoed) - Number(b.vetoed) || b.mainNet - a.mainNet);
         mainlineBoards = topBoards; // 供作战引擎复用
         setMainline({ boards: topBoards, potential: dedupedPotential.slice(0, 15) });
+        return { boards: mainlineBoards };
       } catch {
         setMainline(null);
+        return { boards: [] };
       }
+      })()
+      ]);
+
+      // ==== 并行任务结果汇聚（供作战引擎使用）====
+      const mainlineBoards: MainlineData["boards"] = mainlineRes.status === "fulfilled" ? mainlineRes.value.boards : [];
+      const commodities: GlobalIndex[] = globalRes.status === "fulfilled" ? globalRes.value.commodities : [];
+
+      // ==== 情绪终值（premium 就绪后重算）+ overview 合并（premium 补位）====
+      const prem = premiumRes.status === "fulfilled" ? premiumRes.value : { premiumAvg: null, premiumDist: null, promotionRate: null };
+      const finalSentiment = computeSentimentNow(prem.premiumAvg, prem.promotionRate);
+      // 情绪分落盘/轨迹采样/信号账本 —— 只执行一次（premium 补齐后）
+      if (finalSentiment.sentiment != null) {
+        saveTodaySentiment(finalSentiment.sentiment);
+        // P2：日内轨迹采样（5分钟节流），供情绪动量折线/仓位建议使用
+        recordIntradaySentiment(finalSentiment.sentiment);
+      }
+      if (brData && brData.total > 0 && finalSentiment.sentiment != null && (finalSentiment.sentiment >= 80 || finalSentiment.sentiment <= 25)) {
+        const today = localDateStr();
+        appendSignal({
+          date: today, type: "sentiment_cross", typeLabel: finalSentiment.sentiment >= 80 ? "极度贪婪" : "极度恐慌",
+          code: "MARKET", name: "全市场", priceAtSignal: idxData[0]?.price ?? 0,
+          description: `情绪温度计${finalSentiment.sentiment}分(${finalSentiment.sentimentLabel})`,
+        });
+      }
+      setOverview(prev => prev ? {
+        ...prev,
+        sentiment: finalSentiment.sentiment, sentimentLabel: finalSentiment.sentimentLabel,
+        sentimentFactors: finalSentiment.sentimentFactors,
+        premiumAvg: prem.premiumAvg, premiumDist: prem.premiumDist, promotionRate: prem.promotionRate,
+        fetchedAt: Date.now(),
+      } : prev);
 
       // ============== 作战推荐引擎（规则机版） ==============
       try {
         // 需要 overview 数据（此处 limitPool/sentiment 已算好）
         const overviewForGate: OverviewData = {
-          indices: idxData, breadth: brData, sentiment, sentimentLabel,
-          sentimentFactors, sentimentYesterday: prevSentiment, limitPool,
+          indices: idxData, breadth: brData, sentiment: finalSentiment.sentiment, sentimentLabel: finalSentiment.sentimentLabel,
+          sentimentFactors: finalSentiment.sentimentFactors, sentimentYesterday: prevSentiment, limitPool,
           turnoverAmount: turnoverData.amount, turnoverYesterday: yesterdayAmount,
-          turnoverAvg5d, premiumAvg, promotionRate, maxBoardHeight,
+          turnoverAvg5d, premiumAvg: prem.premiumAvg, promotionRate: prem.promotionRate, maxBoardHeight,
         };
         const gate = computeGate(overviewForGate);
 
@@ -778,7 +823,7 @@ export default function App() {
 
         // ---- ② 市场风格感知（进攻/轮动/防守） ----
         const marketStyle = detectMarketStyle({
-          sentiment,
+          sentiment: finalSentiment.sentiment,
           gateFactor: gate.factor,
           ztCount: rawPool.length,
           blastedRate: limitPool?.blastedRate ?? null,
@@ -791,7 +836,7 @@ export default function App() {
         try {
           const etfSecids = ETF_POOL.map(s => `${/^(60|68|5)/.test(s.code) ? "1" : "0"}.${s.code}`).join(",");
           const etfUrl = `https://push2.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f3,f12,f14,f62,f164&secids=${etfSecids}`;
-          const etfJson = await (await import("./lib/jsonpQueue")).queuedJsonp<any>(etfUrl, 8000, "cb", 1);
+          const etfJson = await (await import("./lib/jsonpQueue")).queuedJsonp<any>(etfUrl, 5000, "cb", 1);
           const etfDiffRaw = etfJson?.data?.diff;
           const etfDiff: any[] = Array.isArray(etfDiffRaw) ? etfDiffRaw : (etfDiffRaw && typeof etfDiffRaw === "object" ? Object.values(etfDiffRaw) : []);
           for (const d of etfDiff) {
@@ -834,7 +879,7 @@ export default function App() {
 
           // ?debug=1 诊断模式（Fix4：可观测性）
           if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
-            console.log("=== 主线引擎（LLM 归类）===", { 情绪: sentiment, 涨停数: rawPool.length, 风格: marketStyle.label, 风险偏好: marketStyle.riskAppetite, 闸门: gate.factor, 归类概览: classifyOverview });
+            console.log("=== 主线引擎（LLM 归类）===", { 情绪: finalSentiment.sentiment, 涨停数: rawPool.length, 风格: marketStyle.label, 风险偏好: marketStyle.riskAppetite, 闸门: gate.factor, 归类概览: classifyOverview });
             console.table(candidates.slice(0, 8).map(c => ({ 主线: c.mainline, 涨停: c.ztCount, 高度: c.height, 资金: (c.mainNet / 1e8).toFixed(0) + "亿", 强度: c.score, 脉冲: c.isPulse ? "是" : "否", 龙一: c.leaders[0]?.name ?? "—", 龙二: c.leaders[1]?.name ?? "—" })));
             console.table(etfResults.map(e => ({ 代码: e.code, 名称: e.name, 总分: e.total, 置信: e.tier, 资金: e.factors.fundTrend, 联动: e.factors.boardLink, 风格: e.factors.styleFit, 主线: e.factors.mainlineLink, 宏观: e.factors.macro, 直出: e.fromMainline ? e.matchedMainline : "" })));
           }
@@ -939,9 +984,13 @@ export default function App() {
   // 竞价段（auction）同样高频刷涨停池 —— 竞价涨停价锁定即出现，实现"竞价即封板"早期信号。
   // 不碰板块资金/新闻/公告等重接口（仍走主刷新 60s），避免全量轮询打爆东财限流。
   const refreshFast = useCallback(async () => {
-    const phase = getCurrentSession().phase;
-    if (phase !== "trading" && phase !== "auction") return;
+    // v9.81（性能）：快刷防重叠 —— 上一轮 18s 快刷未完成（东财黑洞/回退中）时跳过本轮，
+    // 避免 fetchLimitPoolSummary 回退放大请求与自身/refreshAll 叠加
+    if (fastInFlight.current) return;
+    fastInFlight.current = true;
     try {
+      const phase = getCurrentSession().phase;
+      if (phase !== "trading" && phase !== "auction") return;
       const limitPool = await fetchLimitPoolSummary();
       // v9.79（性能/韧性）：18s 高频通道接口抖动时，不要用空池/降级池覆盖上一轮有效池
       // （原无条件 setOverview 会用 totalCount=0 的空池或昨日回退池打空白涨停/情绪模块）
@@ -958,7 +1007,9 @@ export default function App() {
         const alerts = detectSealDecay(limitPool.rawZTPool);
         if (alerts.length > 0) setSealAlerts(alerts);
       }
-    } catch { /* 静默：高频通道失败不影响主刷新 */ }
+    } catch { /* 静默：高频通道失败不影响主刷新 */ } finally {
+      fastInFlight.current = false;
+    }
   }, []);
   useEffect(() => {
     if (!autoRefresh) return;
@@ -1193,7 +1244,12 @@ export default function App() {
   const isSimulateMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("simulate") === "1";
 
   // 加载昨日 ZTPool 快照（用"找最近历史快照"替代本地日期推算，天然兼容法定节假日）
-  const yesterdayZTPool = loadPrevZTSnapshot(overview?.limitPool?.qdate ?? null);
+  // v9.81（性能）：useMemo —— 原每次渲染都全量扫 localStorage + JSON.parse ~500 条快照
+  // （18s 快刷全树重渲染时这是每次渲染的主线程大头之一）
+  const yesterdayZTPool = useMemo(
+    () => loadPrevZTSnapshot(overview?.limitPool?.qdate ?? null),
+    [overview?.limitPool?.qdate],
+  );
   // v9.26.10：useMemo 缓存数组引用，避免每次渲染新数组 → AuctionBoard effect 每秒重建 → 每秒请求
   const yesterdayZtBrief = useMemo(
     () => yesterdayZTPool?.map(z => ({ code: String(z.c), name: String(z.n) })) ?? [],

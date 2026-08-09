@@ -5,6 +5,10 @@
 // v9.78：性能修复 —— 渐进式主线渲染（LLM 归类不阻塞首帧）+ AI 并发限流器（响应 Agnes 并发限流）
 // v9.79：性能韧性修复 —— 板块映射延迟构建 / ErrorBoundary / 18s 空池不覆盖
 // v9.80：卡顿根因修复 —— jsonpQueue 熔断快速短路 + 超时 10s→4s + 数据源异常横幅 + 推送业务码校验 + AIConsole 打字机 + PG 备份脚本
+// v9.81：卡顿整改（性能发布）—— refreshAll 模块链并行化(Σ→max) + 熔断按host分桶(6→3) + 长超时收紧
+//   + 涨停池断源回退深度受限 + refreshFast防重叠 + 龙虎榜161请求风暴收敛 + 渲染路径memo化
+//   + dataStore内存缓存 + cloudStore增量同步(修复bulk 100条截断) + AIConsole打字机降频 + Recharts memo
+//   + 服务端加固（启动补抓链互斥/非交易日跳LLM/盯价与主题分析防重叠/proxy 6s/theme-analysis异步化）
 // ============================================================
-export const APP_VERSION = "v9.80";
+export const APP_VERSION = "v9.81";
 export const BUILD_DATE = "2026-08-09";

@@ -110,7 +110,7 @@ async function fetchIndexOverviewTencent(): Promise<IndexQuote[]> {
       "000688": "sh000688", "000300": "sh000300",
     };
     const codes = MAJOR_INDICES.map(i => codeMap[i.code]).filter(Boolean).join(",");
-    const resp = await fetch(`https://qt.gtimg.cn/q=${codes}`, { mode: "cors" });
+    const resp = await fetch(`https://qt.gtimg.cn/q=${codes}`, { mode: "cors", signal: AbortSignal.timeout(6000) });
     if (!resp.ok) return [];
     // 腾讯接口默认 GBK，浏览器 fetch 可能乱码 → 用 text() 拿原始后尝试解码
     const raw = await resp.arrayBuffer();
@@ -692,7 +692,7 @@ export async function fetchFastNews(pageSize = 20): Promise<FastNewsItem[]> {
   } catch {
     // JSONP 也失败时，尝试用 fetch + no-cors 模式获取（某些环境下可能成功）
     try {
-      const resp = await fetch(url, { mode: "cors", signal: AbortSignal.timeout(10000) });
+      const resp = await fetch(url, { mode: "cors", signal: AbortSignal.timeout(5000) });
       if (resp.ok) {
         const json = await resp.json();
         const list: any[] = json?.data?.fastNewsList ?? [];
@@ -926,8 +926,17 @@ export async function fetchLimitPoolSummary(date?: string): Promise<LimitPoolSum
   let d = date || tradeDateStr();
   const requested = d;
   let last: LimitPoolSummary | null = null;
+  // v9.81（性能）：断源快速放弃 —— 连续 3 天请求全失败（qdate 为 null 的"假空池"）说明数据源不可达，
+  // 不再 10 天逐日回退白等（最坏 10 天 × 3 接口 × 超时重试）；真实空池（qdate 非 null）仍走完整回退
+  let netFails = 0;
+  const MAX_NET_FAILS = 3;
   for (let attempt = 0; attempt < 10; attempt++) {
     const summary = await fetchZTPoolForDate(d);
+    const netFail = summary.totalCount === 0 && summary.qdate == null;
+    if (netFail && ++netFails >= MAX_NET_FAILS) {
+      // 数据源不可达：提前放弃回退（兜底空摘要，UI 走 degraded 横幅提示）
+      return { limitUpCount: 0, limitDownCount: 0, blastedCount: 0, blastedRate: 0, boardCounts: {}, totalBoardStocks: 0, rawZTPool: [], qdate: null, totalCount: 0, isTradingDay: false, degraded: true };
+    }
     if (summary.totalCount > 0 || attempt === 9) {
       // v9.77（P0-6）：请求的是今天、返回的是非今日 qdate → 接口失败被静默回退，
       // 标记 degraded，让 UI 明示"数据来自昨日/接口异常"，不再把昨日涨停数当今日。

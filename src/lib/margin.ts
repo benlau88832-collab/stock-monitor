@@ -89,7 +89,7 @@ export async function fetchStockMargin(code: string): Promise<StockMarginInfo | 
   const url = `${DC}?reportName=RPTA_WEB_RZRQ_GGMX&columns=SCODE,SECNAME,DATE,RZYE,RQYE,RZJME,RZJME3D,RZJME5D,RZJME10D,RCHANGE3DCP,RCHANGE5DCP,RCHANGE10DCP&pageNumber=1&pageSize=1&sortColumns=DATE&sortTypes=-1&source=WEB&client=WEB&filter=(SCODE%3D%22${code}%22)`;
   const start = Date.now();
   try {
-    const json = await queuedJsonp<any>(url, 10000, "callback", 2);
+    const json = await queuedJsonp<any>(url, 5000, "callback", 2);
     const rows: any[] = json?.result?.data ?? [];
     recordApiCall("个股两融", true, Date.now() - start);
     if (rows.length === 0) {

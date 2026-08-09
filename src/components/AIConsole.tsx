@@ -36,9 +36,12 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
   const [researchCtx, setResearchCtx] = useState<ResearchCtx | null>(loadResearchCtx);
   const [busy, setBusy] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // v9.81（性能）：打字机渐显期间跳过对话历史持久化（打字中每帧全量 JSON 序列化 → 结束落盘一次）
+  const typingRef = useRef(false);
 
   // 对话历史持久化（刷新不丢）
   useEffect(() => {
+    if (typingRef.current) return;
     try { localStorage.setItem(MSGS_KEY, JSON.stringify(msgs.slice(-30))); } catch { /* 静默 */ }
   }, [msgs]);
 
@@ -104,19 +107,22 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
         // 但答复"逐字出现"消除"等待 20s 无反馈"的焦虑；降级回复同样渐显但保留 degraded 标）
         const finalText = r.reply || "（空回复）";
         setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "", tools: r.toolsCalled, degraded: r.degraded }));
-        // 打字机：每 8ms 追加 2-4 字符（长回复 600 字约 2-3s，避免用户等 20s 无感知）
+        // v9.81（性能）：打字机 8ms→40ms、每帧 2-4→4-7 字符（整体速度不变，主线程 setState/重渲染频率降 5 倍）
         const full = finalText;
         let idx = 0;
+        typingRef.current = true;
         await new Promise<void>(resolve => {
           const tick = () => {
-            idx = Math.min(full.length, idx + 2 + Math.floor(Math.random() * 3));
+            idx = Math.min(full.length, idx + 4 + Math.floor(Math.random() * 4));
+            // 最后一帧恢复持久化 → 完整文本落盘一次
+            if (idx >= full.length) typingRef.current = false;
             setMsgs(m => {
               const last = m[m.length - 1];
               if (!last || last.role !== "ai") return m;
               return [...m.slice(0, -1), { ...last, text: full.slice(0, idx) }];
             });
             if (idx >= full.length) resolve();
-            else setTimeout(tick, 8);
+            else setTimeout(tick, 40);
           };
           tick();
         });

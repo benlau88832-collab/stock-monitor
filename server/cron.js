@@ -174,7 +174,8 @@ async function fetchMarketIntraday() {
 }
 
 // ---------- 通用 https GET ----------
-function httpsGet(url, timeout = 15000) {
+// v9.81（性能）：默认超时 15s→6s —— 东财断源时服务端外部等待快速失败，不再占连接池
+function httpsGet(url, timeout = 6000) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { headers: { "User-Agent": "Mozilla/5.0", Referer: "https://data.eastmoney.com/" } }, r => {
       const chunks = [];
@@ -777,6 +778,9 @@ async function fetchBlockTrades() {
 
 // ---------- 启动定时任务 ----------
 let cronBusy = false; // v9.26.10：防重叠执行（20min 任务与启动抓取/15:40 并发）
+// v9.81（性能/运维）：盯价/主题分析任务独立防重叠 —— node-cron 同任务前一轮未跑完会再触发
+let watchRunning = false;
+let themeRunning = false;
 // v9.54（V7-15）：A股交易日历 —— 节假日休市判定（2026 年法定休市区间；与前端 tradeCalendar.ts 口径一致）
 const HOLIDAY_RANGES_2026 = [
   ["2026-01-01", "2026-01-02"], ["2026-02-16", "2026-02-22"], ["2026-04-04", "2026-04-06"],
@@ -997,8 +1001,12 @@ function startCron({ pool }) {
   }, { timezone: "Asia/Shanghai" });
 
   // 启动时立即抓取一次（验证 + 补数据：涨停快照 + 快讯 + 公告 + 政策 全部入库）
+  // v9.81（性能/运维）：补抓链加固 —— cronBusy 互斥（不与 20min/15:40 任务并发抢东财+AI 配额）
   setTimeout(async () => {
-    console.log("[cron] 启动即抓取（验证 + 补数据）");
+    if (cronBusy) { console.log("[cron] busy, skip startup fetch"); return; }
+    cronBusy = true;
+    try {
+      console.log("[cron] 启动即抓取（验证 + 补数据）");
     try {
       const snap = await fetchZTPool();
       await pool.query(
@@ -1053,13 +1061,18 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] 启动政策失败:", e.message); }
 
     // v9.75（阶段二）：启动即快讯 LLM 分级回填（先分级，analyzeDaily 的 strongNews 才有数据）
-    try { await rankFastNewsStars(pool); } catch { /* 不影响 */ }
-
-    await analyzeDaily({ pool });
-    // v9.33（缺口2/6/8）：启动即补 复盘 + 资金流 + 大宗交易（容错，任一失败不阻塞）
-    try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] 启动复盘失败:", e.message); }
-    // v9.42：启动即补因子 IC 健康度（无论当天是否到收盘时间都有快照）
-    try { await saveFactorIc(pool); } catch (e) { console.error("[cron] 启动因子IC失败:", e.message); }
+    // v9.81（性能/运维）：非交易日跳过 LLM 链（周末/节假日启动不再烧 5-10 分钟 + AI 配额）
+    const isTrading = isTradingDayCN();
+    if (isTrading) {
+      try { await rankFastNewsStars(pool); } catch { /* 不影响 */ }
+      try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] 启动 analyzeDaily 失败:", e.message); }
+      // v9.33（缺口2/6/8）：启动即补 复盘 + 资金流 + 大宗交易（容错，任一失败不阻塞）
+      try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] 启动复盘失败:", e.message); }
+      // v9.42：启动即补因子 IC 健康度（无论当天是否到收盘时间都有快照）
+      try { await saveFactorIc(pool); } catch (e) { console.error("[cron] 启动因子IC失败:", e.message); }
+    } else {
+      console.log("[cron] 非交易日，跳过 LLM 链（快讯分级/分析/复盘/因子IC）");
+    }
     try {
       const funds = await fetchBoardFundServer();
       if (funds.length > 0) {
@@ -1086,6 +1099,9 @@ function startCron({ pool }) {
         console.log(`[cron] 启动大宗交易入库 ${tDateStr}: ${trades.length} 笔`);
       }
     } catch (e) { console.error("[cron] 启动大宗交易失败:", e.message); }
+    } finally {
+      cronBusy = false;
+    }
   }, 3000);
 
   console.log("[cron] scheduled: 15:40 快照+分析+复盘 · 每20分钟抓快讯/公告/政策 · 盘中每5分钟盯价 · Asia/Shanghai");
@@ -1094,11 +1110,16 @@ function startCron({ pool }) {
   cron.schedule("*/5 9-15 * * 1-5", async () => {
     try {
       if (!isTradingDayCN()) return;
-      const { runWatchCheck } = require("./routes/watch");
-      const r = await runWatchCheck(pool);
-      if (r.triggered.length > 0) {
-        console.log(`[cron] ⚡ 盯价触发关注区间: ${r.triggered.map(t => `${t.name}(${t.code}) 现价${t.price} 偏离${t.deviation}%`).join(" | ")}`);
-      }
+      // v9.81：防重叠 —— 上一轮未跑完（东财慢/超时）时跳过本轮
+      if (watchRunning) { console.log("[cron] watch busy, skip"); return; }
+      watchRunning = true;
+      try {
+        const { runWatchCheck } = require("./routes/watch");
+        const r = await runWatchCheck(pool);
+        if (r.triggered.length > 0) {
+          console.log(`[cron] ⚡ 盯价触发关注区间: ${r.triggered.map(t => `${t.name}(${t.code}) 现价${t.price} 偏离${t.deviation}%`).join(" | ")}`);
+        }
+      } finally { watchRunning = false; }
     } catch (e) { console.error("[cron] 盘中盯价失败:", e.message); }
   });
 
@@ -1135,7 +1156,11 @@ function startCron({ pool }) {
   const scheduleThemeAnalysis = (expr, label) => cron.schedule(expr, async () => {
     try {
       if (!isTradingDayCN() && expr !== "5 15 * * 1-5") return; // 盘后允许非交易日补跑
-      await runThemeAnalysis({ pool, label });
+      // v9.81：防重叠 —— runThemeAnalysis 含 2 次 LLM（恶劣情况单轮可超 30 分钟），不叠加
+      if (themeRunning) { console.log(`[cron] themeAnalysis(${label}) busy, skip`); return; }
+      themeRunning = true;
+      try { await runThemeAnalysis({ pool, label }); }
+      finally { themeRunning = false; }
     } catch (e) { console.error(`[cron] themeAnalysis(${label}) failed:`, e.message); }
   }, { timezone: "Asia/Shanghai" });
   scheduleThemeAnalysis("15 9 * * 1-5", "盘前");

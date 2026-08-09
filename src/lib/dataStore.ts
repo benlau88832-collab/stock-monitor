@@ -19,16 +19,33 @@ const RETENTION_DAYS = 30;
 
 // ============== 内部读写 ==============
 
+// v9.81（性能）：模块级内存缓存 —— ds_news/ds_ann 峰值各近万条，原每次读都全量 JSON.parse
+// （60s 主刷每轮 getAllSince 调用 2 次 × 2 库 = 4 次 MB 级解析，主线程尖峰）。
+// upsert* 原地修改后经 saveArr 落盘并更新缓存引用，保持一致；跨标签页写入走 storage 事件失效。
+const arrCache = new Map<string, unknown>();
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === NEWS_KEY || e.key === ANN_KEY) arrCache.delete(e.key);
+  });
+}
+
 function loadArr<T>(key: string): T[] {
+  const cached = arrCache.get(key);
+  if (cached !== undefined) return cached as T[];
   try {
     const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : [];
+    const arr: T[] = raw ? JSON.parse(raw) : [];
+    arrCache.set(key, arr);
+    return arr;
   } catch { return []; }
 }
 
 function saveArr<T>(key: string, arr: T[]): void {
-  try { localStorage.setItem(key, JSON.stringify(arr)); }
-  catch { /* localStorage 满 → 静默 */ }
+  try {
+    localStorage.setItem(key, JSON.stringify(arr));
+    // upsert 过滤/裁剪后是新数组引用 → 同步缓存
+    arrCache.set(key, arr);
+  } catch { /* localStorage 满 → 静默 */ }
 }
 
 function cutoffDate(): string {

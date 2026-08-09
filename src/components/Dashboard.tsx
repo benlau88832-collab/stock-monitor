@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, memo } from "react";
 import MarketOverview from "./MarketOverview";
 // v9.48（D2）：EmotionCycleCard 移除 —— 情绪/涨停/炸板/溢价/晋级率已在温度条+总览+闸门多处展示，去冗余
 import DisciplinePanel from "./DisciplinePanel";
@@ -83,7 +83,7 @@ export interface WatchStockBrief {
 }
 
 // ============== 指数光带（极薄通栏） ==============
-function IndexStrip({ overview }: { overview: OverviewData | null }) {
+function IndexStripImpl({ overview }: { overview: OverviewData | null }) {
   if (!overview) return null;
   const { indices, turnoverAmount, turnoverAvg5d } = overview;
   const volRatio = turnoverAvg5d && turnoverAvg5d > 0 ? turnoverAmount / turnoverAvg5d : null;
@@ -105,6 +105,12 @@ function IndexStrip({ overview }: { overview: OverviewData | null }) {
     </div>
   );
 }
+// v9.81（性能）：18s 快刷只更新 limitPool → 指数条（不消费涨停池）字段级 memo，跳过无谓重渲染
+const IndexStrip = memo(IndexStripImpl, (prev, next) =>
+  prev.overview?.indices === next.overview?.indices &&
+  prev.overview?.turnoverAmount === next.overview?.turnoverAmount &&
+  prev.overview?.turnoverAvg5d === next.overview?.turnoverAvg5d,
+);
 
 // ============== 涨停温度计横条 ==============
 // 核心进阶温度条（v9.48 G1：涨停/跌停/炸板率已在 StatusBar 全局常驻，此处只留进阶指标：
@@ -228,11 +234,14 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
   }, []);
 
   // 实时计算每只自选股的分级（S/A/B），S/A 级 emit 到事件流（冷却去重防刷屏）
-  // 注意：verdicts 是普通计算，不调用 hook，可放在 conditional return 之前
-  const verdicts = stocks.length === 0 ? [] : stocks.map(s => ({
-    stock: s,
-    verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate, limitPct: s.limitPct ?? 10 }, mainlines),
-  })).filter((x): x is { stock: WatchStockBrief; verdict: NonNullable<ReturnType<typeof classifyAnomaly>> } => x.verdict != null);
+  // v9.81（性能）：useMemo —— 原每次渲染对每只自选股重跑 classifyAnomaly
+  const verdicts = useMemo(() => {
+    if (stocks.length === 0) return [];
+    return stocks.map(s => ({
+      stock: s,
+      verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate, limitPct: s.limitPct ?? 10 }, mainlines),
+    })).filter((x): x is { stock: WatchStockBrief; verdict: NonNullable<ReturnType<typeof classifyAnomaly>> } => x.verdict != null);
+  }, [stocks, mainlines]);
 
   useEffect(() => {
     for (const { stock, verdict } of verdicts) {
@@ -373,15 +382,17 @@ function SentimentSparkline({ pts }: { pts: { t: string; s: number }[] }) {
 }
 
 // ============== 闸门+温度计超大号卡 ==============
-function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: GateResult | null }) {
+function GateGaugeImpl({ overview, gate }: { overview: OverviewData | null; gate: GateResult | null }) {
+  // v9.81（性能）：useMemo —— 原每次渲染都从 localStorage 读日内序列并重算动量/仓位建议
+  const { momentum, delta, advice, intraday } = useMemo(() => {
+    const intraday = loadIntradaySeries();
+    const m = computeMomentum(intraday);
+    return { momentum: m.momentum, delta: m.delta, advice: suggestPosition(overview?.sentiment ?? null, m.momentum, gate?.factor ?? null), intraday };
+  }, [overview?.sentiment, gate?.factor]);
   if (!overview) return null;
   const s = overview.sentiment;
   // 修复：s 可能是 null（类型收窄），color 用兜底值
   const color = s == null ? "#8b5cf6" : s >= 80 ? "#ef4444" : s >= 65 ? "#f59e0b" : s >= 45 ? "#eab308" : s >= 25 ? "#3b82f6" : "#8b5cf6";
-  // P2：情绪动量 + 仓位建议
-  const intraday = loadIntradaySeries();
-  const { momentum, delta } = computeMomentum(intraday);
-  const advice = suggestPosition(s, momentum, gate?.factor ?? null);
   const momentumLabel = momentum === "heating" ? `🔥 升温 ${delta > 0 ? "+" : ""}${delta.toFixed(0)}` : momentum === "cooling" ? `❄️ 降温 ${delta.toFixed(0)}` : momentum === "flat" ? "→ 平稳" : "—";
   const posColor = advice.positionPct >= 70 ? "text-emerald-400" : advice.positionPct >= 40 ? "text-amber-300" : "text-rose-400";
   // v9.26.13：闸门系数颜色——高位（机会/中性）= 绿/琥珀，低位（熔断）= 红
@@ -440,6 +451,11 @@ function GateGauge({ overview, gate }: { overview: OverviewData | null; gate: Ga
     </div>
   );
 }
+// v9.81（性能）：18s 快刷只更新 limitPool → 闸门卡（只看情绪+闸门因子）字段级 memo 跳过无谓重渲染
+const GateGauge = memo(GateGaugeImpl, (prev, next) =>
+  prev.overview?.sentiment === next.overview?.sentiment &&
+  prev.gate?.factor === next.gate?.factor,
+);
 
 // ============== 重要信息摘录（真实新闻+公告） ==============
 function ImportantFeed() {
@@ -502,8 +518,12 @@ function AlertFeed() {
 
 // ============== 梯队缩略卡 ==============
 function LadderMini({ overview, onSwitchTab }: { overview: OverviewData | null; onSwitchTab?: () => void }) {
+  // v9.81（性能）：useMemo —— 原每次渲染对 ~500 条池子重跑分组建梯队
+  const groups = useMemo(
+    () => (overview?.limitPool?.rawZTPool ? buildThemeLadder(overview.limitPool.rawZTPool as ZTPoolItem[]) : []),
+    [overview?.limitPool?.rawZTPool],
+  );
   if (!overview?.limitPool?.rawZTPool) return null;
-  const groups = buildThemeLadder(overview.limitPool.rawZTPool as ZTPoolItem[]);
   const top3 = groups.slice(0, 3);
   if (top3.length === 0) return null;
   return (

@@ -99,15 +99,37 @@ export default function EventClassifyPanel({ onOpenNews }: {
   }, []);
 
   // v13-4：🔄 立即分析（手动触发一轮管线）
+  // v9.81（性能）：服务端已异步化（202 立即返回，后台执行 2 次 LLM）→
+  // 前端轮询 kv theme_analysis:latest，直到 key 变化（新结果落库），最长 90s
   const triggerNow = async () => {
     setTriggering(true);
     try {
+      const before = (await kvGet("theme_analysis:latest")) as { key?: string } | null;
+      const beforeKey = before?.key ?? "";
       const r = await fetch("/api/theme-analysis/trigger", { method: "POST" });
       if (r.ok) {
-        const j = await r.json();
-        if (j.result && Array.isArray(j.result.themes)) {
-          prevHeatRef.current = new Map<string, number>(j.result.themes.map((t: any) => [t.theme, t.heat] as [string, number]));
-          setAnalysis({ ...j.result, themes: j.result.themes.map((t: any) => ({ ...t, delta: "🆕" })) });
+        for (let i = 0; i < 30; i++) {
+          await new Promise(res => setTimeout(res, 3000));
+          const v = (await kvGet("theme_analysis:latest")) as { key?: string; themes?: Array<{ theme: string; heat: number }> } | null;
+          if (v && v.key && v.key !== beforeKey && Array.isArray(v.themes) && v.themes.length > 0) {
+            const next = new Map<string, number>(v.themes.map(t => [t.theme, t.heat]));
+            const prev = prevHeatRef.current;
+            const withDelta = v.themes.map(t => {
+              let delta: string | null = null;
+              if (!prev) delta = "🆕";
+              else {
+                const p = prev.get(t.theme);
+                if (p == null) delta = "🆕";
+                else if (t.heat - p >= 10) delta = `🔥+${t.heat - p}`;
+                else if (p - t.heat >= 10) delta = `❄️-${p - t.heat}`;
+                else delta = "➖";
+              }
+              return { ...t, delta };
+            });
+            prevHeatRef.current = next;
+            setAnalysis({ ...v, themes: withDelta });
+            break;
+          }
         }
       }
     } catch { /* 静默 */ }

@@ -113,7 +113,8 @@ function forward(req, res, target, bodyBuf) {
     });
   });
   upstream.on("error", e => done(() => res.status(502).json({ error: e.message })));
-  upstream.setTimeout(12000, () => { done(() => res.status(504).json({ error: "upstream timeout" })); upstream.destroy(); });
+  // v9.81（性能）：上游超时 12s→6s —— 东财断源时前端不再挂 12s 等 504
+  upstream.setTimeout(6000, () => { done(() => res.status(504).json({ error: "upstream timeout" })); upstream.destroy(); });
   if (bodyBuf) upstream.write(bodyBuf);
   upstream.end();
 }

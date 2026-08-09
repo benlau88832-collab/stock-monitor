@@ -40,6 +40,8 @@ const PROXY_AGENT = getHttpsProxyAgent(PROXY_URL);
 // 返回完整响应 JSON（ai.js 用）；非 2xx / 坏 JSON 均 reject
 function postJSON(url, body, timeoutMs = 30000, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
+    // v9.81（安全加固）：出站 host 白名单 —— 防未来改动把用户可控字符串拼进 URL 造成 SSRF
+    try { require("./hostGuard").assertHostAllowed(url); } catch (e) { reject(e); return; }
     const u = new URL(url);
     const lib = u.protocol === "https:" ? https : http;
     const data = JSON.stringify(body);

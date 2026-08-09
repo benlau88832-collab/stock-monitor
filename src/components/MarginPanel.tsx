@@ -3,7 +3,7 @@
 // 数据：RPTA_RZRQ_LSHJ（沪深合计，T+1 披露，东财最新数据日期通常滞后 1~3 个交易日）
 // 业务含义：融资余额上升 = 融资客加杠杆看多；净买入为正 = 当日融资客净增仓
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, memo } from "react";
 import { ComposedChart, Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend, Cell } from "recharts";
 import { fetchMarginHistory, type MarginHistoryRow } from "../lib/margin";
 
@@ -37,7 +37,7 @@ function deltaText(curr: number | undefined, prev: number | undefined) {
   return { dir, value: d, text: `${d > 0 ? "+" : ""}${fmtYi(d)} 较前日` };
 }
 
-export default function MarginPanel() {
+function MarginPanelImpl() {
   const [history, setHistory] = useState<MarginHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [topRange, setTopRange] = useState(90);    // 顶部 4 卡用 1 月累计
@@ -265,3 +265,5 @@ export default function MarginPanel() {
     </div>
   );
 }
+// v9.81（性能）：无 props 自洽组件 → memo 跳过 18s 快刷/60s 主刷引发的无谓重渲染
+export default memo(MarginPanelImpl);

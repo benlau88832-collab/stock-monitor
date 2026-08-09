@@ -42,6 +42,8 @@ async function loadPushConfig(poolArg) {
 // ---- 通用 HTTP request ----
 function httpRequest(url, opts = {}) {
   return new Promise((resolve, reject) => {
+    // v9.81（安全加固）：出站 host 白名单（推送网关固定域名，防 SSRF）
+    try { require("../lib/hostGuard").assertHostAllowed(url); } catch (e) { reject(e); return; }
     const u = new URL(url);
     const lib = u.protocol === "https:" ? https : http;
     const data = opts.body ?? "";

@@ -139,11 +139,13 @@ module.exports = function dbRoutes(app) {
 
   // ---------- v13-4（P0）：新闻驱动作战管线手动触发 ----------
   // 前端"🔄 立即分析"按钮 → 立即跑一轮管线（不等 30 分钟 cron），复用 cron.runThemeAnalysis
+  // v9.81（性能）：异步化 —— 原同步等待整个管线（2 次 LLM 各最长 40s → 前端按钮挂 80-120s）；
+  // 现 202 立即返回，后台执行，前端轮询 kv theme_analysis:latest（key 变化即新结果）
   app.post("/api/theme-analysis/trigger", async (req, res) => {
     try {
       const { runThemeAnalysis } = require("../cron");
-      const result = await runThemeAnalysis({ pool, label: "手动" });
-      res.json({ ok: true, result });
+      res.json({ ok: true, started: true });
+      runThemeAnalysis({ pool, label: "手动" }).catch(e => console.error("[api] theme-analysis 后台执行失败:", e.message));
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

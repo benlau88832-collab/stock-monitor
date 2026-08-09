@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo } from "react";
 import { fmtMoney, pctColor } from "../lib/format";
 import { fundFlowUrl } from "../lib/realLinks";
 import type { FundStructureData } from "../App";
@@ -65,7 +65,7 @@ function FundBar({ label, value, max }: { label: string; value: number; max: num
 }
 
 // ============== 主组件 ==============
-export default function FundStructure({ data, loading }: { data: FundStructureData | null; loading: boolean }) {
+function FundStructureImpl({ data, loading }: { data: FundStructureData | null; loading: boolean }) {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [showChart, setShowChart] = useState(true);
   // 两融数据（独立拉取：T+1 数据，10分钟缓存，不占用主刷新管道）
@@ -317,3 +317,5 @@ export default function FundStructure({ data, loading }: { data: FundStructureDa
     </div>
   );
 }
+// v9.81（性能）：18s 快刷/60s 主刷时 data 引用未变 → 跳过整个 Recharts 图重绘
+export default memo(FundStructureImpl);

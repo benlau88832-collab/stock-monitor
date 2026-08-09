@@ -16,6 +16,8 @@ async function fetchPrices(codes) {
   const secids = codes.map(c => (c.startsWith("6") ? "1." : "0.") + c).join(",");
   const https = require("https");
   const url = `https://push2.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f2,f12&secids=${secids}`;
+  // v9.81（安全加固）：出站 host 白名单校验（host 固定，防未来改动把清单代码注入任意 URL）
+  try { require("../lib/hostGuard").assertHostAllowed(url); } catch { return {}; }
   return new Promise((resolve) => {
     const req = https.get(url, { timeout: 8000 }, (r) => {
       let data = "";
