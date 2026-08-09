@@ -214,9 +214,12 @@ export function getAllOnDate(dateStr: string): { news: NewsItem[]; ann: AnnItem[
 /** 获取指定日期之后的全部新闻+公告 */
 export function getAllSince(dateStr: string): { news: NewsItem[]; ann: AnnItem[] } {
   try {
+    // v9.84.6：过滤 "undefined undefined" 脏时间行（东财快讯 date/time 偶发缺失的历史数据，
+    // 字符串比较会恒 >= 任何日期 → 永远排最前污染消息流）
+    const validTime = (t?: string) => !!t && !t.includes("undefined") && t.length >= 10;
     return {
-      news: loadArr<NewsItem>(NEWS_KEY).filter(n => (n.time ?? "").slice(0, 10) >= dateStr),
-      ann: loadArr<AnnItem>(ANN_KEY).filter(a => (a.time ?? "").slice(0, 10) >= dateStr),
+      news: loadArr<NewsItem>(NEWS_KEY).filter(n => validTime(n.time) && (n.time ?? "").slice(0, 10) >= dateStr),
+      ann: loadArr<AnnItem>(ANN_KEY).filter(a => validTime(a.time) && (a.time ?? "").slice(0, 10) >= dateStr),
     };
   } catch { return { news: [], ann: [] }; }
 }

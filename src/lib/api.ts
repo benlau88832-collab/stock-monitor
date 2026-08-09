@@ -740,36 +740,27 @@ export interface StockNewsItem {
 // 东方财富全文检索接口 - 按股票名称/代码搜索相关新闻资讯（真实数据，非模拟）
 // 参考：与东方财富网站搜索框功能同源接口
 export async function fetchStockNews(keyword: string, pageSize = 10): Promise<StockNewsItem[]> {
-  const param = {
-    uid: "",
-    keyword,
-    type: ["cmsArticleWebOld"],
-    client: "web",
-    clientType: "web",
-    clientVersion: "curr",
-    param: {
-      cmsArticleWebOld: {
-        searchScope: "default",
-        sort: "default",
-        pageIndex: 1,
-        pageSize,
-        preTag: "",
-        postTag: "",
-      },
-    },
-  };
-  const url = `https://search-api-web.eastmoney.com/search/jsonp?param=${encodeURIComponent(JSON.stringify(param))}`;
+  // v9.84.6：search-api-web 已整体废弃（返回 400，2026-08-10 实测全参数变体均失败）
+  // → 改用 np-weblist 滚动快讯（与 cron 抓取同源，本地代理秒回）：拉 100 条 → 关键词过滤
+  const url = `https://np-weblist.eastmoney.com/comm/web/getFastNewsList?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=100&req_trace=${Date.now()}`;
   try {
     const json = await jsonp<any>(url, 4000, "cb");
-    const list: any[] = json?.result?.cmsArticleWebOld ?? [];
-    return list.map((item) => ({
-      code: String(item.code ?? ""),
-      title: String(item.title ?? ""),
-      summary: String(item.content ?? ""),
-      time: String(item.date ?? ""),
-      source: String(item.mediaName ?? ""),
-      url: String(item.url ?? ""),
-    }));
+    const list: any[] = json?.data?.fastNewsList ?? [];
+    const kw = String(keyword ?? "").trim();
+    const filtered = kw
+      ? list.filter(n => (n.title ?? "").includes(kw) || (n.summary ?? "").includes(kw))
+      : list;
+    return filtered.slice(0, pageSize).map((item) => {
+      const t = `${item.date ?? ""} ${item.time ?? ""}`.trim();
+      return {
+        code: String(item.code ?? ""),
+        title: String(item.title ?? ""),
+        summary: String(item.summary ?? ""),
+        time: t.includes("undefined") ? "" : t,
+        source: "东财快讯",
+        url: String(item.url ?? ""),
+      };
+    });
   } catch {
     return [];
   }

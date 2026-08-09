@@ -1110,9 +1110,14 @@ function startCron({ pool }) {
   cron.schedule("30 17 * * 1-5", async () => { await saveLhbToday(); }, { timezone: "Asia/Shanghai" });
   cron.schedule("30 18 * * 1-5", async () => { await saveLhbToday(); }, { timezone: "Asia/Shanghai" });
 
-  // 交易日每 20 分钟抓快讯+公告自动落库（9:00 - 16:40，v9.26.10 修正 */20 9-16 会在 16:40 触发却注释到 16:30）
-  cron.schedule("*/20 9-16 * * 1-5", async () => {
-    if (!isTradingDayCN()) { console.log("[cron] 非交易日（节假日），跳过快讯抓取"); return; }
+  // 快讯+公告自动落库：每天 8:00-20:00 每 20 分钟（v9.84.6：原仅工作日 9-16 ——
+  // 周末不抓导致周六日问"周末有什么消息"本地库无新数据；周末海外快讯/公告对周一开盘有价值，放行周末）
+  // 节假日（isTradingDayCN false 且非周末）仍跳过
+  cron.schedule("*/20 8-20 * * *", async () => {
+    if (!isTradingDayCN()) {
+      const day = new Date().getDay();
+      if (day !== 0 && day !== 6) { console.log("[cron] 节假日，跳过快讯抓取"); return; }
+    }
     if (cronBusy) { console.log("[cron] busy, skip 20min fetch"); return; }
     cronBusy = true;
     try {

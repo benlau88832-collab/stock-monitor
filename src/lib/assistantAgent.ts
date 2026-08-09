@@ -101,6 +101,20 @@ function buildPgTools(): Array<{ name: string; description: string; kind: "data"
   }));
 }
 
+// ============== v9.84.6（用户核心诉求）：本地未覆盖 → 外部搜索兜底 ==============
+// 东财新闻检索（search-api-web，本地走服务端 proxy 秒回）；本地快讯为空/不足时补充
+async function fetchExternalNews(keyword: string, limit = 10): Promise<Array<{ title: string; time: string; summary: string }>> {
+  try {
+    const { fetchStockNews } = await import("./api");
+    const items = await fetchStockNews(keyword, limit);
+    return items.slice(0, limit).map(n => ({
+      title: n.title,
+      time: n.time,
+      summary: (n as { summary?: string }).summary ?? "",
+    }));
+  } catch { return []; }
+}
+
 export interface AssistantReply {
   reply: string;
   toolsCalled: string[];
@@ -111,25 +125,45 @@ export interface AssistantReply {
 /**
  * v9.84.2（3.4）：简单问答判定 —— 纯询问类（情绪/情况/解释/趋势）无需工具数据，
  * 直接走 /api/ai/stream 真流式；需要实时工具数据的问题（能不能上车/调研/分析个股）仍走 ReAct。
+ * v9.84.6：消息/新闻/公告/政策/事件/隔夜类 MUST 走 ReAct —— 此前被误判为简单问答，
+ *   SSE 快照无新闻数据 → LLM 只能答"快照中没有消息"，用户实测"周末有什么重要消息"被空答。
  */
 export function isSimpleQuestion(q: string): boolean {
   const t = q.trim();
   if (!t || t.length > 80) return false;
   if (/个股深度调研|能不能上车|可不可以买|值得买|要不要买|帮我分析|分析一下|怎么看|怎么样买|买不买|调研|推荐个股/.test(t)) return false;
+  // 消息/资讯类 → ReAct（getLocalNews 本地快讯 + getExternalNews 外部搜索兜底）
+  if (/消息|新闻|快讯|公告|事件|海内外|国内外|政策|隔夜|周末|休市|假期|资讯/.test(t)) return false;
   return /情绪|情况|消息|政策|事件|解释|什么意思|怎么样|如何|多少|趋势|原因|为什么/.test(t);
 }
 
 /** v9.84.2（3.4）：快速问答 system 拼装（大脑快照 + 页面状态，无工具） */
 export async function buildQuickSystem(siteContext: AssistantSiteContext): Promise<string> {
   const brain = await fetchBrainContext();
-  const head = "你是A股短线交易助手（10年游资操盘手）。基于下面的大盘快照与页面状态，直接回答用户问题。要求：先说结论再说依据；数据只引用快照中有的数字，快照没有的直说没有；回答≤200字。";
+  // v9.84.6：注入最近 2 日本地快讯/公告摘要 —— 简单问答也有本地 PG 数据上下文（不再"无数据空答"）
+  let newsNote = "";
+  try {
+    const { getAllSince } = await import("./dataStore");
+    const since2 = getBJDateStr(new Date(Date.now() - 2 * 86400000));
+    const { news, ann } = getAllSince(since2);
+    if (news.length + ann.length > 0) {
+      const policy = news.filter(n => /国务院|央行|证监会|发改委|财政部|工信部|国常会|降准|降息/.test(n.title));
+      newsNote = [
+        "【本地最近2日消息摘要（PG/本地库）】",
+        policy.length ? "政策：" + policy.slice(0, 5).map(n => n.title).join("；") : "",
+        "重要快讯：" + news.slice(0, 8).map(n => n.title).join("；"),
+        ann.length ? "公告：" + ann.slice(0, 5).map(a => `${a.stockName ?? ""}${a.title}`).join("；") : "",
+      ].filter(Boolean).join("\n");
+    }
+  } catch { /* 本地库不可用 → 跳过 */ }
+  const head = "你是A股短线交易助手（10年游资操盘手）。基于下面的本地消息摘要与大盘快照，直接回答用户问题。要求：先说结论再说依据；优先引用本地数据，本地没有的直说没有；回答≤250字。";
   const snap = brain ? brainContextToText(brain) : "";
   const page = [
     "当前最强主线：" + (siteContext.topMainline ?? "暂无"),
     "市场情绪：" + (siteContext.sentiment ?? "?") + "（" + (siteContext.sentimentLabel ?? "数据不足") + "）",
     siteContext.watchStocks ? "用户自选股：" + siteContext.watchStocks : "",
   ].filter(Boolean).join("\n");
-  return head + "\n\n" + (snap ? snap + "\n\n" : "") + "【页面状态】\n" + page;
+  return head + "\n\n" + (newsNote ? newsNote + "\n\n" : "") + (snap ? snap + "\n\n" : "") + "【页面状态】\n" + page;
 }
 
 export interface AssistantSiteContext {
@@ -169,7 +203,7 @@ export async function runAssistantAgent(
     ...pgTools,         // v9.84.2：PG 持久化数据查询（快讯检索/公告/涨停历史/席位/调研/市场日序列）
     {
       name: "getLocalNews",
-      description: '读取本地已抓取的快讯/公告（来自东财，cron 每20分钟更新，秒回不调外部API）。用户问"今日消息/新闻/政策/公告/有什么事件"时 MUST 优先用这个，不用 searchNewsFull。传 { hours: 2 } 读近2小时，不传读今日全部。',
+      description: '读取本地已抓取的快讯/公告（来自东财，cron 每20分钟更新，秒回不调外部API）。用户问"今日消息/新闻/政策/公告/有什么事件"时 MUST 优先用这个。传 { hours: 2 } 读近2小时，不传读今日全部。若返回为空或不足，再用 getExternalNews 搜索补充。',
       kind: "data",
       execute: async (args: any) => {
         try {
@@ -184,6 +218,19 @@ export async function runAssistantAgent(
             topAnns: ann.slice(0, 10).map(a => ({ title: a.title, name: a.stockName, time: a.time })),
           };
         } catch { return { error: "本地数据读取失败" }; }
+      },
+    },
+    {
+      // v9.84.6：外部搜索兜底工具（用户核心诉求"本地未覆盖再搜索"）—— 非妙想，东财检索经本地代理秒回
+      name: "getExternalNews",
+      description: '外部新闻搜索（东财新闻检索，本地服务端代理秒回）：本地快讯/公告未覆盖的主题或关键词，用它补充搜索。传 {keyword:"低空经济", limit:10}。返回标题/时间/摘要。规则：getLocalNews 本地无结果或结果不足时 MUST 用这个补。',
+      kind: "data",
+      execute: async (args: any) => {
+        const kw = String(args?.keyword ?? "").trim();
+        if (!kw) return { error: "keyword required" };
+        const items = await fetchExternalNews(kw, Number(args?.limit) || 10);
+        if (items.length === 0) return { note: `外部搜索"${kw}"无结果` };
+        return { count: items.length, items };
       },
     },
     {
@@ -239,8 +286,9 @@ export async function runAssistantAgent(
   // V13-3（P0）：触发条件收紧为仅"个股深度调研"六个字（用户明确要求，其他问题不用妙想）
   // isDeepResearch/maxRounds 已在工具集处声明（第 44-45 行），此处不再重复
   const system = "你是这个A股实时监控终端的全站分析师助手（10年游资操盘手）。用户会问你任何关于主线/个股/资金/消息/席位/仓位的问题。\n\n"
-    + "【工具使用铁律 v13-3】\n"
+    + "【工具使用铁律 v9.84.6】\n"
     + "- 默认所有问题（消息/主线/个股/资金/仓位）→ MUST 优先用本地数据工具（getLocalNews/getStockFundDetail/getAdmissionVerdict/getFundStreak 等），用已抓取的真实数据 + 你的推理来回答。\n"
+    + "- 本地数据未覆盖或不足（如 getLocalNews 返回空、问的主题本地快讯没有）→ 用 getExternalNews 搜索外部新闻补充（东财检索秒回）。\n"
     + "- 妙想工具（researchQuote/researchData/researchSearch/searchNewsFull）仅在用户消息含'个股深度调研'时可用——其他时候这些工具不存在，不要尝试调用。\n"
     + "- 本地数据工具秒回，不依赖外部 API，不会超时。\n\n"
     + "你有以下工具（自主决定调用顺序与次数，最多 " + maxRounds + " 轮；查个股时用 getStockFundDetail 传 code）：\n"
@@ -272,17 +320,34 @@ export async function runAssistantAgent(
   // ============== V14-2（= V13-7 补做）：简单问题快捷直答（0 次 LLM，秒回不超时） ==============
   const q = question.trim();
   // ① 消息/新闻/快讯/公告/事件类 → 直接读本地快讯（不调 LLM，不调妙想）
+  // v9.84.6：支持"周末/隔夜/近N天"时间窗 —— 原只认"昨天/今日"，问"周末有什么消息"
+  //   只取当日（周日）空库 → "暂无消息"。周末/隔夜 → 取最近 3 个自然日（覆盖周五收盘）。
   if (/消息|新闻|快讯|公告|事件|海内外|国内外/.test(q) && !q.includes("个股深度调研")) {
     try {
       const { getAllSince } = await import("./dataStore");
       let since = getBJDateStr(); // v15-1：北京时间今日（原 toISOString UTC 会偏一天）
       if (/昨天|昨日/.test(q)) { since = getBJDateStr(new Date(Date.now() - 86400000)); }
+      else if (/周末|周六|周日|隔夜|休市|假期|最近几天|近几天|近3天|近三日/.test(q)) {
+        since = getBJDateStr(new Date(Date.now() - 3 * 86400000));
+      }
       const dm = q.match(/(\d{1,2})[.月](\d{1,2})/);
       if (dm) since = `${new Date().getFullYear()}-${String(+dm[1]).padStart(2, "0")}-${String(+dm[2]).padStart(2, "0")}`;
       const { news, ann } = getAllSince(since);
-      if (news.length === 0 && ann.length === 0)
-        return { reply: `${since} 暂无本地快讯/公告（cron 可能尚未抓取或非交易日）。`, toolsCalled: ["getLocalNews"], degraded: false };
-      const lines = [`📅 ${since} 本地消息（快讯${news.length}·公告${ann.length}）`];
+      if (news.length === 0 && ann.length === 0) {
+        // v9.84.6：本地未覆盖 → 外部搜索兜底（东财新闻检索，本地服务端代理秒回）
+        // 关键词提取：优先取"XX消息/XX政策/XX事件"中的 XX；纯问"有什么消息"→ 泛搜 A股
+        const kwMatch = q.match(/([A-Za-z0-9\u4e00-\u9fa5]{2,6})(消息|新闻|政策|事件|利好|利空)/);
+        const kw = kwMatch ? kwMatch[1].replace(/周末|今日|昨日|有什么|重要|哪些/g, "") : "";
+        const finalKw = (kw && !/消息|新闻|政策|事件/.test(kw)) ? kw : "A股";
+        const ext = await fetchExternalNews(finalKw, 8);
+        if (ext.length > 0) {
+          const lines = [`📅 ${since} 起本地快讯为空，已补外部搜索（${finalKw}）：`];
+          ext.slice(0, 8).forEach(n => lines.push(`  • ${n.title}`));
+          return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getExternalNews"], degraded: false };
+        }
+        return { reply: `${since} 起暂无本地快讯/公告，外部搜索也无新增结果（cron 可能尚未抓取或非交易日）。`, toolsCalled: ["getLocalNews", "getExternalNews"], degraded: false };
+      }
+      const lines = [`📅 ${since} 起本地消息（快讯${news.length}·公告${ann.length}）`];
       const policy = news.filter(n => /国务院|央行|证监会|发改委|财政部/.test(n.title));
       if (policy.length) { lines.push("🏛️ 政策："); policy.slice(0, 5).forEach(n => lines.push(`  • ${n.title}`)); }
       const market = news.filter(n => !policy.includes(n)).slice(0, 10);
