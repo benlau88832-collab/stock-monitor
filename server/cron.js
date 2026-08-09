@@ -261,13 +261,14 @@ async function runIntradayBrain(pool, force = false) {
     sentiment = Math.max(0, Math.min(100, Math.round(s)));
     sentimentLabel = sentiment >= 80 ? "极度贪婪" : sentiment >= 65 ? "贪婪" : sentiment >= 45 ? "中性" : sentiment >= 25 ? "恐慌" : "极度恐慌";
   }
+  // ③ 板块资金快照（top30）落库
+  // 注意：情绪分用独立 key sentiment_snapshot（sentiment_intraday:日期 已被前端 sentimentStore
+  //   占用为 [{t:"HH:MM",s:score}] 数组格式 —— 服务端对象格式不得复用同 key 互相覆盖）
   await pool.query(
     `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
      ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
-    [`sentiment_intraday:${ds}`, JSON.stringify({ date: ds, ts: new Date().toISOString(), sentiment, label: sentimentLabel })],
+    [`sentiment_snapshot:${ds}`, JSON.stringify({ date: ds, ts: new Date().toISOString(), sentiment, label: sentimentLabel })],
   );
-
-  // ③ 板块资金快照（top30）
   const boardTop = boards.slice(0, 30).map(b => ({ board: b.name, code: b.code, pct: b.pct, mainNet: b.mainNet }));
   await pool.query(
     `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
