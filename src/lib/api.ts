@@ -1127,10 +1127,16 @@ export interface PopularityItem {
   market?: string;
 }
 
+// v9.82（性能）：人气榜 60s 缓存 —— App 作战卡与 PopularityRadar 双榜共享一次请求（原每次主刷重复拉）
+const popRankCache = { data: null as PopularityItem[] | null, ts: 0 };
+const POP_RANK_TTL = 60 * 1000;
+
 export async function fetchPopularityRank(pageSize = 50): Promise<PopularityItem[]> {
   // v9.31：实测 emappdata.eastmoney.com **支持 CORS**（OPTIONS 预检 200 + Allow-Origin 回显任意 Origin），
   // 且不校验 Referer/Origin → **浏览器直连即可，线上线下均可用**。
   // 之前的 proxy 中转反而失败（emappdata 对 proxy 的 nodejs https.request 做 TLS 指纹 ban → 12s socket hang up）。
+  // v9.82（性能）：断源快速失败 —— 超时 8s→3s（人气榜是对照参考，不值得阻塞作战卡渲染）
+  if (popRankCache.data && Date.now() - popRankCache.ts < POP_RANK_TTL) return popRankCache.data;
   const url = "https://emappdata.eastmoney.com/stockrank/getAllCurrentList";
   const body = {
     appId: "appId01",
@@ -1145,13 +1151,13 @@ export async function fetchPopularityRank(pageSize = 50): Promise<PopularityItem
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(3000),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
     recordApiCall("人气榜", true, Date.now() - start);
     const list: any[] = json?.data ?? [];
-    return list.map((item, idx) => {
+    popRankCache.data = list.map((item, idx) => {
       const sc = String(item.sc ?? "");
       // sc 格式可能是 "SZ002173" 或 "SZ.002173" 或 "0.002173"
       const code = sc.replace(/^[A-Z]{2}\.?/, "").replace(/^\d+\./, "");
@@ -1164,6 +1170,8 @@ export async function fetchPopularityRank(pageSize = 50): Promise<PopularityItem
         market: sc.slice(0, 2),
       };
     });
+    popRankCache.ts = Date.now();
+    return popRankCache.data;
   } catch (err) {
     recordApiCall("人气榜", false, Date.now() - start);
     throw new Error("人气榜接口不可用");
@@ -1190,10 +1198,11 @@ export interface THSPopularityItem {
 
 export async function fetchTHSPopularityRank(pageSize = 30): Promise<THSPopularityItem[]> {
   // 实测 dq.10jqka.com.cn 支持 CORS（OPTIONS 204 + Allow-Methods:* + Origin 回显）且不校验 Referer → 浏览器直连可用
+  // v9.82（性能）：断源快速失败 —— 超时 8s→3s
   const url = "https://dq.10jqka.com.cn/fuyao/hot_list_data/out/hot_list/v1/stock?stock_type=a&type=hour&list_type=normal";
   const start = Date.now();
   try {
-    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(3000) });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
     recordApiCall("同花顺人气榜", true, Date.now() - start);

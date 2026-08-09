@@ -9,11 +9,12 @@ export default function InstitutionFund() {
   const load = useCallback(async () => {
     try {
       // 宽基ETF主力资金：510300/510500/588000/159915/512100
+      // v9.82（性能）：超时 8s→3s —— push2 断源时快速失败，不再挂"加载中…"8 秒
       const url = "https://push2.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f12,f14,f62&secids=1.510300,1.510500,1.588000,0.159915,1.512100";
       const cbName = `etf_${Date.now()}`;
       const data = await new Promise<any>((resolve, reject) => {
         const script = document.createElement("script");
-        const timer = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 8000);
+        const timer = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 3000);
         function cleanup() { clearTimeout(timer); delete (window as any)[cbName]; script.parentNode?.removeChild(script); }
         (window as any)[cbName] = (d: any) => { cleanup(); resolve(d); };
         script.src = `${url}&cb=${cbName}&_=${Date.now()}`;
@@ -52,7 +53,8 @@ export default function InstitutionFund() {
           </div>
         </>
       ) : (
-        <div className="text-xs text-slate-600">加载中…</div>
+        // v9.82（体验）：失败时明确提示接口不可达，不再永久"加载中…"
+        <div className="text-xs text-slate-600">暂无数据（东财接口不可达，恢复后自动显示）</div>
       )}
     </div>
   );

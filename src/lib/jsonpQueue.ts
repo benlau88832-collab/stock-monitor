@@ -68,7 +68,10 @@ function recordFail(url: string): void {
 
 function recordSuccess(url: string): void {
   const b = getBucket(hostOf(url));
-  b.failCount = 0;
+  // v9.82（性能）：间歇性网络（push2 时通时断）下防熔断 flapping ——
+  // 原实现一次成功即清零，偶发 200 让熔断器反复重置，下一轮失败又要重新累计 3 次。
+  // 现：半开试探成功 → 真恢复清零；普通成功 → 失败计数衰减一半（网络抖动不至于立刻全恢复）
+  b.failCount = b.halfOpen ? 0 : Math.floor(b.failCount / 2);
   b.openUntil = 0;
   b.halfOpen = false;
 }

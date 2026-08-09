@@ -646,6 +646,10 @@ export default function Dashboard({
   // v11-3（P0）：上次裁决 action（变化提示用）—— ref 在 setAgentResults 前存旧值
   const lastActionRef = useRef<string | null>(null);
   const runAgent = async (auto = false) => {
+    // v9.82（性能/配额）：自动模式只在盘中（trading/auction）跑 ——
+    // 休市/盘后（周末、收盘后）不空转烧 Agnes 配额（免费版每日限流，避免 429 拖垮其他 AI 功能）；
+    // 手动按钮不受限
+    if (auto && phase !== "trading" && phase !== "auction") return;
     // v9.45（V5-1）：自动触发只覆盖 Top-1（最强主线，把单周期 ~18 次调用降到 ~6）；
     // 手动按钮才覆盖 Top-3 全量
     const cands = battlePlan?.candidates?.slice(0, auto ? 1 : 3) ?? [];
