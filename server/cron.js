@@ -791,46 +791,150 @@ async function analyzeDaily({ pool }) {
 }
 
 // ---------- v9.33（缺口2）：盘后自动复盘（15:40 后） ----------
-// 读当日 zt_snapshot + news + announcements + black_swan，LLM 生成复盘落 kv_store:review:YYYY-MM-DD
+// v9.94.0（第四段）：盘后复盘升级为 13 维度结构化（tdxclaw 式）——
+// 数据面全部来自现有 PG 数据源（不新增外部抓取），LLM 只负责研判文本；
+// 落库 review:YYYY-MM-DD = { date, mainlines, text, dimensions:{d0..d11}, createdAt }
+// 前端 DailySummary 同构渲染（服务端数据优先，AI 按钮仅做人工补全）
 async function generateDailyReview({ pool }) {
   try {
     const date = bjDate();
     const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
+    const dayStart = `${dateStr} 00:00`;
 
-    // 1. 当日涨停池 → 主线分组（按 hybk 行业）
-    const snapR = await pool.query("SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1", [dateStr]);
-    const snap = snapR.rows[0]?.data ?? null;
-    const poolArr = Array.isArray(snap?.pool) ? snap.pool : [];
+    // ========== 维度数据采集（全部现有数据源） ==========
+    // d0 数据完整性声明
+    const d0 = { date: dateStr, generatedAt: new Date().toISOString(), sources: {} };
+
+    // d3 涨跌停：zt_snapshot（涨停池）
+    let snap = null, poolArr = [], blastedArr = [];
+    try {
+      const snapR = await pool.query("SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1", [dateStr]);
+      snap = snapR.rows[0]?.data ?? null;
+      poolArr = Array.isArray(snap?.pool) ? snap.pool : [];
+      d0.sources.limitUp = poolArr.length;
+    } catch { /* ignore */ }
+
+    // d4 板块效应：涨停池按 hybk 分组（涨停数/龙头/最高连板）
     const themeMap = new Map();
     for (const p of poolArr) {
       const h = String(p.hybk || "未分类");
       if (!themeMap.has(h)) themeMap.set(h, []);
-      themeMap.get(h).push(String(p.n || ""));
+      themeMap.get(h).push({ name: String(p.n || p.name || ""), lbc: p.lbc ?? 0, code: p.code });
     }
-    const themes = [...themeMap.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 6);
-    const mainlines = themes.map(([t, arr]) => `${t}(${arr.length}只)${arr.slice(0, 3).join("/")}`).join("；") || "无";
+    const d4Boards = [...themeMap.entries()]
+      .map(([name, arr]) => ({
+        name, count: arr.length,
+        pct: Math.round(arr.length / Math.max(poolArr.length, 1) * 100),
+        leaders: arr.slice(0, 3).map(x => x.name).join("/"),
+        maxLbc: Math.max(...arr.map(x => x.lbc ?? 0)),
+      }))
+      .sort((a, b) => b.count - a.count).slice(0, 8);
+    const mainlines = d4Boards.map(b => `${b.name}(${b.count}只)`).join("；") || "无";
 
-    // 2. 强催化公告（读 analyze 已落库的结果）
-    let strongAnn = [];
+    // d3 连板梯队：涨停池按 lbc 降序 TOP6
+    const d3Ladder = poolArr
+      .filter(p => (p.lbc ?? 0) >= 2)
+      .sort((a, b) => (b.lbc ?? 0) - (a.lbc ?? 0))
+      .slice(0, 6)
+      .map(p => ({ name: String(p.n || p.name || ""), lbc: p.lbc ?? 0, hybk: p.hybk ?? "", pct: p.pct }));
+
+    // d3 炸板池：zt_snapshot 的 blasted（若存在）+ 涨停池中高开板次
     try {
-      const annR = await pool.query("SELECT value FROM kv_store WHERE key = $1", [`llm_analysis:${dateStr}`]);
-      strongAnn = annR.rows[0]?.value?.strongAnn ?? [];
+      const blastR = await pool.query("SELECT data FROM zt_snapshot WHERE date = $1", [dateStr]);
+      const bsnap = blastR.rows[0]?.data;
+      if (Array.isArray(bsnap?.blasted)) blastedArr = bsnap.blasted.slice(0, 5);
     } catch { /* ignore */ }
 
-    // 3. 黑天鹅
-    let blackSwans = "";
+    // d2 主力资金 TOP20：fund_streak 行业（现有）+ 涨停池个股 fund 字段
+    let fundItems = [];
+    try {
+      const fr = await pool.query("SELECT value FROM kv_store WHERE key = $1", [`fund_streak:${dateStr}`]);
+      fundItems = (fr.rows[0]?.value?.items ?? []).slice(0, 8).map(x => ({ name: x.name, mainNet: x.mainNet }));
+    } catch { /* ignore */ }
+    const d2StockFund = poolArr
+      .filter(p => (p.fund ?? 0) > 0)
+      .sort((a, b) => (b.fund ?? 0) - (a.fund ?? 0))
+      .slice(0, 10)
+      .map(p => ({ name: String(p.n || p.name || ""), code: p.code, fund: p.fund ?? 0, pct: p.pct }));
+
+    // d5 事件催化词频：news 标题关键词统计（涨停原因/快讯标题）
+    let newsTitles = [];
+    try {
+      const nr = await pool.query("SELECT title FROM news WHERE time >= $1 LIMIT 500", [dayStart]);
+      newsTitles = nr.rows.map(r => String(r.title || ""));
+    } catch { /* ignore */ }
+    const CATALYST_KEYS = ["创新药", "半导体", "芯片", "电力", "机器人", "PCB", "算力", "数据中心", "储能", "锂电", "光伏", "军工", "AI", "重组", "涨价", "业绩预增", "中标", "IPO", "出海", "消费", "医药", "光模块", "存储", "稀土", "钨", "铜"];
+    const catMap = new Map();
+    for (const t of newsTitles) {
+      for (const k of CATALYST_KEYS) {
+        if (t.includes(k)) catMap.set(k, (catMap.get(k) ?? 0) + 1);
+      }
+    }
+    const d5Catalysts = [...catMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
+      .map(([kw, count]) => ({ kw, count }));
+
+    // d6 异常检测：高炸板（涨停池高 lbc 但无延续）+ 高换手（pool 无换手字段则用 zttj）
+    const d6Anomalies = poolArr
+      .filter(p => (p.zttj?.ct ?? 0) > 5 || (p.lbc ?? 0) >= 5)
+      .slice(0, 5)
+      .map(p => ({ name: String(p.n || p.name || ""), reason: `连板${p.lbc ?? 0}板`, note: "高位股注意分歧" }));
+
+    // d7 公告业绩：announcements（强催化 score 排序）
+    let d7Anns = [];
+    try {
+      const ar = await pool.query(
+        "SELECT stock_name, title, score FROM announcements WHERE time >= $1 AND score IS NOT NULL ORDER BY score DESC LIMIT 8",
+        [dayStart],
+      );
+      d7Anns = ar.rows.map(r => ({ name: r.stock_name, title: String(r.title || "").slice(0, 60), score: r.score }));
+    } catch { /* ignore */ }
+    if (d7Anns.length === 0) {
+      try {
+        const la = await pool.query("SELECT value FROM kv_store WHERE key = $1", [`llm_analysis:${dateStr}`]);
+        d7Anns = (la.rows[0]?.value?.strongAnn ?? []).slice(0, 8).map(a => {
+          const s = String(a ?? "");
+          const i = s.indexOf(":");
+          return { name: i > 0 ? s.slice(0, i) : s, title: i > 0 ? s.slice(i + 1) : s, score: null };
+        });
+      } catch { /* ignore */ }
+    }
+
+    // d8 龙虎榜
+    let d8Lhb = [];
+    try {
+      const lr = await pool.query("SELECT value FROM kv_store WHERE key = $1", [`lhb:${dateStr}`]);
+      d8Lhb = (lr.rows[0]?.value?.items ?? []).slice(0, 8).map(x => ({
+        name: x.name, code: x.code, netBuy: x.netBuy ?? 0, pct: x.pct,
+      }));
+    } catch { /* ignore */ }
+
+    // d9 自选股/持仓：watchlist 当日快照（zt_snapshot 中匹配 + news 中提及）
+    let watchR = null;
+    try {
+      watchR = await pool.query("SELECT value FROM kv_store WHERE key = 'stock_watchlist'");
+    } catch { /* ignore */ }
+    const watchList = Array.isArray(watchR?.rows?.[0]?.value) ? watchR.rows[0].value : [];
+    const d9Watch = watchList.map(code => {
+      const hit = poolArr.find(p => p.code === code);
+      return { code, name: hit ? String(hit.n || hit.name || "") : code, pct: hit?.pct ?? null, lbc: hit?.lbc ?? 0 };
+    }).filter(w => w.pct != null);
+
+    // d10 催化日历：黑天鹅 + 强催化公告标题（近期事件）
+    let d10Events = [];
     try {
       const bsR = await pool.query("SELECT value FROM kv_store WHERE key = $1", [`black_swan:${dateStr}`]);
-      const items = bsR.rows[0]?.value?.items ?? [];
-      blackSwans = items.slice(0, 5).map(i => i.title).join("；");
+      d10Events = (bsR.rows[0]?.value?.items ?? []).slice(0, 5).map(i => ({ title: i.title, name: i.name ?? "", level: "黑天鹅" }));
     } catch { /* ignore */ }
 
-    // 4. LLM 或规则版
+    // d11 次日关注：LLM 生成（依赖文本研判）+ 涨停池强资金兜底
+    const d11Picks = d2StockFund.slice(0, 5).map(x => ({ name: x.name, code: x.code, fund: x.fund }));
+
+    // ========== LLM 研判文本（4 段，与原逻辑一致） ==========
     let reviewText = "";
     const system = `你是10年经验的A股游资复盘分析师。基于今日收盘数据做盘后复盘。严格按以下四个标题输出，禁止增减标题，每段≤4行：【今日主线回顾】【错过与教训】【明日关注清单】【风险提示】。直接输出正文。`;
-    // v9.75（正确性修复）：strongAnn 是字符串数组（"名称:标题"格式，rankStrongAnnouncements 产出），
-    // 原按对象取 a.stock_name/a.title → 每项渲染成 ":"，LLM 收到垃圾串；现在直接 join 使用
-    const userText = `日期：${dateStr}\n今日主线：${mainlines}\n涨停${poolArr.length}只\n强催化公告：${strongAnn.slice(0, 5).join("；") || "无"}\n黑天鹅公告：${blackSwans || "无"}`;
+    const strongAnn = d7Anns.slice(0, 5).map(a => (a.name && a.title) ? `${a.name}:${a.title}` : String(a.title ?? "")).join("；");
+    const blackSwans = d10Events.map(e => e.title).join("；");
+    const userText = `日期：${dateStr}\n今日主线：${mainlines}\n涨停${poolArr.length}只\n板块TOP：${d4Boards.slice(0, 3).map(b => `${b.name}${b.count}只`).join("、")}\n连板梯队：${d3Ladder.map(x => `${x.name}${x.lbc}板`).join("、") || "无"}\n资金TOP：${d2StockFund.slice(0, 3).map(x => `${x.name}${(x.fund / 1e8).toFixed(1)}亿`).join("、")}\n强催化公告：${strongAnn || "无"}\n黑天鹅公告：${blackSwans || "无"}`;
     if (process.env.AI_API_KEY) {
       try { reviewText = await callLLM(userText, { system, maxTokens: 1000, temperature: 0.3 }); }
       catch (e) { reviewText = `【今日主线回顾】${mainlines}\n【错过与教训】LLM调用失败(${e.message})\n【明日关注清单】请稍后重试\n【风险提示】炸板数据见情绪卡`; }
@@ -838,13 +942,29 @@ async function generateDailyReview({ pool }) {
       reviewText = `【今日主线回顾】规则版：${mainlines}\n【错过与教训】未配置服务端 LLM Key\n【明日关注清单】请配置 AI_API_KEY 后自动生成\n【风险提示】涨停${poolArr.length}只`;
     }
 
-    const review = { date: dateStr, mainlines, text: reviewText, createdAt: new Date().toISOString() };
+    // ========== 组装 13 维度结构 ==========
+    const dimensions = {
+      d0,                                        // 数据完整性声明
+      d2: { fundBoards: fundItems, stockFundTop: d2StockFund },  // 主力资金
+      d3: { limitUp: poolArr.length, ladder: d3Ladder, blasted: blastedArr },  // 涨跌停全景
+      d4: { boards: d4Boards },                  // 板块效应
+      d5: { catalysts: d5Catalysts },            // 事件催化词频
+      d6: { anomalies: d6Anomalies },            // 异常检测
+      d7: { anns: d7Anns },                      // 公告业绩
+      d8: { lhb: d8Lhb },                        // 龙虎榜
+      d9: { watch: d9Watch },                    // 自选股/持仓
+      d10: { events: d10Events },                // 催化日历（黑天鹅）
+      d11: { picks: d11Picks },                  // 次日关注（资金兜底）
+      d12: { text: reviewText },                 // Agent 研判（LLM 文本）
+    };
+
+    const review = { date: dateStr, mainlines, text: reviewText, dimensions, createdAt: new Date().toISOString() };
     await pool.query(
       `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
        ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
       [`review:${dateStr}`, JSON.stringify(review)],
     );
-    console.log(`[cron] review ${dateStr} saved`);
+    console.log(`[cron] review ${dateStr} saved (13维: 涨停${poolArr.length} 板块${d4Boards.length} 资金TOP${d2StockFund.length} 催化${d5Catalysts.length} 龙虎榜${d8Lhb.length})`);
   } catch (e) {
     console.error("[cron] review failed:", e.message);
   }

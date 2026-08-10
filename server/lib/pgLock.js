@@ -14,6 +14,7 @@ const LOCK_CRON_MAIN = 154001;   // 15:40 链 / 20min 链 / 启动补抓（三�
 const LOCK_THEME     = 154002;   // themeAnalysis（cron 3 点 + 前端手动触发共用）
 const LOCK_WATCH     = 154003;   // 盯价 5 分钟轮询
 const LOCK_INTRADAY  = 154004;   // 盘中大脑
+const LOCK_REVIEW    = 154005;   // 盘后复盘（v9.94.0：cron 15:40 链 + 前端手动触发共用）
 
 /**
  * 尝试获取 advisory lock，返回持锁连接（调用方必须 finally 调 releaseLock）。
@@ -53,4 +54,4 @@ async function withPgLock(pool, key, fn) {
   }
 }
 
-module.exports = { withPgLock, acquireLock, releaseLock, LOCK_CRON_MAIN, LOCK_THEME, LOCK_WATCH, LOCK_INTRADAY };
+module.exports = { withPgLock, acquireLock, releaseLock, LOCK_CRON_MAIN, LOCK_THEME, LOCK_WATCH, LOCK_INTRADAY, LOCK_REVIEW };

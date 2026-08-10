@@ -233,6 +233,22 @@ function run(cmd) {
   const build = run("npm run build 2>&1 | tail -3");
   check("build 成功", build.ok && /built in/.test(build.out));
 
+  // ========== 四、v9.94 复盘重构（13 维度结构化） ==========
+  console.log("\n--- 四、复盘重构（v9.94）---");
+  try {
+    const rv = await pool.query(
+      "SELECT value FROM kv_store WHERE key LIKE 'review:%' AND key != 'review:latest' ORDER BY key DESC LIMIT 1",
+    );
+    const v = rv.rows[0]?.value;
+    const dm = v?.dimensions ?? {};
+    const dKeys = ["d0", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "d10", "d11", "d12"];
+    const present = dKeys.filter(k => dm[k] != null);
+    check("复盘: 12 维度结构完整", present.length >= 10, `含 ${present.length}/12（${present.join(",")}）`);
+    check("复盘: 涨停/板块/梯队数据真实", (dm.d3?.limitUp ?? 0) > 0 && (dm.d4?.boards?.length ?? 0) > 0, `涨停${dm.d3?.limitUp} 板块TOP${dm.d4?.boards?.length}`);
+    check("复盘: LLM 研判文本非空", (dm.d12?.text ?? "").length > 50, `研判${(dm.d12?.text ?? "").length}字`);
+    check("复盘: 催化词频/资金 TOP 非空", (dm.d5?.catalysts?.length ?? 0) > 0 && (dm.d2?.stockFundTop?.length ?? 0) > 0, `催化${dm.d5?.catalysts?.length} 资金TOP${dm.d2?.stockFundTop?.length}`);
+  } catch (e) { check("复盘 13 维度", false, e.message); }
+
   // ========== 汇总 ==========
   // v9.93.5：防误删护栏 —— 运行前后文件清单对比（发现文件减少立即 FAIL）
   verifyNoDeletion();

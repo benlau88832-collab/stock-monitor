@@ -4,6 +4,8 @@
 // v9.33（缺口2）：新增服务端自动复盘展示 + 历史回放（本地部署 /api/db/kv + /api/db/zt）
 // v9.84.2（AI大脑层 · 3.5）：接线 dailyReviewAuto 死任务 —— "立即 AI 复盘"按钮，
 //   用大脑快照真实数据喂前端模板生成复盘（不等 cron 15:40），结果并入本地复盘库
+// v9.94.1（第四段·复盘重构）：服务端复盘升级 13 维度结构化（tdxclaw 式）——
+//   展示"数据表格（dimensions）+ AI 研判文本"双区；无 dimensions 时回退纯文本
 import { useState, useEffect } from "react";
 import { loadReviews, saveReviews, upsertReview, searchReviews, statByMainline, computeLossStreak, type DailyReview } from "../lib/dailyReview";
 import { localDateStr } from "../lib/format";
@@ -12,6 +14,25 @@ import { isLocalServer } from "../lib/cloudStore";
 import { callAI } from "../lib/ai";
 import { fetchBrainContext } from "../lib/assistantAgent";
 import { apiFetch } from "../lib/cloudStore";
+
+// v9.94.1：13 维度结构化复盘类型（与服务端 cron.generateDailyReview 的 dimensions 对齐）
+interface ReviewDimensions {
+  d0?: { date?: string; generatedAt?: string; sources?: Record<string, unknown> };
+  d2?: { fundBoards?: Array<{ name: string; mainNet: number }>; stockFundTop?: Array<{ name: string; code: string; fund: number; pct?: number }> };
+  d3?: { limitUp?: number; ladder?: Array<{ name: string; lbc: number; hybk?: string; pct?: number }>; blasted?: Array<unknown> };
+  d4?: { boards?: Array<{ name: string; count: number; pct?: number; leaders?: string; maxLbc?: number }> };
+  d5?: { catalysts?: Array<{ kw: string; count: number }> };
+  d6?: { anomalies?: Array<{ name: string; reason: string; note?: string }> };
+  d7?: { anns?: Array<{ name?: string; title?: string; score?: number | null }> };
+  d8?: { lhb?: Array<{ name?: string; code?: string; netBuy?: number; pct?: number }> };
+  d9?: { watch?: Array<{ code: string; name?: string; pct?: number | null; lbc?: number }> };
+  d10?: { events?: Array<{ title?: string; name?: string; level?: string }> };
+  d11?: { picks?: Array<{ name?: string; code?: string; fund?: number }> };
+  d12?: { text?: string };
+}
+interface AutoReview { date: string; text: string; dimensions?: ReviewDimensions }
+
+const fmtYi = (n?: number) => (n == null ? "-" : `${(n / 1e8).toFixed(1)}亿`);
 
 export default function ReviewPanel() {
   const [reviews, setReviews] = useState<DailyReview[]>(loadReviews);
@@ -23,7 +44,7 @@ export default function ReviewPanel() {
   const [reflection, setReflection] = useState("");
   const [showForm, setShowForm] = useState(false);
   // v9.33（缺口2）：自动复盘 + 历史回放
-  const [autoReview, setAutoReview] = useState<{ date: string; text: string } | null>(null);
+  const [autoReview, setAutoReview] = useState<AutoReview | null>(null);
   const [replayDate, setReplayDate] = useState<string>(localDateStr());
   const [replayText, setReplayText] = useState<string | null>(null);
   // v9.84.2（3.5）：立即 AI 复盘（dailyReviewAuto 前端模板 + 大脑快照真实数据）
@@ -76,7 +97,7 @@ export default function ReviewPanel() {
           const r = await apiFetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
           if (!r.ok) continue;
           const v = await r.json();
-          if (v?.value?.text) { if (alive) setAutoReview({ date: v.value.date ?? key, text: v.value.text }); return; }
+          if (v?.value?.text) { if (alive) setAutoReview({ date: v.value.date ?? key, text: v.value.text, dimensions: v.value.dimensions }); return; }
         }
       } catch { /* 静默 */ }
     })();
@@ -159,6 +180,123 @@ export default function ReviewPanel() {
             <span className="text-[10px] font-bold text-violet-300">🤖 自动复盘 {autoReview.date}（LLM/规则版）</span>
             <span className="text-xs text-slate-500">服务端 cron 15:40 生成 · 或手动触发</span>
           </div>
+          {/* v9.94.1：13 维度结构化数据（tdxclaw 式） */}
+          {autoReview.dimensions && (
+            <div className="space-y-1.5 mb-2">
+              {(() => {
+                const dm = autoReview.dimensions!;
+                const rows: Array<{ label: string; body: React.ReactNode }> = [];
+                if (dm.d3) rows.push({ label: `涨跌停 · ${dm.d3.limitUp ?? "-"} 只涨停`, body: (
+                  <div className="flex flex-wrap gap-1">
+                    {(dm.d3.ladder ?? []).slice(0, 5).map((x, i) => (
+                      <span key={i} className="rounded bg-white/10 px-1 py-0.5 text-[10px] text-slate-200">{x.name}{x.lbc}板</span>
+                    ))}
+                    {dm.d3.ladder?.length === 0 && <span className="text-[10px] text-slate-500">无 2 板以上梯队</span>}
+                  </div>
+                )});
+                if (dm.d4) rows.push({ label: "板块效应 TOP", body: (
+                  <div className="space-y-0.5">
+                    {dm.d4.boards?.slice(0, 6).map((b, i) => (
+                      <div key={i} className="flex items-center gap-1 text-[10px]">
+                        <span className="font-bold text-amber-300">{b.name}</span>
+                        <span className="text-slate-400">{b.count}只</span>
+                        {b.leaders && <span className="text-slate-500 truncate">龙头 {b.leaders}</span>}
+                        {(b.maxLbc ?? 0) >= 2 && <span className="rounded bg-rose-500/20 px-1 text-rose-300">{b.maxLbc}板</span>}
+                      </div>
+                    ))}
+                  </div>
+                )});
+                if (dm.d2) rows.push({ label: "主力资金 TOP", body: (
+                  <div className="space-y-0.5">
+                    {(dm.d2.stockFundTop ?? []).slice(0, 5).map((x, i) => (
+                      <div key={i} className="flex items-center gap-1 text-[10px]">
+                        <span className="text-slate-300">{x.name}</span>
+                        <span className="text-rose-300 font-mono">+{fmtYi(x.fund)}</span>
+                        {x.pct != null && <span className="text-slate-500">{x.pct > 0 ? "+" : ""}{x.pct.toFixed(1)}%</span>}
+                      </div>
+                    ))}
+                    {(dm.d2.fundBoards ?? []).slice(0, 3).map((b, i) => (
+                      <div key={`b${i}`} className="text-[10px] text-slate-500">行业 {b.name} +{fmtYi(b.mainNet)}</div>
+                    ))}
+                  </div>
+                )});
+                if (dm.d5) rows.push({ label: "事件催化词频", body: (
+                  <div className="flex flex-wrap gap-1">
+                    {(dm.d5.catalysts ?? []).slice(0, 8).map((c, i) => (
+                      <span key={i} className="rounded bg-cyan-500/10 px-1 py-0.5 text-[10px] text-cyan-300">{c.kw} ×{c.count}</span>
+                    ))}
+                  </div>
+                )});
+                if (dm.d8) rows.push({ label: "龙虎榜", body: (
+                  <div className="space-y-0.5">
+                    {(dm.d8.lhb ?? []).slice(0, 5).map((x, i) => (
+                      <div key={i} className="flex items-center gap-1 text-[10px]">
+                        <span className="text-slate-300">{x.name}</span>
+                        <span className={`font-mono ${(x.netBuy ?? 0) >= 0 ? "text-rose-300" : "text-emerald-300"}`}>
+                          {(x.netBuy ?? 0) >= 0 ? "+" : ""}{fmtYi(x.netBuy)}
+                        </span>
+                      </div>
+                    ))}
+                    {dm.d8.lhb?.length === 0 && <span className="text-[10px] text-slate-500">无上榜</span>}
+                  </div>
+                )});
+                if (dm.d7) rows.push({ label: "公告业绩", body: (
+                  <div className="space-y-0.5">
+                    {(dm.d7.anns ?? []).slice(0, 4).map((a, i) => (
+                      <div key={i} className="text-[10px] text-slate-400 truncate">{a.name ? `${a.name}：` : ""}{a.title}</div>
+                    ))}
+                  </div>
+                )});
+                if (dm.d9) rows.push({ label: "自选股表现", body: (
+                  <div className="flex flex-wrap gap-1">
+                    {(dm.d9.watch ?? []).slice(0, 6).map((w, i) => (
+                      <span key={i} className="rounded bg-white/10 px-1 py-0.5 text-[10px]">
+                        <span className="text-slate-300">{w.name || w.code}</span>
+                        <span className={w.pct != null && w.pct >= 0 ? "text-rose-300" : "text-emerald-300"}>
+                          {" "}{w.pct != null ? `${w.pct >= 0 ? "+" : ""}${w.pct.toFixed(1)}%` : ""}{w.lbc ? ` ${w.lbc}板` : ""}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )});
+                if (dm.d6) rows.push({ label: "异常检测", body: (
+                  <div className="space-y-0.5">
+                    {(dm.d6.anomalies ?? []).slice(0, 3).map((a, i) => (
+                      <div key={i} className="text-[10px] text-amber-300">⚠ {a.name} · {a.reason}{a.note ? `（${a.note}）` : ""}</div>
+                    ))}
+                    {dm.d6.anomalies?.length === 0 && <span className="text-[10px] text-slate-500">无显著异常</span>}
+                  </div>
+                )});
+                if (dm.d10) rows.push({ label: "风险事件（黑天鹅）", body: (
+                  <div className="space-y-0.5">
+                    {(dm.d10.events ?? []).slice(0, 3).map((e, i) => (
+                      <div key={i} className="text-[10px] text-rose-300/80">🔻 {e.title}</div>
+                    ))}
+                    {dm.d10.events?.length === 0 && <span className="text-[10px] text-slate-500">无</span>}
+                  </div>
+                )});
+                if (dm.d11) rows.push({ label: "次日关注（资金兜底）", body: (
+                  <div className="flex flex-wrap gap-1">
+                    {(dm.d11.picks ?? []).slice(0, 5).map((p, i) => (
+                      <span key={i} className="rounded bg-emerald-500/10 px-1 py-0.5 text-[10px] text-emerald-300">
+                        {p.name}{p.fund ? ` +${fmtYi(p.fund)}` : ""}
+                      </span>
+                    ))}
+                  </div>
+                )});
+                return (
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {rows.map((r, i) => (
+                      <div key={i} className="rounded bg-black/25 px-1.5 py-1">
+                        <div className="text-[9px] font-bold text-violet-400/80 mb-0.5">{r.label}</div>
+                        {r.body}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
           <pre className="whitespace-pre-wrap text-[10px] text-slate-300 leading-relaxed">{autoReview.text}</pre>
         </div>
       )}

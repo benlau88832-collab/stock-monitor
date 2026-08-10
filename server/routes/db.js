@@ -165,6 +165,23 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // v9.94.0（第四段）：盘后复盘手动触发 —— 前端"📝 立即复盘"按钮 / 验收脚本
+  app.post("/api/review/trigger", async (req, res) => {
+    try {
+      const cronMod = require("../cron");
+      const { generateDailyReview } = cronMod;
+      const { acquireLock, releaseLock, LOCK_REVIEW } = require("../lib/pgLock");
+      const lockClient = await acquireLock(pool, LOCK_REVIEW);
+      if (!lockClient) {
+        return res.status(409).json({ error: "review already running", running: true });
+      }
+      res.json({ ok: true, started: true });
+      generateDailyReview({ pool })
+        .catch(e => console.error("[api] review 后台执行失败:", e.message))
+        .finally(() => releaseLock(lockClient, LOCK_REVIEW));
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.post("/api/db/anns", async (req, res) => {
     try {
       const items = Array.isArray(req.body) ? req.body : [];
