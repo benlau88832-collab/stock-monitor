@@ -1,66 +1,38 @@
 // ============================================================
-// 同花顺概念库接入（v9.91.0 概念地基）
-// 数据源：q.10jqka.com.cn/gn/（概念列表页，GBK 编码，单页全量 ~361 个概念）
+// 概念白名单接入（v9.91.0 概念地基 + v9.91.3 数据源统一）
+// v9.91.3（数据源统一）：数据源从同花顺 q.10jqka.com.cn（361 概念，GBK 页面抓取）切换为
+//   东方财富 clist 接口（504 概念全量，push2delay 分页）—— 个股概念数据本身就是东财 F10
+//   （BOARD_NAME），白名单必须与之一致，避免双体系命名打架（人脑工程 vs 脑机接口类）。
 // 职责：抓取概念列表 → 落库 PG concept_whitelist（全站题材白名单）；
 //       前端 isThemeBoard 白名单化判定 + 服务端 stockConcepts 过滤共用此表。
 // 刷新策略：表空 或 最后更新 >24h → 重抓（懒加载，路由首调时触发）
 // ============================================================
-const https = require("https");
-const { assertHostAllowed } = require("./hostGuard");
+const { getJson } = require("./outbound");
 
-const CONCEPT_LIST_URL = "https://q.10jqka.com.cn/gn/";
-const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+// 概念板块全量：fs=m:90+t:3（东财概念板块），fid=f12（按代码排序稳定分页），f12=BK 代码、f14=板块名
+const CLIST_URL = "https://push2delay.eastmoney.com/api/qt/clist/get?pn={pn}&pz=100&po=1&np=1&fltt=2&invt=2&fid=f12&fs=m:90+t:3&fields=f12,f14";
 const REFRESH_MS = 24 * 3600 * 1000; // 24h
-const FETCH_TIMEOUT = 10000;
+const TOTAL_PAGES = 6; // 504 概念 / 每页 100 → 6 页（实测 pz 上限 100，pn=1..6 全量无缺口）
 
-/** 抓取概念列表页原始 Buffer（GBK 页面不可经 requestRaw 的 utf8 解码，这里自取 Buffer） */
-function fetchRaw(url, timeout = FETCH_TIMEOUT) {
-  return new Promise((resolve, reject) => {
-    assertHostAllowed(url);
-    const u = new URL(url);
-    const req = https.request(u, {
-      method: "GET",
-      headers: { "User-Agent": BROWSER_UA, Referer: "https://q.10jqka.com.cn/" },
-    }, r => {
-      const chunks = [];
-      r.on("data", c => chunks.push(c));
-      r.on("end", () => {
-        if (r.statusCode && (r.statusCode < 200 || r.statusCode >= 300)) {
-          reject(new Error(`http ${r.statusCode}`));
-          return;
-        }
-        resolve(Buffer.concat(chunks));
-      });
-    });
-    req.on("error", reject);
-    req.setTimeout(timeout, () => { req.destroy(new Error("upstream timeout")); });
-    req.end();
-  });
-}
-
-/** 解析概念列表页 HTML → [{code, name}]（GBK → UTF-8） */
-function parseConceptList(buf) {
-  const html = new TextDecoder("gbk").decode(buf);
+/** 抓取东财概念板块全量列表（6 页 × 100，失败抛错调用方降级） */
+async function fetchConceptList() {
   const items = [];
   const seen = new Set();
-  // <a href="http://q.10jqka.com.cn/gn/detail/code/309183/" target="_blank">AI智能体</a>
-  const re = /\/gn\/detail\/code\/(\d+)\/"[^>]*>([^<]+)<\/a>/g;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const code = m[1];
-    const name = m[2].trim();
-    if (!code || !name || seen.has(code)) continue;
-    seen.add(code);
-    items.push({ code, name });
+  for (let pn = 1; pn <= TOTAL_PAGES; pn++) {
+    const url = CLIST_URL.replace("{pn}", String(pn));
+    // v9.86.0（P2-7）：统一出站客户端（hostGuard 白名单含 push2delay）
+    const r = await getJson(url, { timeout: 6000, source: "push2delay" });
+    const rows = r.data?.data?.diff ?? [];
+    for (const row of rows) {
+      const code = String(row.f12 ?? "").trim();   // BKxxxx 板块代码
+      const name = String(row.f14 ?? "").trim();   // 板块名（如"光刻胶""鸡肉概念"）
+      if (!code || !name || seen.has(code)) continue;
+      seen.add(code);
+      items.push({ code, name });
+    }
+    if (rows.length < 100) break; // 提前结束（数据不足 100 时）
   }
-  return items;
-}
-
-/** 抓取同花顺概念全量列表（失败抛错，调用方降级） */
-async function fetchConceptList() {
-  const buf = await fetchRaw(CONCEPT_LIST_URL);
-  const items = parseConceptList(buf);
-  if (items.length === 0) throw new Error("同花顺概念列表解析为空");
+  if (items.length === 0) throw new Error("东财概念列表解析为空");
   return items;
 }
 
@@ -69,7 +41,7 @@ async function ensureTable(pool) {
   await pool.query(`CREATE TABLE IF NOT EXISTS concept_whitelist (
     code TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    source TEXT DEFAULT 'ths',
+    source TEXT DEFAULT 'em',
     updated_at TIMESTAMPTZ DEFAULT now()
   )`);
 }
@@ -89,8 +61,8 @@ async function ensureConceptWhitelist(pool, { force = false } = {}) {
       await client.query("BEGIN");
       for (const it of items) {
         await client.query(
-          `INSERT INTO concept_whitelist(code, name, source, updated_at) VALUES($1,$2,'ths',now())
-           ON CONFLICT(code) DO UPDATE SET name=$2, updated_at=now()`,
+          `INSERT INTO concept_whitelist(code, name, source, updated_at) VALUES($1,$2,'em',now())
+           ON CONFLICT(code) DO UPDATE SET name=$2, source='em', updated_at=now()`,
           [it.code, it.name],
         );
       }
@@ -99,7 +71,7 @@ async function ensureConceptWhitelist(pool, { force = false } = {}) {
     finally { client.release(); }
     return { refreshed: true, count: items.length };
   } catch (e) {
-    console.warn("[thsConcepts] 概念白名单刷新失败:", e.message);
+    console.warn("[conceptWhitelist] 东财概念白名单刷新失败:", e.message);
     return { refreshed: false, count: null, error: e.message };
   }
 }
@@ -111,4 +83,4 @@ async function getConceptWhitelist(pool) {
   return r.rows.map(x => ({ code: x.code, name: x.name }));
 }
 
-module.exports = { fetchConceptList, parseConceptList, ensureConceptWhitelist, getConceptWhitelist, CONCEPT_LIST_URL };
+module.exports = { fetchConceptList, ensureConceptWhitelist, getConceptWhitelist, CLIST_URL };

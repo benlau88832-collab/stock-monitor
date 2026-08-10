@@ -1,7 +1,8 @@
 // ============================================================
 // v9.91.2（概念机制根治·防再犯）：概念审计脚本
-// 用法：node server/scripts/audit-concepts.js [--local-only]
-// 功能：① 拉取东财 504 概念板块全量（push2delay，失败降级用本地同花顺 361）
+// v9.91.3（数据源统一）：白名单/审计数据源全部为东财 504（同花顺体系已移除）
+// 用法：node server/scripts/audit-concepts.js
+// 功能：① 拉取东财 504 概念板块全量（push2delay）
 //       ② 全量跑 isThemeBoardName → 拒绝清单（含原因分类）
 //       ③ 保留概念跑 conceptGroupOf → 折叠覆盖报告（归不到组的=防流失重点，如"人脑工程"上次漏配）
 // 每次改动 conceptFilter/concept-groups 后必跑，防概念静默流失/漏网。
@@ -9,7 +10,7 @@
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const { getJson } = require("../lib/outbound");
-const { isThemeBoardName, isBroadConcept, normalizeConceptName } = require("../../src/shared/conceptFilter.js");
+const { isThemeBoardName, isBroadConcept } = require("../../src/shared/conceptFilter.js");
 
 const CLIST = "https://push2delay.eastmoney.com/api/qt/clist/get";
 
@@ -30,26 +31,24 @@ async function fetchEastmoneyConcepts() {
 }
 
 (async () => {
-  // ① 概念全集：东财 504（首选）+ 同花顺 361（本地）
+  // ① 概念全集：东财 504（v9.91.3 唯一数据源，同花顺体系已移除）
   let emNames = [];
   try {
     emNames = await fetchEastmoneyConcepts();
     console.log(`东财概念拉取: ${emNames.length} 个`);
   } catch (e) {
-    console.warn(`东财拉取失败（降级本地）: ${e.message}`);
+    console.warn(`东财拉取失败: ${e.message}`);
+    process.exit(1);
   }
-  const thsNames = JSON.parse(
-    require("fs").readFileSync(path.join(__dirname, "..", "..", "..", "..", "gn_concepts.json"), "utf8"),
-  ).map(i => i.name);
-  const all = [...new Set([...emNames, ...thsNames])].sort();
-  console.log(`审计概念总数: ${all.length}（东财 ${emNames.length} + 同花顺 ${thsNames.length}）\n`);
+  const all = emNames.sort();
+  console.log(`审计概念总数: ${all.length}\n`);
 
   // ② 判定分类
   const rejected = [];   // { name, reason }
   const accepted = [];
   for (const n of all) {
     if (isBroadConcept(n)) rejected.push({ name: n, reason: "广泛概念" });
-    else if (!isThemeBoardName(n, new Set(thsNames.map(normalizeConceptName)))) {
+    else if (!isThemeBoardName(n, null)) {
       rejected.push({ name: n, reason: "白名单外+无词根" });
     } else accepted.push(n);
   }
