@@ -390,6 +390,7 @@ function httpsGet(url, timeout = 6000) {
 
 const { getJson, getJsonWithFallback } = require("./lib/outbound");
 const { parseLLMJSON, SCHEMAS } = require("./lib/llmJson");
+const { withPgLock, LOCK_CRON_MAIN, LOCK_THEME, LOCK_WATCH, LOCK_INTRADAY } = require("./lib/pgLock");
 
 // ---------- v9.26.5：自动 LLM 分析调用（.cn 直连优先，失败走代理） ----------
 // v9.38.1（V3-P0）：抽公共层 server/lib/httpProxy.js（惰性 require + 容错，消除重复实现）
@@ -888,7 +889,7 @@ async function runEventClassify({ pool }) {
     if (process.env.AI_API_KEY) {
       try {
         const text = await callLLM(userText, { system, maxTokens: 3000, temperature: 0.1 });
-        const parsed = parseLoose(text);
+        const parsed = parseLLMJSON(text, SCHEMAS.eventClassify); // v9.89.0：修复 v9.87.0 残留（原 parseLoose 未定义，LLM 分级恒作废）
         // v9.85.2（P2-2）：LLM 分级结果标注 source/confidence
         if (parsed && parsed.length > 0) items = parsed.map(x => ({ ...x, source: "llm", confidence: "high" }));
       } catch (e) {
@@ -969,6 +970,30 @@ async function fetchBlockTrades() {
 }
 
 // ---------- 启动定时任务 ----------
+// v9.89.0（P2-4）：15:40 链 checkpoint —— 每步成功后落 kv cron_cp:日期，
+//   重启后启动补抓跳过已完成步骤（防重复执行/重复计费）
+const CRON_CP_KEY = "cron_cp";
+async function markCronStep(dateStr, step) {
+  try {
+    const k = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`${CRON_CP_KEY}:${dateStr}`]);
+    const v = k.rows[0]?.value;
+    const steps = (typeof v === "string" ? JSON.parse(v) : v)?.steps ?? {};
+    steps[step] = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      [`${CRON_CP_KEY}:${dateStr}`, JSON.stringify({ date: dateStr, steps })],
+    );
+  } catch { /* checkpoint 失败不影响主流程 */ }
+}
+async function hasCronStep(dateStr, step) {
+  try {
+    const k = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`${CRON_CP_KEY}:${dateStr}`]);
+    const v = k.rows[0]?.value;
+    const steps = (typeof v === "string" ? JSON.parse(v) : v)?.steps ?? {};
+    return Boolean(steps[step]);
+  } catch { return false; }
+}
 let cronBusy = false; // v9.26.10：防重叠执行（20min 任务与启动抓取/15:40 并发）
 // v9.81（性能/运维）：盯价/主题分析任务独立防重叠 —— node-cron 同任务前一轮未跑完会再触发
 let watchRunning = false;
@@ -999,6 +1024,9 @@ function startCron({ pool }) {
     console.log("[cron] 15:40 收盘快照 + 分析开始");
     if (cronBusy) { console.log("[cron] busy, skip 15:40"); return; }
     cronBusy = true;
+    // v9.89.0（P2-4）：PG advisory lock 跨进程互斥（cronBusy 保留为进程内双保险）
+    let gotLock = false;
+    try { gotLock = await withPgLock(pool, LOCK_CRON_MAIN, async () => {
     try {
       const snap = await fetchZTPool();
       const dateStr = snap.date;
@@ -1009,7 +1037,9 @@ function startCron({ pool }) {
       );
       console.log(`[cron] zt snapshot ${dateStr}: ${snap.count} 只涨停`);
     } catch (e) { console.error("[cron] zt snapshot failed:", e.message); }
+    await markCronStep(dateStr, "zt");
     try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] analyze failed:", e.message); }
+    await markCronStep(dateStr, "analyze");
     // v9.35（S3）：市场日指标落库（信号回测数据源）
     try {
       const md = await fetchMarketDaily(pool);
@@ -1020,18 +1050,23 @@ function startCron({ pool }) {
       );
       console.log(`[cron] market_daily ${md.date}: 涨停${md.ztCount} 炸板${md.zbCount} 跌停${md.dtCount} 炸板率${md.blastedRate}%`);
     } catch (e) { console.error("[cron] market_daily failed:", e.message); }
+    await markCronStep(dateStr, "marketDaily");
     // v9.42：因子 IC 健康度落库（读历史 market_daily+sentiment → 滚动窗口 IC → factor_ic:日期）
     try { await saveFactorIc(pool); } catch (e) { console.error("[cron] factor_ic failed:", e.message); }
+    await markCronStep(dateStr, "factorIc");
     // v9.33（缺口2/6）：盘后自动复盘 + 板块资金流落库（连续性/切换分析数据源）
     try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] review failed:", e.message); }
+    await markCronStep(dateStr, "review");
     // v9.38.1（V3-12）：事件三级分类（政策/行业/事件）—— 盘后批量跑一次
     try { await runEventClassify({ pool }); } catch (e) { console.error("[cron] event_classify failed:", e.message); }
+    await markCronStep(dateStr, "eventClassify");
     // v9.66：收盘盯价快照（active 监控清单 → 收盘价/偏离度 → log + 触发事件）
     try {
       const { runWatchCheck } = require("./routes/watch");
       const wr = await runWatchCheck(pool);
       console.log(`[cron] 收盘盯价: ${wr.checked} 只监控, ${wr.triggered.length} 只触发关注区间`);
     } catch (e) { console.error("[cron] watch close failed:", e.message); }
+    await markCronStep(dateStr, "watchClose");
     try {
       const funds = await fetchBoardFundServer();
       if (funds.length > 0) {
@@ -1045,6 +1080,7 @@ function startCron({ pool }) {
         console.log(`[cron] fund_streak ${fDateStr}: ${funds.length} 行业`);
       }
     } catch (e) { console.error("[cron] fund_streak failed:", e.message); }
+    await markCronStep(dateStr, "fundStreak");
     // v9.33（缺口8）：大宗交易折价异动落库（盘后数据）
     try {
       const trades = await fetchBlockTrades();
@@ -1059,6 +1095,7 @@ function startCron({ pool }) {
         console.log(`[cron] block_trade ${tDateStr}: ${trades.length} 笔`);
       }
     } catch (e) { console.error("[cron] block_trade failed:", e.message); }
+    await markCronStep(dateStr, "blockTrade");
     // v9.36（A3）：龙虎榜落库（涨停×龙虎榜交叉用）
     try {
       const lhb = await fetchLhbDaily();
@@ -1073,6 +1110,9 @@ function startCron({ pool }) {
         console.log(`[cron] lhb ${lDateStr}: ${lhb.length} 只`);
       }
     } catch (e) { console.error("[cron] lhb failed:", e.message); }
+    await markCronStep(dateStr, "lhb");
+    }); } catch (e) { console.error("[cron] PG lock error:", e.message); }
+    if (!gotLock) { console.log("[cron] PG lock busy, skip 15:40"); }
     cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
@@ -1106,6 +1146,9 @@ function startCron({ pool }) {
     }
     if (cronBusy) { console.log("[cron] busy, skip 20min fetch"); return; }
     cronBusy = true;
+    // v9.89.0（P2-4）：PG advisory lock 跨进程互斥
+    let gotLock = false;
+    try { gotLock = await withPgLock(pool, LOCK_CRON_MAIN, async () => {
     try {
       const news = await fetchFastNews();
       if (news.length > 0) {
@@ -1200,6 +1243,8 @@ function startCron({ pool }) {
         [`market_intraday:${iDateStr}`, JSON.stringify(md)],
       );
     } catch (e) { console.error("[cron] intraday snapshot failed:", e.message); }
+    }); } catch (e) { console.error("[cron] PG lock error:", e.message); }
+    if (!gotLock) { console.log("[cron] PG lock busy, skip 20min fetch"); }
     cronBusy = false;
   }, { timezone: "Asia/Shanghai" });
 
@@ -1208,6 +1253,9 @@ function startCron({ pool }) {
   setTimeout(async () => {
     if (cronBusy) { console.log("[cron] busy, skip startup fetch"); return; }
     cronBusy = true;
+    // v9.89.0（P2-4）：PG advisory lock 跨进程互斥
+    let gotLock = false;
+    try { gotLock = await withPgLock(pool, LOCK_CRON_MAIN, async () => {
     try {
       console.log("[cron] 启动即抓取（验证 + 补数据）");
     try {
@@ -1267,12 +1315,21 @@ function startCron({ pool }) {
     // v9.81（性能/运维）：非交易日跳过 LLM 链（周末/节假日启动不再烧 5-10 分钟 + AI 配额）
     const isTrading = isTradingDayCN();
     if (isTrading) {
-      try { await rankFastNewsStars(pool); } catch { /* 不影响 */ }
-      try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] 启动 analyzeDaily 失败:", e.message); }
-      // v9.33（缺口2/6/8）：启动即补 复盘 + 资金流 + 大宗交易（容错，任一失败不阻塞）
-      try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] 启动复盘失败:", e.message); }
-      // v9.42：启动即补因子 IC 健康度（无论当天是否到收盘时间都有快照）
-      try { await saveFactorIc(pool); } catch (e) { console.error("[cron] 启动因子IC失败:", e.message); }
+      // v9.89.0（P2-4）：重启后 15:40 链已完成的步骤跳过（防重复执行/重复计费）
+      const cpDate = bjDateStr();
+      const cpAnalyze = await hasCronStep(cpDate, "analyze");
+      const cpReview = await hasCronStep(cpDate, "review");
+      const cpIc = await hasCronStep(cpDate, "factorIc");
+      if (cpAnalyze && cpReview && cpIc) {
+        console.log("[cron] 启动 LLM 链：今日 15:40 已完成（checkpoint），跳过");
+      } else {
+        try { await rankFastNewsStars(pool); } catch { /* 不影响 */ }
+        if (!cpAnalyze) { try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] 启动 analyzeDaily 失败:", e.message); } }
+        // v9.33（缺口2/6/8）：启动即补 复盘 + 资金流 + 大宗交易（容错，任一失败不阻塞）
+        if (!cpReview) { try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] 启动复盘失败:", e.message); } }
+        // v9.42：启动即补因子 IC 健康度（无论当天是否到收盘时间都有快照）
+        if (!cpIc) { try { await saveFactorIc(pool); } catch (e) { console.error("[cron] 启动因子IC失败:", e.message); } }
+      }
     } else {
       console.log("[cron] 非交易日，跳过 LLM 链（快讯分级/分析/复盘/因子IC）");
     }
@@ -1302,9 +1359,9 @@ function startCron({ pool }) {
         console.log(`[cron] 启动大宗交易入库 ${tDateStr}: ${trades.length} 笔`);
       }
     } catch (e) { console.error("[cron] 启动大宗交易失败:", e.message); }
-    } finally {
-      cronBusy = false;
-    }
+    } finally { /* v9.89.0：原任务体 try 的 finally（cronBusy 复位已外提）*/ } }); } catch (e) { console.error("[cron] PG lock error:", e.message); }
+    if (!gotLock) { console.log("[cron] PG lock busy, skip startup fetch"); }
+    cronBusy = false;
   }, 3000);
 
   console.log("[cron] scheduled: 15:40 快照+分析+复盘 · 每20分钟抓快讯/公告/政策 · 盘中每5分钟盯价 · Asia/Shanghai");
@@ -1314,17 +1371,21 @@ function startCron({ pool }) {
     try {
       if (!isTradingDayCN()) return;
       // v9.81：防重叠 —— 上一轮未跑完（东财慢/超时）时跳过本轮
+      // v9.89.0（P2-4）：PG advisory lock 跨进程互斥（watchRunning 保留为进程内双保险）
       if (watchRunning) { console.log("[cron] watch busy, skip"); return; }
       watchRunning = true;
       try {
-        const { runWatchCheck } = require("./routes/watch");
-        const r = await runWatchCheck(pool);
-        if (r.triggered.length > 0) {
-          console.log(`[cron] ⚡ 盯价触发关注区间: ${r.triggered.map(t => `${t.name}(${t.code}) 现价${t.price} 偏离${t.deviation}%`).join(" | ")}`);
-        }
+        const gotLock = await withPgLock(pool, LOCK_WATCH, async () => {
+          const { runWatchCheck } = require("./routes/watch");
+          const r = await runWatchCheck(pool);
+          if (r.triggered.length > 0) {
+            console.log(`[cron] ⚡ 盯价触发关注区间: ${r.triggered.map(t => `${t.name}(${t.code}) 现价${t.price} 偏离${t.deviation}%`).join(" | ")}`);
+          }
+        });
+        if (!gotLock) console.log("[cron] watch PG lock busy, skip");
       } finally { watchRunning = false; }
     } catch (e) { console.error("[cron] 盘中盯价失败:", e.message); }
-  });
+  }, { timezone: "Asia/Shanghai" });
 
   // v9.84.2/3（3.6+4.1）：盘中大脑快照 + 板块集体异动 —— 每 5 分钟（9:30-15:00 交易日）
   // 情绪分/板块资金快照落库（关页不断链）+ 同板块≥3涨停/资金脉冲 → kv anomaly + 多通道推送
@@ -1334,8 +1395,12 @@ function startCron({ pool }) {
       if (intradayBusy) return; // 防重叠
       intradayBusy = true;
       try {
-        const r = await runIntradayBrain(pool);
-        if (r.sentiment != null) console.log(`[cron] 盘中快照 ${bjDateStr()}: 情绪${r.sentiment} 异动${r.anomalies}`);
+        // v9.89.0（P2-4）：PG advisory lock 跨进程互斥
+        const gotLock = await withPgLock(pool, LOCK_INTRADAY, async () => {
+          const r = await runIntradayBrain(pool);
+          if (r.sentiment != null) console.log(`[cron] 盘中快照 ${bjDateStr()}: 情绪${r.sentiment} 异动${r.anomalies}`);
+        });
+        if (!gotLock) console.log("[cron] intraday PG lock busy, skip");
       } finally { intradayBusy = false; }
     } catch (e) { console.error("[cron] 盘中大脑快照失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
@@ -1374,9 +1439,15 @@ function startCron({ pool }) {
     try {
       if (!isTradingDayCN() && expr !== "5 15 * * 1-5") return; // 盘后允许非交易日补跑
       // v9.81：防重叠 —— runThemeAnalysis 含 2 次 LLM（恶劣情况单轮可超 30 分钟），不叠加
+      // v9.89.0（P2-4）：PG advisory lock 跨进程互斥（与前端手动触发共用 LOCK_THEME）
       if (themeRunning) { console.log(`[cron] themeAnalysis(${label}) busy, skip`); return; }
       themeRunning = true;
-      try { await runThemeAnalysis({ pool, label }); }
+      try {
+        const gotLock = await withPgLock(pool, LOCK_THEME, async () => {
+          await runThemeAnalysis({ pool, label });
+        });
+        if (!gotLock) console.log(`[cron] themeAnalysis(${label}) PG lock busy, skip`);
+      }
       finally { themeRunning = false; }
     } catch (e) { console.error(`[cron] themeAnalysis(${label}) failed:`, e.message); }
   }, { timezone: "Asia/Shanghai" });
@@ -1519,6 +1590,10 @@ ${JSON.stringify(themes.map(t => ({
 
     const themePicks = new Map(); // theme → picks
     const themeEtfs = new Map();  // theme → etfs
+    // v9.89.0：zt 池提升到 try 外 —— 原 const arr 在 try 块内（块级作用域），
+    //   Step4 的 `(Array.isArray(arr) ? arr : [])` 在 try 外引用 → ReferenceError: arr is not defined
+    //   （v9.75 遗留，被 concept-groups module 错误掩盖至今）
+    let arr = [];
     try {
       // v9.75（正确性修复）：zt_snapshot.date 实际存储为带横杠 dateStr（fetchZTPool cron.js 返回）
       // 原用无横杠 date 等值查询永不命中 → ztPool 恒空 → Step4 LLM 选股研判从未真正跑过（死代码）
@@ -1526,7 +1601,7 @@ ${JSON.stringify(themes.map(t => ({
       // zt_snapshot.data 为 jsonb（pg 可能返回字符串或对象）→ 兼容两种
       const raw = ztR.rows[0]?.data;
       const ztPool = typeof raw === "string" ? JSON.parse(raw) : (raw ?? []);
-      const arr = Array.isArray(ztPool) ? ztPool : (ztPool.pool ?? []);
+      arr = Array.isArray(ztPool) ? ztPool : (ztPool.pool ?? []);
       for (const th of themes) {
         // 3a. 主题归属过滤（内联 conceptGroupOf 判断：hybk/名称折叠到主题大类）
         const themeStocks = arr.filter(s => {

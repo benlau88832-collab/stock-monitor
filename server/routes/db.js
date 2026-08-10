@@ -152,14 +152,16 @@ module.exports = function dbRoutes(app) {
       const cronMod = require("../cron");
       const { runThemeAnalysis } = cronMod;
       // v9.85.0（P1-4）：并发锁 —— 原手动触发绕过 themeRunning，重复点击可并发叠加多轮 LLM 管线（每轮 2 次 LLM 最长 30 分钟+）
-      if (cronMod.getThemeBusy && cronMod.getThemeBusy()) {
+      // v9.89.0（P2-4）：升级为 PG advisory lock（与 cron 的 3 个 themeAnalysis 点跨进程共用 LOCK_THEME）
+      const { acquireLock, releaseLock, LOCK_THEME } = require("../lib/pgLock");
+      const lockClient = await acquireLock(pool, LOCK_THEME);
+      if (!lockClient) {
         return res.status(409).json({ error: "theme analysis already running", running: true });
       }
-      if (cronMod.setThemeBusy) cronMod.setThemeBusy(true);
       res.json({ ok: true, started: true });
       runThemeAnalysis({ pool, label: "手动" })
         .catch(e => console.error("[api] theme-analysis 后台执行失败:", e.message))
-        .finally(() => { if (cronMod.setThemeBusy) cronMod.setThemeBusy(false); });
+        .finally(() => releaseLock(lockClient, LOCK_THEME));
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

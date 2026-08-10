@@ -4,7 +4,10 @@
 // 消灭双源漂移（原前端 24 组 vs cron 内联 20 组词根不同 → 同一新闻两种分类）。
 // 改词表只改这里；前端 import、服务端 require。
 // ============================================================
-module.exports = {
+// v9.89.0（P2-4）：纯 ESM —— 项目根 package.json 为 "type": "module"，
+// 服务端 require 此 .js 走 require(ESM)（Node 22+ 支持，返回 namespace）；
+// 原双格式（module.exports 分支）与 vitest 的 module shim 冲突（只读 getter）。
+const DATA = {
   /** 大类词根表（v9.51 V7-4 重构：去单字词根 + 去大类重叠 + 教育独立）
    *  规则：① 词根 ≥2 字（删除 硅/铜/铝/锡/铅/钛/AR/MR 等单/双字易误命中）
    *        ② 重叠概念按主属性唯一归属（算力基建→算力；光通信器件→通信；玻璃→材料）
@@ -115,3 +118,6 @@ module.exports = {
     },
   ],
 };
+
+export default DATA;
+export const CONCEPT_GROUPS = DATA.CONCEPT_GROUPS;
