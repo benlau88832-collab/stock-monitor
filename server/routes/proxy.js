@@ -43,27 +43,10 @@ const TTL = 5000;
 // v9.30.3：模拟浏览器 UA（node 默认 "node" 会被 emappdata 等接口 ban 导致 socket hang up）
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-const ALLOWED_HOSTS = [
-  "push2.eastmoney.com",
-  "push2delay.eastmoney.com",
-  "push2ex.eastmoney.com",
-  "push2his.eastmoney.com",
-  "datacenter-web.eastmoney.com",
-  "np-anotice-stock.eastmoney.com",
-  "np-weblist.eastmoney.com",
-  "emappdata.eastmoney.com",
-  "quote.eastmoney.com",
-  // v9.26.12：腾讯/雪球行情（提供更稳定的今开/昨收/成交量/换手；批量接口无 CORS）
-  "qt.gtimg.cn",
-  "web.ifzq.gtimg.cn",
-  "stock.gtimg.cn",
-  // v9.26.17：东财 push2his（板块分钟 K 线，含主力净额分时 f60）
-  "push2his.eastmoney.com",
-  // v9.31：同花顺人气榜（dq.10jqka.com.cn 热度接口，GET JSON）
-  "dq.10jqka.com.cn",
-  // v9.84.4：search-api-web（个股新闻全文检索，JSONP 壳）—— jsonpQueue 本地 proxy 化后必须放行
-  "search-api-web.eastmoney.com",
-];
+// v9.86.0（P1-16）：转发白名单从数据源注册表派生（只放行行情/新闻类，AI/推送域不放行给浏览器；
+//   废弃的 search-api-web 与无调用的 stock.gtimg.cn 已随注册表移除）
+const { proxyAllowedHosts } = require("../lib/sources");
+const ALLOWED_HOSTS = proxyAllowedHosts();
 
 /** 校验目标 URL 是否在白名单内，返回 { ok, url?, err? } */
 function checkTarget(target) {

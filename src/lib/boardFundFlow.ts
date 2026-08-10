@@ -33,7 +33,7 @@ export async function fetchBoardKlineFlow(secid: string, lmt = 240): Promise<Boa
   const prefixed = /^BK\d+$/.test(s) ? `90.${s}` : s;
   const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${encodeURIComponent(prefixed)}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60&klt=1&fqt=1&end=20500101&lmt=${lmt}`;
   try {
-    const r = await fetch(url, { headers: { Referer: "https://quote.eastmoney.com/" } });
+    const r = await fetch(url, { headers: { Referer: "https://quote.eastmoney.com/" }, signal: AbortSignal.timeout(8000) });
     if (!r.ok) return [];
     const json = await r.json();
     const klines: string[] = json?.data?.klines ?? [];

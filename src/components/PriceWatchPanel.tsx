@@ -35,12 +35,12 @@ export default function PriceWatchPanel() {
 
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch("/api/watch/list");
+      const r = await apiFetch("/api/watch/list");
       const j = await r.json();
       if (j.ok) setWatches(j.items ?? []);
     } catch { /* 服务端不可用 → 静默 */ }
     try {
-      const r = await fetch("/api/watch/events");
+      const r = await apiFetch("/api/watch/events");
       const j = await r.json();
       if (j.ok && j.items?.length > 0) {
         setEvents(prev => {
@@ -72,7 +72,7 @@ export default function PriceWatchPanel() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch(`/api/watch/trend?code=${encodeURIComponent(selected)}`);
+        const r = await apiFetch(`/api/watch/trend?code=${encodeURIComponent(selected)}`);
         const j = await r.json();
         if (j.ok && alive) setTrend(j.items ?? []);
       } catch { /* 静默 */ }

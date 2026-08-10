@@ -115,7 +115,7 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
     let alive = true;
     const load = async () => {
       try {
-        const r = await fetch("/api/watch/list");
+        const r = await apiFetch("/api/watch/list");
         const j = await r.json();
         if (j.ok && alive) {
           const m = new Map<string, number>();

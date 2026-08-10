@@ -4,6 +4,7 @@ import { indexRealUrl, marketBreadthUrl } from "../lib/realLinks";
 import type { OverviewData, SentimentFactors } from "../App";
 import FreshnessTag from "./FreshnessTag";
 import { isLocalServer } from "../lib/cloudStore";
+import { apiFetch } from "../lib/cloudStore";
 
 // ============== 五级色阶 ==============
 function sentimentColor(value: number): string {
@@ -42,7 +43,7 @@ function SentimentGauge({ value, label, factors, yesterday, premiumAvg, promotio
     let alive = true;
     (async () => {
       try {
-        const resp = await fetch("/api/brain/pg", {
+        const resp = await apiFetch("/api/brain/pg", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tool: "marketDaily", args: { limit: 250 } }),

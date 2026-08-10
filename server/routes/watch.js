@@ -10,32 +10,43 @@
 //   POST /api/watch/events/read   标记事件已读
 // ============================================================
 const { pool } = require("../db");
+const { getJson, requestRaw } = require("../lib/outbound");
 
-/** 批量拉现价（东财 ulist 单请求多 code；v9.84.5：push2 断源 → push2delay 延迟行情，盯价 5 分钟轮询足够） */
+/** 批量拉现价（东财 ulist 单请求多 code；v9.84.5：push2 断源 → push2delay 延迟行情，盯价 5 分钟轮询足够）
+ *  v9.86.0（P2-7）：走统一出站客户端 —— 东财失败自动降级腾讯 qt.gtimg.cn（"~"分隔文本，取 [3]现价），
+ *  主源 source 标记 push2delay / 兜底 tencentQuote（消除"盯价静默失效"盲区）。 */
 async function fetchPrices(codes) {
   const secids = codes.map(c => (c.startsWith("6") ? "1." : "0.") + c).join(",");
-  const https = require("https");
   const url = `https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f2,f12&secids=${secids}`;
-  // v9.81（安全加固）：出站 host 白名单校验（host 固定，防未来改动把清单代码注入任意 URL）
-  try { require("../lib/hostGuard").assertHostAllowed(url); } catch { return {}; }
-  return new Promise((resolve) => {
-    const req = https.get(url, { timeout: 8000 }, (r) => {
-      let data = "";
-      r.on("data", d => data += d);
-      r.on("end", () => {
-        try {
-          const j = JSON.parse(data);
-          const diff = j?.data?.diff;
-          const rows = Array.isArray(diff) ? diff : (diff && typeof diff === "object" ? Object.values(diff) : []);
-          const m = {};
-          for (const x of rows) { const p = Number(x?.f2); if (Number.isFinite(p) && p > 0) m[String(x?.f12 ?? "")] = p; }
-          resolve(m);
-        } catch { resolve({}); }
-      });
-    });
-    req.on("error", () => resolve({}));
-    req.on("timeout", () => { req.destroy(); resolve({}); });
-  });
+  const txSecids = codes.map(c => (c.startsWith("6") ? "sh" : "sz") + c).join(",");
+  const txUrl = `https://qt.gtimg.cn/q=${txSecids}`;
+  try {
+    const r = await getJson(url, { timeout: 8000, source: "push2delay" });
+    const diff = r.data?.data?.diff;
+    const rows = Array.isArray(diff) ? diff : (diff && typeof diff === "object" ? Object.values(diff) : []);
+    const m = {};
+    for (const x of rows) { const p = Number(x?.f2); if (Number.isFinite(p) && p > 0) m[String(x?.f12 ?? "")] = p; }
+    return m;
+  } catch {
+    // 腾讯兜底（非 JSON 文本，用 requestRaw 手动解析；GBK 中文名不解码，只取 ASCII 数字字段）
+    try {
+      const t = await requestRaw(txUrl, { timeout: 5000 });
+      const m = {};
+      for (const line of t.body.split(";")) {
+        const qm = line.indexOf('="');
+        if (qm < 0) continue;
+        const fields = line.slice(qm + 2, -1).split("~");
+        const code = String(fields[2] ?? "").slice(2); // sh600001 → 600001
+        const p = Number(fields[3]);
+        if (code && Number.isFinite(p) && p > 0) m[code] = p;
+      }
+      if (Object.keys(m).length > 0) {
+        console.log("[watch] 盯价行情走腾讯兜底源:", Object.keys(m).length, "只");
+        return m;
+      }
+      return {};
+    } catch { return {}; }
+  }
 }
 
 module.exports = function watchRoutes(app) {

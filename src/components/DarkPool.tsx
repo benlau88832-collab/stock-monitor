@@ -5,6 +5,7 @@ import type { DarkPoolData } from "../App";
 import FreshnessTag from "./FreshnessTag";
 // v9.33（缺口8）：大宗交易折价异动（本地服务端 kv block_trade）
 import { isLocalServer } from "../lib/cloudStore";
+import { apiFetch } from "../lib/cloudStore";
 
 interface BlockTradeItem {
   code: string; name: string; price: number; closePrice: number;
@@ -36,7 +37,7 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
           const d = new Date();
           d.setDate(d.getDate() - i);
           const key = `block_trade:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          const r = await fetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
+          const r = await apiFetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
           if (!r.ok) continue;
           const v = await r.json();
           const items = v?.value?.items;

@@ -49,7 +49,7 @@ import { detectSealDecay, type SealAlert } from "./lib/sealMonitor";
 // v9.36（B2）：昨日涨停统计纯函数（溢价/核按钮/晋级率）
 import { computePrevZtStats } from "./lib/prevZtStats";
 import { fetchPopularityRank } from "./lib/api";
-import { getCircuitState } from "./lib/jsonpQueue";
+import { getCircuitState, getSourceState } from "./lib/jsonpQueue";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
 // v9.50（G2）：StatusBar 已并入 TopNav 顶部通栏，App 不再独立渲染
@@ -1398,11 +1398,20 @@ export default function App() {
   if (overview) {
     const circuit = getCircuitState();
     const degradedPool = overview.limitPool?.degraded === true;
+    // v9.86.0（P1-16）：主源实际由 fallback 源供数（push2 → push2delay 延迟行情）→ info 级提示
+    const sourceState = getSourceState();
+    const delayedHost = sourceState.find(s => s.source === "push2delay.eastmoney.com");
     if (overview.stale || degradedPool || (circuit.open && !overview.stale)) {
       alerts.push({
         id: "data_source_issue",
         level: "critical",
         message: `⚠ 数据源异常${degradedPool ? "：涨停池数据来自历史日期（接口不可达/非交易日），情绪与梯队数据可能失真" : overview.stale ? "：本轮刷新多数数据源失败，显示上一轮快照（已尝试多源 fallback）" : "：行情接口熔断中（恢复后自动刷新）"}${circuit.open ? "（已触发快速熔断）" : ""}`,
+      });
+    } else if (delayedHost) {
+      alerts.push({
+        id: "data_source_delayed",
+        level: "info",
+        message: `ℹ 行情主源不可达，当前数据来自延迟源（push2delay，约 15 分钟延迟）`,
       });
     }
   }

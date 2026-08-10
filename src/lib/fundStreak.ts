@@ -3,7 +3,7 @@
 // 数据源：server cron 每日落库 kv_store:fund_streak:YYYY-MM-DD（行业全量双请求）
 // 输出：每行业连续流入/流出天数、今日主力净额、昨日流入今日流出切换标记
 // ============================================================
-import { isLocalServer } from "./cloudStore";
+import { isLocalServer, apiFetch } from "./cloudStore";
 import { getBJDate, getBJWeekday } from "./format";
 
 export interface FundStreak {
@@ -29,7 +29,7 @@ async function loadDayFund(dateStr: string): Promise<Array<{ code: string; name:
   try {
     const url = kvUrl(`fund_streak:${dateStr}`);
     if (!url) return null;
-    const r = await fetch(url);
+    const r = await apiFetch(url);
     if (!r.ok) return null;
     const v = await r.json();
     const items = v?.value?.items;

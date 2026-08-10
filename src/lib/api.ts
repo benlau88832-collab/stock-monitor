@@ -79,16 +79,16 @@ export interface IndexQuote {
 export async function fetchIndexOverview(): Promise<IndexQuote[]> {
   try {
     const secids = MAJOR_INDICES.map((i) => i.secid).join(",");
-    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
+    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=${EM_F.PRICE},${EM_F.PCT},${EM_F.CHANGE},${EM_F.CODE},${EM_F.NAME}&secids=${secids}`;
     const json = await trackedJsonp<any>("指数概览", url);
     const diff = normalizeDiff(json?.data?.diff);
     if (diff.length > 0) {
       return diff.map((d: Record<string, unknown>) => ({
-        code: String(d.f12 ?? ""),
-        name: String(d.f14 ?? ""),
-        price: num(d.f2),
-        pct: num(d.f3),
-        change: num(d.f4),
+        code: String(d[EM_F.CODE] ?? ""),
+        name: String(d[EM_F.NAME] ?? ""),
+        price: num(d[EM_F.PRICE]),
+        pct: num(d[EM_F.PCT]),
+        change: num(d[EM_F.CHANGE]),
       }));
     }
     throw new Error("empty diff");
@@ -218,7 +218,7 @@ export interface GlobalIndex {
 export async function fetchCommodities(): Promise<GlobalIndex[]> {
   try {
     const secids = COMMODITY_INDICES.map((i) => i.secid).join(",");
-    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
+    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=${EM_F.PRICE},${EM_F.PCT},${EM_F.CHANGE},${EM_F.CODE},${EM_F.NAME}&secids=${secids}`;
     const json = await trackedJsonp<any>("商品汇率", url, 4000);
     const diff = normalizeDiff(json?.data?.diff);
     return diff.map((d) => {
@@ -232,7 +232,7 @@ export async function fetchCommodities(): Promise<GlobalIndex[]> {
 export async function fetchGlobalIndices(): Promise<GlobalIndex[]> {
   try {
     const secids = GLOBAL_INDICES.map((i) => i.secid).join(",");
-    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f3,f4,f12,f14&secids=${secids}`;
+    const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=${EM_F.PRICE},${EM_F.PCT},${EM_F.CHANGE},${EM_F.CODE},${EM_F.NAME}&secids=${secids}`;
     const json = await trackedJsonp<any>("全球指数", url, 4000);
     const diff = normalizeDiff(json?.data?.diff);
     return diff.map((d) => {
@@ -421,6 +421,7 @@ export async function fetchBoardFundFlow(
 // 这些不是投资意义上的概念板块，需要过滤掉
 // 板块过滤：从全局分类模块导入（boardTaxonomy 是唯一分类源）
 import { isRealConceptBoard } from "./boardTaxonomy";
+import { EM_F } from "./emFields";
 export { isRealConceptBoard };
 
 // ============== 板块资金流排行（净流入/净流出 Top10 + 连续天数统计） ==============
@@ -574,32 +575,32 @@ export function stockLimitPct(code: string): number {
 
 export async function fetchStockOne(code: string) {
   const secid = toSecid(code);
-  const fields = "f2,f3,f12,f14,f8,f9,f10,f62,f66,f69,f72,f75,f78,f81,f84,f87,f164,f165,f174,f175,f184";
+  const fields = `${EM_F.PRICE},${EM_F.PCT},${EM_F.CODE},${EM_F.NAME},${EM_F.TURNOVER},${EM_F.PE},${EM_F.VOL_RATIO},${EM_F.MAIN_NET},${EM_F.EXTRA_LARGE_NET},f69,${EM_F.LARGE_NET},f75,${EM_F.MEDIUM_NET},f81,${EM_F.SMALL_NET},f87,${EM_F.MAIN_NET_5D},${EM_F.MAIN_NET_5D_PCT},${EM_F.MAIN_NET_10D},${EM_F.MAIN_NET_10D_PCT},${EM_F.MAIN_NET_PCT}`;
   const url = `${PUSH2}/ulist.np/get?ut=${EM_UT}&fltt=2&fields=${fields}&secids=${secid}`;
   const json = await trackedJsonp<any>("个股行情", url);
   const diff = normalizeDiff(json?.data?.diff);
   if (!diff.length) return null;
   const d = diff[0];
   return {
-    code: String(d.f12 ?? ""),
-    name: String(d.f14 ?? ""),
-    price: num(d.f2),
-    pct: num(d.f3),
-    mainNet: num(d.f62),
-    mainNetPct: num(d.f184),
-    extraLargeNet: num(d.f66),
-    largeNet: num(d.f72),
-    mediumNet: num(d.f78),
-    smallNet: num(d.f84),
-    mainNet5d: num(d.f164),
-    mainNet5dPct: num(d.f165),
-    mainNet10d: num(d.f174),
-    mainNet10dPct: num(d.f175),
-    turnoverRate: num(d.f8),
-    pe: num(d.f9),
-    volumeRatio: num(d.f10),
+    code: String(d[EM_F.CODE] ?? ""),
+    name: String(d[EM_F.NAME] ?? ""),
+    price: num(d[EM_F.PRICE]),
+    pct: num(d[EM_F.PCT]),
+    mainNet: num(d[EM_F.MAIN_NET]),
+    mainNetPct: num(d[EM_F.MAIN_NET_PCT]),
+    extraLargeNet: num(d[EM_F.EXTRA_LARGE_NET]),
+    largeNet: num(d[EM_F.LARGE_NET]),
+    mediumNet: num(d[EM_F.MEDIUM_NET]),
+    smallNet: num(d[EM_F.SMALL_NET]),
+    mainNet5d: num(d[EM_F.MAIN_NET_5D]),
+    mainNet5dPct: num(d[EM_F.MAIN_NET_5D_PCT]),
+    mainNet10d: num(d[EM_F.MAIN_NET_10D]),
+    mainNet10dPct: num(d[EM_F.MAIN_NET_10D_PCT]),
+    turnoverRate: num(d[EM_F.TURNOVER]),
+    pe: num(d[EM_F.PE]),
+    volumeRatio: num(d[EM_F.VOL_RATIO]),
     /** v9.60（V9-D1）：关键资金字段缺失（东财改字段）→ UI 显示"数据缺失"而非误导 0 */
-    dataMissing: hasMissingKeyFields(d, ["f3", "f62", "f184", "f164", "f174", "f66", "f72", "f78", "f84"]),
+    dataMissing: hasMissingKeyFields(d, [EM_F.PCT, EM_F.MAIN_NET, EM_F.MAIN_NET_PCT, EM_F.MAIN_NET_5D, EM_F.MAIN_NET_10D, EM_F.EXTRA_LARGE_NET, EM_F.LARGE_NET, EM_F.MEDIUM_NET, EM_F.SMALL_NET]),
   };
 }
 

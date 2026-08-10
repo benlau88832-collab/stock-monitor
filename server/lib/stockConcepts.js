@@ -5,6 +5,7 @@
 //       未命中的 code 实时抓东财并落库（增量积累，避免每次刷新重复打东财）
 // ============================================================
 const DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get";
+const { getJson } = require("./outbound");
 
 /** 非题材过滤（与前端 stockBoards.ts isThemeBoard 同构的简化版：仅过滤指数/地域/状态类） */
 const NON_THEME = /沪深300|上证50|中证|创业板指|深证|上证180|深证100|科创50|国证|MSCI|富时|标普|罗素|央视50|融资融券|深股通|沪股通|北向资金|北交所|陆股通|板块$|概念$|新股|次新|昨日|最近|活跃|热门|强势|预盈|预亏|高送转|破净|低价股|ST|振幅|换手|量比|缩量|放量|超大单|大单|中单|小单|净流入|净流出|资金流入|资金流出|增仓|减仓|封板|炸板|跌停|涨停|高开|低开|东方财富|同花顺|成分|权重|样本/;
@@ -25,12 +26,9 @@ async function fetchEastmoneyBoards(codes) {
     const codeList = chunk.map(c => `"${c}"`).join(",");
     const url = `${DATACENTER}?reportName=RPT_F10_CORETHEME_BOARDTYPE&columns=ALL&filter=(SECURITY_CODE%20in%20(${encodeURIComponent(codeList).replace(/%22/g, '"')}))&pageSize=5000&source=HSF10&client=WEB`;
     try {
-      const resp = await fetch(url, {
-        headers: { Referer: "https://emweb.securities.eastmoney.com/" },
-        signal: AbortSignal.timeout(4000),
-      });
-      const json = await resp.json();
-      const data = json?.result?.data ?? [];
+      // v9.86.0（P2-7）：统一出站客户端（hostGuard + 错误分类；4s 超时语义不变）
+      const r = await getJson(url, { timeout: 4000, headers: { Referer: "https://emweb.securities.eastmoney.com/" }, source: "datacenter" });
+      const data = r.data?.result?.data ?? [];
       const byCode = new Map();
       for (const item of data) {
         const code = String(item.SECURITY_CODE ?? "");

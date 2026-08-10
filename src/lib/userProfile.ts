@@ -6,7 +6,7 @@
 // 消费方：aiAgent（注入 system prompt）+ DecisionVerdictCard（展示一行）
 // ============================================================
 import { localDateStr } from "./format";
-import { isLocalServer } from "./cloudStore";
+import { isLocalServer, apiFetch } from "./cloudStore";
 import { loadRecentPosts } from "./decisionPost";
 import { loadDisciplineState } from "./discipline";
 
@@ -60,7 +60,7 @@ function saveProfile(p: UserProfile): void {
   try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* 满 → 静默 */ }
   if (isLocalServer()) {
     try {
-      fetch("/api/db/kv", {
+      apiFetch("/api/db/kv", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: `user_profile:${localDateStr()}`, value: JSON.stringify(p) }),

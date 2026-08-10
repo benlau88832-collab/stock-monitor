@@ -71,6 +71,7 @@ import type { GateResult } from "../lib/regimeGate";
 // v9.24-P1-4：异动捕捉引擎（S/A/B 分级 + 事件流）
 import { useRef } from "react";
 import { classifyAnomaly, emitAnomaly, subscribeAnomaly, getAnomalies, updateAnomaly, type AnomalyEvent } from "../lib/anomalyTier";
+import { apiFetch } from "../lib/cloudStore";
 
 // ============== 自选股异动项 ==============
 export interface WatchStockBrief {
@@ -597,7 +598,7 @@ export default function Dashboard({
     let alive = true;
     (async () => {
       try {
-        const r = await fetch("/api/watch/list");
+        const r = await apiFetch("/api/watch/list");
         const j = await r.json();
         if (!alive) return;
         const items: Array<{ code: string; name: string; deviation: number | null }> = j?.items ?? [];
@@ -804,7 +805,7 @@ export default function Dashboard({
         for (let i = 0; i < 3; i++) {
           const d = new Date(); d.setDate(d.getDate() - i);
           const key = `lhb:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          const r = await fetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
+          const r = await apiFetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
           if (!r.ok) continue;
           const v = await r.json();
           const items = v?.value?.items;

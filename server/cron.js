@@ -382,21 +382,13 @@ async function runIntradayBrain(pool, force = false) {
 
 // ---------- 通用 https GET ----------
 // v9.81（性能）：默认超时 15s→6s —— 东财断源时服务端外部等待快速失败，不再占连接池
+// v9.86.0（P2-7）：改为统一出站客户端 outbound.getJson 薄封装 —— 签名不变（返回 Promise<JSON>，
+//   15+ 调用点零改动），内部统一 hostGuard 白名单校验 + 错误分类（timeout/http/parse/network）。
 function httpsGet(url, timeout = 6000) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { "User-Agent": "Mozilla/5.0", Referer: "https://data.eastmoney.com/" } }, r => {
-      const chunks = [];
-      r.on("data", c => chunks.push(c));
-      r.on("end", () => {
-        const raw = Buffer.concat(chunks).toString("utf8");
-        try { resolve(JSON.parse(raw)); }
-        catch { reject(new Error("bad json")); }
-      });
-    });
-    req.on("error", reject);
-    req.setTimeout(timeout, () => { req.destroy(new Error("timeout")); });
-  });
+  return getJson(url, { timeout, headers: { Referer: "https://data.eastmoney.com/" }, source: "eastmoney" }).then(r => r.data);
 }
+
+const { getJson, getJsonWithFallback } = require("./lib/outbound");
 
 // ---------- v9.26.5：自动 LLM 分析调用（.cn 直连优先，失败走代理） ----------
 // v9.38.1（V3-P0）：抽公共层 server/lib/httpProxy.js（惰性 require + 容错，消除重复实现）

@@ -3,6 +3,19 @@
 // 同一毫秒 15+ 个 JSONP script 标签会触发限流。
 // 本调度器将并发限制在 ≤3，请求排队+随机抖动错峰发出。
 
+// v9.86.0（P1-16）：数据源注册表 —— push2→push2delay 域名降级从硬编码字符串替换改为查表
+import { fallbackHostFor } from "./sources";
+
+// v9.86.0（P1-16）：最近实际命中的数据源记录（主源 vs fallback 源）—— App 横幅可显示"行情走延迟源"
+const lastSourceByHost = new Map<string, { source: string; at: number }>();
+function recordSourceHit(url: string, source: string) {
+  try { lastSourceByHost.set(hostOf(url), { source, at: Date.now() }); } catch { /* 忽略 */ }
+}
+/** 数据源命中状态导出（横幅/OpsPanel）：host → 实际 provider（主源 or fallback 源） */
+export function getSourceState(): Array<{ host: string; source: string; at: number }> {
+  return [...lastSourceByHost.entries()].map(([host, v]) => ({ host, source: v.source, at: v.at }));
+}
+
 type QueueItem = {
   url: string;
   callbackParam: string;
@@ -121,6 +134,7 @@ async function fetchViaProxy(url: string, timeout: number): Promise<any> {
         if (m) { try { data = JSON.parse(m[1]); } catch { throw new Error("proxy bad jsonp"); } }
         else throw new Error("proxy bad body");
       }
+      recordSourceHit(target, target.includes("push2delay") ? "push2delay" : "eastmoney");
       return data;
     } finally {
       clearTimeout(t);
@@ -129,10 +143,14 @@ async function fetchViaProxy(url: string, timeout: number): Promise<any> {
   try {
     return await attempt(url);
   } catch (err) {
-    // push2 不可达 → push2delay 重试一次（仅非 kline 路径）
-    if (url.includes("push2.eastmoney.com") && !url.includes("/stock/kline/") && !url.includes("daykline")) {
+    // v9.86.0（P1-16）：查数据源注册表降级 —— push2 不可达 → push2delay 重试一次（仅非 kline 路径）
+    const fallbackHost = fallbackHostFor(hostOf(url));
+    if (fallbackHost && !url.includes("/stock/kline/") && !url.includes("daykline")) {
+      const fallbackUrl = url.replace(hostOf(url), fallbackHost);
       try {
-        return await attempt(url.replace("push2.eastmoney.com", "push2delay.eastmoney.com"));
+        const data = await attempt(fallbackUrl);
+        recordSourceHit(url, fallbackHost); // 记录：主源 host 实际由 fallback 源供数
+        return data;
       } catch { /* 双源都失败 → 交给上层回退 script */ }
     }
     throw err;
@@ -149,7 +167,7 @@ function execJsonp(url: string, timeout: number, callbackParam: string): Promise
       delete (window as any)[cbName];
       if (script.parentNode) script.parentNode.removeChild(script);
     }
-    (window as any)[cbName] = (data: any) => { cleanup(); resolve(data); };
+    (window as any)[cbName] = (data: any) => { cleanup(); recordSourceHit(url, "eastmoney"); resolve(data); };
     const sep = url.includes("?") ? "&" : "?";
     script.src = `${url}${sep}${callbackParam}=${cbName}&_=${Date.now()}`;
     script.referrerPolicy = "no-referrer";

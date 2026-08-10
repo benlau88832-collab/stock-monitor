@@ -7,7 +7,7 @@
 //   - market_daily:YYYY-MM-DD（涨停/跌停/炸板/最高板，cron 15:40 落库）
 // 方法：对每个信号找"触发日"，统计次日情绪分变化 / 指标修复 → 样本数/胜率/方向
 // ============================================================
-import { isLocalServer } from "./cloudStore";
+import { isLocalServer, apiFetch } from "./cloudStore";
 // v9.55（V7-19）：北京时间交易日历（周末+节假日统一判定，避免非东八区机器偏移）
 import { isTradingDay, bjDateStr } from "./tradeCalendar";
 // v9.62（V9-L1）：信号阈值统一引用 thresholds.ts
@@ -53,8 +53,8 @@ async function loadHistory(days = 14): Promise<DayRow[]> {
     const row: DayRow = { date: ds, sentiment: null, ztCount: null, dtCount: null, blastedRate: null, maxBoardHeight: null };
     try {
       const [sr, mr] = await Promise.all([
-        fetch(`/api/db/kv?key=${encodeURIComponent(`sentiment:${ds}`)}`).catch(() => null),
-        fetch(`/api/db/kv?key=${encodeURIComponent(`market_daily:${ds}`)}`).catch(() => null),
+        apiFetch(`/api/db/kv?key=${encodeURIComponent(`sentiment:${ds}`)}`).catch(() => null),
+        apiFetch(`/api/db/kv?key=${encodeURIComponent(`market_daily:${ds}`)}`).catch(() => null),
       ]);
       if (sr && sr.ok) {
         const v = await sr.json();

@@ -11,7 +11,7 @@
 import { useState, useEffect, useRef } from "react";
 import { fmtMoney, localDateStr } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
-import { isLocalServer } from "../lib/cloudStore";
+import { isLocalServer, apiFetch } from "../lib/cloudStore";
 import { emit as alertEmit } from "../lib/alertBus";
 import type { OverviewData } from "../App";
 
@@ -35,7 +35,7 @@ export default function LhbCrossPanel({ overview }: { overview?: OverviewData | 
           const d = new Date();
           d.setDate(d.getDate() - i);
           const key = `lhb:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          const r = await fetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
+          const r = await apiFetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
           if (!r.ok) continue;
           const v = await r.json();
           if (Array.isArray(v?.value?.items) && v.value.items.length > 0) {

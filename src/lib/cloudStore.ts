@@ -73,7 +73,10 @@ async function localTokenHeader(): Promise<Record<string, string>> {
  * v9.85.0（P0-2）：统一鉴权 fetch —— 本地部署自动携带 x-local-token。
  * 服务端写操作（POST/PUT/DELETE /api/*）统一鉴权中间件要求 token；所有写类调用改走本函数。
  * 用法：apiFetch("/api/watch/update", { method: "POST", body: JSON.stringify(x) })
+ * v9.86.0（P2-7）：同源 API 默认 15s 超时兜底（此前无超时 —— "加载中…"无限悬挂的直接来源）；
+ *   调用方可传 signal 覆盖（AbortSignal.any 合并，任一中止即中止）。
  */
+const API_FETCH_TIMEOUT_MS = 15000;
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
@@ -81,7 +84,9 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
     const t = await getLocalToken();
     if (t) headers.set("x-local-token", t);
   }
-  return fetch(path, { ...init, headers });
+  const timeoutSignal = AbortSignal.timeout(API_FETCH_TIMEOUT_MS);
+  const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  return fetch(path, { ...init, headers, signal });
 }
 
 // ============== 通用 kv ==============

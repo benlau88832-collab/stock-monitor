@@ -1,3 +1,4 @@
+import { apiFetch } from "./cloudStore";
 // 竞价台数据层（v9.19-F1）
 // v9.26.12 重大改造：东财 ulist 的 f46(今开)/f60(昨收) 字段已重映射为其他含义，
 //   原实现算出 -100% 全错。改用腾讯 qt.gtimg.cn 接口（雪球格式）批量获取真实：
@@ -103,11 +104,8 @@ async function fetchQtBatch(codes: string[]): Promise<QtRow[]> {
   for (const chunk of chunks) {
     try {
       const url = QT_BASE + chunk.map(toQtSymbol).join(",");
-      // v9.84.3（5.4）：/api/proxy 鉴权 token 自动携带（服务端未启用时无害）
-      const token = await import("./cloudStore").then(m => m.getLocalToken()).catch(() => null);
-      const r = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, {
-        headers: token ? { "x-local-token": token } : {},
-      });
+      // v9.86.0（P2-7）：统一 apiFetch —— token 自动携带 + 15s 超时兜底
+      const r = await apiFetch(`/api/proxy?url=${encodeURIComponent(url)}`);
       if (!r.ok) continue;
       const buf = await r.arrayBuffer();
       // 腾讯接口 GBK 编码（用 TextDecoder 解码避免 iconv 兼容性）

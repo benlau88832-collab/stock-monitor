@@ -11,6 +11,7 @@ import { getCurrentSession } from "../lib/tradingSession";
 import { isLocalServer } from "../lib/cloudStore";
 import { callAI } from "../lib/ai";
 import { fetchBrainContext } from "../lib/assistantAgent";
+import { apiFetch } from "../lib/cloudStore";
 
 export default function ReviewPanel() {
   const [reviews, setReviews] = useState<DailyReview[]>(loadReviews);
@@ -72,7 +73,7 @@ export default function ReviewPanel() {
           const d = new Date();
           d.setDate(d.getDate() - i);
           const key = `review:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          const r = await fetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
+          const r = await apiFetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
           if (!r.ok) continue;
           const v = await r.json();
           if (v?.value?.text) { if (alive) setAutoReview({ date: v.value.date ?? key, text: v.value.text }); return; }
@@ -86,7 +87,7 @@ export default function ReviewPanel() {
   const replay = async (date: string) => {
     if (!isLocalServer()) return;
     try {
-      const r = await fetch(`/api/db/zt?date=${date}`);
+      const r = await apiFetch(`/api/db/zt?date=${date}`);
       if (!r.ok) return;
       const v = await r.json();
       const pool = v?.data?.pool ?? v?.pool;

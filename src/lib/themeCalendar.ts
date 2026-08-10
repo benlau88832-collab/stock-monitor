@@ -3,7 +3,7 @@
 // 数据源：server zt_snapshot 历史快照（/api/db/zt?date=YYYY-MM-DD）
 // 输出：每题材首现日 / 连续运行天数 / 历史最高连板 / 阶段判定
 // ============================================================
-import { isLocalServer } from "./cloudStore";
+import { isLocalServer, apiFetch } from "./cloudStore";
 import { getBJDate, getBJWeekday } from "./format";
 
 export interface ThemeLifecycle {
@@ -28,7 +28,7 @@ async function loadDaySnapshot(date: string): Promise<ZTSnapshotPoolItem[]> {
   try {
     const url = ztUrl(date);
     if (!url) return [];
-    const r = await fetch(url);
+    const r = await apiFetch(url);
     if (!r.ok) return [];
     const v = await r.json();
     const pool = v?.data?.pool ?? v?.pool;
