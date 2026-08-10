@@ -258,7 +258,7 @@ module.exports = function dbRoutes(app) {
       const daysAgo = new Date(bjNow.getTime() - 45 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
       // 各块并行且互不阻塞（某一源挂不影响其余）
-      const [conceptsR, newsR, annsR, reportsR, watchR, watchLogR, seatsR, ztR] = await Promise.allSettled([
+      const [conceptsR, newsR, annsR, reportsR, watchR, watchLogR, seatsR, ztR, policyR, sentimentR] = await Promise.allSettled([
         getConcepts(pool, [code]),
         pool.query("SELECT title,summary,boards,sentiment,stars,time,url FROM news WHERE code=$1", [code]),
         pool.query("SELECT art_code,stock_name,title,column_name,score,time,url FROM announcements WHERE stock_code=$1 ORDER BY time DESC LIMIT 20", [code]),
@@ -267,6 +267,11 @@ module.exports = function dbRoutes(app) {
         pool.query("SELECT date,price,mid_price,deviation_pct,triggered,event_text FROM price_watch_log WHERE code=$1 ORDER BY date DESC LIMIT 30", [code]),
         pool.query("SELECT key,value FROM kv_store WHERE key LIKE 'seats:%' AND key >= $1 ORDER BY key DESC LIMIT 45", [daysAgo]),
         pool.query("SELECT date,data FROM zt_snapshot ORDER BY date DESC LIMIT 30"),
+        // v9.95.3（第五段 P1）：个股聚合器补维度 —— 政策快讯（近3日泛市场政策）+ 舆情统计（news sentiment 聚合）
+        pool.query(`SELECT title,time FROM news
+          WHERE (title ILIKE '%国务院%' OR title ILIKE '%央行%' OR title ILIKE '%证监会%' OR title ILIKE '%发改委%' OR title ILIKE '%财政部%' OR title ILIKE '%国常会%' OR title ILIKE '%降准%' OR title ILIKE '%降息%' OR title ILIKE '%资本市场%')
+          AND time >= $1 ORDER BY time DESC LIMIT 5`, [new Date(Date.now() + 8 * 3600 * 1000 - 3 * 24 * 3600 * 1000).toISOString().slice(0, 10)]),
+        pool.query(`SELECT sentiment, count(*)::int AS cnt FROM news WHERE code=$1 AND sentiment IS NOT NULL GROUP BY sentiment`, [code]),
       ]);
 
       // 概念
@@ -317,6 +322,11 @@ module.exports = function dbRoutes(app) {
         watchLog: watchLogR.status === "fulfilled" ? watchLogR.value.rows : [],
         seats,                                        // 近 45 天席位净买/卖记录
         ztHistory,                                    // 近 30 个交易日涨停记录
+        // v9.95.3（第五段 P1）：政策维度（近3日泛市场政策快讯）+ 舆情统计（news sentiment 聚合）
+        policy: policyR.status === "fulfilled" ? policyR.value.rows : [],
+        sentimentSummary: sentimentR.status === "fulfilled"
+          ? { bullish: 0, bearish: 0, neutral: 0, ...Object.fromEntries(sentimentR.value.rows.map(r => [r.sentiment, r.cnt])) }
+          : null,
         asOf: todayStr,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }

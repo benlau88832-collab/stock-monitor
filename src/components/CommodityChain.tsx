@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fmtPct, pctColor } from "../lib/format";
-import { COMMODITY_LIST } from "../lib/commodities";
+import { COMMODITY_LIST, SMALL_METALS } from "../lib/commodities";
+// v9.95.4（第五段 P1）：小金属监测 —— 无期货合约，走本地 PG 快讯关键词（newsByKeyword）
+import { getLocalToken } from "../lib/cloudStore";
 import { recordApiCall } from "../lib/apiHealth";
 import { queuedJsonp } from "../lib/jsonpQueue";
 
@@ -101,6 +103,8 @@ interface Props {
 
 export default function CommodityChain({ boardPcts }: Props) {
   const [quotes, setQuotes] = useState<CommodityQuote[]>([]);
+  // v9.95.4：小金属快讯监测（name → 标题列表）
+  const [smallMetalNews, setSmallMetalNews] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const loadedRef = useRef(false);
@@ -161,6 +165,25 @@ export default function CommodityChain({ boardPcts }: Props) {
       setError(null);
     }
     setLoading(false);
+    // v9.95.4：小金属监测 —— 并行查本地 PG 快讯（钨/磷化铟/锑/钼），失败静默
+    (async () => {
+      try {
+        const token = await getLocalToken();
+        const out: Record<string, string[]> = {};
+        await Promise.all(SMALL_METALS.map(async (sm) => {
+          try {
+            const resp = await fetch("/api/brain/pg", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
+              body: JSON.stringify({ tool: "newsByKeyword", args: { keyword: sm.keywords[0], limit: 3 } }),
+            });
+            const j = await resp.json();
+            out[sm.name] = Array.isArray(j?.items) ? j.items.map((i: { title: string }) => i.title) : [];
+          } catch { out[sm.name] = []; }
+        }));
+        setSmallMetalNews(out);
+      } catch { /* 小金属监测失败不阻塞期货表 */ }
+    })();
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -252,6 +275,27 @@ export default function CommodityChain({ boardPcts }: Props) {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* v9.95.4（第五段 P1）：小金属监测 —— 钨/磷化铟/锑/钼 无期货合约，快讯监测（本地 PG 优先） */}
+      <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-950/10 p-2.5">
+        <div className="text-[11px] font-bold text-fuchsia-300">🔬 小金属监测（无期货 · 快讯）</div>
+        <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+          {SMALL_METALS.map(sm => (
+            <div key={sm.name} className="rounded bg-black/20 px-2 py-1.5">
+              <div className="text-[11px] font-semibold text-slate-200">{sm.name}
+                <span className="ml-1 text-[10px] text-slate-600" title={sm.chain}>{sm.chain.slice(0, 18)}…</span>
+              </div>
+              {(smallMetalNews[sm.name] ?? []).length > 0 ? (
+                <ul className="mt-0.5 list-disc pl-4 text-[10px] text-slate-400 space-y-0.5">
+                  {smallMetalNews[sm.name]!.slice(0, 2).map((t, i) => <li key={i} className="truncate">{t}</li>)}
+                </ul>
+              ) : (
+                <div className="mt-0.5 text-[10px] text-slate-600">近3日无相关快讯</div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="text-[11px] text-slate-600">

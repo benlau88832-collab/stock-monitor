@@ -8,6 +8,8 @@ import { getStockAI } from "../lib/aiConclusionStore";
 // v9.84（分类统一）：自选股雷达显示权威主线标签 —— F10 概念(服务端持久化优先) → classifyStock 唯一分类器
 import { fetchStocksBoards } from "../lib/stockBoards";
 import { scoreStockNews, type StockNewsLLMResult } from "../lib/llmSignals";
+// v9.95.3（第五段 P1）：个股聚合器消费方（全景端点 + AI 综合研判）
+import { fetchStockAggregate, judgeStockAggregate, type StockAggregateData, type StockAggregateLLMResult } from "../lib/stockAggregate";
 import { setAIResult } from "../lib/aiConclusionStore";
 import { classifyStock, type StockClassification } from "../lib/classifyStock";
 
@@ -349,6 +351,11 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   const [followUp, setFollowUp] = useState("");
   // v9.92.0（AI 贯穿全局）：stockNewsScore 接线 —— 原死代码，现在信息流顶部显示个股消息 AI 研判 + store 全站登记
   const [stockNewsAI, setStockNewsAI] = useState<StockNewsLLMResult | null>(null);
+  // v9.95.3：个股全景聚合 + AI 研判
+  const [aggData, setAggData] = useState<StockAggregateData | null>(null);
+  const [aggAI, setAggAI] = useState<StockAggregateLLMResult | null>(null);
+  const [aggLoading, setAggLoading] = useState(false);
+  const aggDoneRef = useRef<string | null>(null);
   const stockNewsDoneRef = useRef<string | null>(null);
   useEffect(() => {
     if (!selected) { setStockNewsAI(null); stockNewsDoneRef.current = null; return; }
@@ -373,6 +380,31 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, infoItems]);
+
+  // v9.95.3（第五段 P1）：选中个股 → 拉全景聚合（概念/新闻/公告/政策/舆情/席位/涨停历史）+ AI 综合研判
+  // 防串股：捕获 selected 快照，响应回来与当前 selected 不一致则丢弃
+  useEffect(() => {
+    if (!selected) { setAggData(null); setAggAI(null); aggDoneRef.current = null; return; }
+    const code = selected;
+    if (aggDoneRef.current === code) return;
+    aggDoneRef.current = code;
+    let alive = true;
+    setAggLoading(true);
+    (async () => {
+      try {
+        const d = await fetchStockAggregate(code);
+        if (!alive || code !== selected) return;
+        if (d) {
+          setAggData(d);
+          const ai = await judgeStockAggregate(d);
+          if (alive && code === selected) setAggAI(ai);
+        }
+      } catch { /* 聚合失败不阻塞信息流 */ }
+      if (alive && code === selected) setAggLoading(false);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
   const [followUpLoading, setFollowUpLoading] = useState(false);
   // 融资融券（按代码缓存展示，T+1 数据 5 分钟缓存）
   const [marginInfo, setMarginInfo] = useState<Record<string, StockMarginInfo | null>>({});
@@ -853,6 +885,43 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
               🤖 消息面AI研判：<b>{stockNewsAI.msgScore}分</b> · {stockNewsAI.polarity}
               {stockNewsAI.invalidation ? ` · 失效条件：${stockNewsAI.invalidation}` : ""}
               {!stockNewsAI.fromLLM && <span className="ml-1 text-[10px] opacity-60">（规则版）</span>}
+            </div>
+          )}
+
+          {/* v9.95.3（第五段 P1）：个股全景聚合卡 —— 公告+新闻+舆情+政策+席位+涨停历史 → AI 综合研判 */}
+          {(aggData || aggLoading) && selected && (
+            <div className="rounded-xl border border-sky-500/20 bg-sky-950/10 p-2.5 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-sky-300">🔬 个股全景聚合</span>
+                <span className="text-[10px] text-slate-500">{aggLoading ? "聚合中…" : `截至 ${aggData?.asOf ?? ""}`}</span>
+              </div>
+              {aggData && (
+                <div className="text-[11px] text-slate-300 space-y-1">
+                  <div>
+                    概念：<span className="text-sky-200">{aggData.concepts?.themes?.join("、") ?? aggData.concepts?.allBoards?.join("、") ?? "无"}</span>
+                    {aggData.concepts?.hybk ? <span className="text-slate-500">（{aggData.concepts.hybk}）</span> : null}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    消息 {aggData.news?.length ?? 0} 条 · 公告 {aggData.announcements?.length ?? 0} 条
+                    {aggData.sentimentSummary ? ` · 舆情 利好${aggData.sentimentSummary.bullish}/利空${aggData.sentimentSummary.bearish}/中性${aggData.sentimentSummary.neutral}` : ""}
+                    {aggData.policy?.length ? ` · 政策 ${aggData.policy.length} 条` : ""}
+                    · 席位 {aggData.seats?.length ?? 0} 条 · 涨停 {aggData.ztHistory?.length ?? 0} 次
+                  </div>
+                  {aggAI && (
+                    <div className={`rounded border px-2 py-1 text-[11px] ${
+                      aggAI.verdict === "关注" ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
+                      : aggAI.verdict === "回避" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                      : "border-white/10 bg-white/5 text-slate-300"
+                    }`}>
+                      🤖 聚合AI研判：<b>{aggAI.verdict === "关注" ? "▲ 关注" : aggAI.verdict === "回避" ? "▼ 回避" : "— 中性"}</b>
+                      <div className="mt-0.5">{aggAI.thesis}</div>
+                      {aggAI.risks.length > 0 && <div className="text-rose-300/80">⚠ {aggAI.risks.join("；")}</div>}
+                      {aggAI.watch && <div className="text-sky-300/80">👀 {aggAI.watch}</div>}
+                      {!aggAI.fromLLM && <span className="text-[10px] opacity-60">（规则版）</span>}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

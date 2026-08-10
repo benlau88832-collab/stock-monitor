@@ -56,6 +56,10 @@ const TASK_CONFIG = {
   // P3-4：用户风格学习 —— 周度低频，中等输出
   userStyleProfile: { temperature: 0.4, maxTokens: 800, thinking: false },
   newsAnalysis: { temperature: 0.4, maxTokens: 700, thinking: false },
+  // v9.95.2：两融情绪研判 —— 小输出结构化
+  marginSentiment: { temperature: 0.2, maxTokens: 800, thinking: false },
+  // v9.95.3：个股聚合研判 —— 中等输出结构化
+  stockAggregate: { temperature: 0.2, maxTokens: 900, thinking: false },
 };
 
 const B = {
@@ -248,6 +252,35 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
 ${p.newsText}
 
 【用户问题】${p.question}` }),
+  // v9.95.2（第五段 P1）：两融 AI 情绪研判 —— 基于真实两融数据判断融资客情绪
+  marginSentiment: (p) => ({ system: `你是A股两融情绪研判分析师（杠杆资金视角）。基于提供的真实两融数据判断融资客当前情绪与杠杆风险。只输出JSON对象。
+
+要求：
+1. verdict 三选一：偏多（融资客加杠杆看多）/ 中性 / 偏空（去杠杆看空）
+2. 依据：融资余额趋势、融资净买入方向与力度、融券余量变化（做空力量）
+3. points 最多 3 条，每条 ≤25 字，必须引用具体数字（如"融资净买入+120亿"）
+4. 数据日期是 T+1 披露（可能滞后 1-3 个交易日），confidence 需考虑数据滞后`, user:
+`【全市场两融数据】
+${p.prompt}
+
+输出严格JSON对象，格式：
+{"verdict":"偏多|中性|偏空","confidence":0-100,"points":["要点1","要点2","要点3"]}
+只返回JSON对象，无其他文字。` }),
+  // v9.95.3（第五段 P1）：个股聚合 AI 分析 —— 公告+新闻+舆情+政策+席位+涨停历史 一次研判
+  stockAggregate: (p) => ({ system: `你是A股个股全景分析引擎（游资+机构双视角）。基于提供的个股聚合数据（概念/新闻/公告/政策/舆情/席位/涨停历史）做综合研判。只输出JSON对象。
+
+要求：
+1. verdict 三选一：关注（有明确催化或资金逻辑）/ 回避（有明显风险）/ 中性
+2. thesis 核心逻辑 ≤120 字，必须引用具体数据（概念/涨停高度/席位净额/舆情方向）
+3. risks 最多 2 条，每条 ≤25 字
+4. watch 给出 1 条应盯防的观察点（≤25 字）
+5. 数据不足就明说，禁止编造`, user:
+`【个股聚合数据】
+${p.prompt}
+
+输出严格JSON对象，格式：
+{"verdict":"关注|回避|中性","thesis":"≤120字核心逻辑","risks":["风险1","风险2"],"watch":"观察点"}
+只返回JSON对象，无其他文字。` }),
   eventDeepDive: (p) => ({ system: SYSTEM_PREFIX, user:
 `你是A股事件深挖分析师。对以下已分级事件做影响推演，回答三个问题并给结论。
 

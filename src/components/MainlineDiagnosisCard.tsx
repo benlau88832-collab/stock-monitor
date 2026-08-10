@@ -9,6 +9,7 @@ import { calcMainlineStrength } from "../lib/mainlineScore";
 import { checkExitSignal } from "../lib/exitSignal";
 import type { MainlineGroup } from "../lib/stockToMainline";
 import DisclaimerTag from "./DisclaimerTag";
+import AskAI from "./AskAI";
 
 // ============== 结构化输出（PRD 7.2） ==============
 export interface MainlineDiagnosis {
@@ -221,6 +222,17 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
           </div>
         </div>
       )}
+
+      {/* v9.95.1（第五段 P2）：主线诊断卡问 AI —— 携带主线现场数据（验收缺口：模块问 AI 入口少主线卡） */}
+      <div className="flex justify-end border-t border-white/5 pt-1.5">
+        <AskAI compact
+          context={`主线：${mainline.mainline}（涨停${mainline.ztCount}家·最高${mainline.height}板·强度${mainline.strengthScore ?? "—"}分）
+板块涨幅${mainline.boardPct}% · 资金${(mainline.mainNet / 1e8).toFixed(1)}亿
+龙头：${mainline.leaders.map(l => `${l.role} ${l.name}(${l.code})`).join("、")}
+风险提示：${mainline.caution ?? "—"}`}
+          placeholder="问：这条主线还能上车吗？龙头怎么选？"
+        />
+      </div>
 
       {!loading && !diagnosis && !error && (
         <button onClick={load} className="rounded bg-violet-500/20 px-2 py-1 text-[10px] text-violet-200 hover:bg-violet-500/30">

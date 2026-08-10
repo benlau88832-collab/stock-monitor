@@ -7,7 +7,10 @@
 import { useMemo, useEffect, useRef, useState } from "react";
 import { runConsensus, type EvidenceSource, type DecisionVerdict } from "../lib/decisionBus";
 import { gateWeight } from "../lib/decisionBus";
-import type { AgentVerdict } from "../lib/aiAgent";
+import type { AgentVerdict, StockVerdict } from "../lib/aiAgent";
+// v9.95.5（第五段 P3）：裁决绑定逐标的 —— 主线 leaders 逐个 AI 裁决（复用 decideForStock 精简 ReAct + store 缓存）
+import { decideForStock } from "../lib/aiAgent";
+import { getStockAI } from "../lib/aiConclusionStore";
 import DisclaimerTag from "./DisclaimerTag";
 import PostButtons from "./PostButtons";
 // P1-1：用户画像摘要（AI 看到"你是谁"）
@@ -42,10 +45,38 @@ interface Props {
    *  破"backfillPostPnl 缺 code/price 恒拒 → 拍板真实盈亏永远积累中"的空转 */
   representCode?: string | null;
   representPrice?: number | null;
+  /** v9.95.5：主线 leaders（龙一/二/三）—— 逐标的裁决"哪辆车" */
+  leaders?: Array<{ code: string; name: string; role: string }> | null;
 }
 
-export default function DecisionVerdictCard({ mainline = "—", sources = [], signalGates = [], factorStats, agent = null, prevAction = null, agentMainline = null, hookCtx, representCode = null, representPrice = null }: Props) {
+export default function DecisionVerdictCard({ mainline = "—", sources = [], signalGates = [], factorStats, agent = null, prevAction = null, agentMainline = null, hookCtx, representCode = null, representPrice = null, leaders = null }: Props) {
   const [showEvidence, setShowEvidence] = useState(false);
+  // v9.95.5：逐标的裁决状态（code → StockVerdict；跑过的缓存进 store，重复查看不重烧 LLM）
+  const [stockVerdicts, setStockVerdicts] = useState<Record<string, StockVerdict>>({});
+  const [stockRunning, setStockRunning] = useState(false);
+  const runStockVerdicts = async () => {
+    if (!leaders || leaders.length === 0 || stockRunning) return;
+    setStockRunning(true);
+    const out: Record<string, StockVerdict> = {};
+    const mainlineCtx = { mainline, stage: verdict?.action ?? "—" };
+    for (const l of leaders) {
+      // 缓存命中（本会话/跨会话持久化）→ 不重烧 LLM
+      const cached = getStockAI(l.code);
+      if (cached) {
+        out[l.code] = { code: l.code, name: l.name, verdict: cached.verdict, reason: cached.reason, riskPoints: [], keyLevel: "", degraded: false };
+        continue;
+      }
+      try {
+        const v = await decideForStock(
+          { code: l.code, name: l.name, boardCount: 0, pct: 0, sealFund: 0, amount: 0, blastCount: 0, role: l.role },
+          mainlineCtx,
+        );
+        out[l.code] = v;
+      } catch { /* 单只失败不阻塞其余 */ }
+    }
+    setStockVerdicts(out);
+    setStockRunning(false);
+  };
   // P0-1：记录最后一次 decision_log 的 ts（供 PostButtons 幂等用）
   const aiLogTsRef = useRef<string | null>(null);
   const verdict: DecisionVerdict | null = useMemo(() => {
@@ -341,6 +372,48 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
           code={representCode ?? null}
           priceAtPost={representPrice ?? null}
         />
+      )}
+
+      {/* v9.95.5（第五段 P3）：逐标的裁决 —— 主线"哪辆车"可买（leaders 逐个精简 ReAct，缓存命中不重跑） */}
+      {leaders && leaders.length > 0 && (
+        <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-950/10 p-2.5 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-fuchsia-300">🎯 逐标的裁决（{mainline}）</span>
+            <button
+              onClick={runStockVerdicts}
+              disabled={stockRunning}
+              className="rounded bg-fuchsia-500/20 px-2 py-0.5 text-[11px] text-fuchsia-200 hover:bg-fuchsia-500/30 disabled:opacity-50"
+            >
+              {stockRunning ? "裁决中…" : Object.keys(stockVerdicts).length > 0 ? "重新裁决" : "AI 逐只裁决"}
+            </button>
+          </div>
+          {Object.keys(stockVerdicts).length > 0 ? (
+            <div className="space-y-1">
+              {leaders.map(l => {
+                const v = stockVerdicts[l.code];
+                if (!v) return null;
+                return (
+                  <div key={l.code} className="flex items-start gap-2 rounded bg-black/20 px-2 py-1.5 text-[11px]">
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-black text-[10px] ${
+                      v.verdict === "可买" ? "bg-emerald-500/25 text-emerald-300"
+                      : v.verdict === "谨慎" ? "bg-amber-500/25 text-amber-300"
+                      : "bg-rose-500/25 text-rose-300"
+                    }`}>{v.verdict}</span>
+                    <div className="min-w-0">
+                      <span className="font-semibold text-slate-200">{l.name}（{l.code}）</span>
+                      <span className="ml-1 text-[10px] text-slate-500">{l.role}</span>
+                      <div className="text-slate-400">{v.reason}</div>
+                      {v.keyLevel && <div className="text-sky-300/80">👀 {v.keyLevel}</div>}
+                      {v.degraded && <span className="text-[10px] text-slate-600">（规则版）</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-[10px] text-slate-500">点按钮对龙一/二/三逐个 AI 裁决（已裁决过的自动读缓存不重复烧配额）</div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -6,6 +6,8 @@
 import { useEffect, useState, useMemo, memo } from "react";
 import { ComposedChart, Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend, Cell } from "recharts";
 import { fetchMarginHistory, type MarginHistoryRow } from "../lib/margin";
+// v9.95.2（第五段 P1）：两融 AI 情绪研判
+import { judgeMarginSentiment, type MarginSentimentLLMResult } from "../lib/marginAI";
 
 // 顶部卡切换区间（用户截图里的 3M/6M/1Y/3Y 风格）
 const TOP_RANGES = [
@@ -40,6 +42,9 @@ function deltaText(curr: number | undefined, prev: number | undefined) {
 function MarginPanelImpl() {
   const [history, setHistory] = useState<MarginHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // v9.95.2：两融 AI 情绪研判状态
+  const [marginAI, setMarginAI] = useState<MarginSentimentLLMResult | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
   const [topRange, setTopRange] = useState(90);    // 顶部 4 卡用 1 月累计
   const [chartRange, setChartRange] = useState(90); // 主图/副图用 3M
 
@@ -49,6 +54,8 @@ function MarginPanelImpl() {
       if (cancelled) return;
       setHistory(rows);
       setLoading(false);
+      // v9.95.2：两融数据到位后自动触发一次 AI 情绪研判（结果登记 store 全站可见）
+      judgeMarginSentiment(rows).then(r => { if (!cancelled) setMarginAI(r); }).catch(() => {});
     });
     return () => { cancelled = true; };
   }, []);
@@ -248,6 +255,52 @@ function MarginPanelImpl() {
             </ResponsiveContainer>
           )}
         </div>
+      </div>
+
+      {/* v9.95.2（第五段 P1）：两融 AI 情绪研判 —— 基于全市场两融真实数据（T+1），LLM 判断融资客情绪 */}
+      <div className="rounded-xl border border-violet-500/20 bg-violet-950/10 p-3">
+        <div className="flex items-center justify-between">
+          <div className="text-xs font-bold text-violet-300">🤖 两融情绪研判（AI）</div>
+          <div className="flex items-center gap-2">
+            {marginAI && (
+              <span className="text-[10px] text-slate-500">{marginAI.fromLLM ? "LLM 研判" : "规则兜底"}</span>
+            )}
+            <button
+              onClick={async () => {
+                if (aiBusy || history.length === 0) return;
+                setAiBusy(true);
+                try { setMarginAI(await judgeMarginSentiment(history)); } catch { /* 静默 */ }
+                setAiBusy(false);
+              }}
+              className="rounded bg-violet-500/20 px-2 py-0.5 text-[11px] text-violet-200 hover:bg-violet-500/30 disabled:opacity-50"
+              disabled={aiBusy || history.length === 0}
+            >
+              {aiBusy ? "研判中…" : "重新研判"}
+            </button>
+          </div>
+        </div>
+        {marginAI ? (
+          <div className="mt-2 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className={`rounded px-2 py-0.5 text-xs font-black ${
+                marginAI.verdict === "偏多" ? "bg-rose-500/25 text-rose-300" :
+                marginAI.verdict === "偏空" ? "bg-emerald-500/25 text-emerald-300" :
+                "bg-slate-500/20 text-slate-300"
+              }`}>
+                {marginAI.verdict === "偏多" ? "▲ 偏多" : marginAI.verdict === "偏空" ? "▼ 偏空" : "— 中性"}
+              </span>
+              <span className="text-[11px] text-slate-400">置信度 <b className="text-violet-300">{marginAI.confidence}%</b></span>
+              {latest && <span className="text-[10px] text-slate-600">数据截至 {latest.date}</span>}
+            </div>
+            {marginAI.points.length > 0 && (
+              <ul className="list-disc pl-5 text-[11px] text-slate-300 space-y-0.5">
+                {marginAI.points.map((pt, i) => <li key={i}>{pt}</li>)}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <div className="mt-2 text-[11px] text-slate-500">{aiBusy ? "AI 研判中…" : "两融数据到位后自动研判融资客情绪"}</div>
+        )}
       </div>
 
       {/* 数据时效说明 */}

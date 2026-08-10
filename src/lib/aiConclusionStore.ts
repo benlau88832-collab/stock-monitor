@@ -15,8 +15,42 @@ export interface StockAIConclusion {
 
 const stockMap = new Map<string, StockAIConclusion>();
 
+// ============== v9.95.1（第五段 P2）：localStorage 持久化 —— 刷新不丢 ==============
+// 背景：验收发现纯内存 Map，刷新即丢；结论跨会话应保留（同一交易日复用，防重复烧 LLM）
+// 存储键：ai_stock_conclusions（个股裁决）/ ai_module_results（模块 AI 结果）
+// 限量：个股 ≤100、模块 ≤200（防 localStorage 5MB 溢出）；set/prune 后同步落盘
+const LS_STOCK_KEY = "ai_stock_conclusions";
+const LS_RESULT_KEY = "ai_module_results";
+const STOCK_MAX = 100;
+const RESULT_MAX = 200;
+
+function persistStockAI(): void {
+  try { localStorage.setItem(LS_STOCK_KEY, JSON.stringify([...stockMap.values()].slice(-STOCK_MAX))); } catch { /* 配额满/隐私模式静默 */ }
+}
+
+function persistAIResults(): void {
+  try { localStorage.setItem(LS_RESULT_KEY, JSON.stringify([...resultMap.values()].slice(-RESULT_MAX))); } catch { /* 静默 */ }
+}
+
+function restoreFromStorage(): void {
+  try {
+    const s = localStorage.getItem(LS_STOCK_KEY);
+    if (s) {
+      const arr = JSON.parse(s) as StockAIConclusion[];
+      for (const c of arr) if (c?.code && c?.verdict && typeof c.ts === "number") stockMap.set(c.code, c);
+    }
+    const r = localStorage.getItem(LS_RESULT_KEY);
+    if (r) {
+      const arr = JSON.parse(r) as AIResultEntry[];
+      for (const e of arr) if (e?.type && e?.key && typeof e.ts === "number") resultMap.set(`${e.type}:${e.key}`, e);
+    }
+  } catch { /* 损坏数据忽略 */ }
+}
+// 注：restoreFromStorage 在文件末尾调用（resultMap 定义于文件后部，TDZ 约束）
+
 export function setStockAI(c: StockAIConclusion): void {
   stockMap.set(c.code, c);
+  persistStockAI();
 }
 
 export function getStockAI(code: string): StockAIConclusion | undefined {
@@ -33,6 +67,7 @@ export function pruneStockAI(maxAgeMs = 24 * 3600 * 1000): void {
   for (const [code, v] of stockMap) {
     if (now - v.ts > maxAgeMs) stockMap.delete(code);
   }
+  persistStockAI();
 }
 
 // ============== v9.92.0：通用 AI 结果登记（模块结论全站可见） ==============
@@ -43,7 +78,8 @@ export type AIResultType =
   | "stockNewsScore"   // 个股消息评分（StockWatchlist 消息区）
   | "factorAttribution"// 因子失效归因（FactorHealthPanel）
   | "eventDeepDive"    // 事件深挖（主题行"问AI"）
-  | "themeDiagnosis";  // 主线诊断（MainlineDiagnosisCard）
+  | "themeDiagnosis"   // 主线诊断（MainlineDiagnosisCard）
+  | "marginSentiment"; // v9.95.2：两融情绪研判（MarginPanel）
 
 export interface AIResultEntry<T = unknown> {
   type: AIResultType;
@@ -60,6 +96,7 @@ const resultMap = new Map<string, AIResultEntry>();
 /** 登记模块 AI 结果（同 type+key 覆盖） */
 export function setAIResult<T>(type: AIResultType, key: string, value: T, from?: string): void {
   resultMap.set(`${type}:${key}`, { type, key, value, ts: Date.now(), from });
+  persistAIResults();
 }
 
 /** 读取模块 AI 结果（无则 undefined） */
@@ -79,4 +116,8 @@ export function pruneAIResults(maxAgeMs = 24 * 3600 * 1000): void {
   for (const [k, v] of resultMap) {
     if (now - v.ts > maxAgeMs) resultMap.delete(k);
   }
+  persistAIResults();
 }
+
+// 模块加载时恢复持久化结论（两个 Map 均已初始化后执行）
+restoreFromStorage();

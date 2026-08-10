@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, memo } from "react";
 import MarketOverview from "./MarketOverview";
-// v9.48（D2）：EmotionCycleCard 移除 —— 情绪/涨停/炸板/溢价/晋级率已在温度条+总览+闸门多处展示，去冗余
+// v9.95.1（第五段 P2）：情绪周期雷达卡重新接线 —— v9.48 移除成死代码，验收缺口"周期阶段化（进度条 5 段）"补回
+import EmotionCycleCard from "./EmotionCycleCard";
+import type { EmotionCycleInput } from "../lib/emotionCycle";
 import DisciplinePanel from "./DisciplinePanel";
 import ReviewPanel from "./ReviewPanel";
 import AuctionBoard from "./AuctionBoard";
@@ -1056,6 +1058,8 @@ export default function Dashboard({
             const z = (overview?.limitPool?.rawZTPool ?? []).find((s: any) => String(s.c) === String(lead.code));
             return z && Number(z.p) > 0 ? Number(z.p) / 1000 : null;
           })()}
+          // v9.95.5（第五段 P3）：逐标的裁决 —— 主线 leaders（龙一/二/三）传决策卡
+          leaders={battlePlan?.candidates?.[0]?.leaders?.map(l => ({ code: l.code, name: l.name, role: l.role })) ?? null}
         />
         {/* v10-3（P0）：选股清单紧贴裁决 —— "可上车→买这些"一气呵成，中间不插 BattlePlan/LimitTempBar */}
         <StockPickList
@@ -1130,6 +1134,22 @@ export default function Dashboard({
           )}
           {/* v9.48 D4：核心温度条提到决策区下方（盘中核心进阶指标，D2 已去 EmotionCycle 冗余） */}
           <LimitTempBar overview={overview} />
+          {/* v9.95.1（第五段 P2）：情绪周期雷达卡重新接线 —— 五档周期（启动/主升/分歧/退潮/冰点）+证据链+退潮预警；
+              昨日高度/昨日炸板率 overview 未透传 → null（computeEmotionCycle 容忍缺项） */}
+          {overview && overview.limitPool && (() => {
+            const cycleInput: EmotionCycleInput = {
+              sentiment: overview.sentiment,
+              ztCount: overview.limitPool.limitUpCount,
+              ztCountYesterday: yesterdayZt && yesterdayZt.length > 0 ? yesterdayZt.length : null,
+              maxBoardHeight: overview.maxBoardHeight,
+              maxBoardYesterday: null,
+              blastedRate: overview.limitPool.blastedRate,
+              blastedRatePrev: null,
+              premiumAvg: overview.premiumAvg,
+              promotionRate: overview.promotionRate,
+            };
+            return <EmotionCycleCard input={cycleInput} premiumDist={overview.premiumDist ?? null} />;
+          })()}
           {/* v10-4（P1）：作战卡内嵌 AI 裁决徽章（每条主线显示 LLM 结论） */}
           <BattlePlan data={battlePlan ?? null} agentResults={agentResults} />
           {/* v10-3：StockPickList 已上移至裁决区（见上），此处不再重复渲染 */}
