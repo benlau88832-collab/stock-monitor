@@ -38,6 +38,7 @@ export type { WatchStock };
 
 interface InfoItem {
   type: "news" | "announcement" | "fund";
+  code: string; // v9.92.3-fix：归属股票代码（防信息流切换串股）
   title: string; summary: string; time: string; url: string;
   tag: string; tagColor: string;
 }
@@ -351,10 +352,16 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   const stockNewsDoneRef = useRef<string | null>(null);
   useEffect(() => {
     if (!selected) { setStockNewsAI(null); stockNewsDoneRef.current = null; return; }
+    // v9.92.3-fix（用户报障）：切换个股立即清空旧研判 —— 原逻辑用旧股票信息流给新股票评分（串股：
+    //   "消息面AI研判：50分·中性·失效条件：新闻全部涉及上海电力"显示在别的股票上）
+    setStockNewsAI(null);
+    // 归属校验：infoItems 必须属于当前 selected（旧信息流未清空前不评分）
+    if (infoItems.length === 0 || infoItems[0]?.code !== selected) return;
+    if (stockNewsDoneRef.current === selected) return;
     const news = infoItems
       .filter(i => i.type === "news" || i.type === "announcement")
       .slice(0, 6).map(i => i.title);
-    if (news.length === 0 || stockNewsDoneRef.current === selected) return;
+    if (news.length === 0) return;
     stockNewsDoneRef.current = selected;
     let alive = true;
     scoreStockNews([{ code: selected, name: stocks[selected]?.name ?? selected, news }]).then(res => {
@@ -365,7 +372,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
     }).catch(() => {});
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, infoItems.length > 0]);
+  }, [selected, infoItems]);
   const [followUpLoading, setFollowUpLoading] = useState(false);
   // 融资融券（按代码缓存展示，T+1 数据 5 分钟缓存）
   const [marginInfo, setMarginInfo] = useState<Record<string, StockMarginInfo | null>>({});
@@ -468,7 +475,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
       const isLU = stock.pct >= limitPct - 0.2;
       const isLD = stock.pct <= -(limitPct - 0.2);
       items.push({
-        type: "fund", title: `${stock.name} 实时资金面`,
+        type: "fund", code, title: `${stock.name} 实时资金面`,
         summary: `现价${stock.price} | ${fmtPct(stock.pct)} | 主力${fmtMoney(stock.mainNet)}(${fmtPct(stock.mainNetPct)}) | 5日${fmtMoney(stock.mainNet5d)} | 10日${fmtMoney(stock.mainNet10d)} | 换手${stock.turnoverRate}% | 量比${stock.volumeRatio}${isLU ? " | ⚡涨停" : ""}${isLD ? " | ⚡跌停" : ""}`,
         time: new Date().toISOString().slice(11, 16), url: stockRealUrl(code),
         tag: "资金面", tagColor: "bg-slate-500/20 text-slate-300",
@@ -477,7 +484,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
       items.push({
         type: "fund", title: mainOut ? "⚠️ 主力净流出 + 散户净流入（结构偏弱）" : "资金结构正常",
         summary: `超大单${fmtMoney(stock.extraLargeNet)} | 大单${fmtMoney(stock.largeNet)} | 中单${fmtMoney(stock.mediumNet)} | 小单${fmtMoney(stock.smallNet)}`,
-        time: "", url: stockRealUrl(code),
+        time: "", url: stockRealUrl(code), code,
         tag: mainOut ? "风险信号" : "资金结构",
         tagColor: mainOut ? "bg-rose-500/20 text-rose-300" : "bg-slate-500/20 text-slate-300",
       });
@@ -489,14 +496,14 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
     for (const n of news) {
       const isNeg = /下跌|利空|暴雷|退市|亏损|减持|违规|处罚|ST|风险|预警|立案|问询/.test(n.title + n.summary);
       const isPos = /利好|上涨|增持|分红|业绩预增|中标|突破|新高|扭亏|回购/.test(n.title + n.summary);
-      items.push({ type: "news", title: n.title, summary: n.summary.slice(0, 100),
+      items.push({ type: "news", code, title: n.title, summary: n.summary.slice(0, 100),
         time: n.time.slice(5, 16), url: n.url,
         tag: isNeg ? "利空" : isPos ? "利好" : "消息面",
         tagColor: isNeg ? "bg-rose-500/20 text-rose-300" : isPos ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300",
       });
     }
     for (const a of anns) {
-      items.push({ type: "announcement", title: a.title, summary: a.columnName ? `[${a.columnName}]` : "",
+      items.push({ type: "announcement", code, title: a.title, summary: a.columnName ? `[${a.columnName}]` : "",
         time: a.time.slice(5, 16), url: a.url, tag: "公告", tagColor: "bg-amber-500/20 text-amber-300",
       });
     }

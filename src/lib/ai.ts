@@ -704,8 +704,9 @@ export async function callAgentChat(
   // 全站 ReAct（AIConsole/决策 Agent）全部 401 降级"AI 服务异常"，用户实测复现
   const token = await getLocalToken();
   // v9.83.2：35s→50s（服务端 45s 兜底，DeepSeek 推理模型长思考）
+  // v9.92.3-fix：50s→95s（服务端放宽到 90s，前端 95s 兜底防截断）
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 50_000);
+  const timer = setTimeout(() => ctrl.abort(), 95_000);
   try {
     const resp = await fetch("/api/ai/call", {
       method: "POST",

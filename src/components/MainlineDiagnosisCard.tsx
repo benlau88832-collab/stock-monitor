@@ -33,6 +33,30 @@ interface Props {
   onClose: () => void;
 }
 
+/**
+ * v9.92.3-fix（用户报障：诊断"新能源车"却输出医药股核心）：LLM leader 输出硬约束。
+ * 核心/跟风/蹭热点只能引用输入 leaders 名单内的股票名（防幻觉），剔除后为空用输入 leaders 兜底。
+ */
+export function constrainLeaders(
+  leaders: Array<{ name: string }>,
+  core?: string[],
+  follower?: string[],
+  hype?: string[],
+): { core: string[]; follower: string[]; hype: string[] } {
+  const known = new Set(leaders.map(l => l.name));
+  const clean = (arr: string[] | undefined): string[] =>
+    Array.isArray(arr) ? arr.filter(n => known.has(n)) : [];
+  const coreC = clean(core);
+  const followerC = clean(follower);
+  const hypeC = clean(hype);
+  const fallbackNames = leaders.map(l => l.name);
+  return {
+    core: coreC.length > 0 ? coreC : fallbackNames.slice(0, 1),
+    follower: followerC.length > 0 ? followerC : fallbackNames.slice(1, 3),
+    hype: hypeC.length > 0 ? hypeC : [],
+  };
+}
+
 export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
   const [diagnosis, setDiagnosis] = useState<MainlineDiagnosis | null>(null);
   const [loading, setLoading] = useState(false);
@@ -76,7 +100,10 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
       if (!result.degraded) {
         const parsed = parseLLMJSON<MainlineDiagnosis>(result.text, schemaForTask("mainlineDiagnosis"));
         if (parsed && parsed.mainline && parsed.strength_score != null) {
-          setDiagnosis(parsed);
+          // v9.92.3-fix（用户报障）：诊断"新能源车"却输出医药股核心 —— LLM 幻觉。
+          // 硬约束：leader 字段只能引用输入数据（mainline.leaders 名单），见 constrainLeaders
+          const ldr = (parsed as { leader?: { core?: string[]; follower?: string[]; hype?: string[] } }).leader;
+          setDiagnosis({ ...parsed, leader: constrainLeaders(mainline.leaders, ldr?.core, ldr?.follower, ldr?.hype) });
           return;
         }
         console.warn("[MainlineDiagnosis] JSON 解析失败，降级规则引擎:", result.text.slice(0, 200));

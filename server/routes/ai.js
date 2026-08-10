@@ -165,7 +165,8 @@ module.exports = function aiRoutes(app) {
 
       // v9.67：30s → 20s（PM2 日志反复 upstream timeout 30s，缩短超时让前端快速拿到降级响应而不是 35s 卡死）
       // v9.83.2：20s → 45s —— 切换到 DeepSeek 推理模型后思考会占时间，20s 会把正常长思考截成 upstream timeout
-      const json = await postJSON(baseUrl, body, 45000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
+      // v9.92.3-fix（用户报障：提问'现在可以加仓吗'超时降级）：45s → 90s —— DeepSeek 推理+代理 127.0.0.1:7897 慢，45s 仍截断正常长思考
+      const json = await postJSON(baseUrl, body, 90000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
       const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
       // v9.41：Agent 需要 tool_calls（LLM 决定下一步调哪个工具）
       const toolCalls = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0

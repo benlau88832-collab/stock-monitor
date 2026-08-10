@@ -466,7 +466,7 @@ export async function runAssistantAgent(
   } else if (rateLimitedFlag) {
     reply = `⏸ AI 配额受限（达 ${maxRounds > 5 ? "深度" : "标准"}桶上限）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。可稍后重试，或查看工具轨迹中已调用的工具结果。`;
   } else if (reason === "timeout") {
-    reply = `⏸ AI 上游超时（20s 内未返回，妙想 API 经代理 127.0.0.1:7897 调用慢）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。建议重试，或临时关闭代理后再试。`;
+    reply = `⏸ AI 上游超时（90s 内未返回，DeepSeek 经代理 127.0.0.1:7897 调用慢）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。建议重试，或临时关闭代理后再试。`;
   } else if (reason === "network") {
     reply = `⏸ AI 网络不通（无法连接到妙想 API）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。检查网络/代理后重试，或直接查看各 Tab 的实时数据。`;
   } else {
