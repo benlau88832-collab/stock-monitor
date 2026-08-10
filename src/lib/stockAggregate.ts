@@ -4,6 +4,7 @@
 // 背景：端点 v9.84 已建但全仓库无消费方（验收缺口），本模块补消费 + AI 分析管线
 // ============================================================
 import { callAI, type AIResult } from "./ai";
+import { getAIResult, setAIResult } from "./aiConclusionStore";
 
 export interface StockAggregateData {
   code: string;
@@ -18,6 +19,19 @@ export interface StockAggregateData {
   policy: Array<{ title: string; time: string }>;
   /** v9.95.3：舆情统计（news sentiment 聚合） */
   sentimentSummary: { bullish: number; bearish: number; neutral: number } | null;
+  /** v9.97.0（批次 2）：技术指标快照 + 信号数组 */
+  indicators?: {
+    signals: Array<{ name: string; value: string; bias: "bull" | "bear" | "neutral" }>;
+    snapshot: Record<string, unknown> | null;
+    error?: string | null;
+  } | null;
+  /** v9.97.0：日K（近 120 根，K线卡用） */
+  kline?: Array<{ date: string; open: number; close: number; high: number; low: number; volume: number }>;
+  /** v9.97.0：舆情词典窗口统计（近 7/30 日） */
+  sentimentWindows?: {
+    window7: { days: number; total: number; positive: number; negative: number; neutral: number; trend: number };
+    window30: { days: number; total: number; positive: number; negative: number; neutral: number; trend: number };
+  } | null;
   asOf: string;
 }
 
@@ -27,6 +41,10 @@ export interface StockAggregateLLMResult {
   risks: string[];
   watch: string;
   fromLLM: boolean;
+  /** v9.97.0：缓存命中标记（6h 窗口内复用） */
+  cached?: boolean;
+  /** v9.97.0：结论生成时基准价 */
+  basePrice?: number;
 }
 
 /** 拉取聚合端点（失败返回 null） */
@@ -83,8 +101,26 @@ function ruleFallback(d: StockAggregateData): StockAggregateLLMResult {
   return { verdict: "中性", thesis: "规则版（LLM不可用）：数据面信号不明确", risks: [], watch: "", fromLLM: false };
 }
 
-/** 聚合 AI 综合研判：LLM 优先，失败规则兜底 */
-export async function judgeStockAggregate(d: StockAggregateData): Promise<StockAggregateLLMResult> {
+// v9.97.0（批次 2，tinavi aiAnalysis 对照）：6h 缓存窗口 + force 刷新 + basePrice 基准价
+export const AGGREGATE_CACHE_MS = 6 * 3600 * 1000;
+
+/**
+ * 聚合 AI 综合研判：LLM 优先，失败规则兜底。
+ * @param opts.force 强制刷新（跳过 6h 缓存窗口）
+ * @param opts.basePrice 结论生成时基准价（落 aiConclusionStore 防过期误用）
+ */
+export async function judgeStockAggregate(
+  d: StockAggregateData,
+  opts: { force?: boolean; basePrice?: number } = {},
+): Promise<StockAggregateLLMResult & { cached?: boolean; basePrice?: number }> {
+  // 缓存窗口：同 code 6h 内已有结论且非 force → 直接复用（不重烧 LLM）
+  if (!opts.force) {
+    const cached = getAIResult("stockAggregate", d.code);
+    if (cached && Date.now() - cached.ts < AGGREGATE_CACHE_MS && cached.value && typeof cached.value === "object") {
+      const v = cached.value as StockAggregateLLMResult;
+      return { ...v, cached: true, basePrice: cached.basePrice };
+    }
+  }
   const prompt = buildAggregatePrompt(d);
   let result: AIResult;
   try {
@@ -94,12 +130,15 @@ export async function judgeStockAggregate(d: StockAggregateData): Promise<StockA
   try {
     const parsed = JSON.parse(result.text) as { verdict?: string; thesis?: string; risks?: unknown; watch?: string };
     const verdict = ["关注", "回避", "中性"].includes(parsed.verdict ?? "") ? parsed.verdict as StockAggregateLLMResult["verdict"] : "中性";
-    return {
+    const out: StockAggregateLLMResult & { basePrice?: number } = {
       verdict,
       thesis: String(parsed.thesis ?? "").slice(0, 140),
       risks: Array.isArray(parsed.risks) ? parsed.risks.slice(0, 2).map(String) : [],
       watch: String(parsed.watch ?? "").slice(0, 30),
       fromLLM: true,
+      basePrice: opts.basePrice,
     };
+    try { setAIResult("stockAggregate", d.code, { verdict: out.verdict, thesis: out.thesis, risks: out.risks, watch: out.watch }, "auto", opts.basePrice); } catch { /* 静默 */ }
+    return out;
   } catch { return ruleFallback(d); }
 }

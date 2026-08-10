@@ -10,6 +10,8 @@ import { fetchStocksBoards } from "../lib/stockBoards";
 import { scoreStockNews, type StockNewsLLMResult } from "../lib/llmSignals";
 // v9.95.3（第五段 P1）：个股聚合器消费方（全景端点 + AI 综合研判）
 import { fetchStockAggregate, judgeStockAggregate, type StockAggregateData, type StockAggregateLLMResult } from "../lib/stockAggregate";
+// v9.97.0（批次 2）：K线卡（手绘蜡烛 6 周期）
+import KlineCard from "./KlineCard";
 import { setAIResult } from "../lib/aiConclusionStore";
 import { classifyStock, type StockClassification } from "../lib/classifyStock";
 
@@ -396,7 +398,8 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
         if (!alive || code !== selected) return;
         if (d) {
           setAggData(d);
-          const ai = await judgeStockAggregate(d);
+          // v9.97.0：basePrice 传现价（防过期结论误用——裁决时价格基准）
+          const ai = await judgeStockAggregate(d, { basePrice: stocks[code]?.price ?? undefined });
           if (alive && code === selected) setAggAI(ai);
         }
       } catch { /* 聚合失败不阻塞信息流 */ }
@@ -888,43 +891,117 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
             </div>
           )}
 
-          {/* v9.95.3（第五段 P1）：个股全景聚合卡 —— 公告+新闻+舆情+政策+席位+涨停历史 → AI 综合研判 */}
+          {/* v9.97.0（批次 2）：个股聚合深度页 —— 12 列栅格（tinavi 对照：行情 3/K线 5/AI 4 + 技术 4/舆情 5/数据状态 3） */}
           {(aggData || aggLoading) && selected && (
-            <div className="rounded-xl border border-sky-500/20 bg-sky-950/10 p-2.5 space-y-1.5">
+            <div className="rounded-xl border border-sky-500/20 bg-sky-950/10 p-2.5 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-sky-300">🔬 个股全景聚合</span>
+                <span className="text-xs font-bold text-sky-300">🔬 个股聚合深度页</span>
                 <span className="text-[10px] text-slate-500">{aggLoading ? "聚合中…" : `截至 ${aggData?.asOf ?? ""}`}</span>
               </div>
               {aggData && (
-                <div className="text-[11px] text-slate-300 space-y-1">
-                  <div>
-                    概念：<span className="text-sky-200">{aggData.concepts?.themes?.join("、") ?? aggData.concepts?.allBoards?.join("、") ?? "无"}</span>
-                    {aggData.concepts?.hybk ? <span className="text-slate-500">（{aggData.concepts.hybk}）</span> : null}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-2">
+                  {/* 行情卡（3 列）—— 复用 stocks 实时数据 */}
+                  <div className="lg:col-span-3 rounded-lg border border-white/10 bg-black/20 p-2">
+                    <div className="text-[10px] text-slate-500">行情</div>
+                    {(() => {
+                      const st = stocks[selected ?? ""];
+                      if (!st) return <div className="text-[10px] text-slate-600 mt-1">—</div>;
+                      return (
+                        <div className="mt-1 space-y-0.5 text-[11px]">
+                          <div className={`text-lg font-black ${st.pct >= 0 ? "text-rose-300" : "text-emerald-300"}`}>{st.price} <span className="text-[11px]">{st.pct >= 0 ? "+" : ""}{st.pct}%</span></div>
+                          <div className="text-slate-400">主力 {fmtMoney(st.mainNet)}（{st.mainNetPct != null ? `${st.mainNetPct}%` : "—"}）</div>
+                          <div className="text-slate-400">5日 {fmtMoney(st.mainNet5d)} · 10日 {fmtMoney(st.mainNet10d)}</div>
+                          <div className="text-slate-500">换手 {st.turnoverRate ?? "—"}% · 量比 {st.volumeRatio ?? "—"}</div>
+                        </div>
+                      );
+                    })()}
                   </div>
-                  <div className="text-[10px] text-slate-400">
-                    消息 {aggData.news?.length ?? 0} 条 · 公告 {aggData.announcements?.length ?? 0} 条
-                    {aggData.sentimentSummary ? ` · 舆情 利好${aggData.sentimentSummary.bullish}/利空${aggData.sentimentSummary.bearish}/中性${aggData.sentimentSummary.neutral}` : ""}
-                    {aggData.policy?.length ? ` · 政策 ${aggData.policy.length} 条` : ""}
-                    · 席位 {aggData.seats?.length ?? 0} 条 · 涨停 {aggData.ztHistory?.length ?? 0} 次
+                  {/* K线卡（5 列）—— 手绘蜡烛 6 周期 */}
+                  <div className="lg:col-span-5">
+                    <KlineCard klines={aggData.kline ?? []} name={aggData.concepts?.themes?.[0] ?? selected ?? ""} />
                   </div>
-                  {aggAI && (
-                    <div className={`rounded border px-2 py-1 text-[11px] ${
-                      aggAI.verdict === "关注" ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
-                      : aggAI.verdict === "回避" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                      : "border-white/10 bg-white/5 text-slate-300"
-                    }`}>
-                      🤖 聚合AI研判：<b>{aggAI.verdict === "关注" ? "▲ 关注" : aggAI.verdict === "回避" ? "▼ 回避" : "— 中性"}</b>
-                      <div className="mt-0.5">{aggAI.thesis}</div>
-                      {aggAI.risks.length > 0 && <div className="text-rose-300/80">⚠ {aggAI.risks.join("；")}</div>}
-                      {aggAI.watch && <div className="text-sky-300/80">👀 {aggAI.watch}</div>}
-                      {!aggAI.fromLLM && <span className="text-[10px] opacity-60">（规则版）</span>}
+                  {/* AI 研判卡（4 列）—— 与行情同权重（tinavi 关键决策） */}
+                  <div className="lg:col-span-4 rounded-lg border border-white/10 bg-black/20 p-2 flex flex-col">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-slate-500">🤖 AI 综合研判</span>
+                      <div className="flex items-center gap-1.5">
+                        {aggAI?.cached && <span className="text-[9px] text-slate-600">缓存≤6h</span>}
+                        {aggAI?.basePrice != null && <span className="text-[9px] text-slate-600">基准 {aggAI.basePrice}</span>}
+                        <button
+                          onClick={async () => {
+                            if (!aggData) return;
+                            const ai = await judgeStockAggregate(aggData, { force: true, basePrice: stocks[selected ?? ""]?.price ?? undefined });
+                            setAggAI(ai);
+                          }}
+                          className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] text-sky-200 hover:bg-sky-500/30"
+                        >force 刷新</button>
+                      </div>
                     </div>
-                  )}
+                    {aggAI ? (
+                      <div className={`mt-1 rounded border px-2 py-1.5 text-[11px] flex-1 ${
+                        aggAI.verdict === "关注" ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
+                        : aggAI.verdict === "回避" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                        : "border-white/10 bg-white/5 text-slate-300"
+                      }`}>
+                        <b>{aggAI.verdict === "关注" ? "▲ 关注" : aggAI.verdict === "回避" ? "▼ 回避" : "— 中性"}</b>
+                        <div className="mt-0.5 leading-relaxed">{aggAI.thesis}</div>
+                        {aggAI.risks.length > 0 && <div className="text-rose-300/80 mt-0.5">⚠ {aggAI.risks.join("；")}</div>}
+                        {aggAI.watch && <div className="text-sky-300/80 mt-0.5">👀 {aggAI.watch}</div>}
+                        {!aggAI.fromLLM && <span className="text-[10px] opacity-60">（规则版）</span>}
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex items-center justify-center text-[10px] text-slate-600">{aggLoading ? "AI 研判中…" : "数据到位后自动研判"}</div>
+                    )}
+                  </div>
+                  {/* 第二行：技术指标（4）+ 舆情窗口（5）+ 数据状态（3） */}
+                  <div className="lg:col-span-4 rounded-lg border border-white/10 bg-black/20 p-2">
+                    <div className="text-[10px] text-slate-500">📐 技术指标信号（服务端计算）</div>
+                    <div className="mt-1 space-y-0.5">
+                      {(aggData.indicators?.signals ?? []).length > 0 ? (aggData.indicators?.signals ?? []).map((sg: { name: string; value: string; bias: string }, i: number) => (
+                        <div key={i} className="flex items-center justify-between text-[10px]">
+                          <span className="text-slate-400">{sg.name}</span>
+                          <span className="text-slate-500 truncate ml-2">{sg.value}</span>
+                          <span className={`ml-1 rounded px-1 font-bold ${
+                            sg.bias === "bull" ? "bg-rose-500/20 text-rose-300"
+                            : sg.bias === "bear" ? "bg-emerald-500/20 text-emerald-300"
+                            : "bg-slate-500/20 text-slate-400"
+                          }`}>{sg.bias === "bull" ? "多" : sg.bias === "bear" ? "空" : "中"}</span>
+                        </div>
+                      )) : <div className="text-[10px] text-slate-600">{aggData.indicators?.error ?? "信号计算中…"}</div>}
+                    </div>
+                  </div>
+                  <div className="lg:col-span-5 rounded-lg border border-white/10 bg-black/20 p-2">
+                    <div className="text-[10px] text-slate-500">📰 舆情窗口（词典打分 · 近7/30日）</div>
+                    <div className="mt-1 grid grid-cols-2 gap-1.5 text-[10px]">
+                      {(["window7", "window30"] as const).map(wk => {
+                        const w = aggData.sentimentWindows?.[wk];
+                        if (!w) return null;
+                        return (
+                          <div key={wk} className="rounded bg-white/5 px-1.5 py-1">
+                            <div className="text-slate-500">{wk === "window7" ? "近7日" : "近30日"} · {w.total} 条</div>
+                            <div className="text-rose-300">利好 {w.positive}</div>
+                            <div className="text-emerald-300">利空 {w.negative}</div>
+                            <div className="text-slate-400">中性 {w.neutral} · 情绪 {w.trend >= 0 ? "+" : ""}{(w.trend * 100).toFixed(0)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="lg:col-span-3 rounded-lg border border-white/10 bg-black/20 p-2">
+                    <div className="text-[10px] text-slate-500">🗂 数据状态（tinavi DataStatusCard 对照）</div>
+                    <div className="mt-1 space-y-0.5 text-[10px] text-slate-400">
+                      <div>概念 {aggData.concepts ? "✓" : "—"} · 消息 {aggData.news?.length ?? 0} 条</div>
+                      <div>公告 {aggData.announcements?.length ?? 0} · 政策 {aggData.policy?.length ?? 0}</div>
+                      <div>席位 {aggData.seats?.length ?? 0} · 涨停 {aggData.ztHistory?.length ?? 0} 次</div>
+                      <div>日K {aggData.kline?.length ?? 0} 根 · 指标 {aggData.indicators?.signals?.length ?? 0} 信号</div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
           )}
 
+          {/* 信息流 */}
           {/* 信息流 */}
           <div ref={scrollRef} className="h-64 overflow-y-auto rounded-lg border border-white/10 bg-black/20 [scrollbar-width:thin]">
             {infoLoading ? (

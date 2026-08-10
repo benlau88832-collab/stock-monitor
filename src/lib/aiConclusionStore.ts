@@ -11,6 +11,8 @@ export interface StockAIConclusion {
   verdict: "可买" | "谨慎" | "回避";
   reason: string;
   ts: number;
+  /** v9.97.0（批次 2，tinavi basePrice 对照）：结论生成时的基准价（防过期结论误用——如裁决"可买"但股价已涨 20%） */
+  basePrice?: number;
 }
 
 const stockMap = new Map<string, StockAIConclusion>();
@@ -79,7 +81,8 @@ export type AIResultType =
   | "factorAttribution"// 因子失效归因（FactorHealthPanel）
   | "eventDeepDive"    // 事件深挖（主题行"问AI"）
   | "themeDiagnosis"   // 主线诊断（MainlineDiagnosisCard）
-  | "marginSentiment"; // v9.95.2：两融情绪研判（MarginPanel）
+  | "marginSentiment"  // v9.95.2：两融情绪研判（MarginPanel）
+  | "stockAggregate";  // v9.97.0：个股全景聚合研判（StockWatchlist 聚合卡）
 
 export interface AIResultEntry<T = unknown> {
   type: AIResultType;
@@ -89,13 +92,15 @@ export interface AIResultEntry<T = unknown> {
   ts: number;
   /** v9.92.0：来源（"catalyst" 就地计算 / "askai" 手动询问 / "react" 对话内） */
   from?: string;
+  /** v9.97.0：结论生成时基准价（防过期误用） */
+  basePrice?: number;
 }
 
 const resultMap = new Map<string, AIResultEntry>();
 
-/** 登记模块 AI 结果（同 type+key 覆盖） */
-export function setAIResult<T>(type: AIResultType, key: string, value: T, from?: string): void {
-  resultMap.set(`${type}:${key}`, { type, key, value, ts: Date.now(), from });
+/** 登记模块 AI 结果（同 type+key 覆盖；v9.97.0 支持 basePrice 基准价） */
+export function setAIResult<T>(type: AIResultType, key: string, value: T, from?: string, basePrice?: number): void {
+  resultMap.set(`${type}:${key}`, { type, key, value, ts: Date.now(), from, basePrice });
   persistAIResults();
 }
 

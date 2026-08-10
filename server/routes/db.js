@@ -288,9 +288,17 @@ module.exports = function dbRoutes(app) {
       const daysAgo = new Date(bjNow.getTime() - 45 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
       // 各块并行且互不阻塞（某一源挂不影响其余）
-      const [conceptsR, newsR, annsR, reportsR, watchR, watchLogR, seatsR, ztR, policyR, sentimentR] = await Promise.allSettled([
+      const [conceptsR, nameR, newsR, annsR, reportsR, watchR, watchLogR, seatsR, ztR, policyR, sentimentR, indicatorsR, newsAllR] = await Promise.allSettled([
         getConcepts(pool, [code]),
-        pool.query("SELECT title,summary,boards,sentiment,stars,time,url FROM news WHERE code=$1", [code]),
+        // v9.97.0-fix：news 表 code 是东财文章 ID 而非股票代码 → 快讯按"股票名/代码"标题匹配（zt_snapshot 取名称）
+        (async () => {
+          const r = await pool.query(`SELECT data FROM zt_snapshot ORDER BY date DESC LIMIT 1`);
+          const snap = r.rows[0]?.data;
+          const poolArr = Array.isArray(snap) ? snap : snap?.pool;
+          const hit = (Array.isArray(poolArr) ? poolArr : []).find(p2 => String(p2?.c ?? p2?.code ?? "") === code);
+          return hit?.name ?? hit?.n ?? null;
+        })(),
+        pool.query("SELECT title,summary,boards,sentiment,stars,time,url FROM news WHERE 1=0", []),
         pool.query("SELECT art_code,stock_name,title,column_name,score,time,url FROM announcements WHERE stock_code=$1 ORDER BY time DESC LIMIT 20", [code]),
         pool.query("SELECT report_date,phase,summary_json,valuation_json,levels_json,full_text,created_at FROM research_reports WHERE code=$1 ORDER BY report_date DESC LIMIT 5", [code]),
         pool.query("SELECT code,name,buy_low,buy_high,stop_loss,trigger_pct,note,updated_at FROM price_watch WHERE code=$1 AND status='active'", [code]),
@@ -301,8 +309,31 @@ module.exports = function dbRoutes(app) {
         pool.query(`SELECT title,time FROM news
           WHERE (title ILIKE '%国务院%' OR title ILIKE '%央行%' OR title ILIKE '%证监会%' OR title ILIKE '%发改委%' OR title ILIKE '%财政部%' OR title ILIKE '%国常会%' OR title ILIKE '%降准%' OR title ILIKE '%降息%' OR title ILIKE '%资本市场%')
           AND time >= $1 ORDER BY time DESC LIMIT 5`, [new Date(Date.now() + 8 * 3600 * 1000 - 3 * 24 * 3600 * 1000).toISOString().slice(0, 10)]),
-        pool.query(`SELECT sentiment, count(*)::int AS cnt FROM news WHERE code=$1 AND sentiment IS NOT NULL GROUP BY sentiment`, [code]),
+        pool.query("SELECT 1", []),
+        // v9.97.0（批次 2）：技术指标快照 + 日K（服务端腾讯 fqkline）+ 舆情窗口统计（词典打分 7/30 日）
+        (async () => {
+          const { computeIndicatorsFor } = require("../lib/indicators");
+          return await computeIndicatorsFor(code);
+        })(),
+        pool.query("SELECT 1", []),
       ]);
+
+      // v9.97.0-fix：股票名（zt_snapshot）→ 快讯按名称匹配（news.code 是文章 ID 非股票代码）
+      const stockName = nameR.status === "fulfilled" ? nameR.value : null;
+      const nameLike = stockName ? `%${stockName}%` : null;
+      const newsRowsR = nameLike
+        ? await pool.query(
+            `SELECT title,summary,boards,sentiment,stars,time,url FROM news
+             WHERE title ILIKE $1 OR summary ILIKE $1 ORDER BY time DESC LIMIT 30`, [nameLike]).catch(() => ({ rows: [] }))
+        : { rows: [] };
+      const sentRowsR = nameLike
+        ? await pool.query(
+            `SELECT sentiment, count(*)::int AS cnt FROM news WHERE (title ILIKE $1 OR summary ILIKE $1) AND sentiment IS NOT NULL GROUP BY sentiment`, [nameLike]).catch(() => ({ rows: [] }))
+        : { rows: [] };
+      const newsAllRowsR = nameLike
+        ? await pool.query(
+            `SELECT title,time FROM news WHERE title ILIKE $1 OR summary ILIKE $1 ORDER BY time DESC LIMIT 200`, [nameLike]).catch(() => ({ rows: [] }))
+        : { rows: [] };
 
       // 概念
       const concepts = conceptsR.status === "fulfilled" && conceptsR.value[code]
@@ -345,7 +376,7 @@ module.exports = function dbRoutes(app) {
       res.json({
         code,
         concepts,                                     // { themes, allBoards, hybk } | null
-        news: newsR.status === "fulfilled" ? newsR.value.rows : [],
+        news: newsRowsR.rows,
         announcements: annsR.status === "fulfilled" ? annsR.value.rows : [],
         reports: reportsR.status === "fulfilled" ? reportsR.value.rows : [],
         watch: watchR.status === "fulfilled" ? watchR.value.rows : [],
@@ -354,9 +385,14 @@ module.exports = function dbRoutes(app) {
         ztHistory,                                    // 近 30 个交易日涨停记录
         // v9.95.3（第五段 P1）：政策维度（近3日泛市场政策快讯）+ 舆情统计（news sentiment 聚合）
         policy: policyR.status === "fulfilled" ? policyR.value.rows : [],
-        sentimentSummary: sentimentR.status === "fulfilled"
-          ? { bullish: 0, bearish: 0, neutral: 0, ...Object.fromEntries(sentimentR.value.rows.map(r => [r.sentiment, r.cnt])) }
-          : null,
+        sentimentSummary: { bullish: 0, bearish: 0, neutral: 0, ...Object.fromEntries(sentRowsR.rows.map(r => [r.sentiment, r.cnt])) },
+        // v9.97.0（批次 2）：技术指标快照 + 日K（K线卡用）+ 舆情词典窗口统计（7/30 日）
+        indicators: indicatorsR.status === "fulfilled" ? indicatorsR.value : { signals: [], snapshot: null, error: "指标计算失败" },
+        kline: indicatorsR.status === "fulfilled" ? indicatorsR.value.klines : [],
+        sentimentWindows: (() => {
+          const { sentimentWindowStats } = require("../lib/keywordSentiment");
+          return { window7: sentimentWindowStats(newsAllRowsR.rows, 7), window30: sentimentWindowStats(newsAllRowsR.rows, 30) };
+        })(),
         asOf: todayStr,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
