@@ -42,7 +42,8 @@ export type AIResultType =
   | "themeNewsScore"   // 主题催化评分（EventClassifyPanel 主题行）
   | "stockNewsScore"   // 个股消息评分（StockWatchlist 消息区）
   | "factorAttribution"// 因子失效归因（FactorHealthPanel）
-  | "eventDeepDive";   // 事件深挖（主题行"问AI"）
+  | "eventDeepDive"    // 事件深挖（主题行"问AI"）
+  | "themeDiagnosis";  // 主线诊断（MainlineDiagnosisCard）
 
 export interface AIResultEntry<T = unknown> {
   type: AIResultType;

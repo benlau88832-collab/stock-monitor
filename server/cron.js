@@ -604,8 +604,9 @@ async function rankFastNewsStars(pool) {
     // v15-fix：t 含 "undefined" 且长度>10 会绕过兜底 → 显式判 includes("undefined")
     const t = `${n.date ?? ""} ${n.time ?? ""}`.trim();
     const finalTime = (!t.includes("undefined") && t.length > 10) ? t : new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 19).replace("T", " ");
+    const rawCode = String(n.code ?? "");
     return {
-      code: String(n.code ?? contentKey(`news_${n.title ?? ""}_${n.date ?? ""}_${n.time ?? ""}`)),
+      code: rawCode || contentKey(`news_${n.title ?? ""}_${n.date ?? ""}_${n.time ?? ""}`),
       title: n.title ?? "",
       summary: n.summary ?? "",
       sentiment: "neutral",
@@ -614,7 +615,9 @@ async function rankFastNewsStars(pool) {
       rankSource: "rule",
       isOverseas: /纳斯达克|道琼斯|恒生|港股|美股|比特币/.test((n.title || "") + (n.summary || "")),
       time: finalTime,
-      url: n.url ?? "",
+      // v9.93.1（用户报障：支撑新闻不可点击）：getFastNewsList 无 url 字段（实测 url 恒空），
+      // 用东财快讯 code 构造真实可跳转链接（实测 finance.eastmoney.com/a/{code}.html 200）
+      url: n.url || (rawCode ? `https://finance.eastmoney.com/a/${rawCode}.html` : ""),
       boards: [],
     };
   });
@@ -1607,7 +1610,9 @@ ${JSON.stringify(themes.map(t => ({
         // 3a. 主题归属过滤（内联 conceptGroupOf 判断：hybk/名称折叠到主题大类）
         const themeStocks = arr.filter(s => {
           const g = conceptGroupOf(String(s.hybk ?? ""));
-          const name = String(s.n ?? "");
+          // v9.93.3-fix：zt_snapshot 落库字段是 code/name（fetchZTPool 已 map），
+          // 原用接口原始 s.c/s.n → 恒空 → 龙头标的 code/name 空壳
+          const name = String(s.name ?? s.n ?? "");
           return g === th.name || name.includes(th.name) || String(s.hybk ?? "").includes(th.name);
         });
         // 3b. 排序选股（封单 > 连板 > 涨幅，取 2-3 只）
@@ -1615,7 +1620,7 @@ ${JSON.stringify(themes.map(t => ({
           .sort((a, b) => (b.fund ?? 0) - (a.fund ?? 0) || (b.lbc ?? 1) - (a.lbc ?? 1) || (b.zdp ?? 0) - (a.zdp ?? 0))
           .slice(0, 3)
           .map((s, i) => ({
-            code: String(s.c ?? ""), name: String(s.n ?? ""),
+            code: String(s.code ?? s.c ?? ""), name: String(s.name ?? s.n ?? ""),
             role: i === 0 ? "首选" : i === 1 ? "接力" : "低吸",
             correlation: 0, buyTrigger: `竞价/回踩企稳再考虑（主题热度${th.heat}）`, stopLoss: "跌破前低-5%", risk: "追高回落",
           }));
@@ -1632,7 +1637,7 @@ ${JSON.stringify(themes.map(t => ({
     let stockVerdicts = [];
     if (allPicks.length > 0) {
       const pickRows = allPicks.map(p => {
-        const s = (Array.isArray(arr) ? arr : []).find(x => String(x.c) === p.code);
+        const s = (Array.isArray(arr) ? arr : []).find(x => String(x.code ?? x.c) === p.code);
         return {
           theme: p.theme, code: p.code, name: p.name, role: p.role,
           boards: s ? String(s.lbc ?? 1) : "?", sealFund: s ? String(s.fund ?? "?") : "?", pct: s ? String(s.zdp ?? "?") : "?", industry: s ? String(s.hybk ?? "?") : "?",
@@ -1662,10 +1667,13 @@ correlation 必须基于行业归属（industry）与主题关联度判断，不
         const a = analyses.find(x => x.theme === t.name) ?? {};
         const rawPicks = (themePicks.get(t.name) ?? []).map(p => {
           const v = verdictMap.get(p.code) ?? {};
+          // v9.93.1（用户报障：无龙头标的）：LLM 失败时 correlation 恒 0 → 被下方 <0.5 全过滤 → picks 空。
+          // 规则兜底关联度（基于角色：首选/接力/低吸），保证龙头标的始终可见；LLM 成功时以 LLM 值为准
+          const ruleCorr = p.role === "首选" ? 0.7 : p.role === "接力" ? 0.6 : 0.5;
           return {
             ...p,
-            correlation: v.correlation ?? 0,
-            aiVerdict: v.verdict ?? "谨慎",
+            correlation: v.correlation ?? ruleCorr,
+            aiVerdict: v.verdict ?? (p.role === "首选" ? "可买" : "谨慎"),
             buyTrigger: v.buyTrigger ?? p.buyTrigger,
             stopLoss: v.stopLoss ?? p.stopLoss,
             risk: v.risk ?? p.risk,

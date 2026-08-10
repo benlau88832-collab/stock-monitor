@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef } from "react";
 import { fmtMoney, localDateStr } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
+import { matchSeatTag } from "../lib/seatProfiles";
 import AskAI from "./AskAI";
 import { isLocalServer, apiFetch } from "../lib/cloudStore";
 import { emit as alertEmit } from "../lib/alertBus";
@@ -26,6 +27,37 @@ export default function LhbCrossPanel({ overview }: { overview?: OverviewData | 
   const [lhbDate, setLhbDate] = useState<string | null>(null);
   // P0-5：已 emit 的交叉标的（组件生命周期内只报一次）
   const emittedRef = useRef<Set<string>>(new Set());
+  // v9.93.3（龙虎榜×席位合并深化）：席位台账（seats:日期 kv）→ 按股票聚合知名席位标签
+  const [seatMap, setSeatMap] = useState<Map<string, Array<{ deptName: string; direction: string; net: number }>>>(new Map());
+  useEffect(() => {
+    if (!isLocalServer()) return;
+    let alive = true;
+    (async () => {
+      try {
+        const m = new Map<string, Array<{ deptName: string; direction: string; net: number }>>();
+        for (let i = 0; i < 3; i++) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          const key = `seats:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          const r = await apiFetch(`/api/db/kv?key=${encodeURIComponent(key)}`);
+          if (!r.ok) continue;
+          const v = await r.json();
+          const list = v?.value;
+          const arr = Array.isArray(list) ? list : (list && typeof list === "object" && "__raw" in list ? (() => { try { return JSON.parse(String((list as any).__raw)); } catch { return []; } })() : []);
+          if (!Array.isArray(arr)) continue;
+          for (const seat of arr) {
+            if (!seat?.stockCode || !seat?.deptName) continue;
+            const code = String(seat.stockCode).replace(/^[A-Z]{2}/, "");
+            const arr2 = m.get(code) ?? [];
+            arr2.push({ deptName: String(seat.deptName), direction: String(seat.direction ?? ""), net: Number(seat.net ?? 0) });
+            m.set(code, arr2);
+          }
+        }
+        if (alive) setSeatMap(m);
+      } catch { /* 席位数据失败不阻塞交叉列表 */ }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     if (!isLocalServer()) return;
@@ -125,6 +157,20 @@ export default function LhbCrossPanel({ overview }: { overview?: OverviewData | 
             <span className="ml-auto shrink-0 truncate max-w-[200px] text-[10px] text-slate-500" title={it.explain}>
               {it.explain || ""}
             </span>
+            {/* v9.93.3：席位加持标签（章盟主/机构专用等知名席位；买卖方向） */}
+            {(() => {
+              const seats = seatMap.get(it.code) ?? [];
+              if (seats.length === 0) return null;
+              const tagged = seats.map(x => ({ ...x, tag: matchSeatTag(x.deptName) })).filter(x => x.tag);
+              const buys = seats.filter(x => x.direction === "买入" || x.net > 0).length;
+              const sells = seats.filter(x => x.direction === "卖出" || x.net < 0).length;
+              const tagLabels = [...new Set(tagged.map(x => x.tag!.label))].slice(0, 2);
+              return (
+                <span className="shrink-0 text-[10px] text-amber-300/90" title={`席位${seats.length}家（买${buys}/卖${sells}）${tagged.map(x => `${x.deptName}(${x.tag!.label})`).join("、")}`}>
+                  {tagLabels.length > 0 ? `${tagLabels.join("·")}` : ""}·{seats.length}席位
+                </span>
+              );
+            })()}
             {/* v9.92.1：龙虎榜×涨停行问AI —— 携带净买入/上榜原因 */}
             <AskAI compact code={it.code} name={it.name}
               context={`龙虎榜×涨停交叉：${it.name}(${it.code}) 今日涨停${it.pct.toFixed(1)}% 龙虎榜净买入${fmtMoney(it.netBuy)} 上榜原因：${it.explain || "—"}`}

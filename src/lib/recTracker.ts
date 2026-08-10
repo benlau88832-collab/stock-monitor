@@ -84,7 +84,8 @@ export async function runAttribution(today: string): Promise<void> {
   for (const r of pending) {
     if (r.type !== "stock") continue;
     const daysSince = Math.floor((now - new Date(r.date + "T00:00:00+08:00").getTime()) / 86400000);
-    if (daysSince >= 2 && (!r.backfilled || r.pctT3 == null)) codesToFetch.add(r.code);
+    // v9.93.2（用户报障：样本永远 0/20）：收集门槛 2 → 1 天 —— T+1 数据次日即可回填入样本
+    if (daysSince >= 1 && (!r.backfilled || r.pctT3 == null)) codesToFetch.add(r.code);
   }
   for (const code of [...codesToFetch].slice(0, 50)) {
     const closes = await fetchStockDailyCloses(code, 40);
@@ -98,7 +99,10 @@ export async function runAttribution(today: string): Promise<void> {
         if (r.pctT1 == null && dates[idx + 1]) r.pctT1 = Math.round((closes.get(dates[idx + 1])! / base - 1) * 10000) / 100;
         if (r.pctT3 == null && dates[idx + 3]) r.pctT3 = Math.round((closes.get(dates[idx + 3])! / base - 1) * 10000) / 100;
       }
-      if (r.pctT1 != null && r.pctT3 != null) r.backfilled = true;
+      // v9.93.2：backfilled 门槛放宽 —— 统计口径只用到 pctT1（computeHitRates），
+      // 原需 pctT1 && pctT3 双全（T+3=第4天）才入样本 → 样本永远积累不上。
+      // 现在 T+1 即可入样本；pctT3 仍为 null 的记录后续轮次继续补（收集条件含 r.pctT3 == null）
+      if (r.pctT1 != null) r.backfilled = true;
     }
   }
 

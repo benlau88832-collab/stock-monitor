@@ -979,7 +979,9 @@ async function fetchZTPoolForDate(d: string): Promise<LimitPoolSummary> {
   // v9.26.18：ZBPool/DT 改用 sort=fbt:asc（原 fund:asc 实际返回空数组，炸板率始终为 0）
   const ztUrl = `https://push2ex.eastmoney.com/getTopicZTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
   const zbUrl = `https://push2ex.eastmoney.com/getTopicZBPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
-  const dtUrl = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt:asc&date=${d}`;
+  // v9.93.2（用户报障：今日跌停 0，实际有 5 只）：DT 池不支持 fbt 排序 ——
+  // v9.26.18 把 ZB/DT 一起改 fbt:asc 是反效果（实测 DT 池 sort=fbt:asc 返回空，sort=fund:asc 返回 5 只跌停）
+  const dtUrl = `https://push2ex.eastmoney.com/getTopicDTPool?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fund:asc&date=${d}`;
 
   const [ztRes, zbRes, dtRes] = await Promise.allSettled([
     ztJsonp<any>(ztUrl), ztJsonp<any>(zbUrl), ztJsonp<any>(dtUrl),

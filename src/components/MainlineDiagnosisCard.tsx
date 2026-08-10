@@ -3,6 +3,7 @@
 // 结构化输出：结论/理由/风险/置信度分行，禁止大段文字
 import { useState, useEffect } from "react";
 import { callAI } from "../lib/ai";
+import { setAIResult } from "../lib/aiConclusionStore";
 import { parseLLMJSON, schemaForTask } from "../lib/llmJson";
 import { calcMainlineStrength } from "../lib/mainlineScore";
 import { checkExitSignal } from "../lib/exitSignal";
@@ -104,6 +105,8 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
           // 硬约束：leader 字段只能引用输入数据（mainline.leaders 名单），见 constrainLeaders
           const ldr = (parsed as { leader?: { core?: string[]; follower?: string[]; hype?: string[] } }).leader;
           setDiagnosis({ ...parsed, leader: constrainLeaders(mainline.leaders, ldr?.core, ldr?.follower, ldr?.hype) });
+          // v9.93.3：诊断结论登记全站 store（AI 诊断列/复盘 prompt 可引用；不覆盖旧值仅刷新）
+          try { setAIResult("themeDiagnosis", mainline.mainline, { stage: parsed.stage, action: parsed.action, confidence: parsed.confidence, sustain_forecast: parsed.sustain_forecast, risk: parsed.risk, ts: Date.now() }, "diagnosis"); } catch { /* 静默 */ }
           return;
         }
         console.warn("[MainlineDiagnosis] JSON 解析失败，降级规则引擎:", result.text.slice(0, 200));
