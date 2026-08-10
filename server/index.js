@@ -44,7 +44,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.get("/api/health", async (req, res) => {
   let db = "down";
   try { await pool.query("SELECT 1"); db = "up"; } catch {}
-  res.json({ ok: true, db, version: "v9.94.2-local", time: new Date().toISOString() });
+  res.json({ ok: true, db, version: "v9.95.0-local", time: new Date().toISOString() });
 });
 
 // ---------- 静态托管（前端单文件产物） ----------

@@ -408,7 +408,10 @@ export async function fetchBoardFundFlow(
     }
     const result = [...merged.values()].sort((a, b) => b.mainNet - a.mainNet);
     boardFlowCache.set(cacheKey, { data: result, ts: now });
-    return limit >= result.length ? result : result.slice(0, limit);
+    // v9.95.x（P0 验收残留修复）：all=true 返回全量，不再 slice(0, limit) ——
+    //   原实现降序后前 limit 个全是流入行业，流出被截断 → 前端"🟢 主力净流出（0 行业）"残留
+    //   （v9.30.1 双请求只修了数据层；调用方 App.tsx:719 与 IndustryFundFlowChart 自行过滤/截取）
+    return result;
   }
 
   // v9.84：统一 pz=BOARD_FLOW_PZ(100) 拉全量再按 limit 截断 —— 使同 boardType 不同 limit 的调用共享缓存

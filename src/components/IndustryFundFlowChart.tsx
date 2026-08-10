@@ -70,9 +70,18 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
   // 原实现：30 条线全从 (09:30,0) 扇形展开，视觉错位混乱；且是插值伪曲线
   // 新实现：0 基准线居中，流入行业红色向右伸、流出行业绿色向左伸，每行行业名+金额
   // 布局：SVG 单列条形，maxAbs 归一化条长；行高 24px；行业多 → 外层滚动
-  const rows = [...inflow.map(b => ({ b, isIn: true })), ...outflow.map(b => ({ b, isIn: false }))];
+  // v9.95.x（P0 验收残留修复）：流入/流出各取前 8 交替展示 —— 原 rows=[...inflow, ...outflow]
+  //   且 svgH=min(rows.length,15) 只画前 15 行（流入占满），流出行业永不可见 →"🟢 净流出 0 行业"
+  const SHOW_EACH = 8;
+  const inTop = inflow.slice(0, SHOW_EACH);
+  const outTop = outflow.slice(0, SHOW_EACH);
+  const rows: Array<{ b: (typeof inflow)[number]; isIn: boolean }> = [];
+  for (let i = 0; i < Math.max(inTop.length, outTop.length); i++) {
+    if (inTop[i]) rows.push({ b: inTop[i], isIn: true });
+    if (outTop[i]) rows.push({ b: outTop[i], isIn: false });
+  }
   const rowH = 24;
-  const svgH = Math.min(rows.length, 15) * rowH + 24; // 最多显示 15 行，其余滚动
+  const svgH = rows.length * rowH + 24; // 全部渲染，外层滚动区查看
   const labelW = 64, gapW = 6, valW = 60, barMaxW = 320;
   const x0 = labelW + barMaxW * 0.18; // 0 基准线位置（左侧留行业名+少量右伸空间）
   const maxAbsY = Math.max(...rows.map(r => Math.abs(toYi(r.b.mainNet))), 0.01);
