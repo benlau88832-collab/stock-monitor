@@ -155,6 +155,26 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
 
       {diagnosis && (
         <div className="space-y-1 text-[11px]">
+          {/* v9.92.2-fix（用户报障）：MAINLINE_DIAGNOSIS schema 中 risk 是 string（LLM 按 schema 返回），
+              原渲染当数组 join → "n.risk.join is not a function" 崩溃；leader 对象也可能缺失/结构不同。
+              统一防御：数组直接用，string 按分隔符拆，缺失给空数组 */}
+          {(() => {
+            const r = diagnosis.risk as unknown;
+            const risks = Array.isArray(r) ? r as string[]
+              : (typeof r === "string" && r.trim() ? r.split(/[；;，,]/).map(x => x.trim()).filter(Boolean) : []);
+            const ldr = (diagnosis as { leader?: { core?: unknown; follower?: unknown; hype?: unknown } }).leader;
+            const core = Array.isArray(ldr?.core) ? ldr.core as string[] : [];
+            const follower = Array.isArray(ldr?.follower) ? ldr.follower as string[] : [];
+            const hype = Array.isArray(ldr?.hype) ? ldr.hype as string[] : [];
+            return (
+              <>
+                {core.length > 0 && <div className="text-slate-500">核心：{core.join("、")}</div>}
+                {follower.length > 0 && <div className="text-slate-600">跟风：{follower.join("、")}</div>}
+                {hype.length > 0 && <div className="text-slate-600">蹭热点：{hype.join("、")}</div>}
+                {risks.length > 0 && <div className="text-rose-300/90">⚠ 风险：{risks.join("；")}</div>}
+              </>
+            );
+          })()}
           <div className="flex gap-2 flex-wrap">
             <span className="rounded bg-black/30 px-1.5 py-0.5 text-slate-300">阶段：<b className="text-amber-300">{diagnosis.stage}</b></span>
             <span className="rounded bg-black/30 px-1.5 py-0.5 text-slate-300">
@@ -165,14 +185,7 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
           {diagnosis.sustain_forecast && (
             <div className="text-slate-400">⏳ {diagnosis.sustain_forecast}</div>
           )}
-          <div className="space-y-0.5">
-            <div className="text-slate-500">核心：{diagnosis.leader.core.join("、") || "—"}</div>
-            {diagnosis.leader.follower.length > 0 && <div className="text-slate-600">跟风：{diagnosis.leader.follower.join("、")}</div>}
-            {diagnosis.leader.hype.length > 0 && <div className="text-slate-600">蹭热点：{diagnosis.leader.hype.join("、")}</div>}
-          </div>
-          {diagnosis.risk.length > 0 && (
-            <div className="text-rose-300/90">⚠ 风险：{diagnosis.risk.join("；")}</div>
-          )}
+
           <div className={`text-[10px] ${diagnosis.exit_signal_triggered ? "text-rose-400" : "text-emerald-400"}`}>
             {diagnosis.exit_signal_triggered ? "⚠ 已触发离场信号" : "✓ 离场信号尚未触发"}
           </div>
