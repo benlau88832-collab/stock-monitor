@@ -7,6 +7,8 @@ import { stockRealUrl } from "../lib/realLinks";
 import { getStockAI } from "../lib/aiConclusionStore";
 // v9.84（分类统一）：自选股雷达显示权威主线标签 —— F10 概念(服务端持久化优先) → classifyStock 唯一分类器
 import { fetchStocksBoards } from "../lib/stockBoards";
+import { scoreStockNews, type StockNewsLLMResult } from "../lib/llmSignals";
+import { setAIResult } from "../lib/aiConclusionStore";
 import { classifyStock, type StockClassification } from "../lib/classifyStock";
 
 // ============== LLM 配置（引用 AI 中枢的统一常量） ==============
@@ -344,6 +346,26 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
   // 追问
   const [chatHistory, setChatHistory] = useState<ChatMsg[]>([]);
   const [followUp, setFollowUp] = useState("");
+  // v9.92.0（AI 贯穿全局）：stockNewsScore 接线 —— 原死代码，现在信息流顶部显示个股消息 AI 研判 + store 全站登记
+  const [stockNewsAI, setStockNewsAI] = useState<StockNewsLLMResult | null>(null);
+  const stockNewsDoneRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selected) { setStockNewsAI(null); stockNewsDoneRef.current = null; return; }
+    const news = infoItems
+      .filter(i => i.type === "news" || i.type === "announcement")
+      .slice(0, 6).map(i => i.title);
+    if (news.length === 0 || stockNewsDoneRef.current === selected) return;
+    stockNewsDoneRef.current = selected;
+    let alive = true;
+    scoreStockNews([{ code: selected, name: stocks[selected]?.name ?? selected, news }]).then(res => {
+      if (!alive) return;
+      const r = res[0];
+      setStockNewsAI(r ?? null);
+      if (r) setAIResult("stockNewsScore", selected, r, "module");
+    }).catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, infoItems.length > 0]);
   const [followUpLoading, setFollowUpLoading] = useState(false);
   // 融资融券（按代码缓存展示，T+1 数据 5 分钟缓存）
   const [marginInfo, setMarginInfo] = useState<Record<string, StockMarginInfo | null>>({});
@@ -664,7 +686,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
               }) : null;
               const exitB = exit ? exitBadge(exit) : null;
               return (
-                <div key={code} onClick={() => setSelected(code)}
+                <div key={code} onClick={() => { setSelected(code); try { import('../lib/uiContext').then(m => m.setCurrentStock(code)); } catch { /* 静默 */ } }}
                   className={`relative rounded px-2 py-2 cursor-pointer transition text-xs ${
                     isSel ? "bg-amber-500/15 border border-amber-400/30" : "bg-black/20 border border-white/5 hover:bg-white/5"
                   }`}>
@@ -811,6 +833,19 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                 className="rounded px-3 py-1.5 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 disabled:opacity-40 shrink-0">
                 {followUpLoading ? "…" : "追问"}
               </button>
+            </div>
+          )}
+
+          {/* v9.92.0：个股消息 AI 研判（stockNewsScore 就地显示 —— 调了看得到） */}
+          {stockNewsAI && (
+            <div className={`rounded border px-2 py-1 text-[11px] ${
+              stockNewsAI.polarity === "利好" ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
+              : stockNewsAI.polarity === "利空" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+              : "border-white/10 bg-white/5 text-slate-300"
+            }`}>
+              🤖 消息面AI研判：<b>{stockNewsAI.msgScore}分</b> · {stockNewsAI.polarity}
+              {stockNewsAI.invalidation ? ` · 失效条件：${stockNewsAI.invalidation}` : ""}
+              {!stockNewsAI.fromLLM && <span className="ml-1 text-[10px] opacity-60">（规则版）</span>}
             </div>
           )}
 

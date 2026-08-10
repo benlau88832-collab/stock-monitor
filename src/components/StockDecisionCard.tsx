@@ -8,6 +8,7 @@ import type { WatchStock, VetoItem } from "./StockWatchlist";
 import DisclaimerTag from "./DisclaimerTag";
 import { checkStockExit, exitBadge } from "../lib/stockExit";
 import { orderUrl } from "../lib/realLinks";
+import AskAI from "./AskAI";
 
 interface Props {
   stock: WatchStock;
@@ -169,6 +170,14 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
           </div>
         </Row>
       </div>
+      {/* v9.92.0（AI 贯穿全局）：模块内问 AI —— 携带决策卡现场数据，就地深问 */}
+      <AskAI
+        code={stock.code}
+        name={stock.name}
+        compact
+        context={`个股决策卡现场数据：${stock.name}(${stock.code}) 现价${stock.price.toFixed(2)} 今日${(stock.pct ?? 0).toFixed(1)}% 主力${fmtMoney(stock.mainNet)} 5日${fmtMoney(stock.mainNet5d)} 换手${(stock.turnoverRate ?? 0).toFixed(1)}% 量比${(stock.volumeRatio ?? 0).toFixed(1)} 概念归类：${classify?.concept ?? classify?.mainline ?? "未知"}`}
+        placeholder="问：为什么跌？该不该加仓？资金在流出吗？"
+      />
       <div className="pt-1 border-t border-white/5 flex items-center justify-between">
         <span className="text-[10px] text-slate-600">规则引擎基于实时数据生成 · 资金按委托金额口径，无法识别拆单 · 数据完整度为字段覆盖近似，非历史胜率</span>
         <DisclaimerTag />

@@ -5,10 +5,11 @@
 // v9.67：调研会话状态 researchCtx —— 结构化上下文（标的/进度/已收集数据）持久化，
 //   每轮注入 LLM + 对话历史持久化 —— "像真人对话一样"记住上下文，刷新不丢
 // ============================================================
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useSyncExternalStore } from "react";
 import { apiFetch } from "../lib/cloudStore";
-import { runAssistantAgent, isSimpleQuestion, buildQuickSystem, type AssistantSiteContext } from "../lib/assistantAgent";
+import { runAssistantAgent, isSimpleQuestion, buildQuickSystem, TAB_LABELS, type AssistantSiteContext } from "../lib/assistantAgent";
 import { streamChat } from "../lib/ai";
+import { getUiContext, subscribeUiContext } from "../lib/uiContext";
 import {
   loadResearchCtx, saveResearchCtx, updateResearchCtxAfterReply,
   extractStockCode, isNewResearchRequest, isContinueResearch,
@@ -42,6 +43,14 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
   const [researchCtx, setResearchCtx] = useState<ResearchCtx | null>(loadResearchCtx);
   const [busy, setBusy] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // v9.92.0（上下文感知）：订阅全局 UI 上下文（当前 Tab/个股）—— AI 自动知道用户在看什么
+  const uiCtx = useSyncExternalStore(subscribeUiContext, getUiContext);
+  // 合并：组件传入的站点上下文（主线/情绪）+ 全局登记（页面/个股），AskAI 携带同一份
+  const mergedCtx: AssistantSiteContext = {
+    ...siteContext,
+    activeTab: uiCtx.activeTab || siteContext.activeTab,
+    currentStock: uiCtx.currentStock ?? siteContext.currentStock ?? null,
+  };
   // v9.81（性能）：打字机渐显期间跳过对话历史持久化（打字中每帧全量 JSON 序列化 → 结束落盘一次）
   const typingRef = useRef(false);
   // v9.85.2（P2-9）：进行中请求的 AbortController —— 关闭对话框/组件卸载/清空对话时中止（stream + ReAct）
@@ -95,7 +104,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
       // 失败（非本地/上游异常）→ 静默回退 ReAct 完整链路
       if (isSimpleQuestion(q)) {
         try {
-          const system = await buildQuickSystem(siteContext);
+          const system = await buildQuickSystem(mergedCtx);
           typingRef.current = true; // 流式期间跳过对话历史持久化（每帧 setState 不落盘）
           const t = setTimeout(() => ctrl.abort(), 60000); // 前端兜底：上游 45s + 缓冲（ctrl 来自 ask 顶部）
           const streamed = await streamChat(
@@ -116,7 +125,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           // 中途错误/断流 → 删除部分渲染文本并回退 ReAct（部分结论不得回写雷达/决策审计）
           if (streamed && streamed.ok) {
             // 完整文本落一次盘（打字机持久化由 msgs effect 处理）
-            try { digestConsoleReply(streamed.text, [], siteContext.topMainline); } catch { /* 静默 */ }
+            try { digestConsoleReply(streamed.text, [], mergedCtx.topMainline); } catch { /* 静默 */ }
             if (abortRef.current === ctrl) abortRef.current = null;
             setBusy(false);
             return;
@@ -139,7 +148,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           .filter(m => m.role === "user" || (m.role === "ai" && !m.text.startsWith("🔍")))
           .slice(-8)
           .map(m => ({ role: m.role === "user" ? "user" as const : "assistant" as const, content: m.text.slice(0, 800) }));
-        const r = await runAssistantAgent(q, siteContext, { history, researchCtx: ctx, signal: ctrl.signal });
+        const r = await runAssistantAgent(q, mergedCtx, { history, researchCtx: ctx, signal: ctrl.signal });
         // 回复后推进会话状态
         const nextCtx = updateResearchCtxAfterReply(ctx, r.reply, r.toolsCalled);
         if (nextCtx) setResearchCtx(nextCtx);
@@ -163,7 +172,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
         // 但答复"逐字出现"消除"等待 20s 无反馈"的焦虑；降级回复同样渐显但保留 degraded 标）
         const finalText = r.reply || "（空回复）";
         // v9.84.2（AI大脑层 · 3.3）：对话结论回写（个股裁决→雷达旁标 / 动作判断→决策审计）
-        try { digestConsoleReply(finalText, r.toolsCalled, siteContext.topMainline); } catch { /* 回写失败不阻塞 */ }
+        try { digestConsoleReply(finalText, r.toolsCalled, mergedCtx.topMainline); } catch { /* 回写失败不阻塞 */ }
         setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "", tools: r.toolsCalled, degraded: r.degraded, source: r.source }));
         // v9.81（性能）：打字机 8ms→40ms、每帧 2-4→4-7 字符（整体速度不变，主线程 setState/重渲染频率降 5 倍）
         const full = finalText;
@@ -222,6 +231,13 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
               <span className="text-sm font-bold text-violet-300">🤖 全站 AI 助手</span>
               <span className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-slate-500">可问主线/个股/资金/席位/消息</span>
             </div>
+            {/* v9.92.0（上下文感知）：AI 当前感知到的页面/个股 —— 让用户确认 AI"知道你在看什么" */}
+            {(uiCtx.activeTab !== "dashboard" || uiCtx.currentStock) && (
+              <span className="truncate rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-300/80" title="AI 已感知当前上下文">
+                📍 {TAB_LABELS[uiCtx.activeTab] ?? uiCtx.activeTab}
+                {uiCtx.currentStock ? ` · ${uiCtx.currentStock.name}` : ""}
+              </span>
+            )}
             {/* v9.85.2（P2-9）：隐私清理入口 —— 清空本机对话/调研会话（不上云，纯本地） */}
             {msgs.length > 0 && (
               <button

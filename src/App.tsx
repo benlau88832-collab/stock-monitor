@@ -224,6 +224,10 @@ export default function App() {
     return "dashboard";
   })();
   const [active, setActive] = useState<TabKey>(initialTab);
+  // v9.92.0（上下文感知）：active 变化（含初始化）同步登记全局 UI 上下文 —— AIConsole/AskAI 感知当前页
+  useEffect(() => {
+    import("./lib/uiContext").then(m => m.setActiveTab(active)).catch(() => {});
+  }, [active]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -1442,7 +1446,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#0d1424,_#05070d_60%)] pb-16">
       <TopNav
-        active={active} onChange={setActive} lastUpdated={lastUpdated} loading={loading}
+        active={active} onChange={(t) => { setActive(t); try { import('./lib/uiContext').then(m => m.setActiveTab(t)); } catch { /* 静默 */ } }} lastUpdated={lastUpdated} loading={loading}
         autoRefresh={autoRefresh} onToggleAutoRefresh={() => setAutoRefresh(v => !v)} onRefreshNow={refreshAll}
         countdown={countdown} nextRefreshAt={nextRefreshAt || undefined}
         overview={overview} fund={fundStructure}
@@ -1460,7 +1464,7 @@ export default function App() {
           <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
             battlePlan={battlePlan} loading={loading} phase={currentPhase} watchStocks={watchStocks}
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
-            onSwitchTab={(tab) => setActive(tab as TabKey)}
+            onSwitchTab={(tab) => { setActive(tab as TabKey); try { import('./lib/uiContext').then(m => m.setActiveTab(tab)); } catch { /* 静默 */ } }}
             ztPool={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined}
             yesterdayZt={yesterdayZtBrief}
             nextScenarios={nextScenarios}

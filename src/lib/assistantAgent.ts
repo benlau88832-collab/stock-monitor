@@ -161,12 +161,24 @@ export async function buildQuickSystem(siteContext: AssistantSiteContext): Promi
   const head = "你是A股短线交易助手（10年游资操盘手）。基于下面的本地消息摘要与大盘快照，直接回答用户问题。要求：先说结论再说依据；优先引用本地数据，本地没有的直说没有；回答≤250字。";
   const snap = brain ? brainContextToText(brain) : "";
   const page = [
+    // v9.92.0：上下文感知 —— 当前页面与个股注入（AI 知道你在看哪只股）
+    "当前页面：" + (siteContext.activeTab ? TAB_LABELS[siteContext.activeTab] ?? siteContext.activeTab : "驾驶舱"),
+    siteContext.currentStock ? `当前查看个股：${siteContext.currentStock.name}(${siteContext.currentStock.code})` : "",
     "当前最强主线：" + (siteContext.topMainline ?? "暂无"),
     "市场情绪：" + (siteContext.sentiment ?? "?") + "（" + (siteContext.sentimentLabel ?? "数据不足") + "）",
     siteContext.watchStocks ? "用户自选股：" + siteContext.watchStocks : "",
   ].filter(Boolean).join("\n");
   return head + "\n\n" + (newsNote ? newsNote + "\n\n" : "") + (snap ? snap + "\n\n" : "") + "【页面状态】\n" + page;
 }
+
+/** v9.92.0：Tab key → 中文名（上下文注入用） */
+export const TAB_LABELS: Record<string, string> = {
+  dashboard: "驾驶舱",
+  fundline: "资金主线",
+  radar: "个股雷达",
+  dragon: "龙虎榜复盘",
+  news: "消息面",
+};
 
 export interface AssistantSiteContext {
   /** 当前最强主线摘要（供"知道你在看什么"） */
@@ -178,6 +190,9 @@ export interface AssistantSiteContext {
   sentimentLabel?: string;
   marketNet?: number;          // 全市场主力净流入(元)
   watchStocks?: string;        // 自选股摘要（名称列表）
+  /** v9.92.0（AI 贯穿全局·上下文感知）：当前页面与个股（来自 uiContext 全局登记） */
+  activeTab?: string;          // dashboard/fundline/radar/dragon/news
+  currentStock?: { code: string; name: string } | null;
 }
 
 export async function runAssistantAgent(
@@ -278,6 +293,9 @@ export async function runAssistantAgent(
   const toolByName = new Map(tools.map(t => [t.name, t]));
 
   const ctxSummary = [
+    // v9.92.0：上下文感知 —— 页面与个股注入 ReAct（AI 自动知道用户在看哪只股/哪个页）
+    "当前页面：" + (siteContext.activeTab ? TAB_LABELS[siteContext.activeTab] ?? siteContext.activeTab : "驾驶舱"),
+    siteContext.currentStock ? "当前查看个股：" + siteContext.currentStock.name + "(" + siteContext.currentStock.code + ")" : "",
     "当前最强主线：" + (siteContext.topMainline ?? "暂无")
       + (siteContext.topMainlineScore != null ? "（强度" + siteContext.topMainlineScore + "分）" : "")
       + (siteContext.topMainlineZtCount ? "·涨停" + siteContext.topMainlineZtCount + "只" : "")

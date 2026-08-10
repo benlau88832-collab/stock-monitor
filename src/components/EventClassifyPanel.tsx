@@ -13,6 +13,9 @@ import DisclaimerTag from "./DisclaimerTag";
 // v9.84.2（AI大脑层 · 3.5）：接线死任务 —— policyDiff（政策解读）/ eventClassify（LLM 精分级）
 import { callAI } from "../lib/ai";
 import { parseLLMJSON, schemaForTask } from "../lib/llmJson";
+import { scoreThemeNews, type ThemeNewsLLMResult } from "../lib/llmSignals";
+import { setAIResult } from "../lib/aiConclusionStore";
+import AskAI from "./AskAI";
 
 interface ClassifiedEvent {
   title: string;
@@ -67,6 +70,27 @@ export default function EventClassifyPanel({ onOpenNews }: {
   const [date, setDate] = useState("");
   // v13-4（P0）：新闻驱动作战管线结果（theme_analysis:latest）—— 有则优先展示管线视图
   const [analysis, setAnalysis] = useState<any | null>(null);
+  // v9.92.0（AI 贯穿全局）：主题催化评分（themeNewsScore 接线 —— 原死代码，现在主题行可见 + store 全站登记）
+  const [themeScores, setThemeScores] = useState<Map<string, ThemeNewsLLMResult>>(new Map());
+  useEffect(() => {
+    const themes = analysis?.themes;
+    if (!Array.isArray(themes) || themes.length === 0) return;
+    let alive = true;
+    const boards = themes.map((t: any) => ({
+      board: String(t.theme ?? ""),
+      stage: String(t.verdict ?? ""),
+      news: (t.evidence ?? []).map((ev: any) => String(ev.title ?? "")).filter(Boolean).slice(0, 6),
+    })).filter(b => b.board);
+    // v9.92.0：news 为空（服务端 theme_analysis 暂未存支撑新闻）也评分 —— LLM 按主题名+阶段评估催化
+    if (boards.length === 0) return;
+    scoreThemeNews(boards).then(res => {
+      if (!alive) return;
+      const m = new Map<string, ThemeNewsLLMResult>(res.map(r => [r.board, r]));
+      setThemeScores(m);
+      for (const r of res) setAIResult("themeNewsScore", r.board, r, "catalyst");
+    }).catch(() => { /* 评分失败不阻塞主题展示 */ });
+    return () => { alive = false; };
+  }, [analysis?.time, analysis?.round]);
   const [triggering, setTriggering] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -285,6 +309,18 @@ export default function EventClassifyPanel({ onOpenNews }: {
                 <span className="block h-full rounded bg-rose-500/70" style={{ width: `${t.heat}%` }} />
               </span>
               <span className="text-xs font-black text-slate-200">{t.heat}分</span>
+              {/* v9.92.0：主题催化评分徽章（themeNewsScore 就地显示，原来调了看不到） */}
+              {(() => {
+                const sc = themeScores.get(String(t.theme ?? ""));
+                if (!sc) return null;
+                const color = sc.polarity === "利好" ? "text-rose-300" : sc.polarity === "利空" ? "text-emerald-300" : "text-slate-400";
+                return (
+                  <span className={`rounded bg-white/5 px-1 py-0.5 text-[10px] font-bold ${color}`}
+                    title={`催化${sc.catalyst}分 · ${sc.polarity} · ${sc.novelty} · ${sc.reason}`}>
+                    📰催化{sc.catalyst}分{sc.reason ? `·${sc.reason}` : ""}
+                  </span>
+                );
+              })()}
               {/* 热度变化箭头（与上一轮对比） */}
               {t.delta && (
                 <span className={`text-xs font-bold ${
@@ -299,6 +335,14 @@ export default function EventClassifyPanel({ onOpenNews }: {
               {(t.etfs?.length ?? 0) > 0 && (
                 <span className="rounded bg-cyan-500/10 px-1 py-0.5 text-xs text-cyan-300">📊{t.etfs.length}</span>
               )}
+              {/* v9.92.0（AI 贯穿全局）：主题行"问AI" —— 携带该主题新闻/标的现场数据 */}
+              <AskAI compact
+                context={`主题作战现场：${t.theme}（${t.verdict ?? ""}，热度${t.heat ?? "?"}分）${t.fundAnalysis ? `
+资金：${t.fundAnalysis}` : ""}
+支撑新闻：${(t.evidence ?? []).slice(0, 5).map((ev: any) => ev.title).join("；") || "无"}
+关联标的：${(t.picks ?? []).slice(0, 5).map((p: any) => `${p.name}(${p.code})`).join("、") || "无"}`}
+                placeholder="问：这个主题为什么涨？还能持续吗？龙头是谁？"
+              />
             </div>
             <div className="text-xs text-amber-200/80">{t.action ?? ""}</div>
 
