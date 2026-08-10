@@ -5,7 +5,7 @@
 import { useState, useEffect } from "react";
 import { getApiHealth, getOverallHealth } from "../lib/apiHealth";
 import { getAIStats } from "../lib/ai";
-import { getJsonpQueueState } from "../lib/jsonpQueue";
+import { getJsonpQueueState, getSourceState } from "../lib/jsonpQueue";
 
 interface FactorInfo {
   total: number;
@@ -61,6 +61,15 @@ export default function OpsPanel() {
         {/* 数据源健康 */}
         <div className="rounded-lg bg-black/20 p-2 space-y-1">
           <div className="text-[10px] text-slate-500">数据源成功率（近 {totalCalls} 次）</div>
+          {/* v9.90.0：主源状态 —— push2 死 + push2delay 供数时明确提示 */}
+          {(() => {
+            const st = getSourceState();
+            const onDelay = st.find(x => x.source === "push2delay.eastmoney.com");
+            const onPrimary = st.find(x => x.host === "push2.eastmoney.com" && x.source === "eastmoney");
+            if (onDelay && !onPrimary) return <div className="text-[10px] text-amber-300">主源 push2 不可达 → 延迟源供数中</div>;
+            if (onPrimary) return <div className="text-[10px] text-emerald-300/80">主源 push2 正常</div>;
+            return null;
+          })()}
           <div className={`text-lg font-bold ${okRate >= 90 ? "text-emerald-300" : okRate >= 70 ? "text-amber-300" : "text-rose-300"}`}>{okRate}%</div>
           {apiRecs.filter(r => r.recentCalls >= 3 && r.recentSuccesses / r.recentCalls < 0.5).slice(0, 3).map((r, i) => (
             <div key={i} className="text-xs text-rose-300/80 truncate">✗ {r.name}</div>

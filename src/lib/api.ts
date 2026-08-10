@@ -104,6 +104,7 @@ export async function fetchIndexOverview(): Promise<IndexQuote[]> {
  * 返回格式：v_sh000001="1~上证指数~000001~收盘价~昨收~今开~成交量~...~涨幅%~..."
  */
 async function fetchIndexOverviewTencent(): Promise<IndexQuote[]> {
+  const startTs = Date.now(); // v9.90.0：兜底成功补记耗时
   try {
     const codeMap: Record<string, string> = {
       "000001": "sh000001", "399001": "sz399001", "399006": "sz399006",
@@ -131,6 +132,8 @@ async function fetchIndexOverviewTencent(): Promise<IndexQuote[]> {
       out.push({ code: String(code), name, price, pct: Number.isFinite(pct) ? pct : 0, change: Number.isFinite(change) ? change : 0 });
     }
     if (out.length === 0) return [];
+    // v9.90.0：主源失败但腾讯兜底成功 → 补记一次成功（健康面板如实反映最终可用性）
+    recordApiCall("指数概览", true, Date.now() - startTs);
     console.warn("[api] 东财指数降级腾讯备用源:", out.length, "条");
     return out;
   } catch { return []; }

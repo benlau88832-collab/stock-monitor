@@ -4,7 +4,7 @@
 // 本调度器将并发限制在 ≤3，请求排队+随机抖动错峰发出。
 
 // v9.86.0（P1-16）：数据源注册表 —— push2→push2delay 域名降级从硬编码字符串替换改为查表
-import { fallbackHostFor } from "./sources";
+import { fallbackHostFor, hostOf as providerHostOf } from "./sources";
 
 // v9.86.0（P1-16）：最近实际命中的数据源记录（主源 vs fallback 源）—— App 横幅可显示"行情走延迟源"
 const lastSourceByHost = new Map<string, { source: string; at: number }>();
@@ -143,9 +143,13 @@ async function fetchViaProxy(url: string, timeout: number): Promise<any> {
   try {
     return await attempt(url);
   } catch (err) {
-    // v9.86.0（P1-16）：查数据源注册表降级 —— push2 不可达 → push2delay 重试一次（仅非 kline 路径）
+    // v9.86.0（P1-16）：查数据源注册表降级 —— push2 不可达 → push2delay 重试一次
+    // v9.90.0：kline 排除条件修正 —— 仅当 fallback 目标为 push2delay 时排除 kline（push2delay 无 kline 接口）；
+    //   fallback 目标为 tencentKline（push2his）时放行（腾讯 fqkline 可经 /api/proxy 转发）
     const fallbackHost = fallbackHostFor(hostOf(url));
-    if (fallbackHost && !url.includes("/stock/kline/") && !url.includes("daykline")) {
+    const isKlinePath = url.includes("/stock/kline/") || url.includes("daykline");
+    const fbIsPush2delay = fallbackHost === hostOf("push2delay");
+    if (fallbackHost && !(isKlinePath && fbIsPush2delay)) {
       const fallbackUrl = url.replace(hostOf(url), fallbackHost);
       try {
         const data = await attempt(fallbackUrl);
@@ -185,6 +189,20 @@ async function execWithFallback(url: string, timeout: number, callbackParam: str
     //   push2 域名熔断后 push2delay 兜底永远跑不到（proxy 请求被直接 reject），
     //   这是"fallback 已就绪但数据仍显示滞后"的直接原因。proxy 有 6s 超时 + 并发 3 约束，成本可控。
     if (isCircuitOpen(url)) throw new Error("circuit open (data source unavailable)");
+    // v9.90.0（根治）：script 直连层同样查表做域名 fallback —— 服务端不在线/代理不可用时，
+    //   浏览器 script 直连 push2 失败 → 自动直连 push2delay（JSONP 无 CORS 限制，实测 cb 参数支持）。
+    //   特判：fallback 目标为 tencentKline（纯 JSON 非 JSONP，script 标签无法回调）→ 跳过避免无意义等待。
+    const fbHost = fallbackHostFor(hostOf(url));
+    // 注意：hostOf 是本文件"URL→host"函数；providerHostOf 是 sources.ts 的"id→host"
+    const fbIsJsonpCompatible = fbHost && fbHost !== providerHostOf("tencentKline");
+    if (fbIsJsonpCompatible) {
+      const fbUrl = url.replace(hostOf(url), fbHost);
+      try {
+        const data = await execJsonp(fbUrl, timeout, callbackParam);
+        recordSourceHit(url, fbHost); // 主源 host 实际由 fallback 域供数（健康面板/横幅可观测）
+        return data;
+      } catch { /* 双域都失败 → 按原路径抛错 */ }
+    }
     return execJsonp(url, timeout, callbackParam);
   }
 }

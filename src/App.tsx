@@ -396,7 +396,9 @@ export default function App() {
       //   （原无条件 setOverview：东财断源时 indices:[]/limitPool:null 抹掉上一轮快照，且 fetchedAt 更新误导为最新）
       const firstSentiment = computeSentimentNow(null, null);
       setOverview(prev => {
-        const failures = [indices.status, breadth.status, limitPoolRes.status, turnover.status]
+        // v9.90.0：stale 判定扩大 —— 加入主力资金/全球指数（原只统计 4 项，
+        //   主力资金/全球指数/板块资金流全挂时横幅不亮，与健康面板 0% 口径不一致）
+        const failures = [indices.status, breadth.status, limitPoolRes.status, turnover.status, fundMain.status, globals.status]
           .filter(s => s === "rejected").length;
         if (!prev) {
           // 首帧：全量写入（从未成功过才 null，无旧值可保留）
