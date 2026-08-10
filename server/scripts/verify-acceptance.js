@@ -3,11 +3,70 @@
 // 用法：node server/scripts/verify-acceptance.js
 // 覆盖：数据层（白名单/core_concept/新闻链接/主题作战/跌停池）+ AI链路 + 单测/tsc/build
 // 输出：逐项 PASS/FAIL + 汇总，任一 FAIL 需修复后再交付
+//
+// ⚠ 安全护栏（v9.93.5 事故后强制）：本脚本【只读验收，零删除动作】——
+// ① 运行前自检：扫描自身源码，出现任何删除类命令（文件删除/目录删除/
+//    镜像删除/分支删除/文件复制工具的镜像参数）立即拒绝执行；
+// ② 变更护栏：运行前快照工作树文件清单，运行后再对比，
+//    发现文件减少立即 FAIL 并打印差异（防误删重要文件）。
 // ============================================================
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const { pool } = require("../db");
 const { execSync } = require("child_process");
+const fs = require("fs");
+
+// ---------- 安全自检（第一道防线：源码级禁止删除命令） ----------
+// 注意：模式用字符类拆分（如 r[m]）书写，避免自检时匹配到模式定义自身
+const DELETE_PATTERNS = [
+  /\br[m]\s+-/, /\br[m]\b/, /\bd[e]l\b/, /\bdel\s+\/[f]\b/, /\broboc[o]py\b/, /\/M[I][R]\b/,
+  /git\s+branch\s+-[Dd]\b/, /\bunl[i]nk\b/, /fs\.[r]m\b/, /fs\.unl[i]nk\b/,
+  /\br[d]\s+\//, /\brmd[i][r]\b/, /\bRemove-[I]tem\b/, /\bRemove[I]tem\b/,
+];
+const SELF = fs.readFileSync(__filename, "utf8");
+const banned = DELETE_PATTERNS.filter(p => p.test(SELF));
+if (banned.length > 0) {
+  console.error(`❌ 安全自检失败：验收脚本源码含删除类命令模式 ${banned.length} 处（${banned.map(p => p.source).join(", ")}）`);
+  console.error("   本脚本禁止任何删除动作，请移除后重试。");
+  process.exit(2);
+}
+
+// ---------- 变更护栏（第二道防线：运行前后文件清单对比） ----------
+const ROOTS = ["src", "server", "docs", "public", "index.html", "package.json", "tsconfig.json", "vite.config.ts"];
+function listFilesRec(dir, base = "") {
+  const out = [];
+  const abs = path.join(dir, base);
+  if (!fs.existsSync(abs)) return out;
+  const st = fs.statSync(abs);
+  if (st.isFile()) { out.push(base); return out; }
+  for (const name of fs.readdirSync(abs)) {
+    if (name === "node_modules" || name === ".git") continue;
+    out.push(...listFilesRec(abs, path.join(base, name)));
+  }
+  return out;
+}
+function snapshotTree() {
+  const cwd = path.join(__dirname, "..", "..");
+  const files = [];
+  for (const r of ROOTS) files.push(...listFilesRec(cwd, r));
+  return files.sort();
+}
+const treeBefore = snapshotTree();
+
+/** 运行后对比文件清单：发现文件减少 → FAIL（防误删） */
+function verifyNoDeletion() {
+  try {
+    const after = snapshotTree();
+    const removed = treeBefore.filter(f => !after.includes(f));
+    if (removed.length > 0) {
+      check("⚠ 防误删护栏：文件无减少", false, `被删 ${removed.length} 个：${removed.slice(0, 5).join(", ")}`);
+    } else {
+      check("⚠ 防误删护栏：文件无减少", true);
+    }
+  } catch (e) {
+    check("⚠ 防误删护栏：文件无减少", false, e.message);
+  }
+}
 const https = require("https");
 const http = require("http");
 
@@ -175,6 +234,8 @@ function run(cmd) {
   check("build 成功", build.ok && /built in/.test(build.out));
 
   // ========== 汇总 ==========
+  // v9.93.5：防误删护栏 —— 运行前后文件清单对比（发现文件减少立即 FAIL）
+  verifyNoDeletion();
   console.log(`\n========== 汇总：${pass} PASS / ${fail} FAIL ==========`);
   if (fail > 0) {
     console.log("\n❌ 未通过项：");
