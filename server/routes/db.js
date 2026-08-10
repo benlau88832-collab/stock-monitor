@@ -196,6 +196,17 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // v9.98.0（批次 3）：基本面体检（investool：阈值表 + 银行专项 + desc/ok + 合理价；表缓存 24h）
+  app.get("/api/db/fundamental/:code", async (req, res) => {
+    try {
+      const code = String(req.params.code || "").trim();
+      if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
+      const { getFundamentalCheck } = require("../lib/fundamentalChecker");
+      const out = await getFundamentalCheck(pool, code);
+      res.json(out);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // v9.96.0（批次 1）：市场情绪叙事报告触发（VibeAlpha）—— 仿 review/trigger：advisory lock + 后台执行 + kv 落库
   app.post("/api/emotion/analyze", async (req, res) => {
     try {

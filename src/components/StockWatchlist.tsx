@@ -12,6 +12,8 @@ import { scoreStockNews, type StockNewsLLMResult } from "../lib/llmSignals";
 import { fetchStockAggregate, judgeStockAggregate, type StockAggregateData, type StockAggregateLLMResult } from "../lib/stockAggregate";
 // v9.97.0（批次 2）：K线卡（手绘蜡烛 6 周期）
 import KlineCard from "./KlineCard";
+// v9.98.0（批次 3）：基本面体检卡（investool）
+import FundamentalCard from "./FundamentalCard";
 import { setAIResult } from "../lib/aiConclusionStore";
 import { classifyStock, type StockClassification } from "../lib/classifyStock";
 
@@ -995,6 +997,10 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                       <div>席位 {aggData.seats?.length ?? 0} · 涨停 {aggData.ztHistory?.length ?? 0} 次</div>
                       <div>日K {aggData.kline?.length ?? 0} 根 · 指标 {aggData.indicators?.signals?.length ?? 0} 信号</div>
                     </div>
+                  </div>
+                  {/* v9.98.0（批次 3）：基本面体检（investool，独立端点拉取） */}
+                  <div className="lg:col-span-12">
+                    <FundamentalCard code={selected ?? ""} price={stocks[selected ?? ""]?.price ?? null} />
                   </div>
                 </div>
               )}

@@ -159,6 +159,13 @@ CREATE TABLE IF NOT EXISTS stock_concepts (
   core_concept TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- v9.98.0（批次 3）：基本面体检缓存（F10 财务 + 估值，24h TTL）
+CREATE TABLE IF NOT EXISTS stock_fundamentals (
+  code       TEXT PRIMARY KEY,
+  name       TEXT,
+  data       JSONB NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;
 
 async function initDb() {
