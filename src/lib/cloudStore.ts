@@ -139,6 +139,18 @@ export async function pushAnnsCloud(items: any[]): Promise<void> {
  *  属本地隐私 —— 不上云、不跨实例恢复 */
 const SKIP_UPLOAD_PREFIXES = ["ai_settings", "llm_api_key", "ai_console_msgs", "ai_research_ctx"];
 
+// v9.93.5：服务端 cron 独占产物前缀 —— 前端只读，禁止经 localStorage 拉回/回传。
+// 污染链路：拉回侧把 PG 的 theme_analysis:* 历史键写进 localStorage → 5 分钟后上传侧
+// 全量回传（kv/bulk 同事务批量 upsert）→ 旧值覆盖 cron 新写的 theme_analysis:latest
+// （"主题作战卡显示 08-08 旧值、多个键同毫秒被批量更新"根因）。
+// 上传+拉回双侧过滤；sentiment:/factor_ic:（前端情绪分/本地因子计算）不在此列，保留同步。
+const SERVER_OWNED_PREFIXES = [
+  "anomaly", "anomaly_seen", "black_swan", "block_trade", "event_classify",
+  "fund_streak", "fund_streak_intraday", "lhb", "llm_analysis",
+  "market_daily", "market_intraday", "policy", "post_summary", "push_log",
+  "review", "seal_alerts", "sentiment_snapshot", "theme_analysis", "user_style",
+];
+
 // v9.81（性能）：增量同步 —— 记录上次成功上传的原始字符串，只上传变更 key。
 // 原实现每 5 分钟全量扫描 + 全量 JSON.parse + stringify 全部 localStorage（MB 级主线程卡顿），
 // 且服务端 kv/bulk 限 100 条/请求 —— 超出的 key 被静默截断（潜在数据丢失）。
@@ -157,6 +169,8 @@ export async function migrateLocalStorageToCloud(): Promise<number> {
       // v9.75（安全修复）：跳过含明文 API Key 的配置 key ——
       // 此前全量上传会把 ai_settings_v1（含 apiKey）复制进 PG，PG 备份泄漏即 Key 泄漏
       if (SKIP_UPLOAD_PREFIXES.some(p => key.startsWith(p))) continue;
+      // v9.93.5：服务端 cron 产物只读不回传（防旧值覆盖新结果）
+      if (SERVER_OWNED_PREFIXES.some(p => key.startsWith(p))) continue;
       try {
         const raw = localStorage.getItem(key);
         if (raw == null) continue;
@@ -212,7 +226,10 @@ export async function syncLocalWithCloud(): Promise<void> {
         // 历史/跨实例的 ai_settings_v1、llm_api_key 可能残留在 PG，拉回会把 Key 重新写回浏览器
         // v9.85.2（P2-9）：对话/调研会话同侧过滤 —— 不跨实例恢复本地隐私
         const SENSITIVE_PREFIXES = ["ai_settings", "llm_api_key", "local_token", "push_settings_v1", "ai_console_msgs", "ai_research_ctx"];
-        const safeMissing = missing.filter((k: string) => !SENSITIVE_PREFIXES.some(p => k.startsWith(p)));
+        // v9.93.5：服务端 cron 产物不拉回 localStorage（拉回=播种，下一轮同步会回传旧值覆盖）
+        const safeMissing = missing.filter((k: string) =>
+          !SENSITIVE_PREFIXES.some(p => k.startsWith(p)) &&
+          !SERVER_OWNED_PREFIXES.some(p => k.startsWith(p)));
         // 分批拉取（每批 50 个 key），避免单次响应过大
         for (let i = 0; i < safeMissing.length; i += 50) {
           const batch = safeMissing.slice(i, i + 50);
