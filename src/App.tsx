@@ -921,7 +921,16 @@ export default function App() {
         } catch { /* commodities 可能未定义 */ }
 
         // ---- ③ ETF 评分（风格感知 + 主线直出） ----
-        const etfResults = computeETFScores(etfQuotes, themeScoreMap, commodityPcts, marketStyle, candidates.map(c => ({ board: c.mainline })));
+        // v9.93.4：新闻催化分接入 ETF 排序（themeNewsScore → 主题催化 → ETF 加权）
+        const catalystMap = new Map<string, number>();
+        try {
+          const { getAllAIResults } = await import("./lib/aiConclusionStore");
+          for (const r of getAllAIResults("themeNewsScore")) {
+            const v = r.value as { catalyst?: number } | undefined;
+            if (v && typeof v.catalyst === "number") catalystMap.set(r.key, v.catalyst);
+          }
+        } catch { /* 催化分缺失不影响排序 */ }
+        const etfResults = computeETFScores(etfQuotes, themeScoreMap, commodityPcts, marketStyle, candidates.map(c => ({ board: c.mainline })), catalystMap);
         const topETFs = etfResults.slice(0, 4); // 多只 ETF 排序
 
         // 候选观察池（板块4-8名）

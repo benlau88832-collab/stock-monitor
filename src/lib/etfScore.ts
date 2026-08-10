@@ -81,7 +81,7 @@ export interface ETFScoreResult {
   code: string;
   name: string;
   total: number;
-  factors: { fundTrend: number; pctBoost: number; boardLink: number; styleFit: number; mainlineLink: number; macro: number };
+  factors: { fundTrend: number; pctBoost: number; boardLink: number; styleFit: number; mainlineLink: number; macro: number; catalystLink?: number };
   tier: "A" | "B" | "C";
   /** 是否主线直出匹配（来自涨停潮主线） */
   fromMainline: boolean;
@@ -102,6 +102,8 @@ export function computeETFScores(
   commodityPcts: Record<string, number>,
   style?: StyleInput,
   mainlines?: Array<{ board: string }>,
+  /** v9.93.4（用户 PRD：ETF 排序是否结合新闻政策验证）：主题→新闻催化分（aiConclusionStore themeNewsScore） */
+  catalystScores?: Map<string, number>,
 ): ETFScoreResult[] {
   const results: ETFScoreResult[] = [];
 
@@ -186,7 +188,22 @@ export function computeETFScores(
       W_MAINLINE * mainlineLink +
       W_MACRO * macro,
     );
-    const finalTotal = clamp(total);
+    // v9.93.4：新闻催化加成（温和 ±5 分内）—— 主题催化分 30-90，50 为基准
+    // 对应 PRD"ETF 排序是否结合新闻政策验证"：v9.92 接线的 themeNewsScore 现在真正影响 ETF 排序
+    let catalystLink = 50;
+    let catalystHit = false;
+    if (catalystScores && catalystScores.size > 0 && spec.boardKeywords.length > 0) {
+      for (const kw of spec.boardKeywords) {
+        for (const [name, cat] of catalystScores) {
+          if (name.includes(kw) || kw.includes(name) || name.includes(kw.slice(0, 2))) {
+            catalystLink = Math.max(catalystLink, cat);
+            catalystHit = true;
+          }
+        }
+      }
+    }
+    const catalystBonus = catalystHit ? clamp(Math.round((catalystLink - 50) * 0.1), -3, 5) : 0;
+    const finalTotal = clamp(total + catalystBonus);
 
     results.push({
       code: spec.code,
@@ -199,6 +216,7 @@ export function computeETFScores(
         styleFit: Math.round(styleFit),
         mainlineLink: Math.round(mainlineLink),
         macro: Math.round(macro),
+        catalystLink: Math.round(catalystLink),
       },
       tier: finalTotal >= 70 ? "A" : finalTotal >= 55 ? "B" : "C",
       fromMainline,

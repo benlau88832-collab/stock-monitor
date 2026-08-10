@@ -283,9 +283,11 @@ function ETFBlock({ etfs }: { etfs: ETFScoreResult[] }) {
         {etfs.slice(0, 4).map((e, i) => (
           // v9.26.13：整行可点击跳 ETF 详情页
           <a key={e.code} href={etfRealUrl(e.code)} target="_blank" rel="noopener noreferrer"
-             className="flex items-center gap-2 text-[11px] hover:bg-white/5 rounded px-1 -mx-1 cursor-pointer">
+             className="group flex items-center gap-2 text-[11px] hover:bg-white/5 rounded px-1 -mx-1 cursor-pointer">
             <span className={`w-5 text-center font-black ${i === 0 ? "text-emerald-300" : "text-slate-500"}`}>{i + 1}</span>
             <span className="font-semibold text-slate-100">{e.name}</span>
+            {/* v9.93.4（用户 PRD：ETF 排序结合了什么）：评分构成 tooltip —— 资金/走势/联动/催化/主线/宏观 */}
+            <span className="hidden text-[9px] text-slate-600 group-hover:inline" title={`评分构成：资金${e.factors.fundTrend}·走势${e.factors.pctBoost}·板块联动${e.factors.boardLink}·新闻催化${e.factors.catalystLink ?? 50}·风格${e.factors.styleFit}·主线${e.factors.mainlineLink}·宏观${e.factors.macro}`} />
             {e.fromMainline && e.matchedMainline && (
               <span className="rounded px-1 py-0.5 text-xs font-bold bg-emerald-500/20 text-emerald-300">主线直出</span>
             )}
