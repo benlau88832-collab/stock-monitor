@@ -389,6 +389,7 @@ function httpsGet(url, timeout = 6000) {
 }
 
 const { getJson, getJsonWithFallback } = require("./lib/outbound");
+const { parseLLMJSON, SCHEMAS } = require("./lib/llmJson");
 
 // ---------- v9.26.5：自动 LLM 分析调用（.cn 直连优先，失败走代理） ----------
 // v9.38.1（V3-P0）：抽公共层 server/lib/httpProxy.js（惰性 require + 容错，消除重复实现）
@@ -504,12 +505,8 @@ async function confirmBlackSwansWithLLM(pool, anns) {
     if (fresh.length === 0) return null;
     const txt = await callLLM(`对以下公告逐条判断是否构成"黑天鹅"（突发重大利空，会让持仓股大跌甚至跌停）：是→"yes"并给影响级别(severe=立案/退市/造假类|moderate=减持/质押/问询类)与一句话影响；否→"no"。
 只输出JSON数组，无其他文字。\n[{"title":"原标题","isBlackSwan":"yes|no","level":"severe|moderate","impact":"≤20字"}]\n\n公告列表：\n${fresh.map((a, i) => `${i + 1}. [${a.stockName}]${a.title.slice(0, 70)}`).join("\n")}`, { maxTokens: 1500, temperature: 0.1 });
-    const cleaned = txt.replace(/```json|```/g, "").trim();
-    let arr = [];
-    try { arr = JSON.parse(cleaned); } catch {
-      const m = cleaned.match(/\[[\s\S]*\]/);
-      if (m) { try { arr = JSON.parse(m[0]); } catch { arr = []; } }
-    }
+    // v9.87.0（P1-8）：统一解析（剥围栏/正则/截断补 ]）+ schema 归一化（isBlackSwan/level 枚举）
+    const arr = parseLLMJSON(txt, SCHEMAS.blackSwan);
     if (!Array.isArray(arr) || arr.length === 0) return null;
     // 只接受输入集内的标题（防幻觉）；yes → 保留（标记级别与影响），no → 排除
     const byTitle = new Map(fresh.map(a => [a.title, a]));
@@ -563,12 +560,8 @@ async function rankFastNewsStars(pool) {
     if (fresh.length === 0) return 0;
     // 3. LLM 批打分（一次调用换 20 条分级）
     const txt = await callLLM(`对以下快讯逐条打分：stars=1-5（5=重大利好/大级别催化，4=强利好，3=中性偏多或利空风险，2=普通，1=无关紧要）；sentiment=positive|negative|neutral。只输出JSON数组，无其他文字。\n[{"title":"原标题","stars":3,"sentiment":"positive","logic":"≤15字"}]\n\n快讯列表：\n${fresh.map((t, i) => `${i + 1}. ${t.slice(0, 80)}`).join("\n")}`, { maxTokens: 2000, temperature: 0.1 });
-    const cleaned = txt.replace(/```json|```/g, "").trim();
-    let arr = [];
-    try { arr = JSON.parse(cleaned); } catch {
-      const m = cleaned.match(/\[[\s\S]*\]/);
-      if (m) { try { arr = JSON.parse(m[0]); } catch { arr = []; } }
-    }
+    // v9.87.0（P1-8）：统一解析 + schema 归一化（stars 1-5 clamp / sentiment 枚举）
+    const arr = parseLLMJSON(txt, SCHEMAS.fastNewsRank);
     if (!Array.isArray(arr) || arr.length === 0) return 0;
     // 4. 回填（只接受输入集合内的标题，防 LLM 幻觉新标题）
     const titleSet = new Set(fresh);
@@ -722,8 +715,8 @@ async function rankStrongAnnouncements(pool, dateStr) {
       if (freshAnns.length > 0) {
         const top40 = freshAnns.slice(0, 40).map(a => `${a.stock_code} ${a.stock_name}: ${a.title}`).join("\n");
         const txt = await callLLM(`对以下公告逐条评分（1-5：5=重大利好必关注，4=强利好，3=中性偏多，≤2=无关/利空），只输出JSON数组，无其他文字：\n[{"code":"代码","score":4,"logic":"≤20字"}]\n\n公告列表：\n${top40}`);
-        const cleaned = txt.replace(/```json|```/g, "").trim();
-        const arr = JSON.parse(cleaned);
+        // v9.87.0（P1-8）：原裸 JSON.parse（坏 JSON 直接抛 → 外层吞掉整段）→ 统一解析 + score clamp
+        const arr = parseLLMJSON(txt, SCHEMAS.annScore);
         if (Array.isArray(arr)) {
           for (const x of arr.slice(0, 15)) {
             if (Number(x.score) >= 4) {
@@ -885,15 +878,8 @@ async function runEventClassify({ pool }) {
       return;
     }
 
-    // JSON 容错解析（LLM 输出常被 max_tokens 截断 → 截到最后一个完整对象补 ]）
-    const parseLoose = (text) => {
-      try { const p = JSON.parse(text); if (Array.isArray(p)) return p; } catch { /* 继续 */ }
-      const idx = text.lastIndexOf("}");
-      if (idx > 0) {
-        try { const p = JSON.parse(text.slice(0, idx + 1) + "]"); if (Array.isArray(p)) return p; } catch { /* 继续 */ }
-      }
-      return null;
-    };
+    // JSON 容错解析：v9.87.0（P1-8）统一走 llmJson（含截断补 ] + level/catalystScore schema 归一化），
+    // 原 parseLoose 内联实现移除
 
     // 3. LLM 三级分级（与前端 aiPrompts eventClassify 同构）；不可用 → 规则版
     let items = null;
@@ -1585,10 +1571,8 @@ correlation<0.5 的标的是低关联度蹭概念，verdict 必须"回避"。
 correlation 必须基于行业归属（industry）与主题关联度判断，不得凭空捏造。`;
       try {
         const stockText = await callLLM(stockPrompt, { maxTokens: 4000, temperature: 0.2 });
-        try { stockVerdicts = JSON.parse(stockText); } catch {
-          const m = stockText.match(/\[[\s\S]*\]/);
-          if (m) { try { stockVerdicts = JSON.parse(m[0]); } catch { stockVerdicts = []; } }
-        }
+        // v9.87.0（P1-8）：统一解析 + verdict 枚举/correlation clamp
+        stockVerdicts = parseLLMJSON(stockText, SCHEMAS.stockSelect) ?? [];
       } catch { stockVerdicts = []; }
     }
     const verdictMap = new Map((Array.isArray(stockVerdicts) ? stockVerdicts : []).map(v => [String(v.code), v]));
@@ -1825,10 +1809,8 @@ async function runUserStyleProfile(pool) {
   try {
     const { callModelText } = require("./lib/httpProxy");
     const text = await callModelText(prompt, { system: "你是A股行为金融分析师。只输出JSON。", maxTokens: 800, temperature: 0.4 });
-    // 剥围栏后尝试解析
-    const cleaned = text.replace(/```(?:json)?\s*/g, "").replace(/```/g, "").trim();
-    const m = cleaned.match(/\{[\s\S]*\}/);
-    if (m) result = JSON.parse(m[0]);
+    // v9.87.0（P1-8）：统一解析 + schema 归一化（字段类型/数组元素）
+    result = parseLLMJSON(text, SCHEMAS.userStyle);
   } catch { /* LLM 失败 → 规则版 */ }
   if (!result) {
     result = { style: "未知", biases: [], avoidThemes: [], suggestion: "样本不足，建议持续使用拍板与成交记录功能" };

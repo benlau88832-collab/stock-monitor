@@ -11,7 +11,8 @@ import { apiFetch, isLocalServer, kvGet } from "../lib/cloudStore";
 import { getAllSince } from "../lib/dataStore";
 import DisclaimerTag from "./DisclaimerTag";
 // v9.84.2（AI大脑层 · 3.5）：接线死任务 —— policyDiff（政策解读）/ eventClassify（LLM 精分级）
-import { callAI, parseAIJSON } from "../lib/ai";
+import { callAI } from "../lib/ai";
+import { parseLLMJSON, schemaForTask } from "../lib/llmJson";
 
 interface ClassifiedEvent {
   title: string;
@@ -97,7 +98,7 @@ export default function EventClassifyPanel({ onOpenNews }: {
         .map(i => ({ title: i.title, source: i.level }));
       if (targets.length === 0) return;
       const r = await callAI("eventClassify", { events: targets });
-      const j = parseAIJSON<Array<{ title: string; level?: string; beneficiaries?: string[]; catalystScore?: number; timeSensitivity?: string; reason?: string }>>(r.text);
+      const j = parseLLMJSON<Array<{ title: string; level?: string; beneficiaries?: string[]; catalystScore?: number; timeSensitivity?: string; reason?: string }>>(r.text, schemaForTask("eventClassify"));
       const list = Array.isArray(j) ? j : [];
       if (list.length > 0) {
         const byTitle = new Map(list.filter(x => x.title).map(x => [x.title, x]));

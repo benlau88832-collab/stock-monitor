@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchMarketAnnouncements, type MarketAnnouncement } from "../lib/api";
-import { callAI, parseAIJSON } from "../lib/ai";
+import { callAI } from "../lib/ai";
+import { parseLLMJSON, schemaForTask } from "../lib/llmJson";
 import type { AnnItem } from "../lib/llmNewsIntelligence";
 import { upsertAnnouncements } from "../lib/dataStore";
 import { matchBoardsByText } from "../lib/boardMap";
@@ -218,7 +219,7 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
         })),
       });
       if (!result.degraded) {
-        const parsed = parseAIJSON<AnnAIScore[]>(result.text, ["code", "score"]);
+        const parsed = parseLLMJSON<AnnAIScore[]>(result.text, schemaForTask("annRank"));
         if (parsed) {
           const updated = new Map(aiScores);
           for (const s of parsed) updated.set(s.code, s);

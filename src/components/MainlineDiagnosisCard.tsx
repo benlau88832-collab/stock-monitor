@@ -3,7 +3,7 @@
 // 结构化输出：结论/理由/风险/置信度分行，禁止大段文字
 import { useState, useEffect } from "react";
 import { callAI } from "../lib/ai";
-import { parseAIJSON } from "../lib/ai";
+import { parseLLMJSON, schemaForTask } from "../lib/llmJson";
 import { calcMainlineStrength } from "../lib/mainlineScore";
 import { checkExitSignal } from "../lib/exitSignal";
 import type { MainlineGroup } from "../lib/stockToMainline";
@@ -74,7 +74,7 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
     try {
       const result = await callAI("mainlineDiagnosis", { prompt: buildPrompt() });
       if (!result.degraded) {
-        const parsed = parseAIJSON<MainlineDiagnosis>(result.text, ["strength_score", "mainline"]);
+        const parsed = parseLLMJSON<MainlineDiagnosis>(result.text, schemaForTask("mainlineDiagnosis"));
         if (parsed && parsed.mainline && parsed.strength_score != null) {
           setDiagnosis(parsed);
           return;

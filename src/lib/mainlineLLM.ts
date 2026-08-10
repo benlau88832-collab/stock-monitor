@@ -5,7 +5,8 @@
 // ④ payload 只放稳定内容（板块名/涨停数/高度/龙头名/新闻标题，不放内部权重）
 // ⑤ temperature 0.1、不流式、不开 thinking
 
-import { callAI, parseAIJSON, type AIResult } from "./ai";
+import { callAI, type AIResult } from "./ai";
+import { parseLLMJSON, schemaForTask } from "./llmJson";
 import type { MarketStyleInfo } from "./mainline";
 import type { MainlineGroup } from "./stockToMainline";
 
@@ -117,7 +118,7 @@ ${JSON.stringify(payload)}
 
 // ============== 容错解析（v9.26 F-07：候选白名单校验） ==============
 function parseLLMMainlineResult(raw: string, candidates: MainlineGroup[]): MainlineLLMResult[] {
-  const arr = parseAIJSON<Array<Record<string, unknown>>>(raw, ["board", "rank"]);
+  const arr = parseLLMJSON<Array<Record<string, unknown>>>(raw, schemaForTask("mainlineRank"));
   if (!arr || !Array.isArray(arr)) return degradeToRules(candidates);
 
   // F-07：构建白名单 —— board 必须来自输入候选；code 必须属于该候选的龙头池

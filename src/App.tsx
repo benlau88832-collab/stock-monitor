@@ -43,7 +43,8 @@ import { checkExitSignal } from "./lib/exitSignal";
 import { stageOfFunds } from "./lib/stageModel";
 import { getAllSince } from "./lib/dataStore";
 // v9.33（缺口3）：LLM 三剧本/龙头预判/风险雷达
-import { callAI, parseAIJSON } from "./lib/ai";
+import { callAI } from "./lib/ai";
+import { parseLLMJSON, schemaForTask } from "./lib/llmJson";
 // v9.34（S1）：封单衰减实时监控（龙一开板前兆）
 import { detectSealDecay, type SealAlert } from "./lib/sealMonitor";
 // v9.36（B2）：昨日涨停统计纯函数（溢价/核按钮/晋级率）
@@ -1130,7 +1131,7 @@ export default function App() {
       callAI("nextDayScenarios", { prompt }).then((r) => {
         if (cancelled) return;
         try {
-          const arr = parseAIJSON<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }>>(r.text);
+          const arr = parseLLMJSON<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }>>(r.text, schemaForTask("nextDayScenarios"));
           if (Array.isArray(arr) && arr.length > 0) setNextScenarios(arr.slice(0, 3));
         } catch { /* 解析失败静默 */ }
       }).catch(() => {});
@@ -1141,7 +1142,7 @@ export default function App() {
         callAI("nextGatePredict", { prompt: `今日盘面：情绪${ov.sentiment ?? "?"}分 · 涨停${ov.limitPool?.limitUpCount ?? 0} · 炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}% · 最高${ov.maxBoardHeight ?? "?"}板\n${gateStr}\n外围指数：${idxStr2 || "无"}\n\n请预判明日开盘闸门状态并给出关键观察点。` }).then((r) => {
           if (cancelled) return;
           try {
-            const j = parseAIJSON<{ nextGate: string; reason: string; watchPoints: string[] }>(r.text);
+            const j = parseLLMJSON<{ nextGate: string; reason: string; watchPoints: string[] }>(r.text, schemaForTask("nextGatePredict"));
             if (j && j.nextGate) setNextGatePredict({ nextGate: String(j.nextGate), reason: String(j.reason ?? ""), watchPoints: Array.isArray(j.watchPoints) ? j.watchPoints.slice(0, 3) : [] });
           } catch { /* 静默 */ }
         }).catch(() => {});
@@ -1154,7 +1155,7 @@ export default function App() {
       callAI("riskRadar", { prompt: rPrompt }).then((r) => {
         if (cancelled) return;
         try {
-          const j = parseAIJSON<{ level: string; points: Array<{ item: string; desc: string }>; advice: string }>(r.text);
+          const j = parseLLMJSON<{ level: string; points: Array<{ item: string; desc: string }>; advice: string }>(r.text, schemaForTask("riskRadar"));
           if (j && j.level) setRiskRadarText(`风险雷达[${j.level}]：${(j.points ?? []).map(p => `${p.item}(${p.desc})`).join("；") || "无明显风险"}${j.advice ? `。建议：${j.advice}` : ""}`);
         } catch { /* 静默 */ }
       }).catch(() => {});
@@ -1168,7 +1169,7 @@ export default function App() {
       callAI("leaderPredict", { prompt: `昨日涨停：${yt || "无"}\n今日已涨停：${zt || "无（竞价未出）"}` }).then((r) => {
         if (cancelled) return;
         try {
-          const j = parseAIJSON<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string }>(r.text);
+          const j = parseLLMJSON<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string }>(r.text, schemaForTask("leaderPredict"));
           if (j) {
             // v9.75（防幻觉）：预测的龙头必须存在于今日/昨日涨停池白名单，否则丢弃（原信任 LLM 编造的 code）
             const poolCodes = new Set([

@@ -10,6 +10,7 @@
 //         ③finalize 强制扣置信（≥50%→-15 / ≥30%→-8，与 decisionBus 同规则，AI 跑不掉门控）
 // ============================================================
 import { callAI, parseAIJSON, callAgentChat, type AgentChatResult } from "./ai";
+import { parseLLMJSON, schemaForTask } from "./llmJson";
 import { getAgentTools, getStockAgentTools, evaluateFactorHealth, type FactorHealthReport } from "./agentTools";
 // v9.58（V8-9）：AI 结论全站联动 store
 import { setStockAI, pruneStockAI } from "./aiConclusionStore";
@@ -106,7 +107,7 @@ canRefute=true 时 suggestAction 必须与 v.action 不同（降级）。`;
     // v9.75（阶段三）：独立 criticReview 任务槽 —— 原复用 dailyIntel（token 2000/缓存/降级全错配，
     // 降级时 dailyIntel 的 FALLBACK JSON 被解析成 {canRefute:undefined} → 误判"复核通过"）
     const r = await callAI("criticReview", { prompt });
-    const j = parseAIJSON<{ canRefute: boolean; why: string; suggestAction: string }>(r.text);
+    const j = parseLLMJSON<{ canRefute: boolean; why: string; suggestAction: string }>(r.text, schemaForTask("criticReview"));
     if (r.degraded) return v; // 降级 = 不挑刺（保持原裁决），不再误判"复核通过"
     if (j?.canRefute && j.suggestAction && j.suggestAction !== v.action) {
       return {

@@ -8,7 +8,8 @@
 // ③ payload 只放稳定内容（名+行业+涨幅+连板）
 // ④ temperature 0.1、不流式、不开 thinking ⑤ 一次调用归类全涨停池
 
-import { callAI, parseAIJSON, type AIResult } from "./ai";
+import { callAI, type AIResult } from "./ai";
+import { parseLLMJSON, schemaForTask } from "./llmJson";
 import type { ZTPoolItem } from "./themeLadder";
 import { fetchBoardFundFlow, fetchBoardConstituents } from "./api";
 import { isRealConceptBoard } from "./boardTaxonomy";
@@ -416,11 +417,11 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
 
 // ============== 容错解析 ==============
 async function parseClassifyResult(raw: string, input: ClassifyInput): Promise<ClassifyResult> {
-  const parsed = parseAIJSON<{
+  const parsed = parseLLMJSON<{
     stocks?: Array<Record<string, unknown>>;
     groups?: Array<Record<string, unknown>>;
     overview?: Record<string, unknown>;
-  }>(raw, ["stocks"]);
+  }>(raw, schemaForTask("mainlineClassify"));
 
   if (!parsed || !Array.isArray(parsed.stocks)) {
     console.warn("[stockToMainline] LLM JSON 解析失败（返回格式非预期）→ fallback 概念板块分组");

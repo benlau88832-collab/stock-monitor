@@ -2,6 +2,7 @@
 // 机制：缓存(秒开+防重复) / 单飞(去重) / 分钟限速 / 降级
 
 import { type AITask, type AITaskPayload, FALLBACKS, buildPrompt, TASK_CONFIG } from "./aiPrompts";
+import { parseLLMJSON } from "./llmJson";
 import { loadSettings, saveSettings } from "./aiSettings";
 import { localDateStr } from "./format";
 import { isLocalServer, getLocalToken } from "./cloudStore";
@@ -650,68 +651,18 @@ export function parseAIJSON<T = unknown>(
   raw: string,
   requiredFields?: string[],
 ): T | null {
-  if (!raw) return null;
-  const tryParse = (text: string): T | null => {
-    try { return JSON.parse(text) as T; } catch { return null; }
-  };
-  const validateArray = (arr: unknown[]): unknown[] | null => {
-    if (!requiredFields || requiredFields.length === 0) return arr;
-    const valid = arr.filter((item) => {
+  // v9.87.0（P1-8）：解析容错统一收敛到 llmJson.parseLLMJSON（剥围栏/正则提取/截断补 ]），
+  //   requiredFields 语义保持原样（字段存在性过滤，坏元素丢弃）
+  const parsed = parseLLMJSON<unknown>(raw);
+  if (parsed === null) return null;
+  if (Array.isArray(parsed) && requiredFields && requiredFields.length > 0) {
+    const valid = parsed.filter((item) => {
       if (!item || typeof item !== "object") return false;
       return requiredFields.every((f) => f in (item as Record<string, unknown>));
     });
-    return valid.length > 0 ? valid : null;
-  };
-
-  try {
-    // a. 剥除代码围栏 ```json ... ``` 或 ``` ... ```
-    let cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
-
-    // b. 提取第一个 [ ... ] 或 { ... }
-    const arrMatch = cleaned.match(/\[[\s\S]*\]/);
-    const objMatch = cleaned.match(/\{[\s\S]*\}/);
-
-    let target: string | null = null;
-    if (arrMatch && objMatch) {
-      // 取出现位置更靠前的那个
-      target = (arrMatch.index ?? Infinity) < (objMatch.index ?? Infinity)
-        ? arrMatch[0] : objMatch[0];
-    } else {
-      target = arrMatch?.[0] ?? objMatch?.[0] ?? null;
-    }
-
-    if (!target) return null;
-
-    // c. JSON.parse（完整尝试）
-    const parsed = tryParse(target);
-    if (parsed !== null) {
-      if (Array.isArray(parsed)) return (validateArray(parsed) as unknown as T) ?? null;
-      return parsed;
-    }
-
-    // c2. v9.75（阶段三）：截断容错 —— LLM 输出被 max_tokens 截断时，
-    //     从最后一个 `}` 处截断并补 `]` 重试（数组场景），避免整段丢失
-    if (target.startsWith("[")) {
-      for (let idx = target.lastIndexOf("}"); idx > 0; idx = target.lastIndexOf("}", idx - 1)) {
-        const partial = target.slice(0, idx + 1) + "]";
-        const p = tryParse(partial);
-        if (p !== null) {
-          if (Array.isArray(p)) return (validateArray(p) as unknown as T) ?? null;
-          return p;
-        }
-      }
-    }
-
-    // d. 数组任务校验字段
-    if (Array.isArray(parsed)) {
-      const valid = validateArray(parsed);
-      return (valid as unknown as T) ?? null;
-    }
-
-    return parsed as T;
-  } catch {
-    return null;
+    return (valid.length > 0 ? valid : null) as T | null;
   }
+  return parsed as T;
 }
 
 // ============================================================

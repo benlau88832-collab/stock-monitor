@@ -1,3 +1,4 @@
+import { parseLLMJSON, schemaForTask } from "./llmJson";
 // ============================================================
 // v9.38（V3-1）：Agent 工具注册表
 // 把现有 16+ 决策/数据函数包装成工具描述符（name/desc/execute）。
@@ -404,7 +405,7 @@ export function getAgentTools(): AgentTool[] {
         if (score < 60) {
           return { deep: false, note: `催化强度 ${score} 分 < 60，未触发深挖（成本控制）；可手动升级关注` };
         }
-        const { callAI, parseAIJSON } = await import("./ai");
+        const { callAI } = await import("./ai");
         try {
           const r = await callAI("eventDeepDive", {
             title: ctx.eventTitle ?? ctx.board ?? "未知事件",
@@ -412,7 +413,7 @@ export function getAgentTools(): AgentTool[] {
             catalystScore: score,
             beneficiaries: ctx.beneficiaries ?? [],
           });
-          const j = parseAIJSON<{ chain: string; targets: Array<{ name: string; reason: string }>; risk: string; confirm: string; conclusion: string }>(r.text);
+          const j = parseLLMJSON<{ chain: string; targets: Array<{ name: string; reason: string }>; risk: string; confirm: string; conclusion: string }>(r.text, schemaForTask("eventDeepDive"));
           // v9.85.0（P1-13）：LLM 降级/失败时显式标记 degraded —— 主 Agent 不得把规则 fallback 当深度证据
           if (r.degraded || !j?.chain) {
             return { deep: true, degraded: true, chain: r.degraded ? "LLM 降级（配额受限），以下为规则参考" : "LLM 深挖失败", targets: [], risk: "", confirm: "看板块主力资金", conclusion: "深挖暂不可用，按分级结果参考" };
@@ -470,10 +471,10 @@ export function getAgentTools(): AgentTool[] {
               } catch { /* 缓存损坏忽略 */ }
             }
             if (!attribution) {
-              const { callAI, parseAIJSON } = await import("./ai");
+              const { callAI } = await import("./ai");
               const decayedList = report.items.filter(i => i.decayed || i.reversed).map(i => `${i.name}(IC=${i.ic != null ? i.ic.toFixed(3) : "?"},样本${i.samples})`).join("、");
               const r = await callAI("factorAttribution", { prompt: `以下A股短线因子近期失效/方向反转（滚动IC接近0或与预期方向相反）。结合当前市场环境，给出最可能的失效原因（如：情绪因子在震荡市钝化/封单数据口径变化/样本不足等），并建议是否需要退役或反向使用。\n失效因子：${decayedList}`, });
-              const j = parseAIJSON<{ summary: string; suggestions: string[] }>(r.text);
+              const j = parseLLMJSON<{ summary: string; suggestions: string[] }>(r.text, schemaForTask("factorAttribution"));
               attribution = j?.summary ? `${j.summary}${(j.suggestions ?? []).length ? `（建议：${j.suggestions.slice(0, 2).join("；")}）` : ""}` : null;
               if (attribution && !r.degraded) {
                 try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), text: attribution })); } catch { /* 存储满忽略 */ }

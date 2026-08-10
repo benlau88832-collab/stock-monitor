@@ -3,7 +3,8 @@
 // ③ 作战卡先规则分渲染，LLM异步补位 ④ payload只放稳定内容
 // ⑤ temperature 0.1、不流式、不开thinking、超时走降级
 
-import { callAI, parseAIJSON, type AIResult } from "./ai";
+import { callAI, type AIResult } from "./ai";
+import { parseLLMJSON, schemaForTask } from "./llmJson";
 
 // ============== 题材消息评分 ==============
 export interface ThemeNewsLLMResult {
@@ -66,7 +67,7 @@ function parseLLMThemeResult(
   raw: string,
   boards: Array<{ board: string }>,
 ): ThemeNewsLLMResult[] {
-  const arr = parseAIJSON<Array<Record<string, unknown>>>(raw, ["board", "catalyst"]);
+  const arr = parseLLMJSON<Array<Record<string, unknown>>>(raw, schemaForTask("themeNewsScore"));
   if (!arr) {
     // 整批失败 → 规则版
     return boards.map(b => ({
@@ -145,7 +146,7 @@ function parseLLMStockResult(
   raw: string,
   stocks: Array<{ code: string }>,
 ): StockNewsLLMResult[] {
-  const arr = parseAIJSON<Array<Record<string, unknown>>>(raw, ["code", "msgScore"]);
+  const arr = parseLLMJSON<Array<Record<string, unknown>>>(raw, schemaForTask("stockNewsScore"));
   if (!arr) {
     return stocks.map(s => ({
       code: s.code, msgScore: 50, polarity: "中性",

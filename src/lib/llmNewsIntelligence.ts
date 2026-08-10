@@ -1,7 +1,8 @@
 // Agnes 深度情报中枢 v2
 // 代码统计 + 模型研判 + 来源溯源 + 分段/终盘写盘
 
-import { callAI, parseAIJSON, hasAvailableAI } from "./ai";
+import { callAI, hasAvailableAI } from "./ai";
+import { parseLLMJSON, schemaForTask } from "./llmJson";
 import { saveDailyMemo, saveSegmentMemo, getRecentMemos, type DailyNewsMemo, type IntelSlot } from "./newsMemoStore";
 import { computeStats, formatStatsForPrompt, formatMarketBlock, pickTopSourced } from "./intelStats";
 
@@ -119,7 +120,7 @@ ${input.strongBoards.join("、") || "暂无数据"}
   }
 
   // ⑥ 解析
-  const parsed = parseAIJSON<Record<string, unknown>>(result.text);
+  const parsed = parseLLMJSON<Record<string, unknown>>(result.text, schemaForTask("dailyIntel"));
   if (!parsed) {
     const fb = buildFallback(input, stats);
     fb.rawSummary = result.text;

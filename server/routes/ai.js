@@ -20,6 +20,8 @@ const TASK_ALLOW = new Set([
   "themeNewsScore", "stockNewsScore", "dailyIntel",
   "dailyReviewAuto", "nextDayScenarios", "leaderPredict", "riskRadar",
   "eventClassify", "eventDeepDive", "agentReason",
+  // v9.87.0（P2-1）：补齐前端有调用点的 task —— 此前 403 后前端回退浏览器直连（服务端不可观测）
+  "criticReview", "factorAttribution", "nextGatePredict",
   // v9.85.1（P1-2）：AIConsole 快速问答（SSE 流式专用，与 /call 共用白名单口径）
   "quickChat",
 ]);
@@ -48,6 +50,8 @@ function takeToken(bucket) {
   b.tokens -= 1;
   return true;
 }
+
+const { parseLLMJSON, SCHEMAS } = require("../lib/llmJson");
 
 module.exports = function aiRoutes(app) {
   // v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
@@ -115,15 +119,22 @@ module.exports = function aiRoutes(app) {
       const history = Array.isArray(req.body?.history)
         ? req.body.history.slice(-8).map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content ?? "").slice(0, 1200) }))
         : [];
+      // v9.87.0（P2-1）：请求侧保护层 —— system/user 长度上限（原无限制，恶意调用可提交超大 prompt 当代理）
+      const sysText = String(system || "");
+      const userText = String(user || "");
+      if (sysText.length > 4000 || userText.length > 16000) {
+        return res.status(400).json({ error: "prompt too long (system<=4000, user<=16000)" });
+      }
       const body = {
         model,
         messages: [
-          { role: "system", content: String(system || "") },
+          { role: "system", content: sysText },
           ...history,
-          { role: "user", content: String(user || "") },
+          { role: "user", content: userText },
         ],
         max_tokens: Math.min(Number(maxTokens) || 2000, 8000),
-        temperature: temperature != null ? Number(temperature) : 0.2,
+        // v9.87.0（P2-1）：temperature 钳制 0-1（原可传任意值）
+        temperature: Math.max(0, Math.min(1, temperature != null ? Number(temperature) : 0.2)),
         stream: false,
       };
       // 2026-08-04 公告后：Endpoint=.cn + agnes-2.5-flash（免费）；thinking 显式关闭才有 content。
@@ -151,6 +162,14 @@ module.exports = function aiRoutes(app) {
         : undefined;
       if (!msg.content && !toolCalls) {
         return res.json({ error: "empty content", finish_reason: json && json.choices && json.choices[0] ? json.choices[0].finish_reason : undefined });
+      }
+      // v9.87.0（P1-8）：JSON 类 task 上游响应做 schema 校验 —— 仅 warn 日志不阻断
+      // （前端 parseLLMJSON 仍有自己的降级链；此处让"坏 JSON 率"可观测）
+      if (msg.content && SCHEMAS[task]) {
+        const parsed = parseLLMJSON(msg.content, SCHEMAS[task]);
+        if (parsed === null) {
+          console.warn(`[ai] task=${task} 上游响应非法 JSON（前端将降级规则版）:`, String(msg.content).slice(0, 80));
+        }
       }
       res.json({ text: msg.content || "", toolCalls });
     } catch (e) {
@@ -196,7 +215,7 @@ module.exports = function aiRoutes(app) {
         { role: "user", content: userText },
       ],
       max_tokens: Math.min(Number(maxTokens) || 2000, 8000),
-      temperature: temperature != null ? Number(temperature) : 0.2,
+      temperature: Math.max(0, Math.min(1, temperature != null ? Number(temperature) : 0.2)),
       stream: true,
     };
     // v9.84.2（3.4）：chat_template_kwargs 是 Agnes 专属参数 —— 与 /api/ai/call 同口径，
