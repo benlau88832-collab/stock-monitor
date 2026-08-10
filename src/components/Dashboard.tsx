@@ -2,6 +2,9 @@ import { useState, useEffect, useMemo, memo } from "react";
 import MarketOverview from "./MarketOverview";
 // v9.95.1（第五段 P2）：情绪周期雷达卡重新接线 —— v9.48 移除成死代码，验收缺口"周期阶段化（进度条 5 段）"补回
 import EmotionCycleCard from "./EmotionCycleCard";
+// v9.96.0（批次 1）：市场情绪 Widget + 叙事报告（VibeAlpha）
+import MarketEmotionWidget from "./MarketEmotionWidget";
+import EmotionReportPanel from "./EmotionReportPanel";
 import type { EmotionCycleInput } from "../lib/emotionCycle";
 import DisciplinePanel from "./DisciplinePanel";
 import ReviewPanel from "./ReviewPanel";
@@ -1147,9 +1150,19 @@ export default function Dashboard({
               blastedRatePrev: null,
               premiumAvg: overview.premiumAvg,
               promotionRate: overview.promotionRate,
+              // v9.96.0（VibeAlpha 对照）：封板率炸板数 + 红盘率（溢价分布派生）
+              blastedCount: overview.limitPool.blastedCount ?? null,
+              redRate: (() => {
+                const d = overview.premiumDist;
+                if (!d) return null;
+                const total = d.ltNeg5 + d.neg5to0 + d.zeroTo3 + d.gt3;
+                return total > 0 ? (d.zeroTo3 + d.gt3) / total : null;
+              })(),
             };
             return <EmotionCycleCard input={cycleInput} premiumDist={overview.premiumDist ?? null} />;
           })()}
+          {/* v9.96.0（批次 1）：红涨绿跌比例条（复用 breadth，零新增请求） */}
+          <MarketEmotionWidget overview={overview} />
           {/* v10-4（P1）：作战卡内嵌 AI 裁决徽章（每条主线显示 LLM 结论） */}
           <BattlePlan data={battlePlan ?? null} agentResults={agentResults} />
           {/* v10-3：StockPickList 已上移至裁决区（见上），此处不再重复渲染 */}
@@ -1177,6 +1190,8 @@ export default function Dashboard({
 
       {/* ============== 复盘工具（v9.46：移到全 Dashboard 末尾 —— "现在进行"在前，"复盘"在后） ============== */}
       {/* 全天可见按钮（默认折叠，状态持久化到 localStorage）：AI复盘/信号/回测/因子健康/决策审计/净值 */}
+      {/* v9.96.0（批次 1）：市场情绪叙事报告（周期引擎 + LLM + 导出） */}
+      <EmotionReportPanel />
       <div className="flex flex-wrap gap-2">
         <button onClick={() => setShowAI(v => !v)}
           className="rounded px-3 py-1 text-xs bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 border border-violet-500/20">

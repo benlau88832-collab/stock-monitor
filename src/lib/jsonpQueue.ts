@@ -41,8 +41,10 @@ let inflight = 0;
 // v9.81（性能修复）：熔断按 host 分桶 —— 原全局熔断让任一域名连续失败就全站快速失败，
 // 龙虎榜(push2ex)/快讯(np-anotice)等单源故障会连带 dashboard 的 push2 数据；
 // 现每个 host 独立维护 failCount/openUntil/halfOpen，互不牵连。阈值 6→3：断源时更快进入快速失败。
-const CIRCUIT_FAIL_THRESHOLD = 3;   // 每 host 连续失败多少次触发熔断
-const CIRCUIT_OPEN_MS = 3000;       // 熔断窗口时长
+// v9.96.0（阶段一-1，finshare SmartCooldown）：分级冷却 —— 错误类型决定冷却时长：
+//   403→300s / 429→120s / 503→30s / timeout→5s / 连接错误→10s / 其他→15s，
+//   连续失败按 min(1+失败数×0.5, 3.0) 倍率累积；WAF 断流（403/ECONNRESET）一次即冷却，
+//   不再"重试 3 次加速被封"。openUntil 语义从"熔断窗口"升级为"分级冷却恢复时间"。
 const circuitBuckets = new Map<string, { failCount: number; openUntil: number; halfOpen: boolean }>();
 
 function getBucket(host: string): { failCount: number; openUntil: number; halfOpen: boolean } {
@@ -53,6 +55,36 @@ function getBucket(host: string): { failCount: number; openUntil: number; halfOp
 
 function hostOf(url: string): string {
   try { return new URL(url).host; } catch { return "unknown"; }
+}
+
+// ============== v9.96.0（阶段一-1）：错误分类 → 分级冷却时长（finshare SmartCooldown 表） ==============
+export type CooldownClass = "forbidden" | "rate_limit" | "service_unavailable" | "timeout" | "connection_error" | "default";
+
+/** 错误 → 冷却分类（纯函数，供单测） */
+export function classifyError(err: unknown): CooldownClass {
+  const msg = err instanceof Error ? err.message : String(err);
+  const s = msg.toLowerCase();
+  if (s.includes("403") || s.includes("forbidden")) return "forbidden";
+  if (s.includes("429") || s.includes("rate limit")) return "rate_limit";
+  if (s.includes("503")) return "service_unavailable";
+  if (s.includes("timeout") || s.includes("abort")) return "timeout";
+  if (s.includes("reset") || s.includes("hang up") || s.includes("load error") || s.includes("failed to fetch") || s.includes("network") || s.includes("socket")) return "connection_error";
+  return "default";
+}
+
+/** 冷却分类 → 基础冷却时长 ms */
+export const COOLDOWN_MS: Record<CooldownClass, number> = {
+  forbidden: 300_000,          // 403：WAF 拒绝，重试无意义
+  rate_limit: 120_000,         // 429：限流
+  service_unavailable: 30_000, // 503
+  timeout: 5_000,              // 超时：可能是瞬时
+  connection_error: 10_000,    // ECONNRESET/HTTP 000：连接级故障
+  default: 15_000,
+};
+
+/** 冷却倍率累积：连续失败 N 次 → ×min(1+N×0.5, 3.0) */
+export function cooldownMultiplier(failCount: number): number {
+  return Math.min(1 + Math.max(0, failCount - 1) * 0.5, 3.0);
 }
 
 /** 熔断状态导出（OpsPanel/横幅可观测）—— 任一 host 熔断即视为整体异常 */
@@ -70,13 +102,14 @@ export function getCircuitState(): { open: boolean; failCount: number; halfOpen:
   return { open, failCount, halfOpen };
 }
 
-function recordFail(url: string): void {
+function recordFail(url: string, err?: unknown): void {
   const b = getBucket(hostOf(url));
   b.failCount++;
-  if (b.failCount >= CIRCUIT_FAIL_THRESHOLD) {
-    b.openUntil = Date.now() + CIRCUIT_OPEN_MS;
-    b.halfOpen = false;
-  }
+  // v9.96.0：按错误类型分级冷却 + 连续失败倍率累积（403 一次即 300s 冷却，不再重试 3 次加速被封）
+  const cls = classifyError(err);
+  const coolMs = COOLDOWN_MS[cls] * cooldownMultiplier(b.failCount);
+  b.openUntil = Math.max(b.openUntil, Date.now() + coolMs);
+  b.halfOpen = false;
 }
 
 function recordSuccess(url: string): void {
@@ -218,7 +251,7 @@ function processNext() {
   execWithFallback(item.url, item.timeout, item.callbackParam)
     .then(data => { recordSuccess(item.url); item.resolve(data); })
     .catch(err => {
-      recordFail(item.url);
+      recordFail(item.url, err);
       if (item.retryCount < item.maxRetries && !isCircuitOpen(item.url)) {
         // v9.84（性能）：重试退避 1s（原 1s/3s/8s 三级）+ 队首插入（原排到队尾）——
         // 间歇网络下 37 个请求互相拖尾是单轮 4-9s 的主因；1 次重试 + 队首插队让失败项最快重发
@@ -260,4 +293,39 @@ export function queuedJsonp<T = any>(
   // （原 v9.80 写法在 Node/vitest 下触发 unhandledRejection，浏览器端也只是 console 噪音）
   promise.then(() => inflightMap.delete(dedupeKey), () => inflightMap.delete(dedupeKey));
   return promise;
+}
+
+// ============== v9.96.0（阶段一-2）：健康探测恢复（finshare HealthProbe） ==============
+// push2 被 WAF 断源后分级冷却 300s；若东财侧恢复，被动等冷却到期太慢。
+// 每 300s 后台探测 push2 快照（000001.SH，经服务端 proxy），连续成功 1 次即关闭冷却切回主源。
+let probeTimer: ReturnType<typeof setInterval> | null = null;
+
+async function probePush2Once(): Promise<boolean> {
+  try {
+    const { isLocalServer, getLocalToken } = await import("./cloudStore");
+    if (!isLocalServer()) return false;
+    const probeUrl = "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=1.000001&fields=f2";
+    const token = await getLocalToken();
+    const resp = await fetch(`/api/proxy?url=${encodeURIComponent(probeUrl)}`, {
+      headers: token ? { "x-local-token": token } : {},
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!resp.ok) return false;
+    const text = await resp.text();
+    if (!text.includes("000001")) return false; // 非预期响应不算恢复
+    const b = getBucket("push2.eastmoney.com");
+    b.failCount = 0;
+    b.openUntil = 0;
+    b.halfOpen = false;
+    recordSourceHit(probeUrl, "push2");
+    console.log("[jsonpQueue] push2 健康探测通过 → 冷却已清除，自动切回主源");
+    return true;
+  } catch { return false; } /* 探测失败静默（维持冷却） */
+}
+
+/** 启动健康探测（幂等；默认 300s 周期 + 启动立即探测一次）。App 初始化时调用一次 */
+export function startHealthProbe(intervalMs = 300_000): void {
+  if (probeTimer) return;
+  void probePush2Once(); // 立即探测（不等到首个周期）
+  probeTimer = setInterval(() => { void probePush2Once(); }, intervalMs);
 }

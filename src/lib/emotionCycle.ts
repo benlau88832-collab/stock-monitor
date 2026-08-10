@@ -15,6 +15,9 @@ export interface EmotionCycleInput {
   blastedRatePrev: number | null; // 昨日炸板率 %
   premiumAvg: number | null;      // 昨日涨停股今日平均溢价 %
   promotionRate: number | null;   // 2板→3板晋级率 0~1
+  // v9.96.0（VibeAlpha market_cycle 对照）：封板率与赚钱效应（红盘率）
+  blastedCount: number | null;    // 今日炸板数（封板率 = 涨停/(涨停+炸板)）
+  redRate: number | null;         // 昨日涨停今日红盘占比（0~1，赚钱效应）
 }
 
 export interface EmotionCycleResult {
@@ -50,6 +53,10 @@ export function computeEmotionCycle(input: EmotionCycleInput): EmotionCycleResul
   const blastedUp = input.blastedRatePrev != null && blasted > input.blastedRatePrev;
   const premium = input.premiumAvg ?? 0;
   const promo = input.promotionRate ?? 0.3;
+  // v9.96.0（VibeAlpha 对照）：封板率 = 涨停/(涨停+炸板)；红盘率 = 昨日涨停今日红盘占比
+  const sealRate = input.blastedCount != null && zt + input.blastedCount > 0
+    ? zt / (zt + input.blastedCount) * 100 : null;
+  const redRate = input.redRate ?? null;
 
   const evidence: string[] = [];
   let phase: EmotionPhase;
@@ -101,6 +108,8 @@ export function computeEmotionCycle(input: EmotionCycleInput): EmotionCycleResul
     evidence.push(`昨日涨停溢价${premium.toFixed(1)}%（为正）`);
     evidence.push(`炸板率${blasted.toFixed(0)}%（偏低）`);
     evidence.push(`最高${height}板`);
+    if (sealRate != null) evidence.push(`封板率${sealRate.toFixed(0)}%`);
+    if (redRate != null) evidence.push(redRate >= 0.5 ? `昨日涨停红盘率${(redRate * 100).toFixed(0)}%（赚钱效应）` : `昨日涨停红盘率${(redRate * 100).toFixed(0)}%（偏弱）`);
   }
   // ---- 分歧：涨停高位但炸板攀升 / 溢价走弱 / 晋级率下滑 ----
   else if (
@@ -122,6 +131,7 @@ export function computeEmotionCycle(input: EmotionCycleInput): EmotionCycleResul
     evidence.push(`涨停${zt}只`);
     evidence.push(`情绪分${s}`);
     evidence.push(`炸板率${blasted.toFixed(0)}%`);
+    if (redRate != null) evidence.push(`昨日涨停红盘率${(redRate * 100).toFixed(0)}%`);
   }
 
   // 退潮预警（游资最看重）

@@ -60,6 +60,8 @@ const TASK_CONFIG = {
   marginSentiment: { temperature: 0.2, maxTokens: 800, thinking: false },
   // v9.95.3：个股聚合研判 —— 中等输出结构化
   stockAggregate: { temperature: 0.2, maxTokens: 900, thinking: false },
+  // v9.96.0：情绪叙事报告 —— 中温长文（Markdown）
+  emotionReport: { temperature: 0.4, maxTokens: 1500, thinking: false },
 };
 
 const B = {
@@ -281,6 +283,24 @@ ${p.prompt}
 输出严格JSON对象，格式：
 {"verdict":"关注|回避|中性","thesis":"≤120字核心逻辑","risks":["风险1","风险2"],"watch":"观察点"}
 只返回JSON对象，无其他文字。` }),
+  // v9.96.0（批次 1，VibeAlpha 对照）：市场情绪叙事报告 —— "老张"毒舌复盘人设，Markdown 章节+表格
+  emotionReport: (p) => ({ system: `你是A股市场情绪叙事分析师（人设：10年游资"老张"，毒舌但准确）。基于提供的真实周期指标与舆情数据，生成一份 Markdown 情绪叙事报告。
+要求：
+1. 标题层级（##/###）+ 至少一个表格（表格必须每行单独一行）
+2. 先说结论（当前周期阶段一句话定性），再展开证据
+3. 数据只引用提供的，禁止编造数字
+4. 结尾固定免责声明（"以上为数据统计与历史规律参考，不构成投资建议"）`, user:
+`【日期】${p.date}
+【周期指标】
+${p.phaseMetrics}
+
+【情绪与舆情】
+${p.sentimentText}
+
+【资金面】
+${p.fundText}
+
+请输出 Markdown 报告（≤600字，含阶段结论/数据表格/风险提示）。` }),
   eventDeepDive: (p) => ({ system: SYSTEM_PREFIX, user:
 `你是A股事件深挖分析师。对以下已分级事件做影响推演，回答三个问题并给结论。
 

@@ -50,6 +50,20 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // v9.96.0（批次 1）：kv 前缀查询（历史报告列表等）—— prefix 按 key 前缀倒序取最新 N 条
+  app.get("/api/db/kv-prefix", async (req, res) => {
+    try {
+      const prefix = String(req.query.prefix || "");
+      const limit = Math.max(1, Math.min(Number(req.query.limit) || 20, 100));
+      if (!prefix) return res.status(400).json({ error: "prefix required" });
+      const r = await pool.query(
+        "SELECT key, value FROM kv_store WHERE key LIKE $1 ORDER BY key DESC LIMIT $2",
+        [prefix + "%", limit],
+      );
+      res.json({ items: r.rows.map(x => ({ key: x.key, value: x.value })) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.put("/api/db/kv", async (req, res) => {
     try {
       const { key, value } = req.body || {};
@@ -178,6 +192,22 @@ module.exports = function dbRoutes(app) {
       res.json({ ok: true, started: true });
       generateDailyReview({ pool })
         .catch(e => console.error("[api] review 后台执行失败:", e.message))
+        .finally(() => releaseLock(lockClient, LOCK_REVIEW));
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // v9.96.0（批次 1）：市场情绪叙事报告触发（VibeAlpha）—— 仿 review/trigger：advisory lock + 后台执行 + kv 落库
+  app.post("/api/emotion/analyze", async (req, res) => {
+    try {
+      const { generateEmotionReport } = require("../lib/emotionAnalysis");
+      const { acquireLock, releaseLock, LOCK_REVIEW } = require("../lib/pgLock");
+      const lockClient = await acquireLock(pool, LOCK_REVIEW);
+      if (!lockClient) {
+        return res.status(409).json({ error: "emotion analysis already running", running: true });
+      }
+      res.json({ ok: true, started: true });
+      generateEmotionReport(pool, new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10))
+        .catch(e => console.error("[api] emotion 报告后台执行失败:", e.message))
         .finally(() => releaseLock(lockClient, LOCK_REVIEW));
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

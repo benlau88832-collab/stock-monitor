@@ -50,7 +50,7 @@ import { detectSealDecay, type SealAlert } from "./lib/sealMonitor";
 // v9.36（B2）：昨日涨停统计纯函数（溢价/核按钮/晋级率）
 import { computePrevZtStats } from "./lib/prevZtStats";
 import { fetchPopularityRank } from "./lib/api";
-import { getCircuitState, getSourceState } from "./lib/jsonpQueue";
+import { getCircuitState, getSourceState, startHealthProbe } from "./lib/jsonpQueue";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
 // v9.50（G2）：StatusBar 已并入 TopNav 顶部通栏，App 不再独立渲染
@@ -1020,6 +1020,8 @@ export default function App() {
   // 抢同一 jsonpQueue（并发3），大请求占满队列 → 关键数据模块排队加载不出来。合并为"先数据、后映射"。
   useEffect(() => {
     let cancelled = false;
+    // v9.96.0（阶段一-2）：push2 健康探测 —— 300s 周期 + 启动立即探测，恢复后自动切回主源
+    startHealthProbe();
     const build = () => { if (!cancelled) ensureBoardMap().catch(e => console.warn("[boardMap] 构建失败:", e)); };
     // refreshAll 无拒绝（try/finally 包裹），完成后再构建；异常兜底 8s 后重试
     Promise.resolve(refreshAll()).then(() => setTimeout(build, 1500)).catch(() => setTimeout(build, 8000));
