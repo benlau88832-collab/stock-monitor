@@ -160,7 +160,8 @@ export default function FactorHealthPanel() {
     }).then(r => {
       if (!alive) return;
       const j = parseLLMJSON<{ summary: string; suggestions: string[] }>(r.text, schemaForTask("factorAttribution"));
-      const text = j?.summary ? `${j.summary}${(j.suggestions ?? []).length ? `（建议：${j.suggestions.slice(0, 2).join("；")}）` : ""}` : null;
+      const sugs = Array.isArray(j?.suggestions) ? (j.suggestions as string[]) : [];
+      const text = j?.summary ? `${j.summary}${sugs.length ? `（建议：${sugs.slice(0, 2).join("；")}）` : ""}` : null;
       if (text && !r.degraded) {
         setAttribution(text);
         setAIResult("factorAttribution", key, text, "module");

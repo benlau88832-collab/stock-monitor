@@ -1167,7 +1167,7 @@ export default function App() {
         if (cancelled) return;
         try {
           const j = parseLLMJSON<{ level: string; points: Array<{ item: string; desc: string }>; advice: string }>(r.text, schemaForTask("riskRadar"));
-          if (j && j.level) setRiskRadarText(`风险雷达[${j.level}]：${(j.points ?? []).map(p => `${p.item}(${p.desc})`).join("；") || "无明显风险"}${j.advice ? `。建议：${j.advice}` : ""}`);
+          if (j && j.level) { const pts = Array.isArray(j.points) ? j.points : []; setRiskRadarText(`风险雷达[${j.level}]：${pts.map(p => `${p.item}(${p.desc})`).join("；") || "无明显风险"}${j.advice ? `。建议：${j.advice}` : ""}`); }
         } catch { /* 静默 */ }
       }).catch(() => {});
     }
