@@ -72,10 +72,14 @@ function postJSON(url, body, timeoutMs = 30000, extraHeaders = {}) {
       req.write(data);
       req.end();
     });
-    // 直连失败（超时/网络错/非2xx）→ 走代理重试一次
-    attempt(null, Math.floor(timeoutMs * 0.4)).then(resolve, () => {
+    // v9.85.1（P1-17）：仅"网络失败"（超时/连接错）才走代理重试 ——
+    // 原实现任何失败都重试：429/5xx 重试可能重复计费、坏 JSON 重试无意义
+    const isNetworkErr = (e) => /timeout|ECONN|ENOTFOUND|socket|hang up|network/i.test(String(e?.message ?? ""))
+      && !/http \d{3}/.test(String(e?.message ?? ""));
+    attempt(null, Math.floor(timeoutMs * 0.4)).then(resolve, (e) => {
+      if (!isNetworkErr(e)) return reject(e); // HTTP 4xx/5xx / 坏 JSON → 直接失败（不重试不计费）
       if (PROXY_AGENT) attempt(PROXY_AGENT, Math.floor(timeoutMs * 0.6)).then(resolve, reject);
-      else reject(new Error("direct failed & no proxy agent"));
+      else reject(e);
     });
   });
 }

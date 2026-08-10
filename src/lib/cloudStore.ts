@@ -201,9 +201,13 @@ export async function syncLocalWithCloud(): Promise<void> {
           if (k) localKeys.add(k);
         }
         const missing = kr.keys.filter((k: string) => !localKeys.has(k));
+        // v9.85.1（P1-14）：拉回侧同样过滤敏感 key —— 原只在上传侧过滤，
+        // 历史/跨实例的 ai_settings_v1、llm_api_key 可能残留在 PG，拉回会把 Key 重新写回浏览器
+        const SENSITIVE_PREFIXES = ["ai_settings", "llm_api_key", "local_token", "push_settings_v1"];
+        const safeMissing = missing.filter((k: string) => !SENSITIVE_PREFIXES.some(p => k.startsWith(p)));
         // 分批拉取（每批 50 个 key），避免单次响应过大
-        for (let i = 0; i < missing.length; i += 50) {
-          const batch = missing.slice(i, i + 50);
+        for (let i = 0; i < safeMissing.length; i += 50) {
+          const batch = safeMissing.slice(i, i + 50);
           const br = await api("GET", `/api/db/kv/bulk?keys=${encodeURIComponent(batch.join(","))}`);
           if (br && Array.isArray(br.items)) {
             for (const item of br.items) {
@@ -218,7 +222,7 @@ export async function syncLocalWithCloud(): Promise<void> {
             }
           }
         }
-        if (isDebug()) console.log(`[cloud] pull-back: 缺失 ${missing.length} 个 key 已从 PG 拉回`);
+        if (isDebug()) console.log(`[cloud] pull-back: 缺失 ${safeMissing.length} 个 key 已从 PG 拉回（过滤敏感 ${missing.length - safeMissing.length} 个）`);
       }
     } catch (e) {
       console.warn("[cloud] pull-back failed:", e);

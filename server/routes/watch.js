@@ -104,10 +104,12 @@ module.exports = function watchRoutes(app) {
     try {
       const code = String(req.query.code || "");
       if (!code) return res.status(400).json({ error: "code required" });
+      // v9.85.1（P1-20）：按采样时间倒序取最近 60 条（真实盘中轨迹，非"每日最后状态"）
       const r = await pool.query(
-        `SELECT date, price, deviation_pct, triggered, event_text FROM price_watch_log WHERE code=$1 ORDER BY date`, [code],
+        `SELECT date, price, deviation_pct, triggered, event_text, created_at
+         FROM price_watch_log WHERE code=$1 ORDER BY id DESC LIMIT 60`, [code],
       );
-      res.json({ ok: true, items: r.rows });
+      res.json({ ok: true, items: r.rows.reverse() });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -147,6 +149,8 @@ async function runWatchCheck(poolArg) {
     if (watches.length === 0) return { checked: 0, triggered: [] };
     // v9.77（P0-9）：price_watch_log 增加 event_type 列 —— 破止损(stop) / 进买入区(zone) 独立去重
     await p.query(`ALTER TABLE price_watch_log ADD COLUMN IF NOT EXISTS event_type TEXT`).catch(() => {});
+    // v9.85.1（P1-20）：保留窗口 —— 追加采样后行数增长，定期清理 30 天前旧日志（有 idx_pwl_code_id 索引，代价低）
+    await p.query(`DELETE FROM price_watch_log WHERE created_at < now() - interval '30 days'`).catch(() => {});
     const prices = await fetchPrices(watches.map(w => w.code));
     const triggered = [];
     for (const w of watches) {
@@ -169,11 +173,12 @@ async function runWatchCheck(poolArg) {
       const logText = eventType === "stop" ? `已破止损（现价${price}≤止损${w.stop_loss}）`
         : eventType === "zone" ? `进入关注区间（偏离${dev}%，买入区 ${w.buy_low}-${w.buy_high}）` : null;
       await p.query(
+        // v9.85.1（P1-20）：追加采样（不再 ON CONFLICT 覆盖）—— 盘中每轮检查都留一行，
+        // trend 才能显示真实走势；去重改由上方 dup 查询（当日已触发同类型则不再触发事件）负责
         `INSERT INTO price_watch_log(code,date,price,mid_price,deviation_pct,triggered,event_type,event_text)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-         ON CONFLICT(code,date) DO UPDATE SET price=EXCLUDED.price,deviation_pct=EXCLUDED.deviation_pct,triggered=EXCLUDED.triggered,event_type=EXCLUDED.event_type,event_text=EXCLUDED.event_text`,
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
         [w.code, today, price, mid, dev, Boolean(eventType), eventType, logText],
-      ).catch(() => {});
+      ).catch((e) => console.warn(`[watch] 日志写入失败 ${w.code}:`, e.message));
       if (eventType && dup.rows.length === 0) {
         await p.query(
           `CREATE TABLE IF NOT EXISTS price_watch_events (

@@ -120,6 +120,8 @@ export interface AssistantReply {
   toolsCalled: string[];
   degraded: boolean;
   rateLimited?: boolean;
+  /** v9.85.1（P2-8）：答复来源 —— 快捷路径（零 LLM 数据直出）与 AI 生成必须区分，用户不得误认"数据直出"为模型结论 */
+  source?: "data" | "rule" | "ai";
 }
 
 /**
@@ -343,7 +345,7 @@ export async function runAssistantAgent(
         if (ext.length > 0) {
           const lines = [`📅 ${since} 起本地快讯为空，已补外部搜索（${finalKw}）：`];
           ext.slice(0, 8).forEach(n => lines.push(`  • ${n.title}`));
-          return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getExternalNews"], degraded: false };
+          return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getExternalNews"], degraded: false, source: "data" };
         }
         return { reply: `${since} 起暂无本地快讯/公告，外部搜索也无新增结果（cron 可能尚未抓取或非交易日）。`, toolsCalled: ["getLocalNews", "getExternalNews"], degraded: false };
       }
@@ -354,15 +356,24 @@ export async function runAssistantAgent(
       if (market.length) { lines.push("📊 市场："); market.forEach(n => lines.push(`  • ${n.title}`)); }
       const strong = ann.filter(a => /业绩|中标|增持|回购|重组|获批/.test(a.title)).slice(0, 5);
       if (strong.length) { lines.push("📋 公告："); strong.forEach(a => lines.push(`  • ${a.stockName ?? ""}：${a.title}`)); }
-      return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getLocalNews"], degraded: false };
+      return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getLocalNews"], degraded: false, source: "data" };
     } catch { /* 快捷失败→继续 ReAct */ }
   }
   // ② 主线类 → 直接用 siteContext（当前页面状态已打包最强主线）
   if (/主线.*什么|今日主线|最强主线/.test(q) && siteContext.topMainline) {
-    return { reply: `今日最强主线：${siteContext.topMainline}（强度${siteContext.topMainlineScore ?? "?"}分，涨停${siteContext.topMainlineZtCount ?? "?"}只）`, toolsCalled: ["siteContext"], degraded: false };
+    return { reply: `今日最强主线：${siteContext.topMainline}（强度${siteContext.topMainlineScore ?? "?"}分，涨停${siteContext.topMainlineZtCount ?? "?"}只）`, toolsCalled: ["siteContext"], degraded: false, source: "data" };
   }
 
   for (let round = 0; round < maxRounds; round++) {
+    // v9.85.1（P1-12）：工具调用总预算 —— 每轮 ≤4 个、全程 ≤12 次（防 LLM 循环烧工具/超时）
+    const MAX_CALLS_PER_ROUND = 4;
+    const MAX_TOTAL_CALLS = 12;
+    let totalCalls = 0;
+    const takeBudget = (): boolean => {
+      if (totalCalls >= MAX_TOTAL_CALLS) return false;
+      totalCalls++;
+      return true;
+    };
     const user = round === 0 ? userCtx : (roundHistory.join("\n") + "\n\n（继续，或直接给最终答复）：");
     let r: AgentChatResult | null;
     try { r = await callAgentChat(system, user, toolDefs, { temperature: 0.2, history: opts?.history }); } catch { r = null; }
@@ -373,7 +384,8 @@ export async function runAssistantAgent(
     // ① 原生 tool_calls
     if (r.toolCalls && r.toolCalls.length > 0) {
       const roundOut: string[] = [];
-      for (const tc of r.toolCalls) {
+      for (const tc of r.toolCalls.slice(0, MAX_CALLS_PER_ROUND)) {
+        if (!takeBudget()) { roundOut.push("（工具调用预算耗尽，请直接给最终答复）"); break; }
         const tool = toolByName.get(tc.name);
         if (!tool) { roundOut.push("未知工具 " + tc.name); continue; }
         calledTools.add(tc.name);
@@ -395,7 +407,8 @@ export async function runAssistantAgent(
     }
     if (parsed?.calls && parsed.calls.length > 0) {
       const roundOut: string[] = [];
-      for (const c of parsed.calls) {
+      for (const c of parsed.calls.slice(0, MAX_CALLS_PER_ROUND)) {
+        if (!takeBudget()) { roundOut.push("（工具调用预算耗尽，请直接给最终答复）"); break; }
         const tool = toolByName.get(c.tool);
         if (!tool) { roundOut.push("未知工具 " + c.tool); continue; }
         calledTools.add(c.tool);

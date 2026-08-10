@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS price_watch (
   updated_at  TIMESTAMPTZ DEFAULT now()
 );
 -- v9.66：价格走势快照 + 触发事件（每日收盘 + 盘中）
+-- v9.85.1（P1-20）：去掉 UNIQUE(code,date) —— 原 upsert 让盘中只剩最后状态、历史轨迹丢失；
+--   改为按采样追加（每次检查插入一行），trend 返回真实时间序列；旧库迁移见 initDb。
 CREATE TABLE IF NOT EXISTS price_watch_log (
   id            SERIAL PRIMARY KEY,
   code          TEXT NOT NULL,
@@ -93,9 +95,9 @@ CREATE TABLE IF NOT EXISTS price_watch_log (
   deviation_pct NUMERIC,
   triggered     BOOLEAN DEFAULT false,
   event_text    TEXT,
-  created_at    TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(code, date)
+  created_at    TIMESTAMPTZ DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_pwl_code_id ON price_watch_log(code, id DESC);
 -- v9.66：盯价触发事件（前端轮询 → alertBus 强提示）
 CREATE TABLE IF NOT EXISTS price_watch_events (
   id            SERIAL PRIMARY KEY,
@@ -110,7 +112,7 @@ CREATE TABLE IF NOT EXISTS price_watch_events (
 );
 CREATE INDEX IF NOT EXISTS idx_news_time ON news(time);
 CREATE INDEX IF NOT EXISTS idx_ann_time ON announcements(time);
-CREATE INDEX IF NOT EXISTS idx_pwl_code_date ON price_watch_log(code, date);
+-- v9.85.1（P1-20）：旧索引 idx_pwl_code_date 保留（兼容）；新增 code+id 时序索引已在上方建
 -- P0-1：人类拍板台账（AI 提议 → 人类拍板闭环关键表）
 CREATE TABLE IF NOT EXISTS decision_post (
   id              SERIAL PRIMARY KEY,
@@ -159,6 +161,10 @@ CREATE TABLE IF NOT EXISTS stock_concepts (
 
 async function initDb() {
   await pool.query(SCHEMA);
+  // v9.85.1（P1-20）：旧库迁移 —— 移除 price_watch_log 的 (code,date) 唯一约束（改追加采样）
+  try {
+    await pool.query(`ALTER TABLE price_watch_log DROP CONSTRAINT IF EXISTS price_watch_log_code_date_key`);
+  } catch (e) { console.warn("[db] 盯价日志约束迁移跳过:", e.message); }
   console.log("[db] schema ready");
 }
 

@@ -20,6 +20,8 @@ const TASK_ALLOW = new Set([
   "themeNewsScore", "stockNewsScore", "dailyIntel",
   "dailyReviewAuto", "nextDayScenarios", "leaderPredict", "riskRadar",
   "eventClassify", "eventDeepDive", "agentReason",
+  // v9.85.1（P1-2）：AIConsole 快速问答（SSE 流式专用，与 /call 共用白名单口径）
+  "quickChat",
 ]);
 
 // ---------- v9.45（V5-1）：分级令牌桶（按任务优先级分桶，互不抢占） ----------
@@ -160,10 +162,20 @@ module.exports = function aiRoutes(app) {
   app.post("/api/ai/stream", async (req, res) => {
     // v9.85.0（P0-1）：async 鉴权必须 await
     if (!(await checkAuth(req, res))) return;
-    const { system, user, temperature, maxTokens, thinking } = req.body || {};
+    const { task, system, user, temperature, maxTokens, thinking } = req.body || {};
     if (!process.env.AI_API_KEY) {
       return res.status(400).json({ error: "server AI key not configured" });
     }
+    // v9.85.1（P1-2）：task 白名单 —— 原 stream 不验 task，调用方可提交任意 prompt 当 LLM 代理；
+    // 与 /api/ai/call 同口径（quickChat = AIConsole 快速问答）
+    const streamTask = String(task || "quickChat");
+    if (!TASK_ALLOW.has(streamTask)) {
+      return res.status(403).json({ error: "task not allowed: " + streamTask });
+    }
+    // v9.85.1（P1-2）：system/user 长度上限（防超大 prompt 滥用）
+    const sysText = String(system || "").slice(0, 4000);
+    const userText = String(user || "").slice(0, 2000);
+    if (!userText) return res.status(400).json({ error: "user required" });
     // 用 explain 桶限速（流式走通用分析配额）
     if (!takeToken("explain")) {
       return res.status(429).json({ error: "rate limited", rateLimited: true });
@@ -173,8 +185,8 @@ module.exports = function aiRoutes(app) {
     const body = {
       model,
       messages: [
-        { role: "system", content: String(system || "") },
-        { role: "user", content: String(user || "") },
+        { role: "system", content: sysText },
+        { role: "user", content: userText },
       ],
       max_tokens: Math.min(Number(maxTokens) || 2000, 8000),
       temperature: temperature != null ? Number(temperature) : 0.2,

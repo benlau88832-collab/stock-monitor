@@ -144,6 +144,26 @@ export async function runDecisionAgent(
 
   // ---------- ① 真·ReAct：LLM 自主调工具（≤5 轮） ----------
   // 轮次预算 5（V3 工程要点 2）；任一工具强否决 → 早停直接"禁止"（V3 要点 4）
+  // v9.85.1（P1-10）：可信上下文字段白名单 —— 真实行情/资金（hs300Pct/limitDownCount/price/mainNet 等）
+  //   只以调用方注入的 ctx 为准，模型 tool args 一律不得覆盖（防模型编造/篡改真实数据）
+  const TRUSTED_CTX_FIELDS = new Set([
+    "mainline", "board", "code", "strengthScore", "stage", "ztCount", "height", "exitSignal",
+    "marketState", "marketFactor", "riskLevel", "sealRed", "sealYellow", "trapFlagged",
+    "lhbBoost", "fundStreakInflow", "premiumAvg", "blastedRate", "sentiment", "gateMode",
+    "concentrationPct", "todayNewPositions", "hs300Pct", "limitDownCount",
+    "price", "pct", "sealFund", "amount", "mainNet", "mainNetPct", "retailNetPct",
+    "mainNet5d", "mainNet10d",
+  ]);
+  const mergeCtxArgs = (ctxArg: ToolContext, rawArgs: string): ToolContext => {
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(rawArgs || "{}") as Record<string, unknown>; } catch { return ctxArg; }
+    const safe: ToolContext = { ...ctxArg };
+    for (const [k, v] of Object.entries(parsed)) {
+      if (TRUSTED_CTX_FIELDS.has(k)) continue; // 可信字段忽略模型参数
+      (safe as Record<string, unknown>)[k] = v;
+    }
+    return safe;
+  };
   const toolDefs = tools.map(t => ({
     name: t.name,
     description: t.description,
@@ -218,8 +238,8 @@ ${/* P1-1：用户画像注入（辅助置信调整，不改变工具逻辑） *
         const tool = toolByName.get(tc.name);
         if (!tool) { roundOut.push(`未知工具 ${tc.name}`); continue; }
         calledTools.add(tc.name);
-        let args = ctx;
-        try { args = { ...ctx, ...(JSON.parse(tc.args || "{}") as object) }; } catch { /* 参数解析失败用默认 ctx */ }
+        // v9.85.1（P1-10）：可信 ctx 优先 —— 模型 args 不得覆盖真实行情字段
+        const args = mergeCtxArgs(ctx, tc.args || "{}");
         try {
           const res = await tool.execute(args as never);
           agentTrace.push(`${tc.name}(${tc.args.slice(0, 60)}) → ${JSON.stringify(res).slice(0, 120)}`);

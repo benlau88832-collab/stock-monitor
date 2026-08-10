@@ -91,10 +91,21 @@ function simpleHash(str: string): number {
   return h >>> 0; // 转无符号
 }
 
+// v9.85.1（P2-3）：canonical JSON —— 递归按 key 排序后序列化。
+// 原 JSON.stringify 按属性插入序：同一逻辑 payload 不同属性顺序 → 不同 hash → 缓存漏命中/双份互相覆盖
+function canonicalStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(v => canonicalStringify(v)).join(",")}]`;
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj).sort().map(k => `${JSON.stringify(k)}:${canonicalStringify(obj[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function cacheKey(task: AITask, payload: unknown): string {
   // 修复：用本地日期（CST 凌晨 0-8 点 toISOString 仍返回昨天，会导致缓存命中旧结果）
   const today = localDateStr();
-  const h = simpleHash(JSON.stringify(payload) || "");
+  const h = simpleHash(canonicalStringify(payload) || "");
   return `ai:cache:${task}:${today}:${h}`;
 }
 
@@ -261,6 +272,8 @@ export async function streamChat(
       method: "POST",
       headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
       body: JSON.stringify({
+        // v9.85.1（P1-2）：task 白名单（服务端校验，quickChat = AIConsole 快速问答）
+        task: "quickChat",
         system: opts.system,
         user: opts.user,
         temperature: opts.temperature ?? 0.2,
@@ -305,6 +318,24 @@ export async function streamChat(
     return { text: full, ok: sawDone, error: sawDone ? undefined : "stream interrupted" };
   } catch {
     return null;
+  }
+}
+
+// ============== v9.85.1（P1-5）：直连端点安全校验 ==============
+// 浏览器直连会把 localStorage 中的 API Key 发往配置的 baseUrl —— 误配/恶意 endpoint 或 XSS 可外发 Key。
+// 策略：仅允许 HTTPS + 固定厂商域名白名单；自定义 endpoint 仅在本地部署（isLocalServer）时允许（仍需 HTTPS）。
+const ALLOWED_DIRECT_HOSTS = [
+  "apihub.agnes-ai.cn", "opencode.ai", "open.bigmodel.cn",
+  "api.moonshot.cn", "dashscope.aliyuncs.com", "api.openai.com",
+];
+function assertSafeEndpoint(url: string): void {
+  let u: URL;
+  try { u = new URL(url); } catch { throw new Error("endpoint 不是合法 URL"); }
+  if (u.protocol !== "https:") throw new Error("endpoint 必须 HTTPS（浏览器直连禁明文传输 Key）");
+  if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return; // 本地代理端点放行
+  if (!ALLOWED_DIRECT_HOSTS.includes(u.hostname)) {
+    // 自定义域名：仅本地部署允许（服务端 proxy 可转发），GitHub Pages 线上禁止（无服务器时更不可信）
+    if (!isLocalServer()) throw new Error("endpoint 不在白名单（线上禁止自定义直连）");
   }
 }
 
@@ -470,9 +501,15 @@ async function executeAI<T extends AITask>(
     // 遍历端点 × thinking 模式，任一成功即返回
     // thinking=true 失败（空/异常）→ 回退 thinking=false 重试同端点
     // 端点失败 → 下一个端点
+    // v9.85.1（P1-5）：每个端点先过安全校验（HTTPS + 白名单），非法端点直接跳过不发送 Key
     let lastError = "网络错误";
     for (let i = 0; i < endpoints.length; i++) {
       const endpoint = endpoints[i];
+      try { assertSafeEndpoint(endpoint); } catch (e) {
+        console.warn("[AI] 端点被安全校验拦截:", (e as Error).message);
+        lastError = (e as Error).message;
+        continue;
+      }
       const useThinking = settings.thinking && config.thinking;
       const variants: boolean[] = useThinking ? [true, false] : [false];
 

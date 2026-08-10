@@ -22,6 +22,8 @@ interface Msg {
   text: string;
   tools?: string[];
   degraded?: boolean;
+  /** v9.85.1（P2-8）：答复来源（data=数据直出，非 AI 生成）—— 与 degraded 区分展示 */
+  source?: "data" | "rule" | "ai";
 }
 
 const MSGS_KEY = "ai_console_msgs";
@@ -150,7 +152,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
         const finalText = r.reply || "（空回复）";
         // v9.84.2（AI大脑层 · 3.3）：对话结论回写（个股裁决→雷达旁标 / 动作判断→决策审计）
         try { digestConsoleReply(finalText, r.toolsCalled, siteContext.topMainline); } catch { /* 回写失败不阻塞 */ }
-        setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "", tools: r.toolsCalled, degraded: r.degraded }));
+        setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "", tools: r.toolsCalled, degraded: r.degraded, source: r.source }));
         // v9.81（性能）：打字机 8ms→40ms、每帧 2-4→4-7 字符（整体速度不变，主线程 setState/重渲染频率降 5 倍）
         const full = finalText;
         let idx = 0;
@@ -221,6 +223,10 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
                   <div className="mb-1 rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-xs font-bold text-rose-300">
                     ⏸ 本次降级回复（非 AI，详见下方说明）
                   </div>
+                )}
+                {/* v9.85.1（P2-8）：数据直出标注 —— 快捷路径零 LLM，用户不应误认为模型结论 */}
+                {m.role === "ai" && m.source === "data" && !m.degraded && (
+                  <div className="mb-1 text-[10px] text-sky-400/70">📊 本地数据直出（未调 AI，非模型生成）</div>
                 )}
                 {m.role === "ai" && m.tools && m.tools.length > 0 && (
                   <div className="mb-1 text-xs text-slate-600">🔍 已调工具：{m.tools.join(" / ")}{m.degraded && m.tools.length > 0 ? "（部分结果可用）" : ""}</div>
