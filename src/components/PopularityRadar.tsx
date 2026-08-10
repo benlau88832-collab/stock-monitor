@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // - 双榜共振（同一只股票两边都上榜）→ 顶部醒目提醒 + 行高亮
 import { fetchPopularityRank, fetchTHSPopularityRank, fetchStockBriefBatch, type PopularityItem, type THSPopularityItem, type StockBrief } from "../lib/api";
 import { fetchStocksBoards } from "../lib/stockBoards";
+import { isThemeBoardName } from "../shared/conceptFilter";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 
@@ -99,7 +100,10 @@ export default function PopularityRadar() {
           emRank: em?.rank ?? null,
           thsRank: t.rank,
           riseAndFall: t.riseAndFall,
-          thsConcepts: t.concepts, thsTag: t.tag,
+          // v9.91.0-fix：同花顺接口 concept_tag 为原始标签（含"国企改革/中字头"等宽泛词），
+          // 显示前过全站判定核心（宽泛黑名单一票否决）；过滤后为空的走下方统一分类器补齐
+          thsConcepts: (t.concepts ?? []).filter(c => isThemeBoardName(c, null)),
+          thsTag: t.tag,
           resonance: !!em,
         });
         emMap.delete(t.code); // 已消费
