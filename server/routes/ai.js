@@ -52,6 +52,7 @@ function takeToken(bucket) {
 }
 
 const { parseLLMJSON, SCHEMAS } = require("../lib/llmJson");
+const { buildPrompt, TASK_CONFIG } = require("../lib/aiPrompts");
 
 module.exports = function aiRoutes(app) {
   // v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
@@ -97,7 +98,7 @@ module.exports = function aiRoutes(app) {
     // v9.85.0（P0-1）：checkAuth 是 async，必须 await —— 原 `!checkAuth(...)` 恒为真导致鉴权形同虚设
     if (!(await checkAuth(req, res))) return;
     try {
-      const { task, system, user, temperature, maxTokens, thinking, tools, toolChoice } = req.body || {};
+      const { task, system, user, payload, temperature, maxTokens, thinking, tools, toolChoice } = req.body || {};
 
       // 白名单校验
       if (!task || !TASK_ALLOW.has(task)) {
@@ -119,12 +120,22 @@ module.exports = function aiRoutes(app) {
       const history = Array.isArray(req.body?.history)
         ? req.body.history.slice(-8).map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content ?? "").slice(0, 1200) }))
         : [];
-      // v9.87.0（P2-1）：请求侧保护层 —— system/user 长度上限（原无限制，恶意调用可提交超大 prompt 当代理）
-      const sysText = String(system || "");
-      const userText = String(user || "");
+      // v9.88.0（P2-1）：canonical prompt —— 客户端传 {task, payload} 由服务端模板重建 system/user
+      // （防绕过中性措辞/JSON 要求/提示注入）；温度/长度以服务端 TASK_CONFIG 为准。
+      // 双协议兼容：payload 缺失（老客户端/curl）→ 沿用 system/user 透传 + 长度上限。
+      let sysText = String(system || "");
+      let userText = String(user || "");
+      if (payload !== undefined && payload !== null && TASK_CONFIG[task]) {
+        const built = buildPrompt(task, payload);
+        sysText = built.system;
+        userText = built.user;
+      }
       if (sysText.length > 4000 || userText.length > 16000) {
         return res.status(400).json({ error: "prompt too long (system<=4000, user<=16000)" });
       }
+      const cfg = TASK_CONFIG[task];
+      const effectiveMaxTokens = cfg ? cfg.maxTokens : (Number(maxTokens) || 2000);
+      const effectiveTemperature = cfg ? cfg.temperature : (temperature != null ? Number(temperature) : 0.2);
       const body = {
         model,
         messages: [
@@ -132,9 +143,9 @@ module.exports = function aiRoutes(app) {
           ...history,
           { role: "user", content: userText },
         ],
-        max_tokens: Math.min(Number(maxTokens) || 2000, 8000),
+        max_tokens: Math.min(effectiveMaxTokens, 8000),
         // v9.87.0（P2-1）：temperature 钳制 0-1（原可传任意值）
-        temperature: Math.max(0, Math.min(1, temperature != null ? Number(temperature) : 0.2)),
+        temperature: Math.max(0, Math.min(1, effectiveTemperature)),
         stream: false,
       };
       // 2026-08-04 公告后：Endpoint=.cn + agnes-2.5-flash（免费）；thinking 显式关闭才有 content。
