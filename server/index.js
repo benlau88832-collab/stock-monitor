@@ -44,7 +44,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.get("/api/health", async (req, res) => {
   let db = "down";
   try { await pool.query("SELECT 1"); db = "up"; } catch {}
-  res.json({ ok: true, db, version: "v9.89.0-local", time: new Date().toISOString() });
+  res.json({ ok: true, db, version: "v9.91.0-local", time: new Date().toISOString() });
 });
 
 // ---------- 静态托管（前端单文件产物） ----------
@@ -132,6 +132,17 @@ require("./routes/push")(app);
 
 // ---------- 定时任务（收盘抓取 + LLM 分析） ----------
 require("./cron")({ pool });
+
+// ---------- v9.91.0（概念地基）：同花顺概念白名单启动预加载（异步，不阻塞启动） ----------
+// 表空或 >24h 时后台抓取落库；首次请求 /api/concepts/whitelist 时前端会再触发一次懒加载兜底
+(async () => {
+  try {
+    const { ensureConceptWhitelist } = require("./lib/thsConcepts");
+    const r = await ensureConceptWhitelist(pool);
+    if (r.refreshed) console.log(`[thsConcepts] 概念白名单启动刷新完成: ${r.count} 个概念`);
+    else console.log("[thsConcepts] 概念白名单已就绪（无需刷新）");
+  } catch (e) { console.warn("[thsConcepts] 启动预加载失败（首次请求时再试）:", e.message); }
+})();
 
 // ---------- 启动 ----------
 // v9.75（安全修复）：只监听 127.0.0.1（本机），不再暴露 0.0.0.0 —— 局域网其他设备无法访问，恶意网页无法触碰

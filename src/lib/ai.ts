@@ -377,6 +377,7 @@ async function callAIviaServer(
   system: string,
   user: string,
   config: { temperature: number; maxTokens: number; thinking: boolean },
+  payload?: unknown,
 ): Promise<{ text: string; error?: string } | null> {
   if (!isLocalServer()) return null;
   // v9.84.3（5.4）：服务端 LOCAL_TOKEN 自动携带（服务端未启用鉴权时带也无害）
@@ -391,8 +392,9 @@ async function callAIviaServer(
       headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
       body: JSON.stringify({
         task,
-        system,
-        user,
+        // v9.88.0（P2-1）：canonical prompt 协议 —— 传原始 payload，服务端用模板重建 system/user；
+        //   浏览器直连路径仍用本地 buildPrompt（见 executeAI）；payload 不存在时服务端走兼容透传
+        ...(payload !== undefined ? { payload } : { system, user }),
         temperature: config.temperature,
         maxTokens: config.maxTokens,
         thinking: config.thinking,
@@ -442,7 +444,7 @@ async function executeAI<T extends AITask>(
     const { system, user } = buildPrompt(task, payload);
     const config = TASK_CONFIG[task];
     const startTs = Date.now();
-    const serverR = await callAIviaServer(task, system, user, config);
+    const serverR = await callAIviaServer(task, system, user, config, payload);
     if (serverR && !serverR.error && serverR.text) {
       // v9.26.9：补缓存 + 统计（此前漏记 → 缓存永不生效、今日调用数恒 0）
       const latency = Date.now() - startTs;

@@ -16,6 +16,8 @@ interface Props {
   mainlines?: string[];
   /** v9.27（P1-7）：持仓成本（若该股在持仓中），用于成本止损 */
   cost?: number | null;
+  /** v9.91.0（概念地基）：该股权威分类结果（classifyStock 折叠大类），板块级主线判定 */
+  classify?: { mainline?: string; source?: string } | null;
 }
 
 // ============== 规则引擎 ==============
@@ -43,13 +45,24 @@ function fundNature(s: WatchStock): { label: string; color: string; desc: string
   return { label: "主力净流出", color: "text-slate-400", desc: `净流出${fmtMoney(s.mainNet)}` };
 }
 
-/** 主线归属：个股名是否命中今日主线龙头（核心/跟风），否则孤立 */
-function mainlineOwn(s: WatchStock, mainlines: string[]): { label: string; color: string; desc: string } {
+/** 主线归属：v9.91.0 板块级判定（权威分类器折叠大类 vs 今日主线），替代名称子串匹配 */
+function mainlineOwn(
+  s: WatchStock,
+  mainlines: string[],
+  classify?: { mainline?: string; source?: string } | null,
+): { label: string; color: string; desc: string } {
   if (!mainlines || mainlines.length === 0)
     return { label: "主线未知", color: "text-slate-500", desc: "今日无主线数据" };
-  // 无法拿到个股概念归属时的近似：按名称是否出现在主线候选集内判断
-  const hit = mainlines.find(m => s.name.includes(m) || m.includes(s.name));
-  if (hit) return { label: `命中主线：${hit}`, color: "text-rose-300", desc: "与今日主线相关" };
+  // ① 板块级判定：个股概念折叠大类 vs 今日主线名（双向包含，兼容大类/细分子线）
+  if (classify && classify.mainline && classify.mainline !== "其他") {
+    const hit = mainlines.find(m =>
+      m === classify.mainline || classify.mainline!.includes(m) || m.includes(classify.mainline!));
+    if (hit)
+      return { label: `命中主线：${hit}`, color: "text-rose-300", desc: `概念归类：${classify.mainline}（${classify.source}）` };
+  }
+  // ② 兜底：名称子串（分类数据不可用时）
+  const hit2 = mainlines.find(m => s.name.includes(m) || m.includes(s.name));
+  if (hit2) return { label: `命中主线：${hit2}`, color: "text-rose-300", desc: "与今日主线相关" };
   return { label: "不在今日主线", color: "text-slate-400", desc: "未命中今日主线候选" };
 }
 
@@ -67,10 +80,10 @@ function stopRef(s: WatchStock): { stop: string; take: string } {
 }
 
 // ============== 组件 ==============
-export default function StockDecisionCard({ stock, vetoList, mainlines = [], cost = null }: Props) {
+export default function StockDecisionCard({ stock, vetoList, mainlines = [], cost = null, classify = null }: Props) {
   const pos = techPosition(stock);
   const fund = fundNature(stock);
-  const own = mainlineOwn(stock, mainlines);
+  const own = mainlineOwn(stock, mainlines, classify);
   const vetoed = vetoList.length > 0;
   const ref = stopRef(stock);
   // v9.27（P1-7）：个股离场信号（持仓成本止损 + 资金/量价结构）

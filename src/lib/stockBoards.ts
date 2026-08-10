@@ -1,27 +1,42 @@
-// 个股所属概念（v9.21-B）
+// 个股所属概念（v9.21-B + v9.91.0 概念地基）
 // 数据源：东财 datacenter RPT_F10_CORETHEME_BOARDTYPE
 // 返回每只股票的"所属板块"列表（含题材概念 + 指数成分 + 地域板块 等）
 // 用途：取代"拉概念成分股反查"——每只涨停股直接知道它属于哪些概念（同花顺式）
+// v9.91.0（概念地基）：
+//   ① 题材判定统一走 src/shared/conceptFilter.js（同花顺白名单 + 宽泛黑名单一票否决 + 词根兜底）
+//   ② 白名单从 /api/concepts/whitelist 懒加载（60min 缓存；服务端离线回退旧兜底，渐进降级）
+//   ③ 支持 hybk 透传（涨停池行业随概念请求落库服务端）
+//   ④ 单次上限 120 → 300（99 涨停 + 自选全覆盖）
 // 纯数据层
 
-// ============== 非题材分类过滤词表（保留"机器人/减速器/AI应用"等真实题材） ==============
-const NON_THEME_PATTERNS = [
-  // 指数/成分类
-  /沪深300|上证50|中证500|中证1000|创业板指|深证|上证180|深证100|科创50|国证|中证|MSCI|富时|标普|罗素|央视50|融资融券|转融券|深股通|沪股通|AH|AB股|CDR|H股|B股|QFII|证金|汇金|社保|保险重仓|基金重仓|券商重仓|信托重仓|机构重仓|游资重仓|散户重仓|主力资金|主力增仓|主力减仓|北向资金|北交所|陆股通/,
-  // 地域/板块类
-  /板块$|概念$|新股|次新股|昨日涨停|昨日连板|昨日首板|昨日高振幅|昨日高换手|昨日跌幅|昨日涨幅|最近多板|最近强势|最近异动|最近活跃|最近高振幅|活跃股|热门股|热股|强势股|预盈预增|预亏预减|高送转|送转|填权|破净|低价股|高价股|百元股|微盘|小盘股|大盘股|中盘股|小盘成长|大盘价值|成长股|价值股|新三板|退市|ST板块/,
-  // 涨跌状态/资金/技术特征类（v9.22-fix：用户反馈"昨日高振幅/机构重仓"被错当主线）
-  /振幅|换手|成交额|量比|缩量|放量|高量|低量|超大单|大单|中单|小单|净流入|净流出|资金流入|资金流出|增仓|减仓|加仓|减仓|封板|炸板|跌停|涨停|高开|低开|平开|红盘|绿盘/,
-  // 维度类
-  /东方财富|同花顺|标准|成分|权重|样本/,
-];
+// ============== 判定核心（与服务端同源，唯一权威） ==============
+import { isThemeBoardName as _isThemeBoardName, normalizeConceptName } from "../shared/conceptFilter";
 
-/** 判断板块名是否为"真实题材概念"（排除指数成分/地域/涨跌状态/资金特征类） */
+// ============== 同花顺白名单（懒加载） ==============
+let whitelistCache: Set<string> | null = null;
+let whitelistTs = 0;
+const WHITELIST_TTL = 60 * 60 * 1000; // 60min
+
+/** 加载同花顺概念白名单（失败保持 null → 判定回退旧兜底逻辑，不阻塞） */
+async function ensureWhitelist(): Promise<Set<string> | null> {
+  const now = Date.now();
+  if (whitelistCache && now - whitelistTs < WHITELIST_TTL) return whitelistCache;
+  try {
+    const resp = await fetch(`/api/concepts/whitelist`, { signal: AbortSignal.timeout(8000) });
+    if (resp.ok) {
+      const json: { concepts?: Array<{ code: string; name: string }> } = await resp.json();
+      const names = (json.concepts ?? []).map(x => normalizeConceptName(x.name));
+      whitelistCache = new Set(names.filter(Boolean));
+      whitelistTs = Date.now();
+      console.log(`[conceptFilter] 同花顺概念白名单就绪: ${whitelistCache.size} 个`);
+    }
+  } catch { /* 服务端不可用 → 保持 null */ }
+  return whitelistCache;
+}
+
+/** 板块名是否为"真实题材概念"（白名单化判定，与全站唯一核心同口径） */
 export function isThemeBoard(name: string): boolean {
-  if (!name || name.length === 0) return false;
-  // 必须有题材含义：包含"概念"关键词或属于已知题材词根
-  const themeHints = /机器人|AI|人工智能|算力|芯片|半导体|光模块|CPO|信创|软件|数据|云|算力|游戏|传媒|新能源|光伏|储能|电池|锂|汽车|华为|苹果|小米|稀土|钴|锂|氢|军工|航天|卫星|导航|船舶|核电|电力|电网|特高压|风电|充电|光伏|机器人|减速器|轴承|汽车零部件|减速|传感器|激光|元宇宙|数字经济|东数西算|5G|6G|通信|量子|脑机|低空|飞行|商业航天|智能驾驶|无人驾驶|汽车电子|消费电子|面板|存储|封测|光刻|光刻机|中芯|CPU|GPU|DPU|交换机|服务器|液冷|PCB|覆铜板|军工电子|航天电子|航空发动机|大飞机|C919|船|海洋|水声|机器人执行器|灵巧手|电机|电控|丝杠|滚柱|谐波|减速|热泵|压缩机|减速机|逆变器|储能|固态电池|钠电池|钒电池|麒麟|昇腾|鸿蒙|欧拉|数字孪生|超清视频|全景摄像|MR|AR|VR|XR|折叠屏|屏下摄像|快充|无线充电|磁悬浮|超导|可控核聚变|第四代半导体|碳化硅|氮化镓|EDA|材料|检测|认证|认证检测|体脂|减肥|保健|医疗|创新药|抗体|疫苗|基因|CRO|CXO|国产替代|自主可控|数字货币|跨境支付|金融科技|互联网券商|智慧农业|种业|转基因|生态农业|粮食安全|职业教育|在线教育|知识付费|传媒|影视|院线|游戏|动漫|短剧|MCN|直播|网红经济|免税店|零售|医美|口腔|眼科|辅助生殖|养老|宠物经济|预制菜|冷链物流|化工|化肥|农药|化纤|钛白粉|磷化工|有机硅|氟化工|煤化工|染料|涂料|玻璃|水泥|钢铁|煤炭|石油|天然气|黄金|贵金属|稀土永磁|永磁|钕铁硼|碳纤维|石墨烯|3D打印|增材制造|超材料/;
-  return themeHints.test(name) || (!NON_THEME_PATTERNS.some(p => p.test(name)) && name.length <= 8);
+  return _isThemeBoardName(name, whitelistCache);
 }
 
 // ============== 数据结构 ==============
@@ -47,17 +62,22 @@ const boardsCache = new Map<string, { data: StockBoards; ts: number }>();
 const BOARDS_TTL = 60 * 1000;
 
 /**
- * 批量查询多只股票的所属概念（一次 IN 查询，最多 30 只）
+ * 批量查询多只股票的所属概念（一次 IN 查询，最多 300 只）
  * @param codes 股票代码（如 ["002896","002230"]）
+ * @param hybkMap 可选：code→东财行业（涨停池自带，随请求落库服务端，补全 hybk 字段）
  */
-export async function fetchStocksBoards(codes: string[]): Promise<Map<string, StockBoards>> {
+export async function fetchStocksBoards(codes: string[], hybkMap?: Map<string, string>): Promise<Map<string, StockBoards>> {
   const result = new Map<string, StockBoards>();
   if (codes.length === 0) return result;
 
   // 本地部署 → 服务端持久化查询（含未命中抓取落库）
   if (isLocalServer()) {
     try {
-      const resp = await fetch(`/api/db/concepts?codes=${encodeURIComponent(codes.slice(0, 120).join(","))}`, { signal: AbortSignal.timeout(8000) });
+      await ensureWhitelist(); // 白名单先就绪（失败不阻塞，回退旧兜底）
+      const hybkQ = hybkMap && hybkMap.size > 0
+        ? "&hybk=" + encodeURIComponent([...hybkMap.entries()].map(([c, h]) => `${c}:${h}`).join(","))
+        : "";
+      const resp = await fetch(`/api/db/concepts?codes=${encodeURIComponent(codes.slice(0, 300).join(","))}${hybkQ}`, { signal: AbortSignal.timeout(8000) });
       if (resp.ok) {
         const json: Record<string, { themes?: string[]; allBoards?: string[] }> = await resp.json();
         const now = Date.now();

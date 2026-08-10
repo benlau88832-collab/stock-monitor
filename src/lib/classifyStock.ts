@@ -4,9 +4,12 @@
 // 折叠策略：一股 N 个概念各自折叠到大类，票数最多者胜出（透明可审计）
 // 目标：全站不再"五套分类打架"（hybk/F10概念/申万/conceptGroups/LLM自由命名），
 //       任何模块要"这只股属于什么主线"只调 classifyStock(code, ...)
+// v9.91.0（概念地基）：入口防御过滤 —— f10Concepts 再过一遍全站判定核心
+//   （拦截上游漏网的宽泛概念/白名单外概念，防"央企国企改革"等标签词进入投票）
 // ============================================================
 import { conceptGroupOf } from "./conceptGroups";
 import { getIndustryByCode } from "./boardMap";
+import { isThemeBoardName } from "../shared/conceptFilter";
 
 export interface StockClassification {
   code: string;
@@ -32,10 +35,11 @@ export function classifyStock(
   f10Concepts: string[] = [],
   hybk?: string,
 ): StockClassification {
-  // ① F10 概念权重投票（首选）
-  if (f10Concepts.length > 0) {
+  // ① F10 概念权重投票（首选）—— v9.91.0：入口防御过滤（白名单外/宽泛概念不参与投票）
+  const cleanConcepts = f10Concepts.filter(c => isThemeBoardName(c, null));
+  if (cleanConcepts.length > 0) {
     const tally = new Map<string, number>();
-    for (const concept of f10Concepts) {
+    for (const concept of cleanConcepts) {
       const group = conceptGroupOf(concept);
       if (group) tally.set(group, (tally.get(group) ?? 0) + 1);
     }

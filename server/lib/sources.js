@@ -25,6 +25,7 @@ const PROVIDERS = [
   { id: "tencentKline", host: "web.ifzq.gtimg.cn",               kind: "kline", priority: 1 },
   { id: "sina",         host: "hq.sinajs.cn",                    kind: "quote", priority: 1 },
   { id: "ths",          host: "dq.10jqka.com.cn",                kind: "data",  priority: 1 },
+  { id: "thsConcepts",  host: "q.10jqka.com.cn",                 kind: "data",  priority: 1 },
   // ---- AI 网关（LLM 出站）----
   { id: "agnes",        host: "apihub.agnes-ai.cn",              kind: "ai" },
   { id: "opencode",     host: "opencode.ai",                     kind: "ai" },

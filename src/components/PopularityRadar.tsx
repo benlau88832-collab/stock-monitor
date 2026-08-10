@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 // - 同花顺：dq.10jqka.com.cn 热度接口（实测支持 CORS，浏览器直连）
 // - 双榜共振（同一只股票两边都上榜）→ 顶部醒目提醒 + 行高亮
 import { fetchPopularityRank, fetchTHSPopularityRank, fetchStockBriefBatch, type PopularityItem, type THSPopularityItem, type StockBrief } from "../lib/api";
+import { fetchStocksBoards } from "../lib/stockBoards";
 import { fmtMoney, fmtPct, pctColor } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
 
@@ -130,6 +131,20 @@ export default function PopularityRadar() {
       if (codes.length > 0) {
         const map = await fetchStockBriefBatch(codes);
         setBriefs(map);
+      }
+
+      // v9.91.0（概念地基）：同花顺人气榜接口无 concept_tag 的个股（东财独有/接口缺字段）
+      // → 用全站统一分类器（同花顺白名单/F10）补齐概念标签，与驾驶舱主线同口径
+      const missing = merged.filter(r => r.thsConcepts.length === 0).map(r => r.code)
+        .filter(c => /^\d{6}$/.test(c));
+      if (missing.length > 0) {
+        fetchStocksBoards(missing.slice(0, 60)).then(boards => {
+          setRows(prev => prev.map(r =>
+            r.thsConcepts.length === 0 && boards.get(r.code)?.themes.length
+              ? { ...r, thsConcepts: boards.get(r.code)!.themes }
+              : r,
+          ));
+        }).catch(() => { /* 补齐失败不阻塞人气榜 */ });
       }
     } catch {
       setError("人气榜加载失败");

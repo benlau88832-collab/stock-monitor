@@ -203,9 +203,28 @@ module.exports = function dbRoutes(app) {
   app.get("/api/db/concepts", async (req, res) => {
     try {
       const codes = String(req.query.codes || "").split(",").filter(Boolean);
+      // v9.91.0（概念地基）：hybk 可选参数（code:hybk,code:hybk）—— 涨停池自带的东财行业
+      // 随概念一起落库，补全 stock_concepts.hybk（此前 INSERT 漏写该字段 → 单股全景行业为空）
+      const hybkMap = new Map();
+      const hybkRaw = String(req.query.hybk || "");
+      for (const pair of hybkRaw.split(",")) {
+        const [c, h] = pair.split(":");
+        if (c && h) hybkMap.set(c.trim(), h.trim());
+      }
       const { getConcepts } = require("../lib/stockConcepts");
-      const out = await getConcepts(pool, codes);
+      const out = await getConcepts(pool, codes, hybkMap);
       res.json(out);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // v9.91.0（概念地基）：同花顺概念白名单 —— 前端 isThemeBoard 白名单化判定的数据源
+  // 懒加载：表空或 >24h 自动重抓（服务端离线时前端回退旧兜底逻辑，渐进降级）
+  app.get("/api/concepts/whitelist", async (req, res) => {
+    try {
+      const { ensureConceptWhitelist, getConceptWhitelist } = require("../lib/thsConcepts");
+      const refresh = await ensureConceptWhitelist(pool);
+      const concepts = await getConceptWhitelist(pool);
+      res.json({ concepts, refreshed: refresh.refreshed, count: concepts.length });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

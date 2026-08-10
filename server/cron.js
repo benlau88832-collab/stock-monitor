@@ -1110,7 +1110,8 @@ function startCron({ pool }) {
         console.log(`[cron] lhb ${lDateStr}: ${lhb.length} 只`);
       }
     } catch (e) { console.error("[cron] lhb failed:", e.message); }
-    await markCronStep(dateStr, "lhb");
+    // v9.91.0-fix：dateStr 是上方 try 块内块级作用域（v9.89 PG 锁改造遗留 ReferenceError → 改用 bjDateStr()）
+    await markCronStep(bjDateStr(), "lhb");
     }); } catch (e) { console.error("[cron] PG lock error:", e.message); }
     if (!gotLock) { console.log("[cron] PG lock busy, skip 15:40"); }
     cronBusy = false;

@@ -763,7 +763,8 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
           {/* v9.24-P1-2：个股决策卡（PRD C1，融资融券之上，先给结论再给数据） */}
           {selected && stocks[selected] && (
             <StockDecisionCard stock={stocks[selected]} vetoList={vetoList} mainlines={mainlines}
-              cost={disciplineState.positions.find(p => p.code === selected)?.cost ?? null} />
+              cost={disciplineState.positions.find(p => p.code === selected)?.cost ?? null}
+              classify={classMap.get(selected) ?? null} />
           )}
 
           {/* 融资融券信号卡（融资客动向） */}

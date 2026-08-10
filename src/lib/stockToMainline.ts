@@ -143,30 +143,47 @@ export async function classifyStocksToMainlines(input: ClassifyInput): Promise<C
     return fallbackByHybk(input);
   }
 
-  // 限 payload 30 只（v9.17-fix：50只+thinking=true 超时降级；改 30只+thinking=false 专用任务槽）
-  // v9.26.15：给 LLM 附加"概念归属"提示（datacenter 折叠后），归类更准
-  let conceptHint = new Map<string, string[]>();
-  try {
-    const hintCodes = input.rawPool.slice(0, 30).map(p => String(p.c ?? "")).filter(Boolean);
-    const boardsMap = await fetchStocksBoards(hintCodes);
-    for (const [code, sb] of boardsMap) {
-      const folded = foldConcepts(sb.themes);
-      if (folded.length > 0) conceptHint.set(code, folded);
-    }
-  } catch { /* 概念提示失败不阻塞 LLM */ }
-  const pool = input.rawPool.slice(0, 30).map(p => ({
-    code: String(p.c ?? ""),
-    name: String(p.n ?? ""),
-    hybk: String(p.hybk ?? "其他"),
-    boardCount: p.lbc ?? 1,
-    pct: p.zdp ?? 0,
-    // v9.26.15：概念提示（如 ["通信","AI应用"]）—— LLM 归类依据
-    concepts: conceptHint.get(String(p.c ?? "")) ?? [],
-  })).filter(p => p.code);
+  // v9.91.0（概念地基）：LLM 覆盖**全部**涨停 —— 原只归前 30 只（"LLM未覆盖"标记来源）。
+  // mainlineClassify maxTokens=4000（服务端 aiPrompts.js），99 只一次调用必被截断 →
+  // 分批 33 只独立调用后合并；单批失败跳过该批（其余批正常），首批失败才整体降级。
+  const BATCH = 33;
+  const allStocks: StockToMainline[] = [];
+  const allLogic: string[] = [];
+  let lastParsed: ClassifyResult | null = null;
+  const rawPool = input.rawPool;
 
-  // payload：只放稳定内容
-  const result: AIResult = await callAI("mainlineClassify", {
-    prompt: `你是A股十年经验的概念主线归类分析师，只输出JSON，不输出任何其他文字或markdown标记。
+  for (let bi = 0; bi < rawPool.length; bi += BATCH) {
+    const batch = rawPool.slice(bi, bi + BATCH);
+    // 限 payload 单批 33 只（v9.17-fix：50只+thinking=true 超时降级；33只+thinking=false 专用任务槽）
+    // v9.26.15：给 LLM 附加"概念归属"提示（datacenter 折叠后），归类更准
+    let conceptHint = new Map<string, string[]>();
+    try {
+      const hintCodes = batch.map(p => String(p.c ?? "")).filter(Boolean);
+      // v9.91.0：hybk 随请求透传（涨停池自带东财行业 → 服务端落库补全 stock_concepts.hybk）
+      const hybkMap = new Map<string, string>();
+      for (const p of batch) {
+        const h = String(p.hybk ?? "").trim();
+        if (h && h !== "其他") hybkMap.set(String(p.c ?? ""), h);
+      }
+      const boardsMap = await fetchStocksBoards(hintCodes, hybkMap.size > 0 ? hybkMap : undefined);
+      for (const [code, sb] of boardsMap) {
+        const folded = foldConcepts(sb.themes);
+        if (folded.length > 0) conceptHint.set(code, folded);
+      }
+    } catch { /* 概念提示失败不阻塞 LLM */ }
+    const pool = batch.map(p => ({
+      code: String(p.c ?? ""),
+      name: String(p.n ?? ""),
+      hybk: String(p.hybk ?? "其他"),
+      boardCount: p.lbc ?? 1,
+      pct: p.zdp ?? 0,
+      // v9.26.15：概念提示（如 ["通信","AI应用"]）—— LLM 归类依据
+      concepts: conceptHint.get(String(p.c ?? "")) ?? [],
+    })).filter(p => p.code);
+
+// payload：只放稳定内容
+const result: AIResult = await callAI("mainlineClassify", {
+  prompt: `你是A股十年经验的概念主线归类分析师，只输出JSON，不输出任何其他文字或markdown标记。
 
 任务：把以下涨停股按"软语义主线"重新归类（不要按申万行业名），例如：
 - 蓝色光标、昆仑万维、易点天下、中文在线 → "AI应用"
@@ -182,15 +199,15 @@ export async function classifyStocksToMainlines(input: ClassifyInput): Promise<C
 
 ⚠️ 强制规则（v9.20-fix，用户反馈）：
 1. mainline 必须是"概念主线/题材主线"（如"机器人""AI应用""稀土""光通信CPO""信创""新能源车"等），
-   绝不能用申万行业名（绝不能是"通用设备""电气设备""计算机设备""通信设备""机械设备"这种行业分类）！
+ 绝不能用申万行业名（绝不能是"通用设备""电气设备""计算机设备""通信设备""机械设备"这种行业分类）！
 2. 即使一只涨停股本身归在某个行业（hybk字段），也要看它实际所属的"概念题材"重新归类。
-   比如"中大力德"申万行业是"通用设备"，但概念归属是"机器人"——必须归到"机器人"！
+ 比如"中大力德"申万行业是"通用设备"，但概念归属是"机器人"——必须归到"机器人"！
 3. 主线名要"投资者口语化"（"机器人"不是"其他通用机械""其他专用设备"）。
 4. 同一主线的票要确保是"同一概念"（不要把"机器人"和"AI应用"混在一起）。
 5. 同时评估每条主线的"是否真主线"：涨停家数≥3 = 真主线（isPulse=false）；1-2只 = 弱主线/孤峰（isPulse=true）。
 6. ⚠️（v9.26.15）每条输入含 concepts 字段 = 该股真实概念归属（已折叠为"通信/芯片/AI应用"等大类），
-   归类必须优先参考 concepts：比如 concepts=["通信","华为"] 就归"通信"，
-   不要只看 hybk 行业名。concepts 为空时再按名称+hybk 判断。
+ 归类必须优先参考 concepts：比如 concepts=["通信","华为"] 就归"通信"，
+ 不要只看 hybk 行业名。concepts 为空时再按名称+hybk 判断。
 
 🔒 归类纪律（v11-12 MUST 遵守，最高优先）：
 1. 每条主线名 MUST 从以下大类中选，禁止自创：${LLM_GROUP_NAMES}
@@ -204,38 +221,66 @@ ${JSON.stringify(pool)}
 
 输出格式（严格JSON）：
 {
-  "stocks": [
-    {"code":"002230","name":"科大讯飞","mainline":"AI应用","confidence":95},
-    {"code":"688041","name":"海光信息","mainline":"国产芯片","confidence":90}
-  ],
-  "groups": [
-    {
-      "mainline":"AI应用",
-      "ztCount":5,
-      "isPulse":false,
-      "logic":"人工智能法立法加速+大模型超预期，板块效应明确",
-      "caution":"注意高位分歧"
-    }
-  ],
-  "overview": {
-    "totalStocks":30,
-    "mainlineCount":6,
-    "trueMainlineCount":3,
-    "logic":"今日盘面以AI应用/算力/国产软件为主线，机器人+新能源车辅助"
+"stocks": [
+  {"code":"002230","name":"科大讯飞","mainline":"AI应用","confidence":95},
+  {"code":"688041","name":"海光信息","mainline":"国产芯片","confidence":90}
+],
+"groups": [
+  {
+    "mainline":"AI应用",
+    "ztCount":5,
+    "isPulse":false,
+    "logic":"人工智能法立法加速+大模型超预期，板块效应明确",
+    "caution":"注意高位分歧"
   }
+],
+"overview": {
+  "totalStocks":30,
+  "mainlineCount":6,
+  "trueMainlineCount":3,
+  "logic":"今日盘面以AI应用/算力/国产软件为主线，机器人+新能源车辅助"
+}
 }`,
-  });
+});
 
-  // 降级：LLM 失败 → 用概念板块硬分类
-  if (result.degraded) {
-    console.warn("[stockToMainline] LLM 降级（degraded=true）→ fallback 概念板块分组。原因：详见 ai.ts 降级链路");
-    const fallback = await fallbackByHybk(input);
-    return fallback;
+  // 降级：单批 LLM 失败 → 首批失败整体降级概念板块硬分类；后续批失败仅跳过该批
+    if (result.degraded) {
+      console.warn(`[stockToMainline] LLM 降级（degraded=true）批 ${bi / BATCH + 1} → ${bi === 0 ? "整体 fallback 概念板块分组" : "跳过该批"}。原因：详见 ai.ts 降级链路`);
+      if (bi === 0) {
+        const fallback = await fallbackByHybk(input);
+        return fallback;
+      }
+      continue;
+    }
+
+    // v9.26.15：LLM 归类（分批全量） + 概念聚合补全（个别漏归类防漏主线）
+    const parsed = await parseClassifyResult(result.text, { ...input, rawPool: batch });
+    lastParsed = parsed;
+    for (const s of parsed.stockMap.values()) allStocks.push(s);
+    if (parsed.overview?.logic) allLogic.push(parsed.overview.logic);
   }
 
-  // v9.26.15：LLM 归类（前30只） + 概念聚合补全（其余涨停）→ 防漏主线
-  const llmResult = await parseClassifyResult(result.text, input);
-  return await mergeWithConceptFallback(llmResult, input);
+  if (allStocks.length === 0) {
+    return await fallbackByHybk(input);
+  }
+
+  // v9.91.0：多批 stockMap 合并 → 概念补全 + groups 全量重建（ztCount 按全池聚合）
+  const merged: ClassifyResult = {
+    stockMap: new Map(allStocks.map(s => [s.code, s])),
+    groups: [],
+    overview: {
+      totalStocks: allStocks.length,
+      mainlineCount: 0,
+      trueMainlineCount: 0,
+      logic: allLogic.filter(Boolean).join("；"),
+    },
+    fromLLM: true,
+  };
+  if (lastParsed && lastParsed.overview?.trueMainlineCount) {
+    merged.overview.trueMainlineCount = lastParsed.overview.trueMainlineCount;
+  }
+  const mergedResult = await mergeWithConceptFallback(merged, input);
+  return mergedResult;
 }
 
 /** v9.26.15：LLM 归类结果 + 概念聚合合并（LLM 只处理前 30 只，其余涨停用概念补齐防漏主线） */
@@ -273,14 +318,19 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
   //   （原 LLM 输出直接原样使用，foldConcepts 只用于概念兜底路径 → "通信"与"光通信/CPO"并存两条主线）
   parsedResult = foldLLMResult(parsedResult);
   const llmCodes = new Set(parsedResult.stockMap.keys());
-  // 找出 LLM 未覆盖的涨停股
+  // 找出 LLM 未覆盖的涨停股（v9.91.0：LLM 已全覆盖时为空，groups 仍走下方全量重建）
   const uncovered = input.rawPool.filter(p => !llmCodes.has(String(p.c ?? "")));
-  if (uncovered.length === 0) return parsedResult;
 
   // 用概念聚合（foldConcepts 折叠 + 一对多展开）补充未覆盖股
   try {
     const uncoveredCodes = uncovered.map(p => String(p.c ?? "")).filter(Boolean);
-    const boardsMap = await fetchStocksBoards(uncoveredCodes);
+    // v9.91.0：hybk 透传（未覆盖股的行业同样落库）
+    const hybkMap = new Map<string, string>();
+    for (const p of uncovered) {
+      const h = String(p.hybk ?? "").trim();
+      if (h && h !== "其他") hybkMap.set(String(p.c ?? ""), h);
+    }
+    const boardsMap = await fetchStocksBoards(uncoveredCodes, hybkMap.size > 0 ? hybkMap : undefined);
     const uncoveredToGroups = new Map<string, string[]>();
     for (const [code, sb] of boardsMap) {
       const folded = foldConcepts(sb.themes);
@@ -392,7 +442,7 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
         dataMissing,
         newsTitles: input.newsItems.filter(n => n.title.includes(ml)).slice(0, 3).map(n => n.title),
         isPulse: llmGroup?.isPulse ?? items.length < 3,
-        logic: llmGroup?.logic ?? `概念补充（LLM未覆盖，${items.length}只）`,
+        logic: llmGroup?.logic ?? `概念归类（同花顺/F10，${items.length}只）`,
         caution: llmGroup?.caution ?? (items.length < 3 ? "涨停数<3，板块效应弱" : ""),
         score: llmGroup?.score ?? (items.length >= 3 ? 65 : items.length === 2 ? 45 : 0),
         fromLLM: Boolean(llmGroup?.fromLLM) || false,
