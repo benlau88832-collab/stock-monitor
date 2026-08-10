@@ -44,6 +44,10 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
   const bodyRef = useRef<HTMLDivElement>(null);
   // v9.81（性能）：打字机渐显期间跳过对话历史持久化（打字中每帧全量 JSON 序列化 → 结束落盘一次）
   const typingRef = useRef(false);
+  // v9.85.2（P2-9）：进行中请求的 AbortController —— 关闭对话框/组件卸载/清空对话时中止（stream + ReAct）
+  const abortRef = useRef<AbortController | null>(null);
+  // v9.85.2（P2-9）：组件卸载时中止进行中请求（资源回收，避免旧请求继续烧配额）
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // 对话历史持久化（刷新不丢）
   useEffect(() => {
@@ -59,6 +63,10 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
     const q = input.trim();
     if (!q || busy) return;
     setInput("");
+
+    // v9.85.2（P2-9）：每次提问新建 AbortController，关闭对话框/清空记录可整体取消
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
 
     // v9.67：维护调研会话状态 —— 新调研(带代码)开新会话；继续沿用；换代码切换
     let ctx = researchCtx;
@@ -89,8 +97,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
         try {
           const system = await buildQuickSystem(siteContext);
           typingRef.current = true; // 流式期间跳过对话历史持久化（每帧 setState 不落盘）
-          const ctrl = new AbortController();
-          const t = setTimeout(() => ctrl.abort(), 60000); // 前端兜底：上游 45s + 缓冲
+          const t = setTimeout(() => ctrl.abort(), 60000); // 前端兜底：上游 45s + 缓冲（ctrl 来自 ask 顶部）
           const streamed = await streamChat(
             { system, user: q, maxTokens: 2000 },
             (delta) => {
@@ -110,6 +117,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           if (streamed && streamed.ok) {
             // 完整文本落一次盘（打字机持久化由 msgs effect 处理）
             try { digestConsoleReply(streamed.text, [], siteContext.topMainline); } catch { /* 静默 */ }
+            if (abortRef.current === ctrl) abortRef.current = null;
             setBusy(false);
             return;
           }
@@ -117,7 +125,11 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
             // 清除已渲染的部分文本（错误流不应残留半截答案）
             setMsgs(m => m.filter(x => x.text !== streamed.text || x.role !== "ai"));
           }
-        } catch { /* 回退 ReAct */ } finally { typingRef.current = false; }
+        } catch {
+          // v9.85.2（P2-9）：用户取消（关闭对话框/清空）→ 静默结束，不回退 ReAct
+          if (ctrl.signal.aborted) { if (abortRef.current === ctrl) abortRef.current = null; setBusy(false); return; }
+          /* 回退 ReAct */
+        } finally { typingRef.current = false; }
       }
 
       setMsgs(m => [...m, { role: "ai", text: "🔍 正在调全站数据调研…" }]);
@@ -127,7 +139,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           .filter(m => m.role === "user" || (m.role === "ai" && !m.text.startsWith("🔍")))
           .slice(-8)
           .map(m => ({ role: m.role === "user" ? "user" as const : "assistant" as const, content: m.text.slice(0, 800) }));
-        const r = await runAssistantAgent(q, siteContext, { history, researchCtx: ctx });
+        const r = await runAssistantAgent(q, siteContext, { history, researchCtx: ctx, signal: ctrl.signal });
         // 回复后推进会话状态
         const nextCtx = updateResearchCtxAfterReply(ctx, r.reply, r.toolsCalled);
         if (nextCtx) setResearchCtx(nextCtx);
@@ -173,9 +185,15 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           tick();
         });
       } catch {
-        setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "⚠ 助手调用失败，请稍后重试", degraded: true }));
+        // v9.85.2（P2-9）：用户取消（关闭对话框/清空记录）→ 删除"调研中"占位气泡，静默结束
+        if (ctrl.signal.aborted) {
+          setMsgs(m => m.slice(0, -1));
+        } else {
+          setMsgs(m => m.slice(0, -1).concat({ role: "ai", text: "⚠ 助手调用失败，请稍后重试", degraded: true }));
+        }
       } finally {
         setBusy(false);
+        if (abortRef.current === ctrl) abortRef.current = null;
       }
     };
 
@@ -204,7 +222,22 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
               <span className="text-sm font-bold text-violet-300">🤖 全站 AI 助手</span>
               <span className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-slate-500">可问主线/个股/资金/席位/消息</span>
             </div>
-            <button onClick={() => setOpen(false)} className="rounded px-1.5 py-0.5 text-slate-500 hover:text-slate-300">✕</button>
+            {/* v9.85.2（P2-9）：隐私清理入口 —— 清空本机对话/调研会话（不上云，纯本地） */}
+            {msgs.length > 0 && (
+              <button
+                onClick={() => {
+                  if (!window.confirm("清空全部对话与调研会话？（仅本机 localStorage，不影响服务端数据）")) return;
+                  abortRef.current?.abort();
+                  try { localStorage.removeItem(MSGS_KEY); } catch { /* 静默 */ }
+                  try { localStorage.removeItem("ai_research_ctx"); } catch { /* 静默 */ }
+                  setMsgs([]);
+                  setResearchCtx(null);
+                }}
+                className="rounded px-1.5 py-0.5 text-slate-500 hover:text-rose-300"
+                title="清空对话记录与调研会话（隐私清理）"
+              >🗑</button>
+            )}
+            <button onClick={() => { abortRef.current?.abort(); setOpen(false); }} className="rounded px-1.5 py-0.5 text-slate-500 hover:text-slate-300">✕</button>
           </div>
 
           {/* 消息区 */}

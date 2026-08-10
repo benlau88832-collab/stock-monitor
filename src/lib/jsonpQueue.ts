@@ -158,24 +158,23 @@ function execJsonp(url: string, timeout: number, callbackParam: string): Promise
   });
 }
 
-/** 执行一次请求：本地 → proxy 优先（秒回），失败回退浏览器 JSONP script */
+/** 执行一次请求：本地 → proxy 优先（秒回，含 push2→push2delay 域名 fallback），失败回退浏览器 JSONP script */
 async function execWithFallback(url: string, timeout: number, callbackParam: string): Promise<any> {
   try {
     return await fetchViaProxy(url, timeout);
   } catch {
+    // v9.85.2：熔断短路只作用于浏览器直连层 —— 原短路在 processNext（proxy 尝试之前），
+    //   push2 域名熔断后 push2delay 兜底永远跑不到（proxy 请求被直接 reject），
+    //   这是"fallback 已就绪但数据仍显示滞后"的直接原因。proxy 有 6s 超时 + 并发 3 约束，成本可控。
+    if (isCircuitOpen(url)) throw new Error("circuit open (data source unavailable)");
     return execJsonp(url, timeout, callbackParam);
   }
 }
 
 function processNext() {
   if (inflight >= MAX_INFLIGHT || queue.length === 0) return;
-  // v9.80：熔断窗口内新请求快速失败（不发出，不重试）
-  const head = queue[0];
-  if (isCircuitOpen(head.url)) {
-    queue.shift()!.reject(new Error("circuit open (data source unavailable)"));
-    setTimeout(processNext, 20);
-    return;
-  }
+  // v9.85.2：移除队首熔断快速 reject —— 熔断判断下沉到 execWithFallback 的 script 层
+  //   （proxy 通道总是尝试，域名 fallback 不因旧熔断状态被阻断）
   const item = queue.shift()!;
   inflight++;
 

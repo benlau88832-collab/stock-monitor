@@ -590,7 +590,7 @@ async function rankFastNewsStars(pool) {
         const stars = Math.max(1, Math.min(5, Number(x.stars) || 1));
         const sentiment = ["positive", "negative", "neutral"].includes(String(x.sentiment)) ? String(x.sentiment) : "neutral";
         const up = await client.query(
-          `UPDATE news SET stars=$1, sentiment=$2 WHERE title=$3 AND stars <= 2`,
+          `UPDATE news SET stars=$1, sentiment=$2, rank_source='llm' WHERE title=$3 AND stars <= 2`,
           [stars, sentiment, title],
         );
         if (up.rowCount > 0) updated++;
@@ -624,6 +624,8 @@ async function rankFastNewsStars(pool) {
       summary: n.summary ?? "",
       sentiment: "neutral",
       stars: rankNewsStars(n.title),
+      // v9.85.2（P2-2）：分级来源标注 —— 规则提星 vs LLM 回填（rankFastNewsStars 会 UPDATE 成 'llm'）
+      rankSource: "rule",
       isOverseas: /纳斯达克|道琼斯|恒生|港股|美股|比特币/.test((n.title || "") + (n.summary || "")),
       time: finalTime,
       url: n.url ?? "",
@@ -678,6 +680,9 @@ async function fetchPolicyNews() {
       summary: (n.summary ?? "").slice(0, 120),
       time: `${n.date ?? ""} ${n.time ?? ""}`.trim(),
       url: n.url ?? "",
+      // v9.85.2（P2-2）：政策快讯目前是纯正则召回 —— source/confidence 标注，后续 LLM 精筛再升级
+      source: "rule",
+      confidence: "medium",
     }))
     .slice(0, 30);
 }
@@ -906,18 +911,20 @@ async function runEventClassify({ pool }) {
       try {
         const text = await callLLM(userText, { system, maxTokens: 3000, temperature: 0.1 });
         const parsed = parseLoose(text);
-        if (parsed && parsed.length > 0) items = parsed;
+        // v9.85.2（P2-2）：LLM 分级结果标注 source/confidence
+        if (parsed && parsed.length > 0) items = parsed.map(x => ({ ...x, source: "llm", confidence: "high" }));
       } catch (e) {
         console.warn("[cron] event_classify LLM 失败，走规则版:", e.message);
       }
     }
     if (!items) {
+      // v9.85.2（P2-2）：规则版同样标注来源（前端可区分规则召回与 LLM 精分级）
       items = events.map(e => {
         const t = e.title;
         let level = "事件";
         if (/国务院|央行|证监会|发改委|国常会|部委|印发|通知|规划|试点|专项/.test(t)) level = "政策";
         else if (/产业链|涨价|订单|技术|量产|突破|扩产|招标/.test(t)) level = "行业";
-        return { title: t.slice(0, 30), level, beneficiaries: [], catalystScore: level === "政策" ? 70 : level === "行业" ? 50 : 30, timeSensitivity: "短期", reason: "规则版分级" };
+        return { title: t.slice(0, 30), level, beneficiaries: [], catalystScore: level === "政策" ? 70 : level === "行业" ? 50 : 30, timeSensitivity: "短期", reason: "规则版分级", source: "rule", confidence: "medium" };
       });
     }
 
@@ -1129,10 +1136,10 @@ function startCron({ pool }) {
           await client.query("BEGIN");
           for (const n of news) {
             await client.query(
-              `INSERT INTO news(code,title,summary,boards,sentiment,stars,is_overseas,time,url)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-               ON CONFLICT(code) DO UPDATE SET title=$2,summary=$3,time=$8,url=$9`,
-              [n.code, n.title, n.summary ?? "", "[]", n.sentiment, n.stars, n.isOverseas, n.time, n.url],
+              `INSERT INTO news(code,title,summary,boards,sentiment,stars,rank_source,is_overseas,time,url)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+               ON CONFLICT(code) DO UPDATE SET title=$2,summary=$3,time=$9,url=$10`,
+              [n.code, n.title, n.summary ?? "", "[]", n.sentiment, n.stars, n.rankSource ?? "rule", n.isOverseas, n.time, n.url],
             );
           }
           await client.query("COMMIT");
@@ -1182,7 +1189,10 @@ function startCron({ pool }) {
       try {
         const regexHits = anns.filter(a => BLACK_ANN_RE.test(a.title || ""));
         const llmConfirmed = await confirmBlackSwansWithLLM(pool, anns);
-        blackSwans = llmConfirmed !== null ? llmConfirmed : regexHits.map(a => ({ code: a.stockCode, name: a.stockName, title: a.title, time: a.time, url: a.url }));
+        // v9.85.2（P2-2）：统一事件分类 schema —— source/confidence 标注（LLM 精筛 vs 正则兜底）
+        blackSwans = llmConfirmed !== null
+          ? llmConfirmed.map(a => ({ ...a, source: "llm", confidence: "high" }))
+          : regexHits.map(a => ({ code: a.stockCode, name: a.stockName, title: a.title, time: a.time, url: a.url, source: "rule", confidence: "medium" }));
         if (blackSwans.length > 0) {
           const bsDate = bjDate();
           const bsDateStr = `${bsDate.slice(0, 4)}-${bsDate.slice(4, 6)}-${bsDate.slice(6, 8)}`;
@@ -1240,10 +1250,10 @@ function startCron({ pool }) {
         await c.query("BEGIN");
         for (const n of news) {
           await c.query(
-            `INSERT INTO news(code,title,summary,boards,sentiment,stars,is_overseas,time,url)
-             VALUES($1,$2,$3,'[]',$4,$5,$6,$7,$8)
-             ON CONFLICT(code) DO UPDATE SET title=$2,summary=$3,time=$7`,
-            [n.code, n.title, n.summary, n.sentiment, n.stars, n.isOverseas, n.time, n.url],
+            `INSERT INTO news(code,title,summary,boards,sentiment,stars,rank_source,is_overseas,time,url)
+             VALUES($1,$2,$3,'[]',$4,$5,$6,$7,$8,$9)
+             ON CONFLICT(code) DO UPDATE SET title=$2,summary=$3,time=$8`,
+            [n.code, n.title, n.summary, n.sentiment, n.stars, n.rankSource ?? "rule", n.isOverseas, n.time, n.url],
           );
         }
         for (const a of anns) {

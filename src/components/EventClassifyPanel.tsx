@@ -20,6 +20,9 @@ interface ClassifiedEvent {
   catalystScore: number;
   timeSensitivity: string;
   reason: string;
+  // v9.85.2（P2-2）：分类来源/置信度 —— rule=正则召回（盘中轻量分级/服务端规则），llm=LLM 精分级
+  source?: "rule" | "llm";
+  confidence?: "medium" | "high";
 }
 
 const LEVEL_META: Record<string, { label: string; color: string }> = {
@@ -108,6 +111,8 @@ export default function EventClassifyPanel({ onOpenNews }: {
             catalystScore: hit.catalystScore ?? e.catalystScore,
             timeSensitivity: hit.timeSensitivity ?? e.timeSensitivity,
             reason: `LLM 精分级：${hit.reason ?? ""}`,
+            source: "llm",
+            confidence: "high",
           };
         }));
       }
@@ -216,6 +221,8 @@ export default function EventClassifyPanel({ onOpenNews }: {
               catalystScore: cls.catalystScore,
               timeSensitivity: "盘中实时",
               reason: "盘中快讯轻量分级（关键词匹配，盘后 LLM 分级将覆盖）",
+              source: "rule",
+              confidence: "medium",
             });
             if (live.length >= 18) break; // 最多 18 条
           }
@@ -437,6 +444,12 @@ export default function EventClassifyPanel({ onOpenNews }: {
                       onClick={onOpenNews}
                     >
                       {e.title.length > 34 ? e.title.slice(0, 34) + "…" : e.title}
+                      {/* v9.85.2（P2-2）：分类来源角标 —— 🤖=LLM 精分级 ⚙️=规则召回（盘后 kv 无字段时按 reason 推断） */}
+                      {(e.source ?? (e.reason?.startsWith("LLM") ? "llm" : e.reason === "规则版分级" || e.reason?.includes("盘中") ? "rule" : null)) === "llm" ? (
+                        <span title={`LLM 精分级 · 高置信：${e.reason ?? ""}`} className="ml-0.5">🤖</span>
+                      ) : (e.source ?? (e.reason?.includes("盘中") || e.reason === "规则版分级" ? "rule" : null)) === "rule" ? (
+                        <span title={`规则召回 · 中置信：${e.reason ?? ""}`} className="ml-0.5">⚙️</span>
+                      ) : null}
                     </span>
                     <span className={`shrink-0 text-[10px] font-bold ${dirCls}`}>{dir === "利好" ? "↑" : dir === "利空" ? "↓" : "→"}</span>
                     <ScoreBadge s={e.catalystScore} />

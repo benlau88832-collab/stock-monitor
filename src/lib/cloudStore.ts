@@ -129,8 +129,10 @@ export async function pushAnnsCloud(items: any[]): Promise<void> {
 }
 
 // ============== localStorage 全量迁移 ==============
-/** 不应上传到 PG 的 key 前缀（含明文 API Key / 敏感凭据的本地配置） */
-const SKIP_UPLOAD_PREFIXES = ["ai_settings", "llm_api_key"];
+/** 不应上传到 PG 的 key 前缀（含明文 API Key / 敏感凭据的本地配置）
+ *  v9.85.2（P2-9）：AI 对话历史（ai_console_msgs）与调研会话（ai_research_ctx）含持仓讨论/个股判断，
+ *  属本地隐私 —— 不上云、不跨实例恢复 */
+const SKIP_UPLOAD_PREFIXES = ["ai_settings", "llm_api_key", "ai_console_msgs", "ai_research_ctx"];
 
 // v9.81（性能）：增量同步 —— 记录上次成功上传的原始字符串，只上传变更 key。
 // 原实现每 5 分钟全量扫描 + 全量 JSON.parse + stringify 全部 localStorage（MB 级主线程卡顿），
@@ -203,7 +205,8 @@ export async function syncLocalWithCloud(): Promise<void> {
         const missing = kr.keys.filter((k: string) => !localKeys.has(k));
         // v9.85.1（P1-14）：拉回侧同样过滤敏感 key —— 原只在上传侧过滤，
         // 历史/跨实例的 ai_settings_v1、llm_api_key 可能残留在 PG，拉回会把 Key 重新写回浏览器
-        const SENSITIVE_PREFIXES = ["ai_settings", "llm_api_key", "local_token", "push_settings_v1"];
+        // v9.85.2（P2-9）：对话/调研会话同侧过滤 —— 不跨实例恢复本地隐私
+        const SENSITIVE_PREFIXES = ["ai_settings", "llm_api_key", "local_token", "push_settings_v1", "ai_console_msgs", "ai_research_ctx"];
         const safeMissing = missing.filter((k: string) => !SENSITIVE_PREFIXES.some(p => k.startsWith(p)));
         // 分批拉取（每批 50 个 key），避免单次响应过大
         for (let i = 0; i < safeMissing.length; i += 50) {

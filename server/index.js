@@ -44,7 +44,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.get("/api/health", async (req, res) => {
   let db = "down";
   try { await pool.query("SELECT 1"); db = "up"; } catch {}
-  res.json({ ok: true, db, version: "v9.85.1-local", time: new Date().toISOString() });
+  res.json({ ok: true, db, version: "v9.85.2-local", time: new Date().toISOString() });
 });
 
 // ---------- 静态托管（前端单文件产物） ----------
@@ -86,6 +86,7 @@ app.get("/api/auth/local-token", async (req, res) => {
 // 白名单：/api/ai/call|stream 自带鉴权（P0-1 已修复）；/api/brain/pg 是工具名白名单只读查询。
 const WRITE_AUTH_WHITELIST = new Set(["/api/ai/call", "/api/ai/stream", "/api/brain/pg"]);
 let writeTokenCache = { t: null, ts: 0 };
+let writeTokenInitialized = false; // v9.85.2（P1-1）：fail-closed —— 已初始化后读取失败拒绝写操作
 async function effectiveWriteToken() {
   if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
   if (writeTokenCache.t && Date.now() - writeTokenCache.ts < 30000) return writeTokenCache.t;
@@ -94,8 +95,11 @@ async function effectiveWriteToken() {
     const v = r.rows[0]?.value;
     const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
     writeTokenCache = { t: t ? String(t) : null, ts: Date.now() };
+    writeTokenInitialized = true;
     return writeTokenCache.t;
-  } catch { return null; }
+  } catch {
+    return writeTokenInitialized ? writeTokenCache.t : null;
+  }
 }
 app.use("/api", async (req, res, next) => {
   const method = req.method;

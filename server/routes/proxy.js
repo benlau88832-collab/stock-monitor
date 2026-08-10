@@ -11,7 +11,9 @@ const { pool } = require("../db");
 // v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
 // 所有 /api/proxy 请求必须携带 header `x-local-token` 且匹配；未配置则放行（本地默认）。
 // v9.84.3（5.4）：未配置 env 时读 kv local_token（index.js ensureLocalToken 自动生成）—— 与 ai.js 同口径
+// v9.85.2（P1-1）：fail-closed —— 已初始化后读取失败拒绝放行（与 ai.js 同修复）
 let storedTokenCache = { t: null, ts: 0 };
+let tokenInitialized = false;
 async function effectiveToken() {
   if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
   if (storedTokenCache.t && Date.now() - storedTokenCache.ts < 30000) return storedTokenCache.t;
@@ -20,8 +22,11 @@ async function effectiveToken() {
     const v = r.rows[0]?.value;
     const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
     storedTokenCache = { t: t ? String(t) : null, ts: Date.now() };
+    tokenInitialized = true;
     return storedTokenCache.t;
-  } catch { return null; }
+  } catch {
+    return tokenInitialized ? storedTokenCache.t : null;
+  }
 }
 async function checkAuth(req, res) {
   const token = await effectiveToken();

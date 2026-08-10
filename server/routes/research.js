@@ -33,6 +33,30 @@ function runMx(script, query, timeoutMs = 60000) {
 }
 
 module.exports = function researchRoutes(app) {
+  // v9.85.2（P1-19）：research 全部路由强制鉴权 —— GET 也保护（quote/data/search 会执行本机 Python
+  //   脚本 + 消耗 MX API 配额；写中间件只拦 POST/PUT，GET 必须在这里单独拦）
+  const { pool } = require("../db");
+  let rTokenCache = { t: null, ts: 0 };
+  let rTokenInit = false;
+  async function rToken() {
+    if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
+    if (rTokenCache.t && Date.now() - rTokenCache.ts < 30000) return rTokenCache.t;
+    try {
+      const r = await pool.query("SELECT value FROM kv_store WHERE key='local_token'");
+      const v = r.rows[0]?.value;
+      const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
+      rTokenCache = { t: t ? String(t) : null, ts: Date.now() };
+      rTokenInit = true;
+      return rTokenCache.t;
+    } catch { return rTokenInit ? rTokenCache.t : null; }
+  }
+  async function researchAuth(req, res, next) {
+    const token = await rToken();
+    if (!token || req.headers["x-local-token"] === token) return next();
+    return res.status(401).json({ error: "unauthorized: missing/invalid x-local-token" });
+  }
+  app.use("/api/research", researchAuth);
+
   app.get("/api/research/quote", async (req, res) => {
     const code = String(req.query.code || "").trim();
     if (!code) return res.status(400).json({ error: "code required" });

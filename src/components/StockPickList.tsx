@@ -6,6 +6,7 @@
 // v9.53（V7-2/10）：每只附 AI 一句话研判（decideForStock）
 // ============================================================
 import { useMemo, useEffect, useState } from "react";
+import { apiFetch } from "../lib/cloudStore";
 import type { MainlineGroup } from "../lib/stockToMainline";
 import type { ZTPoolItem, ThemeStock } from "../lib/themeLadder";
 import { pickStocks, type PickList } from "../lib/stockPicker";
@@ -128,7 +129,7 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
       try {
         const codes = pick?.picks.map(p => p.code).join(",") ?? "";
         if (codes) {
-          const r2 = await fetch(`/api/research/reports?codes=${encodeURIComponent(codes)}`);
+          const r2 = await apiFetch(`/api/research/reports?codes=${encodeURIComponent(codes)}`);
           const j2 = await r2.json();
           if (j2.ok && alive) {
             const rm = new Map<string, string>();

@@ -188,6 +188,8 @@ export async function runAssistantAgent(
     history?: Array<{ role: "user" | "assistant"; content: string }>;
     /** v9.67：调研会话状态（标的/进度/已收集数据）—— 结构化上下文，LLM 每轮"记得" */
     researchCtx?: import("./researchTools").ResearchCtx | null;
+    /** v9.85.2（P2-9）：外部取消信号（AIConsole 关闭/卸载时中止 ReAct，省配额省资源） */
+    signal?: AbortSignal;
   },
 ): Promise<AssistantReply> {
   // V13-3（P0）：妙想工具仅在用户消息包含"个股深度调研"六个字时加载（用户明确要求）
@@ -324,6 +326,7 @@ export async function runAssistantAgent(
   // ① 消息/新闻/快讯/公告/事件类 → 直接读本地快讯（不调 LLM，不调妙想）
   // v9.84.6：支持"周末/隔夜/近N天"时间窗 —— 原只认"昨天/今日"，问"周末有什么消息"
   //   只取当日（周日）空库 → "暂无消息"。周末/隔夜 → 取最近 3 个自然日（覆盖周五收盘）。
+  if (opts?.signal?.aborted) throw new Error("request aborted"); // v9.85.2（P2-9）：已取消则不进入任何分支
   if (/消息|新闻|快讯|公告|事件|海内外|国内外/.test(q) && !q.includes("个股深度调研")) {
     try {
       const { getAllSince } = await import("./dataStore");
@@ -365,6 +368,8 @@ export async function runAssistantAgent(
   }
 
   for (let round = 0; round < maxRounds; round++) {
+    // v9.85.2（P2-9）：外部取消（关闭对话框/组件卸载）→ 立即中止 ReAct，不再消耗 LLM 配额
+    if (opts?.signal?.aborted) throw new Error("request aborted");
     // v9.85.1（P1-12）：工具调用总预算 —— 每轮 ≤4 个、全程 ≤12 次（防 LLM 循环烧工具/超时）
     const MAX_CALLS_PER_ROUND = 4;
     const MAX_TOTAL_CALLS = 12;

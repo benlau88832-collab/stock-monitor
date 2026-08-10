@@ -49,7 +49,6 @@ import { detectSealDecay, type SealAlert } from "./lib/sealMonitor";
 // v9.36（B2）：昨日涨停统计纯函数（溢价/核按钮/晋级率）
 import { computePrevZtStats } from "./lib/prevZtStats";
 import { fetchPopularityRank } from "./lib/api";
-import { getOverallHealth } from "./lib/apiHealth";
 import { getCircuitState } from "./lib/jsonpQueue";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 
@@ -1393,17 +1392,17 @@ export default function App() {
   }
 
   // ============== v9.80（P0 卡顿修复）：数据源异常横幅 ==============
-  // 东财断源/熔断/涨停池 degraded 时置顶醒目提示（"数据来自 N 分钟前"），不再静默显示旧数据
-  // 数据源：apiHealth 整体健康 + jsonpQueue 熔断状态 + limitPool.degraded
+  // v9.85.2：横幅改用 overview.stale（P0-5 本轮真实失败信号）—— 原用 getOverallHealth 历史统计，
+  //   fallback（push2→push2delay/腾讯）已就绪后统计残留仍触发"连续失败"误报；
+  //   且熔断短路已下沉到 script 层（jsonpQueue v9.85.2），proxy fallback 不再被旧熔断阻断。
   if (overview) {
-    const health = getOverallHealth();
     const circuit = getCircuitState();
     const degradedPool = overview.limitPool?.degraded === true;
-    if (health === "red" || circuit.open || degradedPool) {
+    if (overview.stale || degradedPool || (circuit.open && !overview.stale)) {
       alerts.push({
         id: "data_source_issue",
         level: "critical",
-        message: `⚠ 数据源异常${degradedPool ? "：涨停池数据来自历史日期（接口不可达/非交易日），情绪与梯队数据可能失真" : "：东方财富行情接口连续失败，当前显示数据可能滞后"}${circuit.open ? "（已触发快速熔断，恢复后自动刷新）" : ""}`,
+        message: `⚠ 数据源异常${degradedPool ? "：涨停池数据来自历史日期（接口不可达/非交易日），情绪与梯队数据可能失真" : overview.stale ? "：本轮刷新多数数据源失败，显示上一轮快照（已尝试多源 fallback）" : "：行情接口熔断中（恢复后自动刷新）"}${circuit.open ? "（已触发快速熔断）" : ""}`,
       });
     }
   }

@@ -53,7 +53,10 @@ module.exports = function aiRoutes(app) {
   // v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
   // /api/ai/call 必须携带 header `x-local-token`（防局域网/公网白嫖 Agnes 配额）
   // v9.84.3（5.4）：未配置 env 时读 kv local_token（index.js ensureLocalToken 自动生成），默认启用
+  // v9.85.2（P1-1）：fail-closed —— 曾成功初始化过鉴权（kv 有 local_token）后，读取失败拒绝放行
+  //   （原 catch 返回 null 被当作"未启用鉴权"→ DB 短故障即全站放行）
   let storedTokenCache = { t: null, ts: 0 };
+  let tokenInitialized = false; // 是否曾成功从 kv 读取过（区分"未配置"与"读取失败"）
   async function effectiveToken() {
     if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
     if (storedTokenCache.t && Date.now() - storedTokenCache.ts < 30000) return storedTokenCache.t;
@@ -62,8 +65,12 @@ module.exports = function aiRoutes(app) {
       const v = r.rows[0]?.value;
       const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
       storedTokenCache = { t: t ? String(t) : null, ts: Date.now() };
+      tokenInitialized = true;
       return storedTokenCache.t;
-    } catch { return null; }
+    } catch {
+      // fail-closed：已初始化过 → 用最后已知 token（拒绝未授权请求）；从未初始化 → 放行（等同未配置）
+      return tokenInitialized ? storedTokenCache.t : null;
+    }
   }
   async function checkAuth(req, res) {
     const token = await effectiveToken();

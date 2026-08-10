@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS news (
   boards     JSONB DEFAULT '[]'::jsonb,
   sentiment  TEXT,
   stars      INT DEFAULT 1,
+  rank_source TEXT DEFAULT 'rule',
   is_overseas BOOLEAN DEFAULT false,
   time       TEXT,
   url        TEXT
@@ -165,6 +166,10 @@ async function initDb() {
   try {
     await pool.query(`ALTER TABLE price_watch_log DROP CONSTRAINT IF EXISTS price_watch_log_code_date_key`);
   } catch (e) { console.warn("[db] 盯价日志约束迁移跳过:", e.message); }
+  // v9.85.2（P2-2）：news 快讯分级来源标注（rule=规则提星 / llm=LLM 回填）—— 旧库补列
+  try {
+    await pool.query(`ALTER TABLE news ADD COLUMN IF NOT EXISTS rank_source TEXT DEFAULT 'rule'`);
+  } catch (e) { console.warn("[db] news.rank_source 迁移跳过:", e.message); }
   console.log("[db] schema ready");
 }
 

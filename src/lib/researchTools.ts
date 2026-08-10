@@ -7,15 +7,17 @@
 //   持久化 localStorage，每轮注入 LLM —— "像真人对话一样"记住上下文
 // ============================================================
 import type { AgentTool } from "./agentTools";
+import { apiFetch } from "./cloudStore";
 import { STOCK_NAME_MAP } from "./stockNames";
 
 async function serverGet<T>(path: string): Promise<T> {
-  const r = await fetch(path);
+  // v9.85.2（P1-19）：research 全路由鉴权 —— GET 也要带 token（服务端执行 Python 脚本）
+  const r = await apiFetch(path);
   return r.json() as Promise<T>;
 }
 
 async function serverPost<T>(path: string, body: unknown): Promise<T> {
-  const r = await fetch(path, {
+  const r = await apiFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
