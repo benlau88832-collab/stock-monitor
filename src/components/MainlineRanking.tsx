@@ -40,7 +40,13 @@ export default function MainlineRanking({ battlePlan, loading }: {
   }
 
   // 按强度分降序（LLM 精排结果 llmRanked 已在 App 端重排 candidates，这里再兜底一次）
-  const rows = [...candidates].sort((a, b) => (b.strengthScore ?? b.score) - (a.strengthScore ?? a.score));
+  const rows = [...candidates].sort((a, b) => {
+    // v9.91.2："其他"沉底（LLM 归类杂股组不占榜首）
+    const aOther = a.mainline === "其他" ? 1 : 0;
+    const bOther = b.mainline === "其他" ? 1 : 0;
+    if (aOther !== bOther) return aOther - bOther;
+    return (b.strengthScore ?? b.score) - (a.strengthScore ?? a.score);
+  });
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4">

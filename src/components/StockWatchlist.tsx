@@ -324,7 +324,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
       if (!alive) return;
       const m = new Map<string, StockClassification>();
       for (const [code, sb] of boards) {
-        m.set(code, classifyStock(code, sb.themes));
+        m.set(code, classifyStock(code, sb.themes, undefined, sb.coreConcept));
       }
       setClassMap(m);
     }).catch(() => { /* 分类失败不阻塞行情，标签缺省不显示 */ });
@@ -698,9 +698,11 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                           const cls = classMap.get(code);
                           if (!cls || cls.mainline === "其他") return null;
                           const hit = mainlines.includes(cls.mainline);
+                          // v9.91.2：显示优先东财权威核心题材名（concept），无则折叠大类；命中判定仍走折叠 mainline
+                          const label = cls.concept ?? cls.mainline;
                           return <span className={`rounded px-1 py-px text-[10px] font-bold ${hit ? "bg-amber-500/25 text-amber-300" : "bg-slate-700/40 text-slate-300"}`}
-                            title={`主线：${cls.mainline}（${cls.source === "f10_concepts" ? "F10概念" : cls.source === "hybk" ? "涨停池行业" : "申万"}${hit ? "，呼应当前主线" : ""}）`}>
-                            {cls.mainline}{hit ? "⚡" : ""}
+                            title={`主线：${cls.mainline}${cls.concept ? ` · 核心题材：${cls.concept}` : ""}（${cls.source === "f10_concepts" ? "F10概念" : cls.source === "hybk" ? "涨停池行业" : "申万"}${hit ? "，呼应当前主线" : ""}）`}>
+                            {label}{hit ? "⚡" : ""}
                           </span>;
                         })()}
                       </div>

@@ -318,8 +318,14 @@ async function mergeWithConceptFallback(parsedResult: ClassifyResult, input: Cla
   //   （原 LLM 输出直接原样使用，foldConcepts 只用于概念兜底路径 → "通信"与"光通信/CPO"并存两条主线）
   parsedResult = foldLLMResult(parsedResult);
   const llmCodes = new Set(parsedResult.stockMap.keys());
-  // 找出 LLM 未覆盖的涨停股（v9.91.0：LLM 已全覆盖时为空，groups 仍走下方全量重建）
-  const uncovered = input.rawPool.filter(p => !llmCodes.has(String(p.c ?? "")));
+  // 找出 LLM 未覆盖 或 归为"其他"的涨停股（v9.91.2：LLM 归"其他"的也走概念补全重新归类
+  // —— 原"其他"24只堆成第一主线（LLM 偷懒归其他），概念折叠能归组的全部救回）
+  const uncovered = input.rawPool.filter(p => {
+    const code = String(p.c ?? "");
+    if (!llmCodes.has(code)) return true;
+    const ml = parsedResult.stockMap.get(code)?.mainline;
+    return !ml || ml === "其他";
+  });
 
   // 用概念聚合（foldConcepts 折叠 + 一对多展开）补充未覆盖股
   try {

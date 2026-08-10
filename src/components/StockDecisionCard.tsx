@@ -16,8 +16,8 @@ interface Props {
   mainlines?: string[];
   /** v9.27（P1-7）：持仓成本（若该股在持仓中），用于成本止损 */
   cost?: number | null;
-  /** v9.91.0（概念地基）：该股权威分类结果（classifyStock 折叠大类），板块级主线判定 */
-  classify?: { mainline?: string; source?: string } | null;
+  /** v9.91.0（概念地基）：该股权威分类结果（classifyStock），板块级主线判定 */
+  classify?: { mainline?: string; concept?: string | null; source?: string } | null;
 }
 
 // ============== 规则引擎 ==============
@@ -49,7 +49,7 @@ function fundNature(s: WatchStock): { label: string; color: string; desc: string
 function mainlineOwn(
   s: WatchStock,
   mainlines: string[],
-  classify?: { mainline?: string; source?: string } | null,
+  classify?: { mainline?: string; concept?: string | null; source?: string } | null,
 ): { label: string; color: string; desc: string } {
   if (!mainlines || mainlines.length === 0)
     return { label: "主线未知", color: "text-slate-500", desc: "今日无主线数据" };
@@ -58,7 +58,7 @@ function mainlineOwn(
     const hit = mainlines.find(m =>
       m === classify.mainline || classify.mainline!.includes(m) || m.includes(classify.mainline!));
     if (hit)
-      return { label: `命中主线：${hit}`, color: "text-rose-300", desc: `概念归类：${classify.mainline}（${classify.source}）` };
+      return { label: `命中主线：${hit}`, color: "text-rose-300", desc: `核心题材：${classify.concept ?? classify.mainline}（${classify.source}）` };
   }
   // ② 兜底：名称子串（分类数据不可用时）
   const hit2 = mainlines.find(m => s.name.includes(m) || m.includes(s.name));

@@ -832,8 +832,13 @@ export default function App() {
             c.exitSignal = exit.triggered;
             c.exitSignalText = exit.text;
           }
-          // 按强度分重新排序（最强主线在前）
-          candidates.sort((a, b) => (b.strengthScore ?? 0) - (a.strengthScore ?? 0));
+          // 按强度分重新排序（最强主线在前）；v9.91.2："其他"沉底（LLM 归类的杂股组不占第一梯队）
+          candidates.sort((a, b) => {
+            const aOther = a.mainline === "其他" ? 1 : 0;
+            const bOther = b.mainline === "其他" ? 1 : 0;
+            if (aOther !== bOther) return aOther - bOther;
+            return (b.strengthScore ?? 0) - (a.strengthScore ?? 0);
+          });
         } catch { /* 强度分计算失败不影响主流程 */ }
 
         // ---- ①.5 人气榜对照（v9.17-fix）：给各主线龙头打人气排名 ----

@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS stock_concepts (
   concepts   JSONB NOT NULL DEFAULT '[]',
   all_boards JSONB NOT NULL DEFAULT '[]',
   hybk       TEXT,
+  core_concept TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 `;
@@ -170,6 +171,10 @@ async function initDb() {
   try {
     await pool.query(`ALTER TABLE news ADD COLUMN IF NOT EXISTS rank_source TEXT DEFAULT 'rule'`);
   } catch (e) { console.warn("[db] news.rank_source 迁移跳过:", e.message); }
+  // v9.91.2（概念机制根治）：stock_concepts 补 core_concept 列（东财权威核心题材，IS_PRECISE=1 且 rank 最小）
+  try {
+    await pool.query(`ALTER TABLE stock_concepts ADD COLUMN IF NOT EXISTS core_concept TEXT`);
+  } catch (e) { console.warn("[db] stock_concepts.core_concept 迁移跳过:", e.message); }
   console.log("[db] schema ready");
 }
 

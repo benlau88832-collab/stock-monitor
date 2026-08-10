@@ -67,7 +67,9 @@ describe("conceptFilter 概念判定（v9.91.0/1）", () => {
   });
 
   it("白名单已加载但未命中且无词根 → 非题材（原 len<=8 兜底不再放行）", () => {
-    expect(isThemeBoardName("装配建筑", whitelist)).toBe(false);
+    expect(isThemeBoardName("交运设备", whitelist)).toBe(false);   // 行业名（申万），非题材
+    expect(isThemeBoardName("互联网服务", whitelist)).toBe(false); // 行业名，非题材
+    expect(isThemeBoardName("内贸流通", whitelist)).toBe(false);   // 行业名，非题材
     expect(isThemeBoardName("长三角一体化", whitelist)).toBe(false);
   });
 

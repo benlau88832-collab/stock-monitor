@@ -46,6 +46,8 @@ export interface StockBoards {
   themes: string[];
   /** 全部板块（未过滤，调试用） */
   allBoards: string[];
+  /** v9.91.2（概念机制根治）：东财权威核心题材（IS_PRECISE=1 且 rank 最小，不靠词根投票猜） */
+  coreConcept?: string | null;
 }
 
 // ============== 批量查询 ==============
@@ -79,10 +81,10 @@ export async function fetchStocksBoards(codes: string[], hybkMap?: Map<string, s
         : "";
       const resp = await fetch(`/api/db/concepts?codes=${encodeURIComponent(codes.slice(0, 300).join(","))}${hybkQ}`, { signal: AbortSignal.timeout(8000) });
       if (resp.ok) {
-        const json: Record<string, { themes?: string[]; allBoards?: string[] }> = await resp.json();
+        const json: Record<string, { themes?: string[]; allBoards?: string[]; coreConcept?: string | null }> = await resp.json();
         const now = Date.now();
         for (const [code, v] of Object.entries(json)) {
-          const sb: StockBoards = { code, themes: v.themes ?? [], allBoards: v.allBoards ?? [] };
+          const sb: StockBoards = { code, themes: v.themes ?? [], allBoards: v.allBoards ?? [], coreConcept: v.coreConcept ?? null };
           result.set(code, sb);
           boardsCache.set(code, { data: sb, ts: now });
         }
