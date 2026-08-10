@@ -55,6 +55,7 @@ const TASK_CONFIG = {
   nextGatePredict: { temperature: 0.3, maxTokens: 600, thinking: false },
   // P3-4：用户风格学习 —— 周度低频，中等输出
   userStyleProfile: { temperature: 0.4, maxTokens: 800, thinking: false },
+  newsAnalysis: { temperature: 0.4, maxTokens: 700, thinking: false },
 };
 
 const B = {
@@ -236,6 +237,16 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
   nextGatePredict: (p) => ({ system: `你是A股市场情绪预判师。基于今日盘面与隔夜信息，预判明日开盘市场闸门状态（全开/谨慎/低仓/未知）。只输出JSON。`, user: p.prompt }),
   // P3-4：用户风格学习 —— 从历史拍板/盈亏推断交易风格与心理偏差
   userStyleProfile: (p) => ({ system: `你是A股行为金融分析师。基于用户历史交易数据，推断其交易风格与心理偏差。只输出JSON。`, user: p.prompt }),
+  newsAnalysis: (p) => ({ system: `你是A股盘前/盘后资讯分析师，擅长从海量快讯中提炼关键信息并回答具体问题。
+要求：
+1. 先说结论再列要点，≤250字，直接输出正文（不要标题装饰）
+2. 只引用提供的快讯数据，禁止编造数字/新闻
+3. 若用户问美股/外盘走势而数据中没有美股信息，明确说明"本地快讯未覆盖美股（本终端抓取A股快讯）"，再基于数据给出关联判断
+4. 指出最重要的 2-3 条新闻及对A股的影响方向`, user:
+`【本地已抓取快讯】
+${p.newsText}
+
+【用户问题】${p.question}` }),
   eventDeepDive: (p) => ({ system: SYSTEM_PREFIX, user:
 `你是A股事件深挖分析师。对以下已分级事件做影响推演，回答三个问题并给结论。
 

@@ -31,7 +31,9 @@ export type AITask =
   // v9.75（阶段二）：次日闸门预测（regimeGate 规则闸门 + LLM 外围预判）
   | "nextGatePredict"
   // P3-4：用户风格学习（周度，基于拍板/成交/盈亏 → 风格标签 + 心理偏差 + 禁忌题材）
-  | "userStyleProfile";
+  | "userStyleProfile"
+  // v9.94.1：快讯分析总结（用户问"重要的新闻/美股走势"——本地数据+LLM 总结，替代裸直出）
+  | "newsAnalysis";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -75,6 +77,8 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   nextGatePredict: { temperature: 0.3, maxTokens: 600, thinking: false },
   // P3-4：用户风格学习 —— 周度低频，中等输出
   userStyleProfile: { temperature: 0.4, maxTokens: 800, thinking: false },
+  // v9.94.1：快讯分析总结 —— 中低温小输出（结论+要点，非 JSON）
+  newsAnalysis: { temperature: 0.4, maxTokens: 700, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
@@ -132,6 +136,8 @@ export interface AITaskPayload {
   factorAttribution: { prompt: string };
   nextGatePredict: { prompt: string };
   userStyleProfile: { prompt: string };
+  // v9.94.1：快讯分析总结 —— 输入本地已抓取快讯文本 + 用户问题
+  newsAnalysis: { newsText: string; question: string };
 }
 
 // ============== Prompt 构建器 ==============
@@ -315,6 +321,17 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
   nextGatePredict: (p) => ({ system: `你是A股市场情绪预判师。基于今日盘面与隔夜信息，预判明日开盘市场闸门状态（全开/谨慎/低仓/未知）。只输出JSON。`, user: p.prompt }),
   // P3-4：用户风格学习 —— 从历史拍板/盈亏推断交易风格与心理偏差
   userStyleProfile: (p) => ({ system: `你是A股行为金融分析师。基于用户历史交易数据，推断其交易风格与心理偏差。只输出JSON。`, user: p.prompt }),
+  // v9.94.1：快讯分析总结（用户问"重要的新闻/美股走势"）—— 本地真实快讯 + 用户问题 → 结论+要点
+  newsAnalysis: (p) => ({ system: `你是A股盘前/盘后资讯分析师，擅长从海量快讯中提炼关键信息并回答具体问题。
+要求：
+1. 先说结论再列要点，≤250字，直接输出正文（不要标题装饰）
+2. 只引用提供的快讯数据，禁止编造数字/新闻
+3. 若用户问美股/外盘走势而数据中没有美股信息，明确说明"本地快讯未覆盖美股（本终端抓取A股快讯）"，再基于数据给出关联判断
+4. 指出最重要的 2-3 条新闻及对A股的影响方向`, user:
+`【本地已抓取快讯】
+${p.newsText}
+
+【用户问题】${p.question}` }),
   eventDeepDive: (p) => ({ system: SYSTEM_PREFIX, user:
 `你是A股事件深挖分析师。对以下已分级事件做影响推演，回答三个问题并给结论。
 
@@ -415,6 +432,8 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   nextGatePredict: (_p) => JSON.stringify({ nextGate: "未知", reason: "LLM不可用", watchPoints: [] }),
   // P3-4：用户风格规则版
   userStyleProfile: (_p) => JSON.stringify({ style: "未知", biases: [], avoidThemes: [], suggestion: "LLM不可用，无法分析用户风格" }),
+  // v9.94.1：快讯分析规则版 —— LLM 不可用时回退数据直出（原快捷路径行为）
+  newsAnalysis: (p) => `（LLM 暂不可用，以下为本地快讯原文）\n${p.newsText.slice(0, 500)}`,
   eventDeepDive: (p) => JSON.stringify({
     chain: `规则版：${p.title.slice(0, 30)} 影响传导待 LLM 深挖`,
     targets: [{ name: (p.beneficiaries || []).join("、") || p.title.slice(0, 12), reason: "规则版推荐" }],
