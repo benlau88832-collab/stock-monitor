@@ -9,7 +9,6 @@ import { getAgentTools } from "./agentTools";
 // v9.66.1：导入调研会话状态工具
 import { getResearchTools, RESEARCH_SYSTEM, researchCtxNote } from "./researchTools";
 import { callAgentChat, parseAIJSON, type AgentChatResult } from "./ai";
-import { callAI } from "./ai";
 import { fmtMoney, getBJDateStr } from "./format";
 import { isLocalServer } from "./cloudStore";
 
@@ -314,11 +313,16 @@ export async function runAssistantAgent(
     + "- 本地数据未覆盖或不足（如 getLocalNews 返回空、问的主题本地快讯没有）→ 用 getExternalNews 搜索外部新闻补充（东财检索秒回）。\n"
     + "- 妙想工具（researchQuote/researchData/researchSearch/searchNewsFull）仅在用户消息含'个股深度调研'时可用——其他时候这些工具不存在，不要尝试调用。\n"
     + "- 本地数据工具秒回，不依赖外部 API，不会超时。\n\n"
+    + "【消息/美股类问题自主决策 v9.94.2】\n"
+    + "- 用户问\"有什么消息/新闻/公告\"→ 先 getLocalNews 读本地快讯；本地不足再 getExternalNews 补。\n"
+    + "- 用户问\"重要新闻/分析/解读/走势\"→ 同样先 getLocalNews，然后你自己判断哪些重要、组织成结论+要点回答（这是你的分析工作，不是罗列标题）。\n"
+    + "- 用户问\"美股/外盘/纳指/隔夜走势\"→ getLocalNews 里的美股条目可能有限，MUST 再用 getExternalNews 搜\"美股\"（东财快讯含美股条目），把美股信息并入回答；确实没有美股数据才说明本地未覆盖。\n"
+    + "- 回答要回答问题本身（如\"美股走势如何\"就答美股涨跌/影响因素），不要跑题成 A股新闻清单。\n\n"
     + "你有以下工具（自主决定调用顺序与次数，最多 " + maxRounds + " 轮；查个股时用 getStockFundDetail 传 code）：\n"
     + toolDefs.map(t => "- " + t.name + ": " + t.description).join("\n")
     + "\n\n" + RESEARCH_SYSTEM + "\n\n"
     + "规则：\n"
-    + "1. 先调用 1-3 个关键工具获取真实数据（如问\"低空经济能不能上车\"→ getAdmissionVerdict/getMainlineStrength/getFundStreak；问\"某只票\"→ getStockFundDetail/detectTrap/checkExitSignal）。\n"
+    + "1. 先调用 1-3 个关键工具获取真实数据（如问\"低空经济能不能上车\"→ getAdmissionVerdict/getMainlineStrength/getFundStreak；问\"某只票\"→ getStockFundDetail/detectTrap/checkExitSignal；问\"有什么消息/美股走势\"→ getLocalNews/getExternalNews）。\n"
     + "2. 观察工具结果后再决定下一步；数据足够后直接给最终答复。\n"
     + "3. 每轮输出严格JSON之一：\n"
     + "   调用工具：{\"calls\":[{\"tool\":\"工具名\",\"args\":{...可选},\"reason\":\"为什么查它\"}]}\n"
@@ -346,11 +350,13 @@ export async function runAssistantAgent(
   // ① 消息/新闻/快讯/公告/事件类 → 直接读本地快讯（不调 LLM，不调妙想）
   // v9.84.6：支持"周末/隔夜/近N天"时间窗 —— 原只认"昨天/今日"，问"周末有什么消息"
   //   只取当日（周日）空库 → "暂无消息"。周末/隔夜 → 取最近 3 个自然日（覆盖周五收盘）。
-  // v9.94.1（用户实测）：问"重要的新闻/美股走势如何"只罗列标题无分析 ——
-  //   含分析意图词（重要/总结/走势/美股/外盘/分析/解读/如何/怎么样/影响/点评/值得关注）
-  //   → 本地数据收集后走 LLM 总结（source:"ai"），不再纯直出；纯"有什么消息"仍直出秒回。
+  // v9.94.2（PRD 修正：不越俎代庖）：仅"纯查询"（无分析意图词）直出秒回；
+  //   含分析意图（重要/总结/走势/美股/如何/怎么看/影响…）→【不拦截】落到下方 ReAct 主循环，
+  //   由 LLM 自主决策：先 getLocalNews 查本地 → 不足/问美股再 getExternalNews 外部补 → 自己组织回答。
+  //   不再用正则+固定模板短路（v9.94.1 教训：那是规则引擎不是 AI 主观能动性）。
   if (opts?.signal?.aborted) throw new Error("request aborted"); // v9.85.2（P2-9）：已取消则不进入任何分支
-  if (/消息|新闻|快讯|公告|事件|海内外|国内外/.test(q) && !q.includes("个股深度调研")) {
+  const wantsAnalysis = /重要|重点|总结|分析|解读|走势|美股|外盘|纳指|道指|标普|美债|美联储|如何|怎么样|怎么看|影响|点评|值得关注|机会/.test(q);
+  if (/消息|新闻|快讯|公告|事件|海内外|国内外/.test(q) && !q.includes("个股深度调研") && !wantsAnalysis) {
     try {
       const { getAllSince } = await import("./dataStore");
       let since = getBJDateStr(); // v15-1：北京时间今日（原 toISOString UTC 会偏一天）
@@ -361,8 +367,6 @@ export async function runAssistantAgent(
       const dm = q.match(/(\d{1,2})[.月](\d{1,2})/);
       if (dm) since = `${new Date().getFullYear()}-${String(+dm[1]).padStart(2, "0")}-${String(+dm[2]).padStart(2, "0")}`;
       const { news, ann } = getAllSince(since);
-      // 是否要求"分析/总结"（用户要结论不要清单）
-      const wantsAnalysis = /重要|重点|总结|分析|解读|走势|美股|外盘|纳指|道指|标普|如何|怎么样|怎么看|影响|点评|值得关注|机会/.test(q);
       if (news.length === 0 && ann.length === 0) {
         // v9.84.6：本地未覆盖 → 外部搜索兜底（东财新闻检索，本地服务端代理秒回）
         // 关键词提取：优先取"XX消息/XX政策/XX事件"中的 XX；纯问"有什么消息"→ 泛搜 A股
@@ -371,40 +375,18 @@ export async function runAssistantAgent(
         const finalKw = (kw && !/消息|新闻|政策|事件/.test(kw)) ? kw : "A股";
         const ext = await fetchExternalNews(finalKw, 8);
         if (ext.length > 0) {
-          // v9.94.1：外部搜索有结果但用户要分析 → LLM 总结外部新闻
-          if (wantsAnalysis) {
-            try {
-              const aiTxt = await callAI("newsAnalysis", {
-                newsText: ext.slice(0, 8).map(n => n.title).join("\n"),
-                question: q,
-              });
-              if (aiTxt.text?.trim()) return { reply: aiTxt.text.trim(), toolsCalled: ["getExternalNews"], degraded: false, source: "ai" };
-            } catch { /* LLM 失败回落直出 */ }
-          }
           const lines = [`📅 ${since} 起本地快讯为空，已补外部搜索（${finalKw}）：`];
           ext.slice(0, 8).forEach(n => lines.push(`  • ${n.title}`));
           return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getExternalNews"], degraded: false, source: "data" };
         }
         return { reply: `${since} 起暂无本地快讯/公告，外部搜索也无新增结果（cron 可能尚未抓取或非交易日）。`, toolsCalled: ["getLocalNews", "getExternalNews"], degraded: false };
       }
-      // 收集本地数据（政策/市场/公告三类）
-      const policy = news.filter(n => /国务院|央行|证监会|发改委|财政部/.test(n.title));
-      const market = news.filter(n => !policy.includes(n));
-      const strong = ann.filter(a => /业绩|中标|增持|回购|重组|获批/.test(a.title));
-      // v9.94.1：用户要分析（重要/走势/美股等）→ 本地数据喂 LLM 总结
-      if (wantsAnalysis) {
-        try {
-          const parts: string[] = [`📅 ${since} 本地快讯 ${news.length} 条·公告 ${ann.length} 条`];
-          if (policy.length) parts.push(`政策：${policy.slice(0, 5).map(n => n.title).join("；")}`);
-          if (market.length) parts.push(`市场：${market.slice(0, 10).map(n => n.title).join("；")}`);
-          if (strong.length) parts.push(`公告：${strong.slice(0, 5).map(a => `${a.stockName ?? ""}：${a.title}`).join("；")}`);
-          const aiTxt = await callAI("newsAnalysis", { newsText: parts.join("\n"), question: q });
-          if (aiTxt.text?.trim()) return { reply: aiTxt.text.trim(), toolsCalled: ["getLocalNews"], degraded: false, source: "ai" };
-        } catch { /* LLM 失败回落直出（不阻塞秒回） */ }
-      }
       const lines = [`📅 ${since} 起本地消息（快讯${news.length}·公告${ann.length}）`];
+      const policy = news.filter(n => /国务院|央行|证监会|发改委|财政部/.test(n.title));
       if (policy.length) { lines.push("🏛️ 政策："); policy.slice(0, 5).forEach(n => lines.push(`  • ${n.title}`)); }
-      if (market.length) { lines.push("📊 市场："); market.slice(0, 10).forEach(n => lines.push(`  • ${n.title}`)); }
+      const market = news.filter(n => !policy.includes(n)).slice(0, 10);
+      if (market.length) { lines.push("📊 市场："); market.forEach(n => lines.push(`  • ${n.title}`)); }
+      const strong = ann.filter(a => /业绩|中标|增持|回购|重组|获批/.test(a.title)).slice(0, 5);
       if (strong.length) { lines.push("📋 公告："); strong.forEach(a => lines.push(`  • ${a.stockName ?? ""}：${a.title}`)); }
       return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getLocalNews"], degraded: false, source: "data" };
     } catch { /* 快捷失败→继续 ReAct */ }
