@@ -9,6 +9,9 @@ import { isLocalServer } from "../lib/cloudStore";
 import { FACTORS, markNextWin, evaluateFactorIcSeries, resolveAutoStates, type FactorIcPoint, type FactorDayRow } from "../lib/factorLib";
 import { loadFactorIcHistory, type FactorIcHistory } from "../lib/factorHistory";
 import DisclaimerTag from "./DisclaimerTag";
+import { callAI } from "../lib/ai";
+import { parseLLMJSON, schemaForTask } from "../lib/llmJson";
+import { setAIResult, getAIResult } from "../lib/aiConclusionStore";
 
 const IC_Y_MAX = 0.15; // 纵轴固定 ±0.15（IC 常见范围）
 
@@ -131,6 +134,44 @@ export default function FactorHealthPanel() {
     retiredCount > 0 ? `${retiredCount} 因子已退役` : "",
   ].filter(Boolean).join(" · ");
 
+  // v9.92.1（AI 贯穿全局）：失效/反转因子归因就地展示 —— factorAttribution 自动调用（结果存 store 全站可见）
+  const [attribution, setAttribution] = useState<string | null>(null);
+  useEffect(() => {
+    if (!stats) return;
+    const badFactors = FACTORS.filter(f => {
+      const pts = seriesMap[f.id];
+      const cur = pts && pts.length > 0 ? pts[pts.length - 1] : null;
+      return cur && (cur.decayed || cur.reversed);
+    }).slice(0, 5);
+    if (badFactors.length === 0) return;
+    const key = badFactors.map(f => f.id).join(",");
+    // store 缓存优先（24h 内不重复调 LLM）
+    const cached = getAIResult("factorAttribution", key);
+    if (cached && typeof cached.value === "string") { setAttribution(cached.value); return; }
+    let alive = true;
+    const decayedList = badFactors.map(f => {
+      const pts = seriesMap[f.id];
+      const cur = pts[pts.length - 1];
+      return `${f.name}(IC=${cur.ic.toFixed(3)},样本${cur.samples})`;
+    }).join("、");
+    callAI("factorAttribution", {
+      prompt: `以下A股短线因子近期失效/方向反转（滚动IC接近0或与预期方向相反）。结合当前市场环境，给出最可能的失效原因（如：情绪因子在震荡市钝化/封单数据口径变化/样本不足等），并建议是否需要退役或反向使用。
+失效因子：${decayedList}`,
+    }).then(r => {
+      if (!alive) return;
+      const j = parseLLMJSON<{ summary: string; suggestions: string[] }>(r.text, schemaForTask("factorAttribution"));
+      const text = j?.summary ? `${j.summary}${(j.suggestions ?? []).length ? `（建议：${j.suggestions.slice(0, 2).join("；")}）` : ""}` : null;
+      if (text && !r.degraded) {
+        setAttribution(text);
+        setAIResult("factorAttribution", key, text, "module");
+      } else {
+        setAttribution(r.degraded ? "LLM 降级（配额受限），按规则自动处置参考" : null);
+      }
+    }).catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stats?.decayed, stats?.reversed, stats?.total]);
+
   if (loading) {
     return <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-xs text-slate-500">因子健康度加载中…</div>;
   }
@@ -199,6 +240,14 @@ export default function FactorHealthPanel() {
       <div className="text-[11px] text-slate-500">
         每条曲线 = 该因子最近 10 个交易日的滚动 IC（秩相关，正=与期望方向一致）。灰带为 |IC|&lt;0.05 失效区：曲线持续落入灰带 → 因子疑似失效，权重自动降为 0.3（幻方核心：因子会过期）。
       </div>
+
+      {/* v9.92.1：失效因子归因就地展示（原 factorAttribution 只在 ReAct 对话里可见） */}
+      {attribution && (
+        <div className="rounded border border-cyan-500/25 bg-cyan-500/5 px-2.5 py-1.5 text-[11px] text-cyan-100/90">
+          <div className="mb-0.5 font-bold text-cyan-300">🤖 失效因子归因（AI）</div>
+          <div className="whitespace-pre-wrap leading-relaxed">{attribution}</div>
+        </div>
+      )}
 
       {/* 因子曲线列表 */}
       <div className="space-y-1.5">

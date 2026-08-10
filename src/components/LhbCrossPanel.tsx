@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef } from "react";
 import { fmtMoney, localDateStr } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
+import AskAI from "./AskAI";
 import { isLocalServer, apiFetch } from "../lib/cloudStore";
 import { emit as alertEmit } from "../lib/alertBus";
 import type { OverviewData } from "../App";
@@ -124,6 +125,11 @@ export default function LhbCrossPanel({ overview }: { overview?: OverviewData | 
             <span className="ml-auto shrink-0 truncate max-w-[200px] text-[10px] text-slate-500" title={it.explain}>
               {it.explain || ""}
             </span>
+            {/* v9.92.1：龙虎榜×涨停行问AI —— 携带净买入/上榜原因 */}
+            <AskAI compact code={it.code} name={it.name}
+              context={`龙虎榜×涨停交叉：${it.name}(${it.code}) 今日涨停${it.pct.toFixed(1)}% 龙虎榜净买入${fmtMoney(it.netBuy)} 上榜原因：${it.explain || "—"}`}
+              placeholder="问：为什么上榜？席位在买还是卖？次日怎么看？"
+            />
           </a>
         ))}
       </div>

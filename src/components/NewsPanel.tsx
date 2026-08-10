@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import AskAI from "./AskAI";
 import { fetchFastNews, type FastNewsItem } from "../lib/api";
 import AnnouncementPanel from "./AnnouncementPanel";
 import { callAI, type AIResult } from "../lib/ai";
@@ -111,6 +112,16 @@ function NewsCard({ item, highlight }: { item: EnrichedNews; highlight: boolean 
               )}
             </div>
           )}
+          {/* v9.92.1：新闻条目问AI —— 携带标题/板块/主线命中（就地解读利好利空） */}
+          <div className="mt-1 flex justify-end" onClick={e => e.stopPropagation()}>
+            <AskAI compact
+              context={`新闻：${item.title}${item.summary ? `
+摘要：${item.summary}` : ""}${item.boards.length ? `
+关联板块：${item.boards.join("、")}` : ""}${item.mainlineHit ? `
+命中主线：${item.mainlineHit}` : ""}`}
+              placeholder="问：这条消息利好谁？影响哪些板块？"
+            />
+          </div>
         </div>
         <div className="shrink-0 text-right">
           <Stars n={item.stars} />

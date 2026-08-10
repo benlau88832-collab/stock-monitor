@@ -58,7 +58,7 @@ export default function AskAI({ context, code, name, placeholder, compact = fals
   if (!open) {
     return (
       <button
-        onClick={() => setOpen(true)}
+        onClick={e => { e.stopPropagation(); setOpen(true); }} // v9.92.1：防嵌套 <a>（新闻卡）冒泡跳转
         className={`shrink-0 rounded border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-bold text-violet-300 hover:bg-violet-500/20 transition ${compact ? "" : "px-2 py-1 text-xs"}`}
         title="问 AI（携带当前模块上下文，就地回答）"
       >
