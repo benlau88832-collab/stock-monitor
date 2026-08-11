@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef } from "react";
 import { apiFetch, isLocalServer, kvGet } from "../lib/cloudStore";
 import { getAllSince } from "../lib/dataStore";
+import { localDateStr } from "../lib/format"; // v9.99.2（C5）：历史数据标注
 import DisclaimerTag from "./DisclaimerTag";
 // v9.84.2（AI大脑层 · 3.5）：接线死任务 —— policyDiff（政策解读）/ eventClassify（LLM 精分级）
 import { callAI } from "../lib/ai";
@@ -226,7 +227,8 @@ export default function EventClassifyPanel({ onOpenNews }: {
           const key = `event_classify:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
           const v = (await kvGet(key)) as { date?: string; items?: ClassifiedEvent[] } | null;
           if (v && Array.isArray(v.items) && v.items.length > 0) {
-            if (alive) { setItems(v.items!); setDate(v.date ?? ""); }
+            // v9.99.2（C5）：命中非今日分级 → 显式"（历史）"标注，用户可辨显示的是哪天的数据
+            if (alive) { setItems(v.items!); setDate(v.date && v.date !== localDateStr() ? `${v.date}（历史）` : v.date ?? ""); }
             return;
           }
         }
@@ -274,7 +276,10 @@ export default function EventClassifyPanel({ onOpenNews }: {
             <span className="text-sm font-bold text-slate-200">📡 新闻驱动·热点主题作战</span>
             {analysis.time && (
               <span className="text-[10px] text-slate-500">
-                最新 {analysis.time} · {analysis.round === "手动" ? "手动" : analysis.round}
+                {/* v9.99.2（C2）：头部补日期 —— 原只显示 HH:MM，latest 是昨天/前天的轮次用户无从判断（v9.93.5 曾报"显示 08-08 旧值"） */}
+                最新 {analysis.date ? analysis.date.slice(5) : "?"} {analysis.time} · {analysis.round === "手动" ? "手动" : analysis.round}
+                {/* v9.99.2（B2）：Step3 LLM 失败规则兜底标记 */}
+                {analysis.llmDegraded && <span className="ml-1 text-[10px] font-bold text-amber-300">⚡ 规则版</span>}
               </span>
             )}
             <DisclaimerTag />

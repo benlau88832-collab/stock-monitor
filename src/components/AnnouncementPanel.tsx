@@ -166,6 +166,8 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>("all");
   const [aiScores, setAiScores] = useState<Map<string, AnnAIScore>>(() => loadAIScores());
+  // v9.99.2（B6）：annRank LLM 降级标记 —— 原失败时静默少一列 AI 分数、无任何提示
+  const [annAiDegraded, setAnnAiDegraded] = useState(false);
   const aiTriggeredRef = useRef(false);
   const dailyFallbackRef = useRef(false);
   const lastCallbackHash = useRef("");
@@ -226,6 +228,8 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
           setAiScores(updated);
           saveAIScores(updated);
         }
+      } else {
+        setAnnAiDegraded(true); // v9.99.2（B6）：LLM 降级 → 提示条（用户可辨缺列原因）
       }
     } catch { /* callAI 内部已降级 */ }
   }, [aiScores]);
@@ -478,6 +482,12 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
           </a>
         </div>
       </div>
+      {/* v9.99.2（B6）：annRank LLM 降级提示 —— 缺 AI 评分列时用户可辨原因 */}
+      {annAiDegraded && (
+        <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+          ⚡ AI 公告归因暂不可用（规则版）：高星级公告暂无 AI 评分，稍后自动重试
+        </div>
+      )}
 
       {/* 说明栏 */}
       <div className="text-[11px] text-slate-500 flex items-center gap-3">

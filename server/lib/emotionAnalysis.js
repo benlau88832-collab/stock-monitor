@@ -61,11 +61,13 @@ function computeStockSentimentScore(parts) {
 async function collectEmotionMetrics(pool, dateStr) {
   const out = { date: dateStr, metrics: null, newsStats: null, error: null };
   try {
-    // market_daily:date（kv，cron 15:40 落库；凌晨无则用最近一日）
+    // v9.99.2（全栈体检 C1）：按传入 dateStr 精确取 market_daily —— 原实现 `LIKE 'market_daily:%' ORDER BY key DESC LIMIT 1`
+    //   完全忽略日期参数，盘中/盘前最新的一条是昨天的 → 情绪报告"运行分析"永远生成昨天数据、落库昨天 key、前端误判成功。
+    //   现在：精确 key 查不到 → 明确报错（前端提示"今日收盘快照未生成"），不再静默用旧数据冒充
     const mdR = await pool.query(
-      `SELECT key, value FROM kv_store WHERE key LIKE 'market_daily:%' ORDER BY key DESC LIMIT 1`,
+      `SELECT key, value FROM kv_store WHERE key = $1`, [`market_daily:${dateStr}`],
     );
-    if (mdR.rows.length === 0) { out.error = "无 market_daily 数据（cron 未落库）"; return out; }
+    if (mdR.rows.length === 0) { out.error = `今日收盘快照未生成（market_daily:${dateStr} 缺失，cron 15:40 落库）`; return out; }
     let md = mdR.rows[0].value;
     if (typeof md === "string") { try { md = JSON.parse(md); } catch { /* 保持原样 */ } }
     const date = String(mdR.rows[0].key).replace("market_daily:", "");

@@ -59,8 +59,10 @@ export default function BoardRankPanel({ inflow, outflow }: Props) {
       {/* Tab切换 */}
       <div className="flex gap-1">
         {([
-          { key: "inflow" as TabKey, label: "🔥 净流入 Top10", color: "text-emerald-400" },
-          { key: "outflow" as TabKey, label: "💧 净流出 Top10", color: "text-rose-400" },
+          // v9.99.2（全栈体检 A3）：Tab 颜色统一全站语义"红=流入、绿=流出" —— 原"净流入=绿/净流出=红"与
+          //   本表热力矩阵（流入红底/流出绿底）和行内数值（正红负绿）同屏相反
+          { key: "inflow" as TabKey, label: "🔥 净流入 Top10", color: "text-rose-400" },
+          { key: "outflow" as TabKey, label: "💧 净流出 Top10", color: "text-emerald-400" },
           { key: "diverge" as TabKey, label: `⚠️ 流入转流出(${divergeBoards.length})`, color: "text-amber-400" },
         ] as const).map(t => (
           <button key={t.key} onClick={() => { setTab(t.key); setSortKey("mainNet"); setSortAsc(false); }}
@@ -124,7 +126,8 @@ export default function BoardRankPanel({ inflow, outflow }: Props) {
                 <td className="px-2 py-1.5 text-right text-slate-300">{b.turnoverRate > 0 ? `${b.turnoverRate.toFixed(1)}%` : "-"}</td>
                 <td className="px-2 py-1.5 text-center">
                   <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${
-                    b.consecutiveDays > 0 ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"
+                    // v9.99.2（A3）：连续流入→红、连续流出→绿（与全站红=流入语义一致）
+                    b.consecutiveDays > 0 ? "bg-rose-500/20 text-rose-300" : "bg-emerald-500/20 text-emerald-300"
                   }`} title="基于 5日/10日资金累比的估算值（非逐日真实落库）">
                     {b.consecutiveDays > 0 ? `约${b.consecutiveDays}天流入` : `约${Math.abs(b.consecutiveDays)}天流出`}*
                   </span>

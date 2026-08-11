@@ -576,12 +576,15 @@ interface DashboardProps {
   nextGatePredict?: { nextGate: string; reason: string; watchPoints: string[] } | null;
   /** v9.34（S1）：封单衰减预警（终裁决证据源） */
   sealAlerts?: Array<{ level: "yellow" | "red" }> | null;
+  /** v9.99.2（B3）：盘后四任务 LLM 降级标记（三剧本/闸门/风险雷达/龙一预判）—— 规则版兜底不得伪装 AI */
+  llmBriefDegraded?: Record<string, boolean>;
 }
 
 export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
   phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, ztPool, yesterdayZt,
   nextScenarios = null, leaderPredict = null, riskRadarText = null, sealAlerts = null, nextGatePredict = null,
+  llmBriefDegraded = {},
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
   const phase: SessionPhase = phaseProp;
@@ -1120,12 +1123,17 @@ export default function Dashboard({
           {isPre && (
             <>
               {/* v9.19-F2：竞价台（盘前/竞价场景核心） */}
-              {leaderPredict && leaderPredict.predictLeader && (
+              {/* v9.99.2（B3）：LLM 降级时显示"AI 不可用"占位 —— 原 predictLeader 为 null 整卡静默消失 */}
+              {(leaderPredict && (leaderPredict.predictLeader || llmBriefDegraded.leaderPredict)) && (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+                  {leaderPredict.predictLeader ? (
                   <div className="text-xs font-bold text-amber-200">
                     🤖 AI 预判龙一：<span className="text-base">{leaderPredict.predictLeader.name}</span>
                     <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
                   </div>
+                  ) : (
+                  <div className="text-xs font-bold text-amber-300">🤖 AI 预判龙一：AI 暂不可用（规则版无预判）</div>
+                  )}
                   {leaderPredict.reason && <div className="mt-1 text-[11px] text-slate-300">理由：{leaderPredict.reason}</div>}
                   {leaderPredict.watch && <div className="text-[11px] text-rose-300/80">⚠ 盯防：{leaderPredict.watch}</div>}
                 </div>
@@ -1238,12 +1246,14 @@ export default function Dashboard({
               : riskRadarText.includes("[中]") ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
               : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
               🛡 {riskRadarText}
+              {llmBriefDegraded.riskRadar && <span className="ml-1 text-[10px] text-amber-300">⚡ 规则版（LLM 不可用）</span>} {/* v9.99.2（B3） */}
             </div>
           )}
           {/* v9.75（阶段二）：次日闸门预测（LLM 结合隔夜外围/政策预判） */}
           {nextGatePredict && nextGatePredict.nextGate && (
             <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs">
               <span className="font-bold text-slate-200">🚦 次日闸门预测：</span>
+              {llmBriefDegraded.nextGate && <span className="ml-1 text-[10px] text-amber-300">⚡ 规则版（LLM 不可用）</span>} {/* v9.99.2（B3） */}
               <span className={nextGatePredict.nextGate.includes("全开") ? "text-emerald-300" : nextGatePredict.nextGate.includes("低") || nextGatePredict.nextGate.includes("谨慎") ? "text-amber-300" : "text-slate-300"}>{nextGatePredict.nextGate}</span>
               {nextGatePredict.reason && <span className="text-slate-400">（{nextGatePredict.reason}）</span>}
               {nextGatePredict.watchPoints.length > 0 && (
@@ -1253,7 +1263,9 @@ export default function Dashboard({
           )}
           {nextScenarios && nextScenarios.length > 0 && (
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-              <div className="text-[11px] font-bold text-slate-200 mb-2">🎬 明日三剧本（LLM 盘后推演）</div>
+              <div className="text-[11px] font-bold text-slate-200 mb-2">🎬 明日三剧本（LLM 盘后推演）
+                {llmBriefDegraded.nextScenarios && <span className="ml-1 text-[10px] text-amber-300">⚡ 规则版（LLM 不可用）</span>} {/* v9.99.2（B3） */}
+              </div>
               <div className="space-y-1.5">
                 {nextScenarios.map((s, i) => (
                   <div key={i} className="rounded border border-white/5 bg-black/20 px-2 py-1.5">

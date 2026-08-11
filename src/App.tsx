@@ -254,6 +254,9 @@ export default function App() {
   const [nextGatePredict, setNextGatePredict] = useState<{ nextGate: string; reason: string; watchPoints: string[] } | null>(null);
   const [leaderPredict, setLeaderPredict] = useState<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null>(null);
   const [riskRadarText, setRiskRadarText] = useState<string | null>(null);
+  // v9.99.2（B3）：盘后四任务 LLM 降级标记 —— 三剧本/闸门/风险雷达/龙一预判原本不检查 r.degraded，
+  //   规则版 fallback 经 parseLLMJSON 剥前缀后以 AI 面目渲染（伪装）；此标记驱动 Dashboard 角标
+  const [llmBriefDegraded, setLlmBriefDegraded] = useState<Record<string, boolean>>({});
   // v9.34（S1）：封单衰减预警（18s 高频通道轮询对比）
   const [sealAlerts, setSealAlerts] = useState<SealAlert[]>([]);
   const inFlight = useRef(false);
@@ -1154,7 +1157,7 @@ export default function App() {
         if (cancelled) return;
         try {
           const arr = parseLLMJSON<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }>>(r.text, schemaForTask("nextDayScenarios"));
-          if (Array.isArray(arr) && arr.length > 0) setNextScenarios(arr.slice(0, 3));
+          if (Array.isArray(arr) && arr.length > 0) { setNextScenarios(arr.slice(0, 3)); setLlmBriefDegraded(p => ({ ...p, nextScenarios: !!r.degraded })); } // v9.99.2（B3）：降级标记
         } catch { /* 解析失败静默 */ }
       }).catch(() => {});
       // v9.75（阶段二）：次日闸门预测 —— 规则闸门是"当日快照"，此调用让 LLM 结合隔夜外围/政策预判明日闸门（盘后一次）
@@ -1165,7 +1168,7 @@ export default function App() {
           if (cancelled) return;
           try {
             const j = parseLLMJSON<{ nextGate: string; reason: string; watchPoints: string[] }>(r.text, schemaForTask("nextGatePredict"));
-            if (j && j.nextGate) setNextGatePredict({ nextGate: String(j.nextGate), reason: String(j.reason ?? ""), watchPoints: Array.isArray(j.watchPoints) ? j.watchPoints.slice(0, 3) : [] });
+            if (j && j.nextGate) { setNextGatePredict({ nextGate: String(j.nextGate), reason: String(j.reason ?? ""), watchPoints: Array.isArray(j.watchPoints) ? j.watchPoints.slice(0, 3) : [] }); setLlmBriefDegraded(p => ({ ...p, nextGate: !!r.degraded })); } // v9.99.2（B3）
           } catch { /* 静默 */ }
         }).catch(() => {});
       }
@@ -1178,7 +1181,7 @@ export default function App() {
         if (cancelled) return;
         try {
           const j = parseLLMJSON<{ level: string; points: Array<{ item: string; desc: string }>; advice: string }>(r.text, schemaForTask("riskRadar"));
-          if (j && j.level) { const pts = Array.isArray(j.points) ? j.points : []; setRiskRadarText(`风险雷达[${j.level}]：${pts.map(p => `${p.item}(${p.desc})`).join("；") || "无明显风险"}${j.advice ? `。建议：${j.advice}` : ""}`); }
+          if (j && j.level) { const pts = Array.isArray(j.points) ? j.points : []; setRiskRadarText(`风险雷达[${j.level}]：${pts.map(p => `${p.item}(${p.desc})`).join("；") || "无明显风险"}${j.advice ? `。建议：${j.advice}` : ""}`); setLlmBriefDegraded(p => ({ ...p, riskRadar: !!r.degraded })); } // v9.99.2（B3）
         } catch { /* 静默 */ }
       }).catch(() => {});
     }
@@ -1205,6 +1208,7 @@ export default function App() {
               reason: String(j.reason ?? ""),
               watch: String(j.watch ?? ""),
             });
+            setLlmBriefDegraded(p => ({ ...p, leaderPredict: !!r.degraded })); // v9.99.2（B3）：降级 → Dashboard 显示"AI 不可用"占位而非整卡消失
           }
         } catch { /* 静默 */ }
       }).catch(() => {});
@@ -1482,6 +1486,7 @@ export default function App() {
             leaderPredict={leaderPredict}
             riskRadarText={riskRadarText}
             nextGatePredict={nextGatePredict}
+            llmBriefDegraded={llmBriefDegraded} // v9.99.2（B3）：盘后四任务 LLM 降级标记
             sealAlerts={sealAlerts} />
         )}
 

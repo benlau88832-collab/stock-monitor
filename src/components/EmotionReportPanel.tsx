@@ -10,6 +10,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchPopularityRank, type PopularityItem } from "../lib/api";
 import { renderMiniMarkdown } from "../lib/md";
 import { exportElementAsPng } from "../lib/exportImage"; // v9.99.1（批次 5-3）：导出通用化（与复盘报告共用）
+import { localDateStr } from "../lib/format"; // v9.99.2（C1）：触发结果日期校验
 
 interface EmotionReport {
   date: string;
@@ -34,6 +35,8 @@ export default function EmotionReportPanel() {
   const [running, setRunning] = useState(false);
   const [hot, setHot] = useState<HotItem[]>([]);
   const [exporting, setExporting] = useState(false);
+  // v9.99.2（C1）：触发结果提示 —— 今日快照未生成/失败时明确告知，不再静默轮询超时
+  const [errMsg, setErrMsg] = useState<string | null>(null);
   const reportRef = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -68,18 +71,27 @@ export default function EmotionReportPanel() {
   const trigger = async () => {
     if (running) return;
     setRunning(true);
+    setErrMsg(null);
     try {
       await fetch("/api/emotion/analyze", { method: "POST" });
-      // 后台执行 → 轮询等最新报告
+      // v9.99.2（C1）：轮询校验"最新报告日期 = 今天" —— 原实现轮询到任一带 report 的旧报告即 break，
+      //   服务端曾用昨天的 market_daily 生成昨天报告、落库昨天 key，前端误判"生成成功"
+      const today = localDateStr();
+      let found = false;
       for (let i = 0; i < 10; i++) {
         await new Promise(r => setTimeout(r, 3000));
         const resp = await fetch("/api/db/kv-prefix?prefix=report:emotion:&limit=1");
         const j = await resp.json();
         const v = j.items?.[0]?.value;
         const parsed = typeof v === "string" ? JSON.parse(v) : v;
-        if (parsed?.report) { setReports(prev => [parsed, ...prev.filter(r => r.date !== parsed.date)]); break; }
+        if (parsed?.report && parsed.date === today) {
+          setReports(prev => [parsed, ...prev.filter(r => r.date !== parsed.date)]);
+          found = true;
+          break;
+        }
       }
-    } catch { /* 触发失败 */ }
+      if (!found) setErrMsg("今日收盘快照未生成（交易日 15:40 后可用），本次分析未产出今日报告");
+    } catch { setErrMsg("触发失败，请稍后重试"); }
     setRunning(false);
   };
 
@@ -116,6 +128,10 @@ export default function EmotionReportPanel() {
           )}
         </div>
       </div>
+      {/* v9.99.2（C1）：触发结果提示（今日快照未生成/失败） */}
+      {errMsg && (
+        <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">⚠ {errMsg}</div>
+      )}
 
       {/* 舆情三分类（人气榜派生，VibeAlpha 对照） */}
       {hot.length > 0 && (

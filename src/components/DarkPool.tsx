@@ -14,11 +14,12 @@ interface BlockTradeItem {
 
 function FlowBadge({ type }: { type: string }) {
   // 四象限标签颜色（已删除旧的洗盘/诱多/拉升做T等不可达分支）
+  // v9.99.2（全栈体检 A2）：统一全站语义"红=流入、绿=流出" —— 原"共振流入/看多"用绿、"看空"用红，与行内数值 pctColor（正红负绿）同屏相反
   let color = "bg-slate-500/20 text-slate-300";
-  if (type.includes("看多") || type.includes("共振流入")) color = "bg-emerald-500/20 text-emerald-300";
-  else if (type.includes("看空") || type.includes("共振流出")) color = "bg-rose-500/20 text-rose-300";
+  if (type.includes("看多") || type.includes("共振流入")) color = "bg-rose-500/20 text-rose-300";
+  else if (type.includes("看空") || type.includes("共振流出")) color = "bg-emerald-500/20 text-emerald-300";
   else if (type.includes("偏多") || type.includes("承接")) color = "bg-amber-500/20 text-amber-300";
-  else if (type.includes("偏空") || type.includes("撤离")) color = "bg-rose-500/20 text-rose-300";
+  else if (type.includes("偏空") || type.includes("撤离")) color = "bg-rose-500/20 text-rose-300"; // 撤离=风险警示（保持红）
   return <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${color}`}>{type}</span>;
 }
 
@@ -78,8 +79,9 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
       {data.marketFlowType && (
         <div className={`rounded-xl border p-4 ${
           // v9.26.10：对齐 judgeFlowType 实际文案（共振流入/共振流出/主力承接/主力撤离）
-          data.marketFlowType.includes("共振流入") ? "border-emerald-500/30 bg-emerald-500/10" :
-          data.marketFlowType.includes("共振流出") ? "border-rose-500/30 bg-rose-500/10" :
+          // v9.99.2（A2）：共振流入→红框（流入）、共振流出→绿框（流出），与全站红=流入语义一致
+          data.marketFlowType.includes("共振流入") ? "border-rose-500/30 bg-rose-500/10" :
+          data.marketFlowType.includes("共振流出") ? "border-emerald-500/30 bg-emerald-500/10" :
           data.marketFlowType.includes("主力承接") ? "border-amber-500/30 bg-amber-500/10" :
           data.marketFlowType.includes("主力撤离") ? "border-rose-500/30 bg-rose-500/10" :
           "border-white/10 bg-white/5"
@@ -155,15 +157,12 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {/* v9.99.2（A7）：合并"资金总体流向"与"今日明盘净流入"两卡 —— 东财口径 f62≡f66+f72（主力=超大单+大单=明盘），
+            原两卡并列显示同一数字不同标题（App.tsx 注释自认恒等），静默冗余；合并后 5 卡 → 4 卡 */}
         <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-          <div className="text-xs text-slate-400">资金总体流向（主力净流入）</div>
+          <div className="text-xs text-slate-400">今日主力净流入（明盘）</div>
           <div className={`mt-1 text-2xl font-black ${pctColor(data.totalFlow)}`}>{fmtMoney(data.totalFlow)}</div>
-          <div className="mt-2 text-[11px] text-slate-500">超大单+大单净额</div>
-        </div>
-        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-          <div className="text-xs text-slate-400">今日明盘净流入</div>
-          <div className={`mt-1 text-2xl font-black ${pctColor(data.openPoolToday)}`}>{fmtMoney(data.openPoolToday)}</div>
           <div className="mt-2 text-[11px] text-slate-500">超大单+大单（公开大资金）</div>
         </div>
         <div className="rounded-xl border border-white/10 bg-white/5 p-4">

@@ -72,6 +72,11 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
   // 布局：SVG 单列条形，maxAbs 归一化条长；行高 24px；行业多 → 外层滚动
   // v9.95.x（P0 验收残留修复）：流入/流出各取前 8 交替展示 —— 原 rows=[...inflow, ...outflow]
   //   且 svgH=min(rows.length,15) 只画前 15 行（流入占满），流出行业永不可见 →"🟢 净流出 0 行业"
+  // v9.99.2（全栈体检 A1）：对称条形布局 —— 修复流出行业金额文字被 SVG 视口裁剪
+  // 旧布局：x0=labelW+barMaxW*0.18=121.6，流出条从 x0 向左最长 256px，金额文字 x 最小达 -141（视口外被裁）
+  //   → 截图实锤"绿色条全部无数值"。新布局 0 基准线居中、两侧对称预留：
+  //   viewBox = labelW + barAreaW + 2*valW；x0 = labelW + barAreaW/2 + valW（=284）
+  //   条最大长 = barAreaW/2*0.9（=144）→ 流出文字 x_min = 284-2-144-5-文字宽 ≈ 98 > 0 ✓ 永不裁剪
   const SHOW_EACH = 8;
   const inTop = inflow.slice(0, SHOW_EACH);
   const outTop = outflow.slice(0, SHOW_EACH);
@@ -82,8 +87,8 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
   }
   const rowH = 24;
   const svgH = rows.length * rowH + 24; // 全部渲染，外层滚动区查看
-  const labelW = 64, gapW = 6, valW = 60, barMaxW = 320;
-  const x0 = labelW + barMaxW * 0.18; // 0 基准线位置（左侧留行业名+少量右伸空间）
+  const labelW = 64, gapW = 6, valW = 60, barAreaW = 320; // 条形区总宽（0 线居中，两侧各半）
+  const x0 = labelW + barAreaW / 2 + valW; // 0 基准线（居中）
   const maxAbsY = Math.max(...rows.map(r => Math.abs(toYi(r.b.mainNet))), 0.01);
 
   return (
@@ -99,23 +104,23 @@ export default function IndustryFundFlowChart({ boards, asOfMinutes = 270, refre
       </div>
       {/* 横向条形图（滚动区，最多展示 15 行） */}
       <div className="max-h-[400px] overflow-y-auto pr-1">
-        <svg viewBox={`0 0 ${labelW + barMaxW + valW} ${svgH}`} className="w-full" role="img" aria-label="行业资金流向横向条形图，红色流入右伸、绿色流出左伸">
-          {/* 0 基准线 */}
+        <svg viewBox={`0 0 ${labelW + barAreaW + valW * 2} ${svgH}`} className="w-full" role="img" aria-label="行业资金流向横向条形图，红色流入右伸、绿色流出左伸">
+          {/* 0 基准线（居中） */}
           <line x1={x0} y1={8} x2={x0} y2={svgH - 8} stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeDasharray="4 3" />
           {rows.map(({ b, isIn }, i) => {
             const valYi = toYi(b.mainNet);
-            const len = Math.max(3, Math.abs(valYi) / maxAbsY * barMaxW * 0.8);
+            const len = Math.max(3, Math.abs(valYi) / maxAbsY * (barAreaW / 2) * 0.9);
             const y = 14 + i * rowH;
             const barX = isIn ? x0 + 2 : x0 - 2 - len;
             const color = isIn ? "#f43f5e" : "#10b981";
             const textColor = isIn ? "#fca5a5" : "#86efac";
             return (
               <g key={b.code}>
-                {/* 行业名 */}
-                <text x={x0 - gapW} y={y + 8} textAnchor="end" fontSize="11" fill="rgba(148,163,184,0.9)">{b.name.slice(0, 6)}</text>
+                {/* 行业名（固定左列） */}
+                <text x={labelW - gapW} y={y + 8} textAnchor="end" fontSize="11" fill="rgba(148,163,184,0.9)">{b.name.slice(0, 6)}</text>
                 {/* 条形（流入红右伸 / 流出绿左伸） */}
                 <rect x={barX} y={y} width={len} height={10} rx={2} fill={color} opacity={0.75} />
-                {/* 金额 */}
+                {/* 金额（条末端外侧；对称布局下流出侧空间充足，永不裁剪） */}
                 <text x={isIn ? x0 + 2 + len + 5 : x0 - 2 - len - 5} y={y + 8}
                   fontSize="10" fontWeight="600" fill={textColor} textAnchor={isIn ? "start" : "end"}>
                   {valYi >= 0 ? "+" : ""}{valYi.toFixed(1)}亿

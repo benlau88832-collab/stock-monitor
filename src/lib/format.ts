@@ -11,7 +11,10 @@ export function fmtMoney(v: number | null | undefined): string {
     return `${sign}${wan.toFixed(1)}万`;
   }
   if (Math.round(abs) >= 10000) return `${sign}${(abs / 1e4).toFixed(1)}万`;
-  return `${sign}${abs.toFixed(0)}`;
+  // v9.99.2（A8）：绝对值 <0.5 的负数（如 -0.4）不再显示 "-0"（四舍五入到 0 却带负号，语义荒谬）
+  const rounded = abs.toFixed(0);
+  if (v < 0 && Number(rounded) === 0) return "0";
+  return `${sign}${rounded}`;
 }
 
 export function fmtPct(v: number | null | undefined, digits = 2): string {

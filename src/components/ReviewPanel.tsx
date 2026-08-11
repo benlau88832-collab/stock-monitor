@@ -65,6 +65,32 @@ export default function ReviewPanel() {
   };
 
   // 🤖 立即 AI 复盘：大脑快照（情绪/涨停/主线/黑天鹅/强催化）→ 前端模板 → 结果并入本地复盘库
+  // v9.99.2（C3）：服务端复盘触发 —— /api/review/trigger 此前前端零调用，自动复盘区只能被动看 cron 15:40 结果；
+  //   盘前/盘中想看"今日服务端复盘"没有入口。接线已有端点：POST → 轮询 review:今天（13 维结构化）
+  const [serverReviewing, setServerReviewing] = useState(false);
+  const triggerServerReview = async () => {
+    if (serverReviewing) return;
+    setServerReviewing(true);
+    try {
+      const r = await fetch("/api/review/trigger", { method: "POST" });
+      if (!r.ok) return;
+      const today = localDateStr();
+      for (let i = 0; i < 12; i++) {
+        await new Promise(res => setTimeout(res, 5000));
+        try {
+          const resp = await fetch(`/api/db/kv?key=${encodeURIComponent(`review:${today}`)}`);
+          const j = await resp.json();
+          const v = j?.value;
+          if (v && (v.text || v.dimensions)) {
+            setAutoReview({ date: today, text: v.text ?? "", dimensions: v.dimensions });
+            break;
+          }
+        } catch { /* 轮询单次失败继续 */ }
+      }
+    } catch { /* 触发失败静默 */ }
+    setServerReviewing(false);
+  };
+
   const runAIReview = async () => {
     if (aiReviewing) return;
     setAiReviewing(true);
@@ -86,8 +112,9 @@ export default function ReviewPanel() {
       });
       if (!r.text) return;
       setAutoReview({ date: localDateStr(), text: r.text });
-      // 并入本地复盘库（今日未手填时兜底；已有手填则跳过避免覆盖）
-      if (!todayReview) {
+      // v9.99.2（B5）：降级（规则版）文本只展示、不写入本地复盘库 —— 原实现把"⚡ 规则版"兜底文本
+      //   upsertReview 持久化为正式"今日复盘"，规则内容污染复盘库/题材统计
+      if (!todayReview && !r.degraded) {
         const review: DailyReview = {
           date: today, mainline: top[0]?.theme ?? "—", leader: ladder[0]?.name ?? "",
           myStocks: "", pnl: null, reflection: r.text.slice(0, 200), createdAt: Date.now(),
@@ -199,7 +226,15 @@ export default function ReviewPanel() {
         <div className="rounded border border-violet-500/25 bg-violet-500/10 p-2">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[10px] font-bold text-violet-300">🤖 自动复盘 {autoReview.date}（LLM/规则版）</span>
-            <span className="text-xs text-slate-500">服务端 cron 15:40 生成 · 或手动触发</span>
+            <span className="flex items-center gap-1.5">
+              {/* v9.99.2（C3）：服务端复盘触发按钮（今日 13 维结构化复盘） */}
+              <button onClick={triggerServerReview} disabled={serverReviewing}
+                className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-bold text-violet-200 hover:bg-violet-500/30 disabled:opacity-50"
+                title="调用服务端生成今日 13 维结构化复盘（需当日快照数据）">
+                {serverReviewing ? "生成中…" : "🔄 生成今日"}
+              </button>
+              <span className="text-[10px] text-slate-500">cron 15:40 自动 · 可手动</span>
+            </span>
           </div>
           {/* v9.94.1：13 维度结构化数据（tdxclaw 式） */}
           {autoReview.dimensions && (

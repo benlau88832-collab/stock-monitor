@@ -45,6 +45,13 @@ async function fetchMarketDaily(pool) {
   // v9.56（V8-2）：premiumAvg/promotionRate 补落库；sealDecayCount 改真实（无 seal 预警源 → null，不用炸板冒充）；fundInflowStreak 连续天数
   // sealDecayCount：封单衰减预警数 —— server 无 sealMonitor 预警源，真实值缺失 → null（不再用 zbPool 炸板数代理）
   md.sealDecayCount = null;
+  // v9.99.2（全栈体检 B7）：补 sentiment —— market_daily 此前无情绪字段 → 情绪叙事报告"情绪温度计 —"。
+  //   盘中 sentiment_snapshot:日期 每 5 分钟落库（对象 {date,ts,sentiment,label}），收盘时合并最新值
+  try {
+    const sentR = await pool.query(`SELECT value FROM kv_store WHERE key = $1`, [`sentiment_snapshot:${dateStr}`]);
+    const sentV = sentR.rows[0]?.value;
+    if (sentV != null) md.sentiment = typeof sentV === "object" && Number.isFinite(Number(sentV.sentiment)) ? Number(sentV.sentiment) : null;
+  } catch { md.sentiment = null; }
   // premiumAvg（昨日涨停股今日平均涨幅）+ promotionRate（昨日首板今日继续涨停比例）
   // v9.75（正确性修复）：zt_snapshot.date 存储为带横杠 dateStr（fetchZTPool 返回），
   // 原用无横杠 bjDate() 比较（"2026-08-08" < "20260808" 恒真）→ 今天自己的行被当"昨日快照"，premium 今日算今日
@@ -1667,13 +1674,34 @@ ${JSON.stringify(themes.map(t => ({
 
 输出严格JSON数组：
 [{"theme":"主题名","verdict":"领涨龙头|潜力起爆|风险警示","fundAnalysis":"≤40字引用具体数字","action":"≤20字操作建议"}]`;
-    const analysisText = await callLLM(analysisPrompt, { maxTokens: 3000, temperature: 0.2 });
+    // v9.99.2（全栈体检 B2）：Step3 callLLM 包 try/catch —— 原实现无捕获，LLM 失败抛错被外层 catch 吞掉
+    //   → 整条主题分析管线 return null 不落库 → 前端主题作战卡空白且无任何提示（最严重 LLM 失效表现）。
+    //   现：失败/解析失败 → 规则兜底 verdict（资金方向判定）继续落库 + llmDegraded 标记，前端可显示"规则版"
+    let analysisLlmFailed = false;
+    let analysisText = null;
+    try {
+      analysisText = await callLLM(analysisPrompt, { maxTokens: 3000, temperature: 0.2 });
+    } catch (e) {
+      analysisLlmFailed = true;
+      console.warn("[themeAnalysis] Step3 LLM 失败，规则兜底 verdict:", e.message);
+    }
     let analyses = [];
-    try { analyses = JSON.parse(analysisText); } catch {
-      const m = analysisText.match(/\[[\s\S]*\]/);
-      if (m) { try { analyses = JSON.parse(m[0]); } catch { analyses = []; } }
+    if (analysisText) {
+      try { analyses = JSON.parse(analysisText); } catch {
+        const m = analysisText.match(/\[[\s\S]*\]/);
+        if (m) { try { analyses = JSON.parse(m[0]); } catch { analyses = []; } }
+      }
     }
     if (!Array.isArray(analyses)) analyses = [];
+    // 规则兜底：LLM 失败或输出不可解析 → 按资金方向给 verdict（与 prompt 内规则同口径）
+    if (analysisLlmFailed || analyses.length === 0) {
+      analysisLlmFailed = true;
+      analyses = themes.map(t => {
+        const f = fundMatchForTheme(t.name);
+        const verdict = f && f.mainNet5d > 0 ? "领涨龙头" : f && f.mainNet > 0 ? "潜力起爆" : "风险警示";
+        return { theme: t.name, verdict, fundAnalysis: "LLM 不可用，规则兜底（资金方向）", action: "跟踪观察" };
+      });
+    }
 
     // ===== V13-5（P0）Step 3：规则选股 + ETF 匹配 =====
     // 说明：stockPicker.ts / etfScore.ts / classifyStock 均为 TS 前端模块，server(CJS) 无法 require ——
@@ -1783,6 +1811,7 @@ correlation 必须基于行业归属（industry）与主题关联度判断，不
       date: dateStr,
       time: new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(11, 16),
       round: label,
+      llmDegraded: analysisLlmFailed, // v9.99.2（B2）：Step3 LLM 失败规则兜底标记（前端可显示"规则版"）
       themes: themes.map(t => {
         const a = analyses.find(x => x.theme === t.name) ?? {};
         const rawPicks = (themePicks.get(t.name) ?? []).map(p => {

@@ -22,6 +22,10 @@ const TASK_ALLOW = new Set([
   "eventClassify", "eventDeepDive", "agentReason",
   // v9.87.0（P2-1）：补齐前端有调用点的 task —— 此前 403 后前端回退浏览器直连（服务端不可观测）
   "criticReview", "factorAttribution", "nextGatePredict",
+  // v9.99.2（全栈体检 B1）：补齐服务端模式仍活跃的 task —— marginSentiment/stockAggregate 此前不在白名单，
+  //   服务端部署形态（浏览器无 Key、走 /api/ai/call）恒 403 "task not allowed" → 两大功能 LLM 从未生效、永远规则版；
+  //   emotionReport/userStyleProfile/newsAnalysis 前端无调用者，一并放行防未来 403
+  "marginSentiment", "stockAggregate", "emotionReport", "userStyleProfile", "newsAnalysis",
   // v9.85.1（P1-2）：AIConsole 快速问答（SSE 流式专用，与 /call 共用白名单口径）
   "quickChat",
 ]);

@@ -28,6 +28,8 @@ export interface MainlineDiagnosis {
   risk: string[];
   exit_signal_triggered: boolean;
   confidence: number;
+  /** v9.99.2（B4）：true = 规则引擎兜底产出（LLM 失败/解析失败），渲染加"规则版"角标，用户不得误认 AI 诊断 */
+  degraded?: boolean;
 }
 
 interface Props {
@@ -151,6 +153,7 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
         risk: [exit.text || mainline.caution].filter(Boolean).slice(0, 2),
         exit_signal_triggered: exit.triggered,
         confidence: Math.min(70, 40 + strength.score / 10),
+        degraded: true, // v9.99.2（B4）：规则引擎兜底 → 渲染标"规则版"，不伪装 AI
       });
     } catch (e) {
       setError("诊断生成失败");
@@ -167,6 +170,10 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-violet-300">🎯 主线诊断 · {mainline.mainline}</span>
+          {/* v9.99.2（B4）：规则引擎兜底时显式标注，不伪装 AI 诊断 */}
+          {diagnosis?.degraded && (
+            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300" title="LLM 不可用/解析失败，当前为规则引擎兜底输出">⚡ 规则引擎版</span>
+          )}
           {diagnosis && (
             <span className={`rounded px-1.5 py-0.5 text-[10px] font-black ${
               diagnosis.strength_score >= 80 ? "bg-rose-500/25 text-rose-300" :

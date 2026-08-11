@@ -43,7 +43,7 @@ function fundNature(s: WatchStock): { label: string; color: string; desc: string
   if (smallIn) return { label: "散户接盘", color: "text-emerald-300", desc: "主力流出+散户流入，警惕派发" };
   if (mainPos && extraDominant) return { label: "大资金进场", color: "text-rose-300", desc: `超大单主导，净流入${fmtMoney(s.mainNet)}` };
   if (mainPos) return { label: "主力净流入", color: "text-rose-300", desc: `净流入${fmtMoney(s.mainNet)}（占比${fmtPct(s.mainNetPct)}）` };
-  return { label: "主力净流出", color: "text-slate-400", desc: `净流出${fmtMoney(s.mainNet)}` };
+  return { label: "主力净流出", color: "text-slate-400", desc: `净流出${fmtMoney(Math.abs(s.mainNet)).replace(/^\+/, "")}` }; // v9.99.2（A4）：消除"净流出-50.00亿"双重符号
 }
 
 /** 主线归属：v9.91.0 板块级判定（权威分类器折叠大类 vs 今日主线），替代名称子串匹配 */

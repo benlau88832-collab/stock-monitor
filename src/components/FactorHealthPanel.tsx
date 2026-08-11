@@ -66,6 +66,8 @@ export default function FactorHealthPanel() {
   const [fallbackRows, setFallbackRows] = useState<FactorDayRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // v9.99.2（C4）：刷新重载 —— 原 useEffect([]) 只挂载加载一次，盘中看到的永远是 15:40 快照且无刷新入口
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -91,7 +93,7 @@ export default function FactorHealthPanel() {
       }
     })();
     return () => { alive = false; };
-  }, []);
+  }, [reloadTick]); // v9.99.2（C4）：reloadTick 触发重载（🔄 刷新按钮）
 
   // 统一成 factorId → IcPoint[]（快照模式按 name 匹配注册表）
   const seriesMap = useMemo(() => {
@@ -216,7 +218,15 @@ export default function FactorHealthPanel() {
         <div className="text-sm font-bold text-slate-100">
           🧪 因子健康度 <span className="ml-1 text-[10px] text-slate-500 font-normal">幻方"因子会失效"监测 · 滚动窗口 IC 曲线</span>
         </div>
-        <DisclaimerTag />
+        <div className="flex items-center gap-1.5">
+          {/* v9.99.2（C4）：刷新按钮 —— 盘中重读最新 factor_ic 快照 */}
+          <button onClick={() => setReloadTick(t => t + 1)} disabled={loading}
+            className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/20 disabled:opacity-50"
+            title="重新读取服务端 factor_ic 快照（盘中为 15:40 数据）">
+            {loading ? "加载中…" : "🔄 刷新"}
+          </button>
+          <DisclaimerTag />
+        </div>
       </div>
 
       {/* 汇总条 */}

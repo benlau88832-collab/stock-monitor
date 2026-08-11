@@ -38,11 +38,14 @@ function getAlertLevel(structure: FundStructureData["structure"]): AlertLevel {
 }
 
 // ============== 出货强度 ==============
+// v9.99.2（全栈体检 A6）：阈值按"全市场口径"下调 —— 旧阈值 5%/2% 是按个股口径设计的，
+//   全市场主力净流入通常 ±100~500 亿、两市成交额 1.2 万亿，比值仅 0.3%~4%，"强"档几乎永不触发、卡片常态"弱"。
+//   新阈值：强≥2%（≈240 亿+）、中≥0.8%、弱其余。
 function shipIntensity(mainNet: number, turnover: number): { label: string; color: string } {
   if (turnover <= 0 || mainNet >= 0) return { label: "无出货", color: "text-slate-400" };
   const ratio = Math.abs(mainNet) / turnover * 100;
-  if (ratio >= 5) return { label: `强（${ratio.toFixed(1)}%）`, color: "text-rose-400" };
-  if (ratio >= 2) return { label: `中（${ratio.toFixed(1)}%）`, color: "text-amber-400" };
+  if (ratio >= 2) return { label: `强（${ratio.toFixed(1)}%）`, color: "text-rose-400" };
+  if (ratio >= 0.8) return { label: `中（${ratio.toFixed(1)}%）`, color: "text-amber-400" };
   return { label: `弱（${ratio.toFixed(1)}%）`, color: "text-emerald-400" };
 }
 
@@ -310,8 +313,7 @@ function FundStructureImpl({ data, loading }: { data: FundStructureData | null; 
       <div className="text-[11px] text-slate-600 leading-relaxed">
         数据来源：东方财富push2资金流接口。主力=超大单+大单净额；散户=小单净额；游资=中单净额。
         分级预警：轻度(今日主力出) → 中度(主力出+散户进/5日持续出) → 重度(全面背离+持续多日)。
-        {/* v9.63（V9-D4）：两融数据未接入全市场汇总 → 显式标"开发中"（避免用户误以为 bug） */}
-        两融数据：该指标开发中（待全市场汇总接口）。
+        {/* v9.99.2（A5）：删除过期"两融开发中"脚注 —— 两融卡片已接真实接口 RPTA_RZRQ_LSHJ 全市场汇总 */}
         <a href={fundFlowUrl()} target="_blank" rel="noopener noreferrer" className="text-amber-300 hover:underline ml-1">查看东方财富资金流向 →</a>
       </div>
     </div>
