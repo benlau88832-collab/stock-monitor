@@ -86,7 +86,7 @@ function Stars({ n }: { n: number }) {
   return <span className="text-amber-400 text-[11px]">{"★".repeat(n)}{"☆".repeat(3 - n)}</span>;
 }
 
-function NewsCard({ item, highlight }: { item: EnrichedNews; highlight: boolean }) {
+function NewsCard({ item, highlight, stockLinks }: { item: EnrichedNews; highlight: boolean; stockLinks?: Map<string, string[]> }) {
   return (
     <a href={item.url} target="_blank" rel="noopener noreferrer"
       className={`block px-3 py-2.5 hover:bg-white/5 transition ${highlight ? "bg-amber-500/5 border-l-2 border-amber-400" : ""}`}>
@@ -103,6 +103,14 @@ function NewsCard({ item, highlight }: { item: EnrichedNews; highlight: boolean 
               ))}
             </div>
           )}
+          {/* v9.104.0（第四批 C，T-C2）：新闻→标的联动标记（标题命中今日涨停池股票） */}
+          {stockLinks?.get(String(item.code ?? ""))?.length ? (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {stockLinks!.get(String(item.code))!.slice(0, 3).map(s => (
+                <span key={s} className="rounded px-1 py-0.5 text-[11px] font-bold bg-emerald-500/15 text-emerald-300">🎯 {s}</span>
+              ))}
+            </div>
+          ) : null}
           {/* v9.24-P1-3：命中主线 + 定价状态（PRD E1） */}
           {item.mainlineHit && (
             <div className="flex flex-wrap gap-1 mt-1">
@@ -132,8 +140,9 @@ function NewsCard({ item, highlight }: { item: EnrichedNews; highlight: boolean 
   );
 }
 
-function ScrollColumn({ title, icon, color, news, linkUrl }: {
-  title: string; icon: string; color: string; news: EnrichedNews[]; linkUrl: string;
+function ScrollColumn({ title, icon, color, news, linkUrl, stockLinks }: {
+  title: string; icon: string; color: string; news: EnrichedNews[]; linkUrl?: string;
+  stockLinks?: Map<string, string[]>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [paused, setPaused] = useState(false);
@@ -169,7 +178,7 @@ function ScrollColumn({ title, icon, color, news, linkUrl }: {
           <div className="flex items-center justify-center h-full text-xs text-slate-500">暂无消息</div>
         ) : (
           <div className="divide-y divide-white/5">
-            {sorted.map((n, i) => <NewsCard key={`${n.code}-${i}`} item={n} highlight={n.stars >= 3} />)}
+            {sorted.map((n, i) => <NewsCard key={`${n.code}-${i}`} item={n} highlight={n.stars >= 3} stockLinks={stockLinks} />)}
           </div>
         )}
       </div>
@@ -214,6 +223,27 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [boardFilter, setBoardFilter] = useState<string>("");
+  // v9.104.0（第四批 C，T-C2）：新闻→标的联动（涨停池股票名命中标题）—— news code → 股票名[]
+  const [stockLinks, setStockLinks] = useState<Map<string, string[]>>(new Map());
+
+  // v9.104.0（T-C2）：加载新闻×主线×标的联动（服务端 /api/db/news-links，30s 随刷新）
+  useEffect(() => {
+    let alive = true;
+    const loadLinks = async () => {
+      try {
+        const r = await fetch("/api/db/news-links?limit=30");
+        const j = await r.json();
+        if (!alive || !Array.isArray(j.items)) return;
+        const m = new Map<string, string[]>();
+        for (const it of j.items) {
+          if (Array.isArray(it.stocks) && it.stocks.length > 0) m.set(String(it.code), it.stocks);
+        }
+        setStockLinks(m);
+      } catch { /* 联动加载失败不阻塞新闻 */ }
+    };
+    loadLinks();
+    return () => { alive = false; };
+  }, []);
 
   // AI 快讯三行
   const [aiDigest, setAiDigest] = useState<string | null>(null);
@@ -381,8 +411,8 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
       </div>
 
       <div className="flex gap-4">
-        <ScrollColumn title="国内重要消息" icon="🇨🇳" color="text-rose-400" news={domestic} linkUrl="https://kuaixun.eastmoney.com/" />
-        <ScrollColumn title="外围国际消息" icon="🌍" color="text-slate-400" news={overseas} linkUrl="https://kuaixun.eastmoney.com/" />
+        <ScrollColumn title="国内重要消息" icon="🇨🇳" color="text-rose-400" news={domestic} linkUrl="https://kuaixun.eastmoney.com/" stockLinks={stockLinks} />
+        <ScrollColumn title="外围国际消息" icon="🌍" color="text-slate-400" news={overseas} linkUrl="https://kuaixun.eastmoney.com/" stockLinks={stockLinks} />
       </div>
     </section>
   );

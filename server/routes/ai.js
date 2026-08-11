@@ -26,6 +26,8 @@ const TASK_ALLOW = new Set([
   //   服务端部署形态（浏览器无 Key、走 /api/ai/call）恒 403 "task not allowed" → 两大功能 LLM 从未生效、永远规则版；
   //   emotionReport/userStyleProfile/newsAnalysis 前端无调用者，一并放行防未来 403
   "marginSentiment", "stockAggregate", "emotionReport", "userStyleProfile", "newsAnalysis",
+  // v9.104.0（第四批 C，T-C3）：盘中 LLM 快评（重要新闻四段式）
+  "intradayQuickComment",
   // v9.85.1（P1-2）：AIConsole 快速问答（SSE 流式专用，与 /call 共用白名单口径）
   "quickChat",
 ]);

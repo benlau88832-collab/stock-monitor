@@ -121,6 +121,33 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // v9.104.0（第四批 C，T-C2）：新闻×主线×标的联动聚合 —— 标题命中概念白名单词根（主线）
+  //   + 标题命中今日涨停池股票名（标的），新闻卡显示"影响主线/标的"标记（盘中 LLM 闭环的数据底座）
+  app.get("/api/db/news-links", async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(Number(req.query.limit) || 20, 50));
+      const newsR = await pool.query("SELECT code, title, time FROM news ORDER BY time DESC LIMIT $1", [limit]);
+      // 今日涨停池（zt_snapshot 最新一日）→ 股票名 + hybk 板块
+      const ztR = await pool.query("SELECT date, data FROM zt_snapshot ORDER BY date DESC LIMIT 1");
+      let poolArr = [];
+      try {
+        const ztData = ztR.rows[0]?.data;
+        poolArr = Array.isArray(ztData) ? ztData : (ztData && typeof ztData === "object" && "pool" in ztData ? ztData.pool : []);
+      } catch { poolArr = []; }
+      const stockNames = new Set(poolArr.map(p => String(p.n ?? "")).filter(Boolean));
+      // 概念白名单词根（shared ESM，require(ESM) Node 22+）
+      const { CONCEPT_GROUPS } = require("../../src/shared/concept-groups.js");
+      const roots = CONCEPT_GROUPS.flatMap(g => (g.roots ?? []).filter(r => String(r).length >= 2));
+      const items = newsR.rows.map(n => {
+        const title = String(n.title ?? "");
+        const mainlines = roots.filter(r => title.includes(r)).slice(0, 3);
+        const stocks = [...stockNames].filter(sn => sn && title.includes(sn)).slice(0, 3);
+        return { code: n.code, title: title.slice(0, 80), time: n.time, mainlines, stocks };
+      }).filter(x => x.mainlines.length > 0 || x.stocks.length > 0);
+      res.json({ items, ztDate: ztR.rows[0]?.date ?? null });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.post("/api/db/news", async (req, res) => {
     try {
       const items = Array.isArray(req.body) ? req.body : [];

@@ -1559,6 +1559,30 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] 盘中大脑快照失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
 
+  // v9.104.0（第四批 C，T-C1）：盘中情报 30min 自动（9:30-14:30）—— analyzeDaily 复用
+  // 关页不断链：盘中每 30 分钟 LLM 生成当日分析（llm_analysis:日期，失败规则版兜底已有）
+  // + kv intel_intraday:日期:HHMM 轮次标记（前端 IntelligenceDashboard 可展示"盘中自动轮次"）
+  let intradayIntelBusy = false;
+  cron.schedule("30 9-14 * * 1-5", async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      if (intradayIntelBusy) return;
+      intradayIntelBusy = true;
+      try {
+        await analyzeDaily({ pool });
+        const now = new Date(Date.now() + 8 * 3600 * 1000);
+        const ds = now.toISOString().slice(0, 10);
+        const hhmm = now.toISOString().slice(11, 16).replace(":", "");
+        await pool.query(
+          `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+           ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+          [`intel_intraday:${ds}:${hhmm}`, JSON.stringify({ date: ds, time: hhmm, type: "盘中自动" })],
+        );
+        console.log(`[cron] 盘中情报轮次 ${ds}:${hhmm}`);
+      } finally { intradayIntelBusy = false; }
+    } catch (e) { console.error("[cron] 盘中情报失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
   // v9.102.0（第二批 A，T-A1）：盘中精灵秒级轮询 —— push2ex 四池 2-5s 串行巡检
   // 通达信"盘中精灵"效果：涨停潮/炸板突变/封单异动第一时间提醒
   // 东财风控：内部串行 QPS≤2 + 每池 1.5-3s 抖动；busy 跳过 + PG lock（与盘中大脑共享 LOCK_INTRADAY）

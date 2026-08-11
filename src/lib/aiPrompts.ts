@@ -39,7 +39,9 @@ export type AITask =
   // v9.95.3（第五段 P1）：个股聚合 AI 分析（公告+新闻+舆情+政策+席位+涨停历史）
   | "stockAggregate"
   // v9.96.0（批次 1）：市场情绪叙事报告（VibeAlpha）—— 周期指标+舆情 → Markdown 报告
-  | "emotionReport";
+  | "emotionReport"
+  // v9.104.0（第四批 C，T-C3）：盘中 LLM 快评 —— 重要新闻四段式（≤200 字）
+  | "intradayQuickComment";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -84,7 +86,9 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   // P3-4：用户风格学习 —— 周度低频，中等输出
   userStyleProfile: { temperature: 0.4, maxTokens: 800, thinking: false },
   // v9.94.1：快讯分析总结 —— 中低温小输出（结论+要点，非 JSON）
-  newsAnalysis: { temperature: 0.4, maxTokens: 700, thinking: false },
+  newsAnalysis: { temperature: 0.4, maxTokens: 2000, thinking: false }, // v9.104.0：700→2000（推理模型铁律）
+  // v9.104.0（第四批 C，T-C3）：盘中快评（轻量四段式，≤200 字）
+  intradayQuickComment: { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.95.2：两融情绪研判 —— 小输出结构化
   marginSentiment: { temperature: 0.2, maxTokens: 800, thinking: false },
   // v9.95.3：个股聚合研判 —— 中等输出结构化
@@ -150,6 +154,8 @@ export interface AITaskPayload {
   userStyleProfile: { prompt: string };
   // v9.94.1：快讯分析总结 —— 输入本地已抓取快讯文本 + 用户问题
   newsAnalysis: { newsText: string; question: string };
+  // v9.104.0（第四批 C，T-C3）：盘中快评 —— 输入重要新闻文本
+  intradayQuickComment: { newsText: string };
   // v9.95.2：两融情绪研判 —— 输入全市场两融指标文本
   marginSentiment: { prompt: string };
   // v9.95.3：个股聚合研判 —— 输入聚合数据文本
@@ -351,6 +357,14 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
 ${p.newsText}
 
 【用户问题】${p.question}` }),
+  // v9.104.0（第四批 C，T-C3）：盘中 LLM 快评 —— 重要新闻四段式（≤200 字），轻量 prompt 适配盘中时效
+  intradayQuickComment: (p) => ({ system: `你是A股盘中快评分析师。对给定重要新闻输出四段式快评，总长≤200字，直接输出正文（不要标题装饰）：
+【利好/利空】一句话定性
+【影响链】→ 传导到哪些板块/个股（只引用已知概念，不编造）
+【参与建议】≤30字操作提示（中性合规表述，不承诺收益）
+【失效条件】≤20字（什么情况该判断失效）
+禁止编造数字与个股，数据不足时明说"数据不足"。`, user: `【重要新闻】
+${(p.newsText ?? "").slice(0, 400)}` }),
   // v9.95.2（第五段 P1）：两融 AI 情绪研判 —— 基于真实两融数据判断融资客情绪
   marginSentiment: (p) => ({ system: `你是A股两融情绪研判分析师（杠杆资金视角）。基于提供的真实两融数据判断融资客当前情绪与杠杆风险。只输出JSON对象。
 
@@ -505,6 +519,12 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   userStyleProfile: (_p) => JSON.stringify({ style: "未知", biases: [], avoidThemes: [], suggestion: "LLM不可用，无法分析用户风格" }),
   // v9.94.1：快讯分析规则版 —— LLM 不可用时回退数据直出（原快捷路径行为）
   newsAnalysis: (p) => `（LLM 暂不可用，以下为本地快讯原文）\n${p.newsText.slice(0, 500)}`,
+  // v9.104.0（第四批 C，T-C3）：盘中快评规则版 —— 降级标注明确（P1-06 教训）
+  intradayQuickComment: (p) => `⚡ 快评降级（规则版，LLM 不可用）：
+【利好/利空】数据不足，规则版无法定性
+【影响链】${p.newsText.slice(0, 100)}
+【参与建议】建议结合消息面与盘面资金确认后再决策
+【失效条件】无`,
   eventDeepDive: (p) => JSON.stringify({
     chain: `规则版：${p.title.slice(0, 30)} 影响传导待 LLM 深挖`,
     targets: [{ name: (p.beneficiaries || []).join("、") || p.title.slice(0, 12), reason: "规则版推荐" }],

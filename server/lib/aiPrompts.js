@@ -55,13 +55,15 @@ const TASK_CONFIG = {
   nextGatePredict: { temperature: 0.3, maxTokens: 600, thinking: false },
   // P3-4：用户风格学习 —— 周度低频，中等输出
   userStyleProfile: { temperature: 0.4, maxTokens: 800, thinking: false },
-  newsAnalysis: { temperature: 0.4, maxTokens: 700, thinking: false },
+  newsAnalysis: { temperature: 0.4, maxTokens: 2000, thinking: false }, // v9.104.0：700→2000（推理模型铁律）
   // v9.95.2：两融情绪研判 —— 小输出结构化
   marginSentiment: { temperature: 0.2, maxTokens: 800, thinking: false },
   // v9.95.3：个股聚合研判 —— 中等输出结构化
   stockAggregate: { temperature: 0.2, maxTokens: 900, thinking: false },
   // v9.96.0：情绪叙事报告 —— 中温长文（Markdown）
   emotionReport: { temperature: 0.4, maxTokens: 1500, thinking: false },
+  // v9.104.0（第四批 C，T-C3）：盘中快评（轻量四段式，≤200 字）
+  intradayQuickComment: { temperature: 0.3, maxTokens: 2000, thinking: false },
 };
 
 const B = {
@@ -254,6 +256,14 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
 ${p.newsText}
 
 【用户问题】${p.question}` }),
+  // v9.104.0（第四批 C，T-C3）：盘中快评（与前端 src/lib/aiPrompts.ts 同构，golden 一致性）
+  intradayQuickComment: (p) => ({ system: `你是A股盘中快评分析师。对给定重要新闻输出四段式快评，总长≤200字，直接输出正文（不要标题装饰）：
+【利好/利空】一句话定性
+【影响链】→ 传导到哪些板块/个股（只引用已知概念，不编造）
+【参与建议】≤30字操作提示（中性合规表述，不承诺收益）
+【失效条件】≤20字（什么情况该判断失效）
+禁止编造数字与个股，数据不足时明说"数据不足"。`, user: `【重要新闻】
+${(p.newsText ?? "").slice(0, 400)}` }),
   // v9.95.2（第五段 P1）：两融 AI 情绪研判 —— 基于真实两融数据判断融资客情绪
   marginSentiment: (p) => ({ system: `你是A股两融情绪研判分析师（杠杆资金视角）。基于提供的真实两融数据判断融资客当前情绪与杠杆风险。只输出JSON对象。
 
