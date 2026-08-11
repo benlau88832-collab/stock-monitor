@@ -40,10 +40,12 @@ module.exports = function dbRoutes(app) {
   });
 
   // v9.26.6：批量拉取多个 key（limit 防止过大响应；前端分批）
+  // v9.100.0（P1-02，安全）：bulk 复用 SENSITIVE_KV_RE —— 原 GET 旁路可直读 local_token/push_settings_v1
+  //   （GET 不经过写鉴权中间件 + CORS 放行任意 localhost 端口；单测覆盖）
   app.get("/api/db/kv/bulk", async (req, res) => {
     try {
       const keysRaw = String(req.query.keys || "");
-      const keys = keysRaw.split(",").map(s => s.trim()).filter(Boolean);
+      const keys = keysRaw.split(",").map(s => s.trim()).filter(Boolean).filter(k => !SENSITIVE_KV_RE.test(k));
       if (keys.length === 0) return res.json({ items: [] });
       const r = await pool.query("SELECT key, value FROM kv_store WHERE key = ANY($1::text[])", [keys]);
       res.json({ items: r.rows.map(x => ({ key: x.key, value: x.value })) });
@@ -51,6 +53,7 @@ module.exports = function dbRoutes(app) {
   });
 
   // v9.96.0（批次 1）：kv 前缀查询（历史报告列表等）—— prefix 按 key 前缀倒序取最新 N 条
+  // v9.100.0（P1-02，安全）：结果同样过滤敏感 key（防 prefix 旁路，如 prefix=local_）
   app.get("/api/db/kv-prefix", async (req, res) => {
     try {
       const prefix = String(req.query.prefix || "");
@@ -60,7 +63,7 @@ module.exports = function dbRoutes(app) {
         "SELECT key, value FROM kv_store WHERE key LIKE $1 ORDER BY key DESC LIMIT $2",
         [prefix + "%", limit],
       );
-      res.json({ items: r.rows.map(x => ({ key: x.key, value: x.value })) });
+      res.json({ items: r.rows.map(x => ({ key: x.key, value: x.value })).filter(x => !SENSITIVE_KV_RE.test(x.key)) });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
