@@ -148,14 +148,98 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ---------- v9.105.0（第五批 E）政策引擎端点 ----------
+  // T-E2 首写候选（规则层 diff + LLM 裁决）：GET /api/policy/first-write
+  // T-E3 政策关键词映射：GET /api/policy/map?kw=
+  // T-E4 政策解读报告（LLM+降级）：POST /api/policy/interpret?docId=
+  // T-E5 政策日历 + 联动统计：GET /api/policy/calendar
+  const { findFirstWriteTerms, matchPolicyToBoards, POLICY_CALENDAR, policyImpactStats } = require("../lib/policyAnalysis");
+
+  app.get("/api/policy/first-write", async (req, res) => {
+    try {
+      const r = await pool.query("SELECT id,title,content,doc_date FROM policy_docs ORDER BY doc_date");
+      if (r.rows.length < 2) return res.json({ items: [], note: "语料不足（需 ≥2 篇）" });
+      const newDoc = r.rows[r.rows.length - 1]; // 最新政策
+      const hist = r.rows.slice(0, -1).map(d => d.content);
+      const candidates = findFirstWriteTerms(hist, newDoc.content).slice(0, 40); // v9.105.0：放宽（低空经济/具身智能 实证低频在 20 名外）
+      // LLM 裁决（policyFirstWrite，失败降级规则层——P1-06 教训）
+      let verdicts = null;
+      try {
+        const { callModelText } = require("../lib/httpProxy");
+        const text = await callModelText(
+          `【政策文档】${newDoc.title}\n【候选术语】\n${candidates.map(c => c.term + "（" + c.freq + "次）").join("\n")}`,
+          { system: "你是政策研究专家。从候选术语中裁决哪些是真正的首次写入/表述升级概念。只输出JSON数组：[{\"concept\":\"概念名\",\"firstWrite\":\"true|false\",\"upgrade\":\"无|表述升级|定位变化\",\"benefit\":\"受益行业/板块\"}]，最多8条。", maxTokens: 2000, temperature: 0.2 },
+        );
+        const m = text.match(/\[[\s\S]*\]/);
+        if (m) verdicts = JSON.parse(m[0]);
+      } catch { verdicts = null; }
+      res.json({ doc: newDoc.title, docDate: newDoc.doc_date, candidates: candidates.slice(0, 40), llmVerdicts: Array.isArray(verdicts) ? verdicts : null, degraded: !Array.isArray(verdicts) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/policy/map", async (req, res) => {
+    try {
+      const kw = String(req.query.kw || "").trim();
+      if (!kw) return res.status(400).json({ error: "kw required" });
+      const { CONCEPT_GROUPS } = require("../../src/shared/concept-groups.js");
+      const boards = matchPolicyToBoards(kw, CONCEPT_GROUPS);
+      // 龙头：stock_concepts 匹配板块（hybk/core_concept）取最近抓取的标的
+      let stocks = [];
+      try {
+        const sr = await pool.query(
+          "SELECT code, hybk, core_concept FROM stock_concepts WHERE hybk ILIKE $1 OR core_concept ILIKE $1 LIMIT 20",
+          [`%${kw}%`],
+        );
+        stocks = sr.rows.slice(0, 8).map(x => ({ code: x.code, hybk: x.hybk, core: x.core_concept }));
+      } catch { stocks = []; }
+      res.json({ kw, boards, stocks, note: boards.length === 0 && stocks.length === 0 ? "未命中（概念白名单 504 与股票概念库均无匹配）" : undefined });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/policy/interpret", async (req, res) => {
+    try {
+      const docId = Number(req.query.docId || req.body?.docId || 0);
+      if (!docId) return res.status(400).json({ error: "docId required" });
+      const r = await pool.query("SELECT id,title,content,doc_date FROM policy_docs WHERE id=$1", [docId]);
+      const doc = r.rows[0];
+      if (!doc) return res.status(404).json({ error: "doc not found" });
+      let report = null, degraded = false;
+      try {
+        const { callModelText } = require("../lib/httpProxy");
+        report = await callModelText(
+          `【政策】${doc.title}\n${doc.content.slice(0, 5000)}`,
+          { system: "你是券商级政策分析师。基于政策全文生成解读报告（Markdown，≤600字）：\n【核心要点】≤3 条\n【受益链】上中下游传导（引用原文概念，不编造）\n【历史对照】同领域历年表述变化\n【催化规律】首写概念后板块历史表现（样本不足明说）\n【参与建议】中性合规表述，不承诺收益", maxTokens: 3000, temperature: 0.3 },
+        );
+      } catch { degraded = true; report = `⚡ 解读降级（规则版，LLM 不可用）：\n${doc.content.slice(0, 300)}`; }
+      const now = new Date(Date.now() + 8 * 3600 * 1000);
+      const dateStr = now.toISOString().slice(0, 10);
+      const val = { docId, title: doc.title, date: dateStr, report, degraded, ts: Date.now() };
+      await pool.query(
+        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+         ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+        [`report:policy:${dateStr}`, JSON.stringify(val)],
+      );
+      res.json({ ok: true, degraded, report });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/policy/calendar", async (req, res) => {
+    try {
+      // 联动统计：政策日后 3/5 日涨停家数变化（zt_snapshot 聚合）
+      const ztR = await pool.query("SELECT date, jsonb_array_length(data->'pool') AS pool_count FROM zt_snapshot ORDER BY date");
+      const ztRows = ztR.rows.map(x => ({ date: x.date, pool_count: Number(x.pool_count ?? 0) }));
+      const items = POLICY_CALENDAR.map(c => ({ ...c, impact: policyImpactStats(ztRows, c.date) }));
+      res.json({ items });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.post("/api/db/news", async (req, res) => {
     try {
       const items = Array.isArray(req.body) ? req.body : [];
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        for (const n of items) {
-          if (!n.code) continue;
+        for (const n of items) {          if (!n.code) continue;
           await client.query(
             `INSERT INTO news(code,title,summary,boards,sentiment,stars,is_overseas,time,url)
              VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)

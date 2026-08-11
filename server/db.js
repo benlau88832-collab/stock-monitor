@@ -166,6 +166,18 @@ CREATE TABLE IF NOT EXISTS stock_fundamentals (
   data       JSONB NOT NULL DEFAULT '{}',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- v9.105.0（第五批 E，T-E1）：政策语料库（五年规划建议/纲要/政府工作报告/中央经济工作会议/部委文件全文）
+CREATE TABLE IF NOT EXISTS policy_docs (
+  id         SERIAL PRIMARY KEY,
+  title      TEXT NOT NULL,
+  doc_date   TEXT,
+  doc_no     TEXT,
+  category   TEXT,
+  content    TEXT NOT NULL,
+  source_url TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(source_url)
+);
 `;
 
 async function initDb() {

@@ -41,7 +41,10 @@ export type AITask =
   // v9.96.0（批次 1）：市场情绪叙事报告（VibeAlpha）—— 周期指标+舆情 → Markdown 报告
   | "emotionReport"
   // v9.104.0（第四批 C，T-C3）：盘中 LLM 快评 —— 重要新闻四段式（≤200 字）
-  | "intradayQuickComment";
+  | "intradayQuickComment"
+  // v9.105.0（第五批 E）：政策首写概念裁决 / 政策解读报告
+  | "policyFirstWrite"
+  | "policyInterpretation";
 
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
@@ -89,6 +92,9 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   newsAnalysis: { temperature: 0.4, maxTokens: 2000, thinking: false }, // v9.104.0：700→2000（推理模型铁律）
   // v9.104.0（第四批 C，T-C3）：盘中快评（轻量四段式，≤200 字）
   intradayQuickComment: { temperature: 0.3, maxTokens: 2000, thinking: false },
+  // v9.105.0（第五批 E）：政策首写裁决（规则候选→LLM 精筛）/ 政策解读报告
+  policyFirstWrite: { temperature: 0.2, maxTokens: 2000, thinking: false },
+  policyInterpretation: { temperature: 0.3, maxTokens: 3000, thinking: false },
   // v9.95.2：两融情绪研判 —— 小输出结构化
   marginSentiment: { temperature: 0.2, maxTokens: 800, thinking: false },
   // v9.95.3：个股聚合研判 —— 中等输出结构化
@@ -156,6 +162,8 @@ export interface AITaskPayload {
   newsAnalysis: { newsText: string; question: string };
   // v9.104.0（第四批 C，T-C3）：盘中快评 —— 输入重要新闻文本
   intradayQuickComment: { newsText: string };
+  policyFirstWrite: { candidates: string; docTitle: string };
+  policyInterpretation: { docTitle: string; content: string };
   // v9.95.2：两融情绪研判 —— 输入全市场两融指标文本
   marginSentiment: { prompt: string };
   // v9.95.3：个股聚合研判 —— 输入聚合数据文本
@@ -357,6 +365,18 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
 ${p.newsText}
 
 【用户问题】${p.question}` }),
+  // v9.105.0（第五批 E，T-E2）：首写概念裁决 —— 规则层候选 → LLM 精筛（升级报告：词频diff+LLM裁决双层）
+  policyFirstWrite: (p) => ({ system: `你是政策研究专家。给定候选政策术语列表（规则引擎从新政策 vs 历史语料 diff 检出），裁决哪些是真正的"首次写入/表述升级"概念：
+1. 只输出 JSON 数组 [{"concept":"概念名","firstWrite":"true|false","upgrade":"无|表述升级|定位变化","benefit":"受益行业/板块"}]，最多 8 条
+2. firstWrite=true 仅限该概念在新政策中首次出现（历史规划无）、且属产业/技术/经济类术语（非通用政策套话）
+3. benefit 引用已知行业（如 低空经济→低空基建/无人机/通航）`, user: `【政策文档】${p.docTitle}\n【候选术语】\n${p.candidates}` }),
+  // v9.105.0（第五批 E，T-E4）：政策解读报告（受益链/时间线对比/历史催化/建议）
+  policyInterpretation: (p) => ({ system: `你是券商级政策分析师。基于政策全文生成解读报告（Markdown，≤600字）：
+【核心要点】≤3 条
+【受益链】上中下游传导（引用原文概念，不编造）
+【历史对照】同领域历年表述变化（如 低空经济 十四五未提→十五五首写）
+【催化规律】首写概念后板块历史表现（样本不足明说）
+【参与建议】中性合规表述，不承诺收益`, user: `【政策】${p.docTitle}\n${(p.content ?? "").slice(0, 5000)}` }),
   // v9.104.0（第四批 C，T-C3）：盘中 LLM 快评 —— 重要新闻四段式（≤200 字），轻量 prompt 适配盘中时效
   intradayQuickComment: (p) => ({ system: `你是A股盘中快评分析师。对给定重要新闻输出四段式快评，总长≤200字，直接输出正文（不要标题装饰）：
 【利好/利空】一句话定性
@@ -519,6 +539,9 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   userStyleProfile: (_p) => JSON.stringify({ style: "未知", biases: [], avoidThemes: [], suggestion: "LLM不可用，无法分析用户风格" }),
   // v9.94.1：快讯分析规则版 —— LLM 不可用时回退数据直出（原快捷路径行为）
   newsAnalysis: (p) => `（LLM 暂不可用，以下为本地快讯原文）\n${p.newsText.slice(0, 500)}`,
+  // v9.105.0（第五批 E）：政策任务规则版 —— 降级标注明确（P1-06 教训）
+  policyFirstWrite: (p) => `⚡ 裁决降级（规则版）：候选词按频次原样返回\n${p.candidates.slice(0, 200)}`,
+  policyInterpretation: (p) => `⚡ 解读降级（规则版，LLM 不可用）：政策全文过长为规则版摘要\n${p.content.slice(0, 300)}`,
   // v9.104.0（第四批 C，T-C3）：盘中快评规则版 —— 降级标注明确（P1-06 教训）
   intradayQuickComment: (p) => `⚡ 快评降级（规则版，LLM 不可用）：
 【利好/利空】数据不足，规则版无法定性

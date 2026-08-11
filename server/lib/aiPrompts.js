@@ -64,6 +64,9 @@ const TASK_CONFIG = {
   emotionReport: { temperature: 0.4, maxTokens: 1500, thinking: false },
   // v9.104.0（第四批 C，T-C3）：盘中快评（轻量四段式，≤200 字）
   intradayQuickComment: { temperature: 0.3, maxTokens: 2000, thinking: false },
+  // v9.105.0（第五批 E）：政策首写裁决 / 政策解读报告
+  policyFirstWrite: { temperature: 0.2, maxTokens: 2000, thinking: false },
+  policyInterpretation: { temperature: 0.3, maxTokens: 3000, thinking: false },
 };
 
 const B = {
@@ -257,6 +260,21 @@ ${p.newsText}
 
 【用户问题】${p.question}` }),
   // v9.104.0（第四批 C，T-C3）：盘中快评（与前端 src/lib/aiPrompts.ts 同构，golden 一致性）
+  // v9.105.0（第五批 E，T-E2）：首写概念裁决（与前端同构）
+  policyFirstWrite: (p) => ({ system: `你是政策研究专家。给定候选政策术语列表（规则引擎从新政策 vs 历史语料 diff 检出），裁决哪些是真正的"首次写入/表述升级"概念：
+1. 只输出 JSON 数组 [{"concept":"概念名","firstWrite":"true|false","upgrade":"无|表述升级|定位变化","benefit":"受益行业/板块"}]，最多 8 条
+2. firstWrite=true 仅限该概念在新政策中首次出现（历史规划无）、且属产业/技术/经济类术语（非通用政策套话）
+3. benefit 引用已知行业（如 低空经济→低空基建/无人机/通航）`, user: `【政策文档】${p.docTitle}
+【候选术语】
+${p.candidates}` }),
+  // v9.105.0（第五批 E，T-E4）：政策解读报告（与前端同构）
+  policyInterpretation: (p) => ({ system: `你是券商级政策分析师。基于政策全文生成解读报告（Markdown，≤600字）：
+【核心要点】≤3 条
+【受益链】上中下游传导（引用原文概念，不编造）
+【历史对照】同领域历年表述变化（如 低空经济 十四五未提→十五五首写）
+【催化规律】首写概念后板块历史表现（样本不足明说）
+【参与建议】中性合规表述，不承诺收益`, user: `【政策】${p.docTitle}
+${(p.content ?? "").slice(0, 5000)}` }),
   intradayQuickComment: (p) => ({ system: `你是A股盘中快评分析师。对给定重要新闻输出四段式快评，总长≤200字，直接输出正文（不要标题装饰）：
 【利好/利空】一句话定性
 【影响链】→ 传导到哪些板块/个股（只引用已知概念，不编造）
