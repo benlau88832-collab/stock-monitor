@@ -167,9 +167,11 @@ export default function EmotionReportPanel() {
         <div ref={reportRef} className="rounded-lg border border-white/10 bg-black/30 p-3">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[11px] text-slate-400">
-              {/* v9.100.0（P1-03）：旧报告醒目"历史"角标 —— 审查实测展示 3 天前报告无任何标注 */}
+              {/* v9.100.0（P1-03）：旧报告醒目"历史"角标 —— 审查实测展示 3 天前报告无任何标注
+                  v9.101.0（P1-03 返工）：角标内不再重复日期（原"⚠ 历史报告 2026-08-07"与下方日期粘连成
+                  "2026-08-072026-08-07"），日期由下方统一展示 */}
               {latest.date !== localDateStr() && (
-                <span className="mr-1 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">⚠ 历史报告 {latest.date}</span>
+                <span className="mr-1.5 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300" title={`最新报告日期 ${latest.date}`}>⚠ 历史报告</span>
               )}
               {latest.date} · 周期阶段：<b className="text-amber-300">{latest.phase}</b>
             </span>

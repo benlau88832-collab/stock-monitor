@@ -28,7 +28,12 @@ async function fetchMarketDaily(pool) {
   const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
   const zt = await httpsGet(`https://push2ex.eastmoney.com/getTopicZTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt%3Aasc&date=${date}`);
   const zb = await httpsGet(`https://push2ex.eastmoney.com/getTopicZBPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt%3Aasc&date=${date}`);
-  const dt = await httpsGet(`https://push2ex.eastmoney.com/getTopicDTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt%3Aasc&date=${date}`);
+  // v9.101.0（P1-01 返工）：跌停池空响应重试一次（push2ex 间歇性抖动，验收实测 dtCount=0 但跌停池实有 1 只）
+  let dt = await httpsGet(`https://push2ex.eastmoney.com/getTopicDTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt%3Aasc&date=${date}`);
+  if (!dt?.data?.pool?.length) {
+    await new Promise(r => setTimeout(r, 1500));
+    dt = await httpsGet(`https://push2ex.eastmoney.com/getTopicDTPool?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=500&sort=fbt%3Aasc&date=${date}`);
+  }
   const ztPool = zt?.data?.pool ?? [];
   const zbPool = zb?.data?.pool ?? [];
   const dtPool = dt?.data?.pool ?? [];
@@ -512,7 +517,7 @@ async function confirmBlackSwansWithLLM(pool, anns) {
     const fresh = candidates.filter(a => !done.has(a.title)).slice(0, 15);
     if (fresh.length === 0) return null;
     const txt = await callLLM(`对以下公告逐条判断是否构成"黑天鹅"（突发重大利空，会让持仓股大跌甚至跌停）：是→"yes"并给影响级别(severe=立案/退市/造假类|moderate=减持/质押/问询类)与一句话影响；否→"no"。
-只输出JSON数组，无其他文字。\n[{"title":"原标题","isBlackSwan":"yes|no","level":"severe|moderate","impact":"≤20字"}]\n\n公告列表：\n${fresh.map((a, i) => `${i + 1}. [${a.stockName}]${a.title.slice(0, 70)}`).join("\n")}`, { maxTokens: 1500, temperature: 0.1 });
+只输出JSON数组，无其他文字。\n[{"title":"原标题","isBlackSwan":"yes|no","level":"severe|moderate","impact":"≤20字"}]\n\n公告列表：\n${fresh.map((a, i) => `${i + 1}. [${a.stockName}]${a.title.slice(0, 70)}`).join("\n")}`, { maxTokens: 2000, temperature: 0.1 }); // v9.101.0（P1-06 返工）：1500→2000，推理模型不足则 content 为空
     // v9.87.0（P1-8）：统一解析（剥围栏/正则/截断补 ]）+ schema 归一化（isBlackSwan/level 枚举）
     const arr = parseLLMJSON(txt, SCHEMAS.blackSwan);
     if (!Array.isArray(arr) || arr.length === 0) return null;
@@ -943,7 +948,7 @@ async function generateDailyReview({ pool }) {
     const blackSwans = d10Events.map(e => e.title).join("；");
     const userText = `日期：${dateStr}\n今日主线：${mainlines}\n涨停${poolArr.length}只\n板块TOP：${d4Boards.slice(0, 3).map(b => `${b.name}${b.count}只`).join("、")}\n连板梯队：${d3Ladder.map(x => `${x.name}${x.lbc}板`).join("、") || "无"}\n资金TOP：${d2StockFund.slice(0, 3).map(x => `${x.name}${(x.fund / 1e8).toFixed(1)}亿`).join("、")}\n强催化公告：${strongAnn || "无"}\n黑天鹅公告：${blackSwans || "无"}`;
     if (process.env.AI_API_KEY) {
-      try { reviewText = await callLLM(userText, { system, maxTokens: 1000, temperature: 0.3 }); }
+      try { reviewText = await callLLM(userText, { system, maxTokens: 2000, temperature: 0.3 }); } // v9.101.0（P1-06 返工）：1000→2000，复盘 LLM 失败 root cause（empty content）
       catch (e) { reviewText = `【今日主线回顾】${mainlines}\n【错过与教训】LLM调用失败(${e.message})\n【明日关注清单】请稍后重试\n【风险提示】炸板数据见情绪卡`; }
     } else {
       reviewText = `【今日主线回顾】规则版：${mainlines}\n【错过与教训】未配置服务端 LLM Key\n【明日关注清单】请配置 AI_API_KEY 后自动生成\n【风险提示】涨停${poolArr.length}只`;
@@ -1997,7 +2002,7 @@ async function runPostSummary(pool) {
   let summary = null;
   try {
     const { callModelText } = require("./lib/httpProxy");
-    summary = await callModelText(prompt, { system: "你是A股短线游资盘后复盘助手。严格按给定三段标题输出，每段≤3行，引用具体数字。", maxTokens: 600, temperature: 0.3 });
+    summary = await callModelText(prompt, { system: "你是A股短线游资盘后复盘助手。严格按给定三段标题输出，每段≤3行，引用具体数字。", maxTokens: 2000, temperature: 0.3 }); // v9.101.0（P1-06 返工）：600→2000
   } catch (e) {
     summary = `【今日拍板命中度】规则版：${postsText}\n【明日剧本】情绪${sentiment ?? "?"}分，炸板${blastedRate ?? "?"}%，明日以情绪延续性为准\n【明日应关注】看最高板${maxBoard ?? "?"}梯队 + 竞价高开方向`;
   }
@@ -2057,7 +2062,7 @@ async function runUserStyleProfile(pool) {
   let result = null;
   try {
     const { callModelText } = require("./lib/httpProxy");
-    const text = await callModelText(prompt, { system: "你是A股行为金融分析师。只输出JSON。", maxTokens: 800, temperature: 0.4 });
+    const text = await callModelText(prompt, { system: "你是A股行为金融分析师。只输出JSON。", maxTokens: 2000, temperature: 0.4 }); // v9.101.0（P1-06 返工）：800→2000
     // v9.87.0（P1-8）：统一解析 + schema 归一化（字段类型/数组元素）
     result = parseLLMJSON(text, SCHEMAS.userStyle);
   } catch { /* LLM 失败 → 规则版 */ }

@@ -42,6 +42,24 @@ const createdLocalDate = (ts: number | undefined): string | null => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+// v9.101.0（P1-04 返工）：跨日错位判定（任一命中 → "⚠跨日"角标）——
+//   ① dataDate（AI 复盘记录的大脑快照日期）≠ 条目日期（验收根因：08-11 02:22 生成、内容实为 08-10 收盘数据）
+//   ② createdAt 日期 ≠ 条目日期（原判据）
+//   ③ 存量错位启发式：凌晨 <9 点生成 + 长文本含"【"（AI 四段标题特征）→ 内容为昨日收盘数据
+//     （覆盖验收 1786386148479=08-11 02:22 且无 dataDate 的旧条目）
+const crossDayReview = (r: DailyReview): string | null => {
+  if (r.dataDate && r.dataDate !== r.date) return `内容数据日期 ${r.dataDate} ≠ 条目日期 ${r.date}`;
+  const cd = createdLocalDate(r.createdAt);
+  if (cd != null && cd !== r.date) return `内容生成于 ${cd}，与条目日期 ${r.date} 不一致（跨日时段生成）`;
+  if (r.createdAt) {
+    const h = new Date(r.createdAt).getHours();
+    if (h < 9 && r.reflection && r.reflection.length > 50 && r.reflection.includes("【")) {
+      return `凌晨 ${h} 点生成的 AI 复盘文本，内容为昨日收盘数据（条目日期 ${r.date}）`;
+    }
+  }
+  return null;
+};
+
 export default function ReviewPanel() {
   const [reviews, setReviews] = useState<DailyReview[]>(loadReviews);
   const [keyword, setKeyword] = useState("");
@@ -125,6 +143,9 @@ export default function ReviewPanel() {
         const review: DailyReview = {
           date: today, mainline: top[0]?.theme ?? "—", leader: ladder[0]?.name ?? "",
           myStocks: "", pnl: null, reflection: r.text.slice(0, 200), createdAt: Date.now(),
+          // v9.101.0（P1-04 返工）：记录大脑快照数据日期 —— 凌晨跨日时快照是昨日收盘数据，
+          //   dataDate=昨日 → 展示"⚠跨日"角标（验收：08-11 02:22 生成的内容实为 08-10 数据）
+          dataDate: brain?.date ?? today,
         };
         update(upsertReview(review, reviews));
       }
@@ -434,12 +455,11 @@ export default function ReviewPanel() {
             <div className="flex items-center gap-2">
               <span className="font-mono text-slate-500">{r.date.slice(5)}</span>
               {/* v9.100.0（P1-04）：跨日错位校验标注 —— 审查实测 08-11 条目显示 08-10 时段的 AI 复盘文本（凌晨生成、日期键错位） */}
-              {createdLocalDate(r.createdAt) != null && createdLocalDate(r.createdAt) !== r.date && (
-                <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300"
-                  title={`内容生成于 ${createdLocalDate(r.createdAt)}，与条目日期 ${r.date} 不一致（跨日时段生成）`}>
+              {(() => { const cd = crossDayReview(r); return cd && (
+                <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300" title={cd}>
                   ⚠跨日
                 </span>
-              )}
+              ); })()}
               <span className="font-semibold text-teal-300">{r.mainline}</span>
               <span className="text-slate-400">{r.leader}</span>
               {r.pnl != null && (

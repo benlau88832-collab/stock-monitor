@@ -178,7 +178,7 @@ export interface DarkPoolData {
   darkPoolToday: number;  // 今日暗盘净流入（中单+小单）
   darkPool5d: number;     // 近5日主力净流入
   darkPool10d: number;    // 近10日主力净流入
-  marketFlowType: string; // 主力动向判断（同花顺6种组合）
+  marketFlowType: string; // v9.101.0（P2-04 返工）：主力动向判断（四象限：共振流入/共振流出/主力承接/主力撤离）——原"同花顺6种组合"注释与实现不符
   topBoards: Array<{
     code: string;
     name: string;
@@ -1508,8 +1508,15 @@ export default function App() {
                 {/* v9.26.20：行业资金流向走势图（全部有数据的行业，组件按实际数量动态展示） */}
                 {topIndustryFund.length > 0 && (
                   // v9.100.0（P2-11）：传实际时刻 asOfMinutes —— 原固定 270（=15:00），盘中永远显示"截至 15:00"（审查疑点）
+                  // v9.101.0（P2-11 返工）：上限 270→330（09:30+270min=14:00 错误，15:00 应为 330）；
+                  //   盘后（≥15:00）固定 330 显示"15:00"（验收实测 21:59 仍显示 14:00）
                   <IndustryFundFlowChart boards={topIndustryFund} refreshSec={60}
-                    asOfMinutes={Math.max(0, Math.min(270, (getBJDate().getHours() * 60 + getBJDate().getMinutes()) - (9 * 60 + 30)))} />
+                    asOfMinutes={(() => {
+                      const bj = getBJDate();
+                      const mins = (bj.getHours() * 60 + bj.getMinutes()) - (9 * 60 + 30);
+                      if (mins >= 330) return 330; // 盘后固定 15:00
+                      return Math.max(0, Math.min(330, mins));
+                    })()} />
                 )}
                 <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                   <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构详情</h3>

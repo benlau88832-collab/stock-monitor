@@ -12,6 +12,10 @@ export interface DailyReview {
   pnl: number | null;    // 当日盈亏%（正=赚）
   reflection: string;    // 一句话反思
   createdAt: number;
+  /** v9.101.0（P1-04 返工）：内容数据日期 —— AI 复盘基于大脑快照生成时记录快照实际日期
+   *  （brain.date），凌晨跨日时与 date（条目日期）不同 → 展示"⚠跨日"角标；
+   *   旧数据无此字段，由 createdAt 日期 + 凌晨 AI 文本启发式兜底 */
+  dataDate?: string;
 }
 
 const REVIEW_KEY = "daily_reviews_v1";

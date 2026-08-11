@@ -120,7 +120,9 @@ function getSourceHealth() {
       host,
       // v9.100.0（P2-09）：冷却结束但 60s 窗口内全失败（≥3 次调用 0% 成功率）→ 标 "failed"（断源）
       //   原实现冷却到期即回 "ok"，与"0%"成功率同屏矛盾（OpsPanel 显示"push2 ok 0%"）
-      state: b.openUntil > now ? "cooling" : b.halfOpen ? "half-open" : (rate === 0 && total >= 3 ? "failed" : "ok"),
+      // v9.101.0（P2-09 返工）：阈值 total>=3 → total>=1 —— 断源低流量下 60s 调用数恒 1-2（验收实测 calls60s=2），
+      //   "failed" 不可达；任一失败调用且 0% 成功率即判断源（保留 half-open 语义）
+      state: b.openUntil > now ? "cooling" : b.halfOpen ? "half-open" : (rate === 0 && total >= 1 ? "failed" : "ok"),
       cooldownRemainSec: b.openUntil > now ? Math.ceil((b.openUntil - now) / 1000) : 0,
       failCount: b.failCount,
       successRate: rate,
