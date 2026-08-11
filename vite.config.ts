@@ -38,7 +38,7 @@ export default defineConfig({
     // v9.84（分类统一）：src/shared/concept-groups.js 为 CJS（server require 同源），
     // 默认只处理 node_modules → 加入 include 让 rollup-commonjs 解析其 module.exports
     commonjsOptions: {
-      include: [/node_modules/, /concept-groups\.js$/],
+      include: [/node_modules/, /concept-groups\.js$/, /overseas-map\.js$/], // v9.103.0（T-D1）：外围映射表 CJS 共享
     },
   },
 });

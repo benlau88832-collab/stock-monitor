@@ -7,9 +7,12 @@ const INTRADAY_PREFIX = "sentiment_intraday:"; // sentiment_intraday:YYYY-MM-DD 
 
 function todayKey(): string { return localDateStr(); }
 
-export function saveTodaySentiment(score: number): void {
+// v9.106.1（验收观察项①）：写入键用"数据日期"而非本地时钟日期 ——
+//   凌晨跨日时（本地时钟已次日但市场数据仍昨日）若用 localDateStr() 会把昨日情绪错标到次日
+//   （与 P1-04 复盘跨日同类风险）；dataDate 由调用方传涨停池 qdate（接口真实交易日），null 回退今日
+export function saveTodaySentiment(score: number, dataDate?: string | null): void {
   if (score === 50) return;
-  localStorage.setItem(PREFIX + todayKey(), String(score));
+  localStorage.setItem(PREFIX + (dataDate || todayKey()), String(score));
   localStorage.removeItem("prev_sentiment"); // 清理旧key
 }
 
@@ -17,10 +20,11 @@ export function saveTodaySentiment(score: number): void {
 export interface IntradayPoint { t: string; s: number }
 
 /** 日内采样（5分钟节流）：盘中每次刷新情绪分时记录，用于画日内折线+动量 */
-export function recordIntradaySentiment(score: number): void {
+// v9.106.1（验收观察项①）：dataDate 与 saveTodaySentiment 同口径（数据日期防凌晨跨日错标）
+export function recordIntradaySentiment(score: number, dataDate?: string | null): void {
   if (!Number.isFinite(score) || score <= 0) return;
   try {
-    const key = INTRADAY_PREFIX + todayKey();
+    const key = INTRADAY_PREFIX + (dataDate || todayKey());
     let pts: IntradayPoint[] = [];
     try { pts = JSON.parse(localStorage.getItem(key) || "[]"); } catch { pts = []; }
     const now = new Date();

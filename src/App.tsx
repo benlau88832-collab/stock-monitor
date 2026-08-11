@@ -677,10 +677,11 @@ export default function App() {
       const prem = premiumRes.status === "fulfilled" ? premiumRes.value : { premiumAvg: null, premiumDist: null, promotionRate: null };
       const finalSentiment = computeSentimentNow(prem.premiumAvg, prem.promotionRate);
       // 情绪分落盘/轨迹采样/信号账本 —— 只执行一次（premium 补齐后）
+      // v9.106.1（验收观察项①）：写入键用数据日期 limitPool.qdate（接口真实交易日）——凌晨跨日不再把昨日情绪错标到次日
       if (finalSentiment.sentiment != null) {
-        saveTodaySentiment(finalSentiment.sentiment);
+        saveTodaySentiment(finalSentiment.sentiment, limitPool?.qdate);
         // P2：日内轨迹采样（5分钟节流），供情绪动量折线/仓位建议使用
-        recordIntradaySentiment(finalSentiment.sentiment);
+        recordIntradaySentiment(finalSentiment.sentiment, limitPool?.qdate);
       }
       if (brData && brData.total > 0 && finalSentiment.sentiment != null && (finalSentiment.sentiment >= 80 || finalSentiment.sentiment <= 25)) {
         const today = localDateStr();
@@ -1237,12 +1238,19 @@ export default function App() {
         // v9.26.17：自选股全量（fetchStockBriefBatch 已支持分批）
         const map = await fetchStockBriefBatch(codes);
         if (cancelled) return;
+        // v9.106.1（验收遗留 #2）：自选为涨停股时注入盘口字段（封单/成交/炸板）→ 异动分级并行算 boardTrap 三分类
+        // 涨停池（rawZTPool：c/n/fund/zbc/amount）为最权威封单数据源，非涨停股无字段 → 三分类自然不触发
+        const sealMap = new Map<string, { sealFund: number; amount: number; blastCount: number }>();
+        for (const s of overview.limitPool?.rawZTPool ?? []) {
+          sealMap.set(String(s.c), { sealFund: Number(s.fund ?? 0), amount: Number(s.amount ?? 0), blastCount: Number(s.zbc ?? 0) });
+        }
         const items: WatchStockBrief[] = [];
         for (const [code, b] of map) {
           const alert = Math.abs(b.pct) >= 5 || b.turnoverRate > 10;
           const alertTag = Math.abs(b.pct) >= 5 ? `${b.pct > 0 ? "↑" : "↓"}${Math.abs(b.pct).toFixed(1)}%` : b.turnoverRate > 10 ? `换手${b.turnoverRate.toFixed(0)}%` : "";
           // v9.24-P1-4：量比注入（异动分级 S/A/B 用）
-          items.push({ code, name: b.name, price: b.price, pct: b.pct, turnoverRate: b.turnoverRate, alert, alertTag, volumeRatio: b.volumeRatio, limitPct: stockLimitPct(code) });
+          const seal = sealMap.get(code);
+          items.push({ code, name: b.name, price: b.price, pct: b.pct, turnoverRate: b.turnoverRate, alert, alertTag, volumeRatio: b.volumeRatio, limitPct: stockLimitPct(code), ...(seal ? { sealFund: seal.sealFund, amount: seal.amount, blastCount: seal.blastCount } : {}) });
         }
         items.sort((a, b) => Number(b.alert) - Number(a.alert) || Math.abs(b.pct) - Math.abs(a.pct));
         if (!cancelled) setWatchStocks(items);

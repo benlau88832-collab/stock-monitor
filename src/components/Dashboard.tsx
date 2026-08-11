@@ -88,6 +88,10 @@ export interface WatchStockBrief {
   volumeRatio?: number;
   /** v9.26.10：涨跌幅限制（10/20），异动分级按板块区分 */
   limitPct?: number;
+  /** v9.106.1（验收遗留 #2）：盘口字段（自选为涨停股时由 App 从涨停池注入，boardTrap 三分类用） */
+  sealFund?: number;
+  amount?: number;
+  blastCount?: number;
 }
 
 // v9.84（性能）：因子行缓存（10min）—— loadFactorRows 跨挂载/跨 effect 共享，首屏不再反复打 40+ kv
@@ -255,14 +259,16 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
     if (stocks.length === 0) return [];
     return stocks.map(s => ({
       stock: s,
-      verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate, limitPct: s.limitPct ?? 10 }, mainlines),
+      // v9.106.1（验收遗留 #2）：补传封单/成交/炸板字段 → classifyAnomaly 内并行算 boardTrap 三分类
+      verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate, limitPct: s.limitPct ?? 10, sealFund: s.sealFund, amount: s.amount, blastCount: s.blastCount }, mainlines),
     })).filter((x): x is { stock: WatchStockBrief; verdict: NonNullable<ReturnType<typeof classifyAnomaly>> } => x.verdict != null);
   }, [stocks, mainlines]);
 
   useEffect(() => {
     for (const { stock, verdict } of verdicts) {
       if (verdict.level === "S" || verdict.level === "A") {
-        emitAnomaly(verdict, { code: stock.code, name: stock.name, pct: stock.pct, volumeRatio: stock.volumeRatio ?? null, turnoverRate: stock.turnoverRate });
+        // v9.106.1（验收遗留 #2）：emit 时同步透传封单字段（boardTrap 标签进事件流）
+        emitAnomaly(verdict, { code: stock.code, name: stock.name, pct: stock.pct, volumeRatio: stock.volumeRatio ?? null, turnoverRate: stock.turnoverRate, sealFund: stock.sealFund, amount: stock.amount, blastCount: stock.blastCount });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -330,6 +336,15 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
               <div className="text-xs text-slate-500 leading-tight mt-0.5">
                 {verdict.reason}
                 {verdict.mainlineHit && <span className="ml-1 text-amber-300">⚡呼应主线</span>}
+                {/* v9.106.1（验收遗留 #2）：盘口三分类标签（boardTrap 接线，数据足时显示） */}
+                {verdict.boardTrap?.type && (
+                  <span className={`ml-1 rounded px-1 py-0.5 text-[10px] font-bold ${
+                    verdict.boardTrap.type === "诱多" ? "bg-rose-500/25 text-rose-300" :
+                    verdict.boardTrap.type === "假摔" ? "bg-amber-500/25 text-amber-300" :
+                    "bg-emerald-500/25 text-emerald-300"}`}>
+                    {verdict.boardTrap.type}
+                  </span>
+                )}
               </div>
               <div className="text-xs text-slate-400 leading-tight">
                 {verdict.aiComment} · <span className={actionColor(verdict.action)}>{verdict.action}</span>
@@ -349,6 +364,15 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
               <span className={e.level === "S" ? "text-rose-400" : e.level === "A" ? "text-amber-300/80" : "text-slate-500"}>
                 {minsAgo(e.ts)} [{e.level}] {e.name} <span className={actionColor(e.action)}>{e.action}</span>
               </span>
+              {/* v9.106.1（验收遗留 #2）：事件流摘要的盘口三分类标签 */}
+              {e.boardTrap?.type && (
+                <span className={`rounded px-1 py-0.5 text-[10px] font-bold ${
+                  e.boardTrap.type === "诱多" ? "bg-rose-500/25 text-rose-300" :
+                  e.boardTrap.type === "假摔" ? "bg-amber-500/25 text-amber-300" :
+                  "bg-emerald-500/25 text-emerald-300"}`}>
+                  {e.boardTrap.type}
+                </span>
+              )}
               {e.aiCommentLLM && (
                 <span className="text-violet-300/90">🤖 {e.aiCommentLLM}</span>
               )}

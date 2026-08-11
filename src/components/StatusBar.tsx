@@ -54,10 +54,17 @@ export default function StatusBar({ overview, fund }: {
         {overview && overview.turnoverAmount > 0 && (
           <span className="text-slate-400">
             成交<span className="text-slate-200 font-semibold">{fmtMoney(overview.turnoverAmount)}</span>
+            {/* v9.106.1（验收#1）：turnoverYesterday 路径补 P1-07 同款过滤 —— 盘前/跨日 yesterday 异常时
+                曾显示"成交+23209.86亿 -100%"荒谬环比（Dashboard/App 的 turnoverAvg5d 路径已修，此处遗漏） */}
             {overview.turnoverYesterday && overview.turnoverYesterday > 0 && (
-              <span className={overview.turnoverAmount > overview.turnoverYesterday ? "text-rose-400" : "text-emerald-400"}>
-                {" "}{((overview.turnoverAmount / overview.turnoverYesterday - 1) * 100).toFixed(0)}%
-              </span>
+              (() => {
+                const r = overview.turnoverAmount / overview.turnoverYesterday;
+                if (r < 0.05 || r > 20) return null; // 异常比值（断源/垃圾值）不渲染百分比
+                const color = overview.turnoverAmount > overview.turnoverYesterday ? "text-rose-400" : "text-emerald-400";
+                return (
+                  <span className={color}>{" "}{((r - 1) * 100).toFixed(0)}%</span>
+                );
+              })()
             )}
           </span>
         )}

@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isLocalServer } from "../lib/cloudStore";
 import { emit as alertEmit } from "../lib/alertBus";
+import { getBJDateStr } from "../lib/format";
 
 interface SprintEvent {
   id: string;
@@ -18,6 +19,8 @@ interface SprintEvent {
   reason: string;
   severity: string;
   ts: number;
+  /** v9.102.0：服务端落库带 date（YYYY-MM-DD），v9.106.1 前端用它做跨日校验 */
+  date?: string;
 }
 
 const levelColor: Record<string, string> = {
@@ -44,6 +47,18 @@ export default function SpriteOverlay() {
         const v = j?.value;
         if (!v || typeof v !== "object") return;
         const ev = v as SprintEvent;
+        // v9.106.1（验收观察项②）：跨日校验 —— 盘前 anomaly_latest 残留昨日事件时清空，
+        // 不再显示昨日"涨停潮"误导。事件日期 = 显式 date 字段优先，缺失时按 ts 换算北京日期
+        // （覆盖历史无 date 字段的测试残留事件）
+        const evDate = ev.date || (ev.ts ? getBJDateStr(new Date(ev.ts)) : "");
+        if (evDate && evDate !== getBJDateStr()) {
+          if (lastIdRef.current !== ev.id || latest != null) {
+            setLatest(null);
+            setPopup(null);
+            setHistory([]);
+          }
+          return;
+        }
         if (!ev.id || ev.id === lastIdRef.current) return;
         lastIdRef.current = ev.id;
         if (!alive) return;
