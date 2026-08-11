@@ -115,12 +115,15 @@ function getSourceHealth() {
     const arr = callLog.get(host) ?? [];
     const total = arr.length;
     const ok = arr.filter(t => t > 0).length;
+    const rate = total > 0 ? Math.round(ok / total * 100) : null;
     out.push({
       host,
-      state: b.openUntil > now ? "cooling" : b.halfOpen ? "half-open" : "ok",
+      // v9.100.0（P2-09）：冷却结束但 60s 窗口内全失败（≥3 次调用 0% 成功率）→ 标 "failed"（断源）
+      //   原实现冷却到期即回 "ok"，与"0%"成功率同屏矛盾（OpsPanel 显示"push2 ok 0%"）
+      state: b.openUntil > now ? "cooling" : b.halfOpen ? "half-open" : (rate === 0 && total >= 3 ? "failed" : "ok"),
       cooldownRemainSec: b.openUntil > now ? Math.ceil((b.openUntil - now) / 1000) : 0,
       failCount: b.failCount,
-      successRate: total > 0 ? Math.round(ok / total * 100) : null,
+      successRate: rate,
       calls60s: total,
     });
   }

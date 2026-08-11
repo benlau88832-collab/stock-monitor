@@ -178,6 +178,8 @@ function VolumeTag({ avgPct, turnoverAmount, turnoverYesterday, turnoverAvg5d }:
   if (!compareBase || compareBase <= 0) return null;
 
   const ratio = turnoverAmount / compareBase;
+  // v9.100.0（P1-07）：ratio 异常（<0.05/>20，push2 断源垃圾值）→ 不渲染标签（审查实测"缩量下跌（较昨日-99.8%）"）
+  if (ratio < 0.05 || ratio > 20) return null;
   const isUp = avgPct > 0.3;
   const isDown = avgPct < -0.3;
   const isVolUp = ratio > 1.05; // 成交额比基准多5%以上=放量

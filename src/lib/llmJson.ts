@@ -39,10 +39,17 @@ export interface TaskSchema {
   maxItems?: number;
 }
 
-// ============== 解析容错（剥围栏 → 正则提取 → 截断补 ]） ==============
+// ============== 解析容错（剥围栏 → 正则提取 → 截断补 ] → 尾随逗号修复） ==============
 
+// v9.100.0（P1-06）：tryParse 加尾随逗号修复 —— DeepSeek 长 JSON 输出（主线归类大数组等）常见
+//   `{"a":1,}` / `[1,2,]` 尾随逗号，裸 JSON.parse 拒收 → 前端降级规则版（审查实测 mainlineClassify/
+//   criticReview/annRank 全部"上游响应非法 JSON"）。修复后 JSON.parse 重试一次（与 server/lib/llmJson.js 同构）
 function tryParse(text: string): unknown {
-  try { return JSON.parse(text); } catch { return null; }
+  try { return JSON.parse(text); } catch {
+    const fixed = String(text).replace(/,\s*([}\]])/g, "$1");
+    if (fixed !== text) { try { return JSON.parse(fixed); } catch { /* 继续 */ } }
+    return null;
+  }
 }
 
 /** 从 LLM 原始输出中提取最可能的 JSON 文本（剥围栏 + 取第一个 [ ] 或 { }） */

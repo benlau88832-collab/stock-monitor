@@ -210,7 +210,8 @@ export default function DarkPool({ data, loading }: { data: DarkPoolData | null;
                     <td className="px-3 py-2 font-medium text-slate-100">
                       <a href={boardRealUrl(b.code, "concept")} target="_blank" rel="noopener noreferrer" className="hover:text-amber-300 hover:underline">
                         {b.name}
-                        <span className="ml-1 text-[11px] text-amber-300/50">概念</span>
+                        {/* v9.100.0（P2-05）：板块名已含"概念"不再重复拼接（如"AI概念"显示"AI概念 概念"） */}
+                        <span className="ml-1 text-[11px] text-amber-300/50">{String(b.name ?? "").includes("概念") ? "" : "概念"}</span>
                       </a>
                     </td>
                     <td className={`px-3 py-2 text-right font-semibold ${pctColor(b.openNet)}`}>{fmtMoney(b.openNet)}</td>

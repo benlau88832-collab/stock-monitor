@@ -1451,11 +1451,27 @@ function startCron({ pool }) {
       const cpAnalyze = await hasCronStep(cpDate, "analyze");
       const cpReview = await hasCronStep(cpDate, "review");
       const cpIc = await hasCronStep(cpDate, "factorIc");
-      if (cpAnalyze && cpReview && cpIc) {
+      // v9.100.0（P1-01）：启动补跑遗漏 market_daily —— 服务重启错过 15:40 链时，
+      //   情绪报告/信号回测/Playbook/盘后汇报全断档（2026-08-11 实测 market_daily:08-11=null，其余链全回退昨日）
+      const cpMarketDaily = await hasCronStep(cpDate, "marketDaily");
+      if (cpAnalyze && cpReview && cpIc && cpMarketDaily) {
         console.log("[cron] 启动 LLM 链：今日 15:40 已完成（checkpoint），跳过");
       } else {
         try { await rankFastNewsStars(pool); } catch { /* 不影响 */ }
         if (!cpAnalyze) { try { await analyzeDaily({ pool }); } catch (e) { console.error("[cron] 启动 analyzeDaily 失败:", e.message); } }
+        // v9.100.0（P1-01）：补 market_daily（参照 15:40 链写法，checkpoint 幂等防重复）
+        if (!cpMarketDaily) {
+          try {
+            const md = await fetchMarketDaily(pool);
+            await pool.query(
+              `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+               ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+              [`market_daily:${md.date}`, JSON.stringify(md)],
+            );
+            await markCronStep(md.date, "marketDaily");
+            console.log(`[cron] 启动补 market_daily ${md.date}: 涨停${md.ztCount} 炸板${md.zbCount} 跌停${md.dtCount}`);
+          } catch (e) { console.error("[cron] 启动 market_daily 失败:", e.message); }
+        }
         // v9.33（缺口2/6/8）：启动即补 复盘 + 资金流 + 大宗交易（容错，任一失败不阻塞）
         if (!cpReview) { try { await generateDailyReview({ pool }); } catch (e) { console.error("[cron] 启动复盘失败:", e.message); } }
         // v9.42：启动即补因子 IC 健康度（无论当天是否到收盘时间都有快照）

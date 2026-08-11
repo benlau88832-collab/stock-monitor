@@ -198,7 +198,8 @@ function MarginPanelImpl() {
           ) : trend.length === 0 ? (
             <div className="flex h-full items-center justify-center text-xs text-amber-300">两融历史数据暂不可用，请稍后刷新</div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
+            // v9.100.0（P2-16）：initialDimension 消除折叠容器初始 width/height=0 的 Recharts warning
+            <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 600, height: 200 }}>
               <ComposedChart data={trend} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                 <CartesianGrid stroke="#ffffff10" vertical={false} />
                 <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={30} />

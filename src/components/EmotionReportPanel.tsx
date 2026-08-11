@@ -138,15 +138,16 @@ export default function EmotionReportPanel() {
         <div className="grid grid-cols-3 gap-2 text-[10px]">
           <div className="rounded bg-black/20 p-1.5">
             <div className="text-rose-300 font-bold">🔥 人气核心（Top5）</div>
-            <div className="mt-0.5 text-slate-400">{topHot.map(h => h.name).join("、") || "—"}</div>
+            {/* v9.100.0（P2-10）：name 为空（人气榜字段缺失）时不再渲染"、、、、"，空则"暂无数据" */}
+            <div className="mt-0.5 text-slate-400">{topHot.map(h => h.name).filter(Boolean).join("、") || "暂无数据"}</div>
           </div>
           <div className="rounded bg-black/20 p-1.5">
             <div className="text-amber-300 font-bold">💰 赚钱效应（≤20 且涨&gt;9%）</div>
-            <div className="mt-0.5 text-slate-400">{emotionCore.map(h => h.name).join("、") || "—"}</div>
+            <div className="mt-0.5 text-slate-400">{emotionCore.map(h => h.name).filter(Boolean).join("、") || "暂无数据"}</div>
           </div>
           <div className="rounded bg-black/20 p-1.5">
             <div className="text-emerald-300 font-bold">🔪 接飞刀（≤20 且跌&lt;-5%）</div>
-            <div className="mt-0.5 text-slate-400">{catchKnife.map(h => h.name).join("、") || "—"}</div>
+            <div className="mt-0.5 text-slate-400">{catchKnife.map(h => h.name).filter(Boolean).join("、") || "暂无数据"}</div>
           </div>
         </div>
       )}
@@ -165,7 +166,13 @@ export default function EmotionReportPanel() {
       {latest ? (
         <div ref={reportRef} className="rounded-lg border border-white/10 bg-black/30 p-3">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] text-slate-400">{latest.date} · 周期阶段：<b className="text-amber-300">{latest.phase}</b></span>
+            <span className="text-[11px] text-slate-400">
+              {/* v9.100.0（P1-03）：旧报告醒目"历史"角标 —— 审查实测展示 3 天前报告无任何标注 */}
+              {latest.date !== localDateStr() && (
+                <span className="mr-1 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">⚠ 历史报告 {latest.date}</span>
+              )}
+              {latest.date} · 周期阶段：<b className="text-amber-300">{latest.phase}</b>
+            </span>
             <span className="text-[10px] text-slate-600">{latest.degraded ? "规则版（LLM 不可用）" : `LLM 报告 · ${latest.generatedAt.slice(0, 16)}`}</span>
           </div>
           <div className="text-[10px] text-slate-500 mb-1.5">

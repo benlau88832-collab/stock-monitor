@@ -32,6 +32,23 @@ describe("v9.87.0 parseLLMJSON 容错", () => {
     expect(r[0].code).toBe("600001");
   });
 
+  // v9.100.0（P1-06）：DeepSeek 长 JSON 尾随逗号（"上游响应非法 JSON"降级根因）→ tryParse 修复重试
+  it("尾随逗号修复（对象/数组内 ,} / ,]）", () => {
+    const r1 = parseLLMJSON('[{"code":"600001","score":4,},{"code":"600002","score":3,}]', SIMPLE) as any[];
+    expect(r1).toHaveLength(2);
+    expect(r1[0].code).toBe("600001");
+    expect(r1[1].score).toBe(3);
+    const r2 = parseLLMJSON<{ code: string; score: number }>('{"code":"600001","score":4,}') as any;
+    expect(r2).not.toBeNull();
+    expect(r2.code).toBe("600001");
+  });
+
+  it("代码围栏 + 尾随逗号组合（审查实测 mainlineClassify 场景）", () => {
+    const r = parseLLMJSON('```json\n[{"code":"600001","score":4,},{"code":"600002","score":3,}]\n```', SIMPLE) as any[];
+    expect(r).toHaveLength(2);
+    expect(r[1].code).toBe("600002");
+  });
+
   it("空输出 → null", () => {
     expect(parseLLMJSON("", SIMPLE)).toBeNull();
     expect(parseLLMJSON("纯文本无 JSON", SIMPLE)).toBeNull();

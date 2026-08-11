@@ -65,7 +65,7 @@ import { runSignalBackfill, isBackfilledToday, markBackfilledToday } from "./lib
 import { recordRecommendation, runAttribution } from "./lib/recTracker";
 import { getCurrentSession, type SessionPhase } from "./lib/tradingSession";
 import { emit as emitAlert } from "./lib/alertBus";
-import { localDateStr, localDateStrOffset } from "./lib/format";
+import { localDateStr, localDateStrOffset, getBJDate } from "./lib/format";
 // v9.77（P0-11 修复）：读 server 已落库的 market_daily（昨日炸板率）→ 复活主线退潮前兆"炸板率环比+15pp"规则
 import { kvGet } from "./lib/cloudStore";
 
@@ -553,8 +553,8 @@ export default function App() {
       // ④ 暗盘（概念板块资金 + Top10 成分股）
       (async () => {
       // === Dark Pool (concept boards) ===
-      // 明暗盘判断逻辑（参照同花顺6种组合模型）：
-      // 明盘 = 超大单+大单（明面上的大资金行为）
+      // v9.100.0（P2-04）：注释口径统一 —— 原"参照同花顺6种组合模型"与下方"四象限"实现不符（审查疑点③）
+      // 明暗盘四象限判断：明盘 = 超大单+大单（明面上的大资金行为）
       // 暗盘 = 中单+小单（看似散户，但可能包含主力拆单的隐蔽资金）
       // 四象限判断（f62≡f66+f72，totalFlow与openNet恒等，只有openNet与darkNet两个独立维度）
       // v9.65（V1-M2）：judgeFlowType 统一引用 lib/stockScore（原此处内联版与 lib 版文案 drift）
@@ -1274,14 +1274,17 @@ export default function App() {
     } else lastSignalActive["oversold"] = false;
 
     // 量能偏离（成交额 vs 5日均 ±50%）
-    if (overview.turnoverAvg5d && overview.turnoverAvg5d > 0) {
+    // v9.100.0（P1-07）：turnoverAmount<=0 或 ratio 异常（<0.05/>20，push2 断源垃圾值）→ 不报荒谬警报（审查实测"缩量至5日均量0%"）
+    if (overview.turnoverAmount > 0 && overview.turnoverAvg5d && overview.turnoverAvg5d > 0) {
       const ratio = overview.turnoverAmount / overview.turnoverAvg5d;
-      if (ratio > 1.5) {
-        if (!lastSignalActive["vol_high"]) { lastSignalActive["vol_high"] = true; emitAlert({ severity: "info", id: "vol_high", message: `成交额放量${(ratio * 100).toFixed(0)}%于5日均量` }); }
-      } else lastSignalActive["vol_high"] = false;
-      if (ratio < 0.5) {
-        if (!lastSignalActive["vol_low"]) { lastSignalActive["vol_low"] = true; emitAlert({ severity: "info", id: "vol_low", message: `成交额缩量至5日均量${(ratio * 100).toFixed(0)}%` }); }
-      } else lastSignalActive["vol_low"] = false;
+      if (ratio >= 0.05 && ratio <= 20) {
+        if (ratio > 1.5) {
+          if (!lastSignalActive["vol_high"]) { lastSignalActive["vol_high"] = true; emitAlert({ severity: "info", id: "vol_high", message: `成交额放量${(ratio * 100).toFixed(0)}%于5日均量` }); }
+        } else lastSignalActive["vol_high"] = false;
+        if (ratio < 0.5) {
+          if (!lastSignalActive["vol_low"]) { lastSignalActive["vol_low"] = true; emitAlert({ severity: "info", id: "vol_low", message: `成交额缩量至5日均量${(ratio * 100).toFixed(0)}%` }); }
+        } else lastSignalActive["vol_low"] = false;
+      } else { lastSignalActive["vol_high"] = false; lastSignalActive["vol_low"] = false; }
     }
   }, [overview, fundStructure]);
 
@@ -1504,7 +1507,9 @@ export default function App() {
               <div className="space-y-3 px-4 pb-4">
                 {/* v9.26.20：行业资金流向走势图（全部有数据的行业，组件按实际数量动态展示） */}
                 {topIndustryFund.length > 0 && (
-                  <IndustryFundFlowChart boards={topIndustryFund} refreshSec={60} />
+                  // v9.100.0（P2-11）：传实际时刻 asOfMinutes —— 原固定 270（=15:00），盘中永远显示"截至 15:00"（审查疑点）
+                  <IndustryFundFlowChart boards={topIndustryFund} refreshSec={60}
+                    asOfMinutes={Math.max(0, Math.min(270, (getBJDate().getHours() * 60 + getBJDate().getMinutes()) - (9 * 60 + 30)))} />
                 )}
                 <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                   <h3 className="mb-3 text-sm font-bold text-slate-200">资金结构详情</h3>

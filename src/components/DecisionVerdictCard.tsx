@@ -47,9 +47,11 @@ interface Props {
   representPrice?: number | null;
   /** v9.95.5：主线 leaders（龙一/二/三）—— 逐标的裁决"哪辆车" */
   leaders?: Array<{ code: string; name: string; role: string }> | null;
+  /** v9.100.0（P2-18）：今日涨停池（逐标的裁决入参用真实封单/涨幅/炸板，替代全零字段） */
+  ztPool?: Array<{ c: string; n: string; fbt?: number; lbc?: number; fund?: number; zdp?: number; zbc?: number; amount?: number }> | null;
 }
 
-export default function DecisionVerdictCard({ mainline = "—", sources = [], signalGates = [], factorStats, agent = null, prevAction = null, agentMainline = null, hookCtx, representCode = null, representPrice = null, leaders = null }: Props) {
+export default function DecisionVerdictCard({ mainline = "—", sources = [], signalGates = [], factorStats, agent = null, prevAction = null, agentMainline = null, hookCtx, representCode = null, representPrice = null, leaders = null, ztPool = null }: Props) {
   const [showEvidence, setShowEvidence] = useState(false);
   // v9.95.5：逐标的裁决状态（code → StockVerdict；跑过的缓存进 store，重复查看不重烧 LLM）
   const [stockVerdicts, setStockVerdicts] = useState<Record<string, StockVerdict>>({});
@@ -67,8 +69,19 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
         continue;
       }
       try {
+        // v9.100.0（P2-18）：入参接真实涨停池字段 —— 原 boardCount/pct/sealFund/amount/blastCount 全零，
+        //   decideForStock 的 6 字段分析全基于 0（封单 0=成交 0%、炸板 0）得出失真结论（审查：与 StockPickList 对齐）
+        const raw = (ztPool ?? []).find((s: { c: string }) => String(s.c) === String(l.code));
         const v = await decideForStock(
-          { code: l.code, name: l.name, boardCount: 0, pct: 0, sealFund: 0, amount: 0, blastCount: 0, role: l.role },
+          {
+            code: l.code, name: l.name,
+            boardCount: Number(raw?.lbc ?? 0),
+            pct: Number(raw?.zdp ?? 0),
+            sealFund: Number(raw?.fund ?? 0),
+            amount: Number(raw?.amount ?? 0),
+            blastCount: Number(raw?.zbc ?? 0),
+            role: l.role,
+          },
           mainlineCtx,
         );
         out[l.code] = v;

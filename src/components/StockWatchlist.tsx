@@ -145,8 +145,9 @@ const STORAGE_KEY = "stock_watchlist";
 const APIKEY_STORAGE = APIKEY_STORAGE_KEY;
 
 function loadWatchlist(): string[] {
-  try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : ["600519", "000001", "300750"]; }
-  catch { return ["600519", "000001", "300750"]; }
+  // v9.100.0（P2-01）：空自选不再硬编码假自选 ["600519","000001","300750"]（误导用户以为有持仓）→ 返回空，UI 空态引导添加
+  try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; }
+  catch { return []; }
 }
 function saveWatchlist(codes: string[]) { localStorage.setItem(STORAGE_KEY, JSON.stringify(codes)); }
 

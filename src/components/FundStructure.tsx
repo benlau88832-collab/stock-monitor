@@ -199,7 +199,8 @@ function FundStructureImpl({ data, loading }: { data: FundStructureData | null; 
           <div>
             <div className="text-xs font-bold text-slate-300 mb-1">近20日主力资金净额走势（亿）</div>
             <div className="h-32 w-full">
-              <ResponsiveContainer width="100%" height="100%">
+              {/* v9.100.0（P2-16）：initialDimension 消除折叠容器初始 width/height=0 的 Recharts warning */}
+              <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 600, height: 128 }}>
                 <LineChart data={trendData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                   <XAxis dataKey="date" tick={{ fill: "#94a3b8", fontSize: 9 }} />

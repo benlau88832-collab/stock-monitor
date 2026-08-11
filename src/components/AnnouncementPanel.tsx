@@ -9,6 +9,7 @@ import { matchBoardsByText } from "../lib/boardMap";
 import { classifyStock } from "../lib/classifyStock";
 // v9.32.1（缺口7）：公告类型聚类标签
 import { clusterAnnouncement, ANN_CATEGORY_META } from "../lib/annCluster";
+import { localDateStr } from "../lib/format"; // v9.100.0（P2-15）：短格式时间排序归一
 
 // ============== AI 公告归因结果 ==============
 interface AnnAIScore {
@@ -314,7 +315,13 @@ export default function AnnouncementPanel({ onTopAnnouncements }: AnnPanelProps 
       }
 
       // 按时间倒序排列
-      merged.sort((a, b) => b.time.localeCompare(a.time));
+      // v9.100.0（P2-15）：time 格式归一后比较 —— 原直接 localeCompare，短格式"20:52"与完整"2026-08-11 18:30"
+      //   字符串序错乱（":" < "2" 导致短格式排前面，审查实测 20:52 排在 18:30 后）
+      merged.sort((a, b) => {
+        const ta = String(a.time ?? "").length >= 10 ? String(a.time) : `${localDateStr()} ${a.time ?? ""}`;
+        const tb = String(b.time ?? "").length >= 10 ? String(b.time) : `${localDateStr()} ${b.time ?? ""}`;
+        return tb.localeCompare(ta);
+      });
 
       setItems(merged);
       setError(null);

@@ -79,7 +79,10 @@ export function matchStockToMainline(
     for (const [bname, b] of boardMap) {
       if (bname === ind) continue; // 已匹配过
       // 双向包含（短词被长词包含）：如"光电子"包含"光"
-      if (name.includes(bname) || bname.includes(name) || name.includes(bname.slice(0, 2))) {
+      // v9.100.0（P2-14）：2 字前缀匹配加长度门槛（bname ≥4 字才允许）——
+      //   原无条件 `name.includes(bname.slice(0,2))` 让 2 字泛词（如"电力""新能"）过宽命中
+      //   （审查：绿色电力/上海电力类标的被误归"新能源车"）；2 字板块名仍走完整包含匹配（name.includes(bname)）
+      if (name.includes(bname) || bname.includes(name) || (bname.length >= 4 && name.includes(bname.slice(0, 2)))) {
         relatedConcepts.push(b);
       }
     }

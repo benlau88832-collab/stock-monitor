@@ -117,7 +117,7 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
       // 降级：规则引擎（强度分 + 离场信号）
       const strength = calcMainlineStrength({
         ztCount: mainline.ztCount,
-        totalZtCount: Math.max(mainline.ztCount * 3, 30), // 无全市场数据，用 3× 近似
+        totalZtCount: Math.max(mainline.ztCount * 3, 30), // v9.100.0（P2-02）：全市场涨停数估算（3×近似，非真实值——规则引擎兜底口径，LLM 成功路径不受影响）
         height: mainline.height,
         totalMaxHeight: Math.max(mainline.height, 2),
         promotionRate: null,

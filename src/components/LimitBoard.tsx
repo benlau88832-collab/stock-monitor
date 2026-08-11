@@ -162,14 +162,20 @@ function StatCard({ label, value, sub, color }: { label: string; value: string |
 }
 
 // ============== 题材热度排行 ==============
-function ThemeRanking({ stocks }: { stocks: ZTStock[] }) {
+// v9.100.0（P2-13）：接收 qdate —— 标题用真实交易日，回退昨日时显式标注（原固定"今日"误导）
+function ThemeRanking({ stocks, qdate }: { stocks: ZTStock[]; qdate: string | null }) {
   const counts = new Map<string, number>();
   for (const s of stocks) counts.set(s.theme, (counts.get(s.theme) ?? 0) + 1);
   const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
   const max = sorted.length > 0 ? sorted[0][1] : 1;
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-      <div className="text-xs font-bold text-amber-300 mb-2">🔥 今日涨停题材热度排行</div>
+      <div className="text-xs font-bold text-amber-300 mb-2">
+        🔥 {qdate ? `${qdate.slice(4, 6)}-${qdate.slice(6, 8)}` : "今日"} 涨停题材热度排行
+        {qdate && qdate !== todayStr() && (
+          <span className="ml-1 rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300">⚠ 回退昨日数据</span>
+        )}
+      </div>
       <div className="space-y-1.5">
         {sorted.map(([theme, count]) => (
           <div key={theme} className="flex items-center gap-2 text-xs">
@@ -343,7 +349,7 @@ export default function LimitBoard() {
 
       {/* 题材热度 + 连板梯队 */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <ThemeRanking stocks={ztStocks} />
+        <ThemeRanking stocks={ztStocks} qdate={qdate} />
         <div className="lg:col-span-2"><BoardLadder stocks={ztStocks} /></div>
       </div>
 

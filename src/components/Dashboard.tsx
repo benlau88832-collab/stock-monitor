@@ -97,7 +97,10 @@ const FACTOR_ROWS_TTL = 10 * 60 * 1000;
 function IndexStripImpl({ overview }: { overview: OverviewData | null }) {
   if (!overview) return null;
   const { indices, turnoverAmount, turnoverAvg5d } = overview;
-  const volRatio = turnoverAvg5d && turnoverAvg5d > 0 ? turnoverAmount / turnoverAvg5d : null;
+  // v9.100.0（P1-07）：均量缺失/垃圾值（push2 断源时 avg5d 或 amount 异常）→ 不显示荒谬百分比（审查实测"vs均量-100%/0%"）
+  const volRatio = turnoverAmount > 0 && turnoverAvg5d && turnoverAvg5d > 0
+    ? (() => { const r = turnoverAmount / turnoverAvg5d; return r >= 0.05 && r <= 20 ? r : null; })()
+    : null;
   return (
     <div className="flex items-center gap-3 rounded-lg bg-black/30 px-3 py-1 overflow-x-auto text-[11px]">
       {indices.slice(0, 4).map(idx => (
@@ -706,7 +709,11 @@ export default function Dashboard({
           // decisionSources 已聚合 overview 真实值，这里透传给 Agent 工具层。
           {
             trapFlagged: false,
-            marketFactor: decisionSources.find(s => s.name === "市场状态")?.confidence ? 0.6 : 0.5,
+            // v9.100.0（P2-03）：marketFactor 接真实情绪分（0-100 归一 0.1-0.9）—— 原硬编码 0.6/0.5 恒定两值，
+            //   系统性风险判定与实际市场状态脱钩（审查：市场状态 confidence 判断恒真/恒假）
+            marketFactor: overview?.sentiment != null && Number.isFinite(overview.sentiment)
+              ? Math.max(0.1, Math.min(0.9, overview.sentiment / 100))
+              : 0.5,
             hs300Pct: overview?.indices?.find((i: any) => i.code === "000300")?.pct ?? null,
             limitDownCount: overview?.limitPool?.limitDownCount ?? 0,
             blastedRate: overview?.limitPool?.blastedRate ?? 0,
@@ -1066,6 +1073,8 @@ export default function Dashboard({
           })()}
           // v9.95.5（第五段 P3）：逐标的裁决 —— 主线 leaders（龙一/二/三）传决策卡
           leaders={battlePlan?.candidates?.[0]?.leaders?.map(l => ({ code: l.code, name: l.name, role: l.role })) ?? null}
+          // v9.100.0（P2-18）：传今日涨停池供逐标的裁决取真实字段（封单/涨幅/炸板）
+          ztPool={overview?.limitPool?.rawZTPool ?? null}
         />
         {/* v10-3（P0）：选股清单紧贴裁决 —— "可上车→买这些"一气呵成，中间不插 BattlePlan/LimitTempBar */}
         <StockPickList

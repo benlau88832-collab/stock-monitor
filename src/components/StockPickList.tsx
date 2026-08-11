@@ -170,7 +170,10 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
             role: p.role,
           },
           { mainline: pick.mainline, stage: pick.stage },
-        ).catch(() => null);
+        ).catch(() => {
+          // v9.100.0（P1-05）：失败/超时 → 降级哨兵（原返回 null → aiMap 缺该 code → 渲染永久"AI 研判中…"挂起 20+ 分钟无降级）
+          return { code: p.code, name: p.name, verdict: "谨慎" as const, reason: "研判失败（规则版兜底）", riskPoints: [], keyLevel: "", degraded: true };
+        });
       };
       const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
       const results: Array<StockVerdict | null> = [];
@@ -269,6 +272,8 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
               {(() => {
                 const ai = aiMap.get(p.code);
                 if (!ai) return <div className="mt-0.5 text-xs text-slate-600">🤖 AI 研判中…</div>;
+                // v9.100.0（P1-05）：降级（含失败哨兵/配额受限）→ 显式"规则版"文案，不再伪装 AI 结论
+                if (ai.degraded) return <div className="mt-0.5 text-xs text-amber-300/90">⚡ {ai.reason || "研判降级（规则版）"}</div>;
                 const vc = ai.verdict === "可买" ? "bg-emerald-500/20 text-emerald-300" : ai.verdict === "回避" ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300";
                 return (
                   <div className="mt-0.5 text-sm">

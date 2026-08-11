@@ -35,6 +35,13 @@ interface AutoReview { date: string; text: string; dimensions?: ReviewDimensions
 
 const fmtYi = (n?: number) => (n == null ? "-" : `${(n / 1e8).toFixed(1)}亿`);
 
+// v9.100.0（P1-04）：本地复盘条目"内容生成日"（本地时区 YYYY-MM-DD）—— 校验条目 date 是否被跨日错位写入
+const createdLocalDate = (ts: number | undefined): string | null => {
+  if (!ts) return null;
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
 export default function ReviewPanel() {
   const [reviews, setReviews] = useState<DailyReview[]>(loadReviews);
   const [keyword, setKeyword] = useState("");
@@ -426,6 +433,13 @@ export default function ReviewPanel() {
           <div key={r.date} className="rounded bg-black/20 px-2 py-1 text-[11px]">
             <div className="flex items-center gap-2">
               <span className="font-mono text-slate-500">{r.date.slice(5)}</span>
+              {/* v9.100.0（P1-04）：跨日错位校验标注 —— 审查实测 08-11 条目显示 08-10 时段的 AI 复盘文本（凌晨生成、日期键错位） */}
+              {createdLocalDate(r.createdAt) != null && createdLocalDate(r.createdAt) !== r.date && (
+                <span className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300"
+                  title={`内容生成于 ${createdLocalDate(r.createdAt)}，与条目日期 ${r.date} 不一致（跨日时段生成）`}>
+                  ⚠跨日
+                </span>
+              )}
               <span className="font-semibold text-teal-300">{r.mainline}</span>
               <span className="text-slate-400">{r.leader}</span>
               {r.pnl != null && (

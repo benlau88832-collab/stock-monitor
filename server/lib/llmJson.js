@@ -6,8 +6,14 @@
 //   string maxLen 截断、requiredFields 缺失剔除元素、空数组 → null。
 // ============================================================
 
+// v9.100.0（P1-06）：tryParse 加尾随逗号修复（与前端 src/lib/llmJson.ts 同构）——
+//   DeepSeek 长 JSON 输出的 `{"a":1,}` / `[1,2,]` 尾随逗号导致"上游响应非法 JSON"全链路降级
 function tryParse(text) {
-  try { return JSON.parse(text); } catch { return null; }
+  try { return JSON.parse(text); } catch {
+    const fixed = String(text).replace(/,\s*([}\]])/g, "$1");
+    if (fixed !== text) { try { return JSON.parse(fixed); } catch { /* 继续 */ } }
+    return null;
+  }
 }
 
 /** 剥围栏 + 取第一个 [ ] 或 { } */
