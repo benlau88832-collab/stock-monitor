@@ -43,6 +43,94 @@ const TTL = 5000;
 // v9.30.3：模拟浏览器 UA（node 默认 "node" 会被 emappdata 等接口 ban 导致 socket hang up）
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+// ============== v9.99.0（批次 4，finshare SmartCooldown）：服务端分级冷却 + 成功率观测 ==============
+// 与前端 src/lib/jsonpQueue.ts 同构（错误分类→冷却时长→倍率累积→按 host 分桶隔离）
+const COOLDOWN_MS = {
+  forbidden: 300_000,          // 403：WAF 拒绝
+  rate_limit: 120_000,         // 429：限流
+  service_unavailable: 30_000, // 503
+  timeout: 5_000,              // 超时
+  connection_error: 10_000,    // ECONNRESET/HTTP 000
+  default: 15_000,
+};
+function classifyError(msg) {
+  const s = String(msg || "").toLowerCase();
+  if (s.includes("403") || s.includes("forbidden")) return "forbidden";
+  if (s.includes("429") || s.includes("rate limit")) return "rate_limit";
+  if (s.includes("503")) return "service_unavailable";
+  if (s.includes("timeout") || s.includes("abort")) return "timeout";
+  if (s.includes("reset") || s.includes("hang up") || s.includes("failed to fetch") || s.includes("socket")) return "connection_error";
+  return "default";
+}
+const circuitBuckets = new Map(); // host -> { failCount, openUntil, halfOpen }
+function getBucket(host) {
+  let b = circuitBuckets.get(host);
+  if (!b) { b = { failCount: 0, openUntil: 0, halfOpen: false }; circuitBuckets.set(host, b); }
+  return b;
+}
+function isCircuitOpen(host) {
+  const b = getBucket(host);
+  if (b.openUntil === 0) return false;
+  if (Date.now() < b.openUntil) return true;
+  if (!b.halfOpen) { b.halfOpen = true; return false; } // 到期半开试探
+  return true;
+}
+function recordFail(host, err) {
+  const b = getBucket(host);
+  b.failCount++;
+  const coolMs = COOLDOWN_MS[classifyError(err?.message ?? err)] * Math.min(1 + Math.max(0, b.failCount - 1) * 0.5, 3.0);
+  b.openUntil = Math.max(b.openUntil, Date.now() + coolMs);
+  b.halfOpen = false;
+  recordCall(host, false);
+}
+function recordSuccess(host) {
+  const b = getBucket(host);
+  b.failCount = b.halfOpen ? 0 : Math.floor(b.failCount / 2);
+  b.openUntil = 0;
+  b.halfOpen = false;
+  recordCall(host, true);
+}
+
+// 成功率观测：60s 滑动窗口（每源保留时间戳数组）
+const callLog = new Map(); // host -> number[]（ms 时间戳，成功用正数、失败用负数）
+function recordCall(host, ok) {
+  const now = Date.now();
+  let arr = callLog.get(host);
+  if (!arr) { arr = []; callLog.set(host, arr); }
+  arr.push(ok ? now : -now);
+  // 只保留 60s 窗口
+  const cutoff = now - 60_000;
+  while (arr.length > 0 && Math.abs(arr[0]) < cutoff) arr.shift();
+  if (arr.length > 500) arr.splice(0, arr.length - 500); // 防无限增长
+}
+/** 各源健康状态（OpsPanel/观测端点用）：状态/冷却剩余/成功率/最近命中 */
+function getSourceHealth() {
+  const now = Date.now();
+  const out = [];
+  for (const [host, b] of circuitBuckets) {
+    const arr = callLog.get(host) ?? [];
+    const total = arr.length;
+    const ok = arr.filter(t => t > 0).length;
+    out.push({
+      host,
+      state: b.openUntil > now ? "cooling" : b.halfOpen ? "half-open" : "ok",
+      cooldownRemainSec: b.openUntil > now ? Math.ceil((b.openUntil - now) / 1000) : 0,
+      failCount: b.failCount,
+      successRate: total > 0 ? Math.round(ok / total * 100) : null,
+      calls60s: total,
+    });
+  }
+  // 有调用但从未失败过的 host 也补录（观察态）
+  for (const [host, arr] of callLog) {
+    if (!circuitBuckets.has(host)) {
+      const total = arr.length;
+      const ok = arr.filter(t => t > 0).length;
+      out.push({ host, state: "ok", cooldownRemainSec: 0, failCount: 0, successRate: total > 0 ? Math.round(ok / total * 100) : null, calls60s: total });
+    }
+  }
+  return out;
+}
+
 // v9.86.0（P1-16）：转发白名单从数据源注册表派生（只放行行情/新闻类，AI/推送域不放行给浏览器；
 //   废弃的 search-api-web 与无调用的 stock.gtimg.cn 已随注册表移除）
 const { proxyAllowedHosts } = require("../lib/sources");
@@ -68,6 +156,12 @@ const CACHE_MAX_BYTES = 40 * 1024 * 1024;
 let cacheBytes = 0;
 function forward(req, res, target, bodyBuf) {
   const { url: u } = checkTarget(target);
+  // v9.99.0：分级冷却快速失败 —— WAF 断流(403/ECONNRESET)期间不再逐请求重试加速被封
+  if (isCircuitOpen(u.hostname)) {
+    res.set("X-Data-Source", "circuit-open");
+    return res.status(502).json({ error: "circuit open (source cooling)" });
+  }
+  res.set("X-Data-Source", u.hostname); // v9.99.0：data_source 标记（实际供数源，前端可观测）
   // 缓存命中（v9.26.10：剔除 req_trace/时间戳类动态参数；POST 不缓存）
   let cacheKey = null;
   if (!bodyBuf) {
@@ -129,14 +223,15 @@ function forward(req, res, target, bodyBuf) {
       }
       done(() => {
         res.set("Content-Type", type);
+        recordSuccess(u.hostname); // v9.99.0：成功率观测
         // v9.85.0（P1-3）：不再设置 ACAO:* —— 统一由 index.js CORS 中间件管控（仅 localhost）
         res.send(body);
       });
     });
   });
-  upstream.on("error", e => done(() => res.status(502).json({ error: e.message })));
+  upstream.on("error", e => { recordFail(u.hostname, e); done(() => res.status(502).json({ error: e.message })); });
   // v9.81（性能）：上游超时 12s→6s —— 东财断源时前端不再挂 12s 等 504
-  upstream.setTimeout(6000, () => { done(() => res.status(504).json({ error: "upstream timeout" })); upstream.destroy(); });
+  upstream.setTimeout(6000, () => { recordFail(u.hostname, new Error("upstream timeout")); done(() => res.status(504).json({ error: "upstream timeout" })); upstream.destroy(); });
   if (bodyBuf) upstream.write(bodyBuf);
   upstream.end();
 }
@@ -152,6 +247,12 @@ module.exports = function proxyRoutes(app) {
       return res.status(code).json({ error: c.err });
     }
     forward(req, res, t, null);
+  });
+
+  // v9.99.0（批次 4）：数据源健康观测（各源状态/冷却剩余/成功率 60s 窗口）
+  app.get("/api/proxy/health", async (req, res) => {
+    if (!(await checkAuth(req, res))) return;
+    res.json({ sources: getSourceHealth(), at: new Date().toISOString() });
   });
 
   // v9.27：POST 转发（人气榜 emappdata POST 接口 CORS 失效，本地部署经此绕行）

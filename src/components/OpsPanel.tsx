@@ -19,6 +19,8 @@ export default function OpsPanel() {
   const [aiStats, setAiStats] = useState<ReturnType<typeof getAIStats>>(null as never);
   const [queue, setQueue] = useState({ inflight: 0, queueLength: 0 });
   const [factor, setFactor] = useState<FactorInfo | null>(null);
+  // v9.99.0（批次 4）：服务端数据源冷却状态（/api/proxy/health）
+  const [srcHealth, setSrcHealth] = useState<Array<{ host: string; state: string; cooldownRemainSec: number; failCount: number; successRate: number | null; calls60s: number }>>([]);
 
   useEffect(() => {
     let alive = true;
@@ -26,6 +28,14 @@ export default function OpsPanel() {
       try { setApiRecs(getApiHealth().slice(0, 12)); } catch { /* 静默 */ }
       try { setAiStats(getAIStats()); } catch { /* 静默 */ }
       try { setQueue(getJsonpQueueState()); } catch { /* 静默 */ }
+      // v9.99.0：服务端分级冷却观测（失败进入冷却的源 + 成功率）
+      try {
+        const { getLocalToken } = await import("../lib/cloudStore");
+        const token = await getLocalToken();
+        const r = await fetch("/api/proxy/health", { headers: token ? { "x-local-token": token } : {} });
+        const j = await r.json();
+        if (j?.sources && alive) setSrcHealth(j.sources);
+      } catch { /* 本地无服务端时静默 */ }
       try {
         const { evaluateFactorHealth } = await import("../lib/agentTools");
         const r = await evaluateFactorHealth();
@@ -77,6 +87,21 @@ export default function OpsPanel() {
           {apiRecs.filter(r => r.recentCalls >= 2 && r.avgMs > 3000).slice(0, 2).map((r, i) => (
             <div key={i} className="text-xs text-amber-300/80 truncate">🐢 {r.name} {(r.avgMs / 1000).toFixed(1)}s</div>
           ))}
+          {/* v9.99.0（批次 4）：服务端源冷却状态 —— 各 host 状态点/冷却倒计时/成功率 */}
+          {srcHealth.filter(h => h.state !== "ok" || (h.successRate != null && h.successRate < 100)).slice(0, 4).map(h => (
+            <div key={h.host} className="flex items-center justify-between text-[10px]">
+              <span className="truncate text-slate-500">{h.host.split(".")[0]}</span>
+              <span className={`ml-1 shrink-0 font-bold ${
+                h.state === "cooling" ? "text-amber-300" : h.state === "half-open" ? "text-sky-300" : "text-emerald-300"
+              }`}>
+                {h.state === "cooling" ? `冷却 ${h.cooldownRemainSec}s` : h.state === "half-open" ? "半开试探" : "ok"}
+              </span>
+              {h.successRate != null && <span className="ml-1 shrink-0 text-slate-500">{h.successRate}%</span>}
+            </div>
+          ))}
+          {srcHealth.filter(h => h.state !== "ok" || (h.successRate != null && h.successRate < 100)).length === 0 && (
+            <div className="text-[10px] text-emerald-300/60">全部源正常（近 60s）</div>
+          )}
         </div>
 
         {/* AI 配额 */}
