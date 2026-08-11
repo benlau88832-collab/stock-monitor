@@ -1135,6 +1135,8 @@ let watchRunning = false;
 let themeRunning = false;
 // v9.84.2/3：盘中大脑快照防重叠
 let intradayBusy = false;
+// v9.102.0（第二批 A，T-A1）：盘中精灵秒级轮询防重叠（内部串行四池 8-15s/轮，*/2s 检查 + busy 跳过）
+let sprintBusy = false;
 // v9.54（V7-15）：A股交易日历 —— 节假日休市判定（2026 年法定休市区间；与前端 tradeCalendar.ts 口径一致）
 const HOLIDAY_RANGES_2026 = [
   ["2026-01-01", "2026-01-02"], ["2026-02-16", "2026-02-22"], ["2026-04-04", "2026-04-06"],
@@ -1555,6 +1557,24 @@ function startCron({ pool }) {
         if (!gotLock) console.log("[cron] intraday PG lock busy, skip");
       } finally { intradayBusy = false; }
     } catch (e) { console.error("[cron] 盘中大脑快照失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
+  // v9.102.0（第二批 A，T-A1）：盘中精灵秒级轮询 —— push2ex 四池 2-5s 串行巡检
+  // 通达信"盘中精灵"效果：涨停潮/炸板突变/封单异动第一时间提醒
+  // 东财风控：内部串行 QPS≤2 + 每池 1.5-3s 抖动；busy 跳过 + PG lock（与盘中大脑共享 LOCK_INTRADAY）
+  cron.schedule("*/2 * 9-15 * * 1-5", async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      if (sprintBusy) return; // 防重叠（一轮 8-15s，*/2s 触发会被跳过大部分）
+      sprintBusy = true;
+      try {
+        const gotLock = await withPgLock(pool, LOCK_INTRADAY, async () => {
+          const { runIntradaySprint } = require("./lib/intradaySprint");
+          await runIntradaySprint(pool);
+        });
+        if (!gotLock) console.log("[cron] sprint PG lock busy, skip");
+      } finally { sprintBusy = false; }
+    } catch (e) { console.error("[cron] 盘中精灵失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
 
   // ---------- P0-3：拍板盈亏自动回填（15:50 盘后） ----------

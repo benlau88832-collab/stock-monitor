@@ -56,6 +56,8 @@ import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 // v9.50（G2）：StatusBar 已并入 TopNav 顶部通栏，App 不再独立渲染
 import { auditLocalStorageQuota } from "./lib/storageQuota";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
+// v9.102.0（第二批 A，T-A3）：盘中精灵浮层（右下角迷你条 + S 级弹窗，所有 Tab 可见）
+import SpriteOverlay from "./components/SpriteOverlay";
 // v9.58（V8-8）：全局 AI 助手（右下角悬浮，所有 Tab 可见）
 import AIConsole from "./components/AIConsole";
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
@@ -1472,6 +1474,9 @@ export default function App() {
 
       {/* 三级警报横幅 */}
       <AlertBanner alerts={alerts} />
+
+      {/* v9.102.0（T-A3）：盘中精灵浮层（右下角常驻，S 级弹窗全局可见） */}
+      <SpriteOverlay />
 
       {/* v9.79（韧性）：ErrorBoundary 包裹主内容 —— 单个数据模块抛错时显示兜底而非整树白屏，
           TopNav/AIConsole/footer 保持存活，用户仍可切换 Tab/刷新 */}
