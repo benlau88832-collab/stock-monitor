@@ -14,6 +14,8 @@ import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
 // v9.35（S3）：信号有效性回测面板
 import SignalEffectivenessPanel from "./SignalEffectivenessPanel";
+// v9.106.0（第六批 B，T-B4）：主线级回测面板
+import MainlineBacktestPanel from "./MainlineBacktestPanel";
 // v9.42：因子健康度面板（幻方"因子失效"IC 曲线可视化）
 import FactorHealthPanel from "./FactorHealthPanel";
 // v9.65（V2-P2）：运维可观测面板
@@ -637,6 +639,8 @@ export default function Dashboard({
   const [showSignalEffect, setShowSignalEffect] = useState(Boolean(panelPref.showSignalEffect));
   // v9.42：因子健康度面板（幻方"因子失效"IC 曲线）
   const [showFactorHealth, setShowFactorHealth] = useState(Boolean(panelPref.showFactorHealth));
+  // v9.106.0（第六批 B，T-B4）：主线级回测面板（zt_snapshot 板块延续胜率）
+  const [showMainlineBt, setShowMainlineBt] = useState(false);
   // v9.44（②/④）：决策审计 + 信号净值
   const [showAudit, setShowAudit] = useState(Boolean(panelPref.showAudit));
   const [showEquity, setShowEquity] = useState(Boolean(panelPref.showEquity));
@@ -1219,6 +1223,11 @@ export default function Dashboard({
           className="rounded px-3 py-1 text-xs bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border border-violet-500/30">
           {showSignalEffect ? "收起回测" : "🧪 信号有效性回测"}
         </button>
+        {/* v9.106.0（第六批 B，T-B4）：主线级回测 */}
+        <button onClick={() => setShowMainlineBt(v => !v)}
+          className="rounded px-3 py-1 text-xs bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 border border-cyan-500/20">
+          {showMainlineBt ? "收起主线回测" : "📊 主线回测"}
+        </button>
         {/* v9.42：因子健康度面板（幻方"因子失效"IC 曲线） */}
         <button onClick={() => setShowFactorHealth(v => !v)}
           className="rounded px-3 py-1 text-xs bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 border border-violet-500/40">
@@ -1299,6 +1308,8 @@ export default function Dashboard({
         </div>
       )}
       {showSignalEffect && <SignalEffectivenessPanel />}
+      {/* v9.106.0（第六批 B，T-B4）：主线级回测面板 */}
+      {showMainlineBt && <MainlineBacktestPanel />}
       {/* v9.42：因子健康度（server cron 15:40 落库 factor_ic:日期） */}
       {showFactorHealth && <FactorHealthPanel />}
       {/* v9.65（V2-P2）：运维可观测面板（数据源/AI配额/队列/因子） */}

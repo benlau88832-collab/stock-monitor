@@ -16,6 +16,7 @@ import { callAI } from "../lib/ai";
 import { parseLLMJSON, schemaForTask } from "../lib/llmJson";
 import { scoreThemeNews, type ThemeNewsLLMResult } from "../lib/llmSignals";
 import { setAIResult } from "../lib/aiConclusionStore";
+import { getEvStatsByCode } from "../lib/recTracker"; // v9.106.0（T-B2）：主题 EV 期望值徽章
 import AskAI from "./AskAI";
 
 interface ClassifiedEvent {
@@ -314,6 +315,17 @@ export default function EventClassifyPanel({ onOpenNews }: {
                 <span className="block h-full rounded bg-rose-500/70" style={{ width: `${t.heat}%` }} />
               </span>
               <span className="text-xs font-black text-slate-200">{t.heat}分</span>
+              {/* v9.106.0（第六批 B，T-B2）：主题 EV 期望值徽章（胜率×赔率，样本<20 积累中） */}
+              {(() => {
+                const ev = getEvStatsByCode(String(t.theme ?? ""), "theme");
+                if (ev.sampleCount === 0) return null;
+                return ev.accumulated ? (
+                  <span className="rounded bg-violet-500/15 px-1 py-0.5 text-[10px] font-bold text-violet-300"
+                    title={`近 ${ev.sampleCount} 次同类主题 T+1 表现`}>EV {ev.ev != null ? (ev.ev >= 0 ? "+" : "") + ev.ev.toFixed(1) : "—"}%</span>
+                ) : (
+                  <span className="rounded bg-white/5 px-1 py-0.5 text-[10px] text-slate-500" title={`样本 ${ev.sampleCount}/20 积累中`}>EV积累中({ev.sampleCount}/20)</span>
+                );
+              })()}
               {/* v9.92.0：主题催化评分徽章（themeNewsScore 就地显示，原来调了看不到） */}
               {(() => {
                 const sc = themeScores.get(String(t.theme ?? ""));

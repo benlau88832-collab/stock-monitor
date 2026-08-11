@@ -134,8 +134,7 @@ export interface HitRateStats {
 
 export function computeHitRates(maxSamples = 20): HitRateStats {
   const all = loadRecords();
-  const backfilled = all.filter(r => r.backfilled && r.type === "stock" && r.pctT1 != null);
-  const total = backfilled.length;
+  const backfilled = all.filter(r => r.backfilled && r.type === "stock" && r.pctT1 != null);  const total = backfilled.length;
   if (total === 0) return { total: 0, directionHitRate: null, avgT1: null, sampleSufficient: false };
   const recent = backfilled.slice(0, maxSamples);
   const n = recent.length;
@@ -143,6 +142,24 @@ export function computeHitRates(maxSamples = 20): HitRateStats {
   const directionHitRate = Math.round(dirHits / n * 100);
   const avgT1 = Math.round(recent.reduce((s, r) => s + (r.pctT1 ?? 0), 0) / n * 100) / 100;
   return { total, directionHitRate, avgT1, sampleSufficient: total >= maxSamples };
+}
+
+// v9.106.0（第六批 B，T-B2）：标的/主线 EV 期望值统计 —— 用该 code 的 T+1 回填样本算胜率/赔率/EV
+// 数据源：recTracker pctT1 序列（回填已有）；复用第一批 evStats.computeEvStats（样本<20 → 积累中）
+import { computeEvStats, type EvStats } from "./evStats";
+
+/**
+ * 指定标的/主线的 EV 统计（T+1 样本）
+ * @param code 标的代码或主题名（type=stock/theme 的记录）
+ * @param type 记录类型（stock 个股 / theme 主线）
+ * @returns EV 统计（样本不足 → accumulated=false）
+ */
+export function getEvStatsByCode(code: string, type: "stock" | "theme" = "stock"): EvStats {
+  const all = loadRecords();
+  const samples = all
+    .filter(r => r.type === type && r.code === code && r.backfilled && r.pctT1 != null)
+    .map(r => r.pctT1 as number);
+  return computeEvStats(samples);
 }
 
 /** 获取命中率文案（供作战卡底部显示） */

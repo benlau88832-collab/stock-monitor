@@ -233,6 +233,26 @@ module.exports = function dbRoutes(app) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // v9.106.0（第六批 B，T-B4）：主线级回测 —— zt_snapshot 多日板块涨停序列聚合 → 同主线历史胜率表
+  app.get("/api/backtest/mainline", async (req, res) => {
+    try {
+      const ztR = await pool.query("SELECT date, data FROM zt_snapshot ORDER BY date");
+      const rows = ztR.rows.map(r => {
+        const d = r.data;
+        const poolArr = Array.isArray(d) ? d : (d && typeof d === "object" && "pool" in d ? d.pool : []);
+        const byBoard = new Map();
+        for (const p of poolArr) {
+          const b = String(p.hybk || "未分类");
+          byBoard.set(b, (byBoard.get(b) ?? 0) + 1);
+        }
+        return { date: r.date, boards: [...byBoard.entries()].map(([hybk, count]) => ({ hybk, count })) };
+      });
+      const { runMainlineBacktest } = require("../lib/mainlineBacktest");
+      const items = runMainlineBacktest(rows);
+      res.json({ days: rows.length, items });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.post("/api/db/news", async (req, res) => {
     try {
       const items = Array.isArray(req.body) ? req.body : [];
