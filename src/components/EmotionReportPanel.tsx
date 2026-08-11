@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchPopularityRank, type PopularityItem } from "../lib/api";
 import { renderMiniMarkdown } from "../lib/md";
+import { exportElementAsPng } from "../lib/exportImage"; // v9.99.1（批次 5-3）：导出通用化（与复盘报告共用）
 
 interface EmotionReport {
   date: string;
@@ -82,16 +83,12 @@ export default function EmotionReportPanel() {
     setRunning(false);
   };
 
+  // v9.99.1（批次 5-3）：导出走共用工具 exportElementAsPng（与复盘报告 ReviewPanel 同实现）
   const exportPng = async () => {
     if (!reportRef.current || exporting) return;
     setExporting(true);
     try {
-      const html2canvas = (await import("html2canvas")).default;
-      const canvas = await html2canvas(reportRef.current, { backgroundColor: "#0b1020", scale: 2 });
-      const a = document.createElement("a");
-      a.download = `情绪叙事报告-${reports[0]?.date ?? "今日"}.png`;
-      a.href = canvas.toDataURL("image/png");
-      a.click();
+      await exportElementAsPng(reportRef.current, `情绪叙事报告-${reports[0]?.date ?? "今日"}.png`);
     } catch (e) { console.warn("[emotion] 导出失败:", e); }
     setExporting(false);
   };

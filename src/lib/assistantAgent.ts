@@ -122,6 +122,10 @@ export interface AssistantReply {
   rateLimited?: boolean;
   /** v9.85.1（P2-8）：答复来源 —— 快捷路径（零 LLM 数据直出）与 AI 生成必须区分，用户不得误认"数据直出"为模型结论 */
   source?: "data" | "rule" | "ai";
+  /** v9.99.1（批次 5-2）：失败阶段（crewai {success,error,stage} 结构化错误对照）——
+   *  llm-call 模型调用失败 / timeout 上游超时 / network 网络不通 / rate-limit 配额受限 / parse 输出无法解析；
+   *  仅 degraded 时有值，AskAI/AIConsole 可展示"失败发生在哪一步" */
+  stage?: "llm-call" | "timeout" | "network" | "rate-limit" | "parse";
 }
 
 /**
@@ -484,10 +488,13 @@ export async function runAssistantAgent(
   }
   // V14-2（V13-8）：降级时有已获取数据 → 附上（不再"AI 输出异常"空白）
   reply = fbData ? reply + fbData : reply;
+  // v9.99.1（批次 5-2）：失败阶段推导 —— 与上方 reply 分支一一对应
+  const stage = llmOk ? "parse" : rateLimitedFlag ? "rate-limit" : reason === "timeout" ? "timeout" : reason === "network" ? "network" : "llm-call";
   return {
     reply,
     toolsCalled: [...calledTools],
     degraded: true,
     rateLimited: rateLimitedFlag,
+    stage,
   };
 }

@@ -53,13 +53,17 @@ const COOLDOWN_MS = {
   connection_error: 10_000,    // ECONNRESET/HTTP 000
   default: 15_000,
 };
+// v9.99.1（批次 5-1）：ECONNRESET 显式分类 —— 词根与前端 jsonpQueue 完全同构（crewai http_utils 对照）：
+//   ECONNRESET（WinError 10054 "远程主机强迫关闭连接"）/ HTTP 000 / TLS 断连（"Client network socket
+//   disconnected"）均按 connection_error → 10s 起冷却，WAF 断流期间绝不重试加速被封
 function classifyError(msg) {
   const s = String(msg || "").toLowerCase();
   if (s.includes("403") || s.includes("forbidden")) return "forbidden";
   if (s.includes("429") || s.includes("rate limit")) return "rate_limit";
   if (s.includes("503")) return "service_unavailable";
   if (s.includes("timeout") || s.includes("abort")) return "timeout";
-  if (s.includes("reset") || s.includes("hang up") || s.includes("failed to fetch") || s.includes("socket")) return "connection_error";
+  if (s.includes("reset") || s.includes("econnreset") || s.includes("hang up") || s.includes("load error")
+    || s.includes("fetch fail") || s.includes("failed to fetch") || s.includes("network") || s.includes("socket")) return "connection_error";
   return "default";
 }
 const circuitBuckets = new Map(); // host -> { failCount, openUntil, halfOpen }

@@ -6,7 +6,7 @@
 //   用大脑快照真实数据喂前端模板生成复盘（不等 cron 15:40），结果并入本地复盘库
 // v9.94.1（第四段·复盘重构）：服务端复盘升级 13 维度结构化（tdxclaw 式）——
 //   展示"数据表格（dimensions）+ AI 研判文本"双区；无 dimensions 时回退纯文本
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { loadReviews, saveReviews, upsertReview, searchReviews, statByMainline, computeLossStreak, type DailyReview } from "../lib/dailyReview";
 import { localDateStr } from "../lib/format";
 import { getCurrentSession } from "../lib/tradingSession";
@@ -14,6 +14,7 @@ import { isLocalServer } from "../lib/cloudStore";
 import { callAI } from "../lib/ai";
 import { fetchBrainContext } from "../lib/assistantAgent";
 import { apiFetch } from "../lib/cloudStore";
+import { exportElementAsPng } from "../lib/exportImage"; // v9.99.1（批次 5-3）：导出通用化（与情绪报告共用）
 
 // v9.94.1：13 维度结构化复盘类型（与服务端 cron.generateDailyReview 的 dimensions 对齐）
 interface ReviewDimensions {
@@ -49,6 +50,19 @@ export default function ReviewPanel() {
   const [replayText, setReplayText] = useState<string | null>(null);
   // v9.84.2（3.5）：立即 AI 复盘（dailyReviewAuto 前端模板 + 大脑快照真实数据）
   const [aiReviewing, setAiReviewing] = useState(false);
+
+  // v9.99.1（批次 5-3）：导出复盘卡为 PNG（html2canvas 共用工具，与情绪报告同实现）
+  const [exporting, setExporting] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  const exportPng = async () => {
+    if (!exportRef.current || exporting) return;
+    setExporting(true);
+    try {
+      await exportElementAsPng(exportRef.current, `复盘记录-${localDateStr()}.png`);
+    } catch (e) { console.warn("[review] 导出失败:", e); }
+    setExporting(false);
+  };
 
   // 🤖 立即 AI 复盘：大脑快照（情绪/涨停/主线/黑天鹅/强催化）→ 前端模板 → 结果并入本地复盘库
   const runAIReview = async () => {
@@ -153,7 +167,7 @@ export default function ReviewPanel() {
   const lossStreak = computeLossStreak(reviews);
 
   return (
-    <div className="rounded-xl border border-teal-500/20 bg-teal-950/10 p-3 space-y-2">
+    <div ref={exportRef} className="rounded-xl border border-teal-500/20 bg-teal-950/10 p-3 space-y-2">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-teal-300">📝 每日复盘</span>
@@ -167,10 +181,17 @@ export default function ReviewPanel() {
             <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold text-rose-300">连续亏损 {lossStreak} 天 · 冷静期</span>
           )}
         </div>
-        <button onClick={() => setShowForm(v => !v)}
-          className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/20">
-          {showForm ? "收起" : todayReview ? "编辑今日" : "记录今日"}
-        </button>
+        <div className="flex gap-1.5">
+          <button onClick={exportPng} disabled={exporting}
+            className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] text-sky-200 hover:bg-sky-500/30 disabled:opacity-50"
+            title="导出复盘卡为图片">
+            {exporting ? "导出中…" : "📥 导出"}
+          </button>
+          <button onClick={() => setShowForm(v => !v)}
+            className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/20">
+            {showForm ? "收起" : todayReview ? "编辑今日" : "记录今日"}
+          </button>
+        </div>
       </div>
 
       {/* v9.33（缺口2）：服务端自动复盘展示 */}

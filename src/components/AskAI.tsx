@@ -25,7 +25,18 @@ interface AskResult {
   tools: string[];
   degraded: boolean;
   source?: "data" | "rule" | "ai";
+  /** v9.99.1（批次 5-2）：失败阶段（assistantAgent.stage 透传）—— 展示"失败发生在哪一步" */
+  stage?: "llm-call" | "timeout" | "network" | "rate-limit" | "parse";
 }
+
+// v9.99.1（批次 5-2）：阶段 → 人类可读文案（crewai {success,error,stage} 对照）
+const STAGE_LABEL: Record<string, string> = {
+  "llm-call": "LLM 调用失败",
+  timeout: "上游超时（90s）",
+  network: "网络不通",
+  "rate-limit": "配额受限",
+  parse: "LLM 输出解析失败",
+};
 
 export default function AskAI({ context, code, name, placeholder, compact = false }: AskAIProps) {
   const [open, setOpen] = useState(false);
@@ -47,7 +58,7 @@ export default function AskAI({ context, code, name, placeholder, compact = fals
       };
       const fullQ = context ? `【现场上下文】\n${context}\n\n【问题】${q}` : q;
       const r = await runAssistantAgent(fullQ, siteCtx);
-      setResult({ text: r.reply, tools: r.toolsCalled, degraded: r.degraded, source: r.source });
+      setResult({ text: r.reply, tools: r.toolsCalled, degraded: r.degraded, source: r.source, stage: r.stage });
     } catch {
       setResult({ text: "⚠ 助手调用失败，请稍后重试", tools: [], degraded: true });
     } finally {
@@ -97,6 +108,7 @@ export default function AskAI({ context, code, name, placeholder, compact = fals
           {result.degraded && (
             <div className="rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-300">
               ⏸ 本次降级回复（非 AI）
+              {result.stage && <span className="ml-1 text-rose-300/70">· 失败阶段：{STAGE_LABEL[result.stage] ?? result.stage}</span>}
             </div>
           )}
           {!result.degraded && result.source === "data" && (

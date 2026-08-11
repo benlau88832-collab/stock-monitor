@@ -6,13 +6,14 @@ const COOLDOWN_MS = {
   forbidden: 300_000, rate_limit: 120_000, service_unavailable: 30_000,
   timeout: 5_000, connection_error: 10_000, default: 15_000,
 };
-function classifyError(msg) {
+function classifyError(msg: string) {
   const s = String(msg || "").toLowerCase();
   if (s.includes("403") || s.includes("forbidden")) return "forbidden";
   if (s.includes("429") || s.includes("rate limit")) return "rate_limit";
   if (s.includes("503")) return "service_unavailable";
   if (s.includes("timeout") || s.includes("abort")) return "timeout";
-  if (s.includes("reset") || s.includes("hang up") || s.includes("failed to fetch") || s.includes("socket")) return "connection_error";
+  if (s.includes("reset") || s.includes("econnreset") || s.includes("hang up") || s.includes("load error")
+    || s.includes("fetch fail") || s.includes("failed to fetch") || s.includes("network") || s.includes("socket")) return "connection_error";
   return "default";
 }
 
@@ -25,6 +26,13 @@ describe("v9.99.0 服务端分级冷却（与前端 jsonpQueue 同构）", () =>
     expect(classifyError("upstream timeout")).toBe("timeout");
     expect(COOLDOWN_MS[classifyError("upstream timeout")]).toBe(5_000);
     expect(classifyError("other")).toBe("default");
+  });
+  it("ECONNRESET 显式分类（WinError 10054 断源同款，与前端同构）", () => {
+    expect(classifyError("read ECONNRESET")).toBe("connection_error");
+    expect(classifyError("ECONNRESET")).toBe("connection_error");
+    expect(classifyError("Client network socket disconnected before secure TLS connection was established")).toBe("connection_error");
+    expect(classifyError("fetch failed")).toBe("connection_error");
+    expect(COOLDOWN_MS[classifyError("read ECONNRESET")]).toBe(10_000);
   });
   it("WAF 断源（403/连接错误）冷却远长于超时", () => {
     expect(COOLDOWN_MS.forbidden).toBeGreaterThan(COOLDOWN_MS.timeout * 10);

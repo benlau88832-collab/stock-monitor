@@ -68,7 +68,9 @@ export function classifyError(err: unknown): CooldownClass {
   if (s.includes("429") || s.includes("rate limit")) return "rate_limit";
   if (s.includes("503")) return "service_unavailable";
   if (s.includes("timeout") || s.includes("abort")) return "timeout";
-  if (s.includes("reset") || s.includes("hang up") || s.includes("load error") || s.includes("failed to fetch") || s.includes("network") || s.includes("socket")) return "connection_error";
+  // v9.99.1（批次 5-1）：ECONNRESET（WinError 10054）/HTTP 000/TLS 断连显式分类 —— 词根与 server proxy.js 同构
+  if (s.includes("reset") || s.includes("econnreset") || s.includes("hang up") || s.includes("load error")
+    || s.includes("fetch fail") || s.includes("failed to fetch") || s.includes("network") || s.includes("socket")) return "connection_error";
   return "default";
 }
 
