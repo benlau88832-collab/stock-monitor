@@ -1577,6 +1577,23 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] 盘中精灵失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
 
+  // v9.103.0（第三批 D，T-D2）：隔夜映射巡检 —— 9:05 盘前 + 15:05 盘后
+  // 外盘异动（|涨跌幅|≥2%）→ shared/overseas-map.js 映射匹配 → kv overseas_map_hint:日期 + info 推送
+  cron.schedule("5 9 * * 1-5", async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      const { runOverseasPatrol } = require("./lib/overseasPatrol");
+      await runOverseasPatrol(pool, "盘前");
+    } catch (e) { console.error("[cron] 隔夜映射巡检(盘前)失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+  cron.schedule("5 15 * * 1-5", async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      const { runOverseasPatrol } = require("./lib/overseasPatrol");
+      await runOverseasPatrol(pool, "盘后");
+    } catch (e) { console.error("[cron] 隔夜映射巡检(盘后)失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
   // ---------- P0-3：拍板盈亏自动回填（15:50 盘后） ----------
   // 对 decision_post 表中"已拍 confirm 且执行未标记"的样本，用真实日 K 回填 T+5 PnL
   // 幂等：UPDATE 后再查不重复（executed=true）

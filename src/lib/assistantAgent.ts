@@ -11,6 +11,8 @@ import { getResearchTools, RESEARCH_SYSTEM, researchCtxNote } from "./researchTo
 import { callAgentChat, parseAIJSON, type AgentChatResult } from "./ai";
 import { fmtMoney, getBJDateStr } from "./format";
 import { isLocalServer } from "./cloudStore";
+// v9.103.0（第三批 D，T-D5）：外围映射表（CJS shared，确定性匹配）—— 事件→A股映射链工具
+import { matchOverseas } from "../shared/overseas-map";
 
 // ============== v9.84.2（AI大脑层 · 3.1）：大脑快照（60s 缓存） ==============
 export interface BrainContext {
@@ -254,6 +256,19 @@ export async function runAssistantAgent(
         const items = await fetchExternalNews(kw, Number(args?.limit) || 10);
         if (items.length === 0) return { note: `外部搜索"${kw}"无结果` };
         return { count: items.length, items };
+      },
+    },
+    {
+      // v9.103.0（第三批 D，T-D5）：外围→A股映射查询（确定性规则，不烧 LLM）
+      // 客户场景："AXT 大涨怎么看云南锗业""英伟达财报利好谁"——先命中映射表再让 LLM 结合推理
+      name: "lookupOverseasMap",
+      description: '外围→A股映射查询（确定性规则表）：输入外盘标的/事件关键词（如 "AXT""英伟达""美债""原油""特斯拉"），返回映射的 A 股板块/标的池/传导链/强度权重/置信度。用户问"XX大涨/异动/政策怎么看A股、利好谁、影响什么板块"时 MUST 先调这个，命中结果再结合本地数据回答；未命中返回空数组。传 { text: "事件或外盘标的名" }',
+      kind: "data",
+      execute: async (args: any) => {
+        const t = String(args?.text ?? "").trim();
+        if (!t) return { error: "text required", hits: [] };
+        const hits = matchOverseas(t);
+        return { count: hits.length, hits: hits.slice(0, 5).map((h: { source: string; aBoard: string; stocks: string[]; chain: string; weight: number; confidence: string }) => ({ source: h.source, aBoard: h.aBoard, stocks: h.stocks.slice(0, 5), chain: h.chain, weight: h.weight, confidence: h.confidence })) };
       },
     },
     {
