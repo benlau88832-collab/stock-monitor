@@ -63,23 +63,26 @@ export function classifyBoardTrap(
 }
 
 /**
- * v9.106.1（验收遗留 #2 接线）：涨停池数据 → BoardTrapInput 适配（纯函数）
- * 涨停池（push2ex getTopicZTPool）可得的盘口字段：fund 封单额 / amount 成交额 / zbc 炸板次数。
- * 大单流向缺失 → 用"封单增减"代理（封单撤 = 主力流出、增封 = 主力流入），仅当 prevSealFund 有效时可用；
- * 换手缺失 → 不传（强势介入放宽换手条件）。
- * @param s { sealFund, amount, blastCount } 涨停池元素
- * @param prevSealFund 上一轮该股封单额（<=0 表示无快照 → 变化率 0，首轮不判）
+ * v9.106.2（用户定调：同概念批量涨停视为板块异动，而非自选股）：板块级盘口三分类（纯函数）
+ * 板块/题材批量涨停（≥2 只）时，用板块聚合盘口特征判定板块资金性质：
+ *   - sealRatio = 板块总封单 / 板块总成交（涨停池唯一有 amount 的聚合口径）
+ *   - sealChangeRate / bigNetFlow = 板块总封单相对上轮的增减（封单撤 = 板块主力流出代理）
+ *   - blasted = 组内炸板股占比 ≥30%（封板不稳的板块才有"假摔"语义）
+ * 首轮无快照（prevTotalSealFund<=0）→ 变化率 0，不误判。
  */
-export function classifyBoardTrapFromLimit(
-  s: { sealFund: number; amount: number; blastCount: number },
-  prevSealFund: number,
+export function classifyBoardTrapForBoard(
+  input: { stocks: Array<{ sealFund: number; amount: number; blastCount: number }>; prevTotalSealFund: number },
+  opts?: { sealRatioMin?: number; sealStableMax?: number; retreatRate?: number; turnoverMax?: number; blastRatio?: number },
 ): BoardTrapResult {
-  const sealRatio = s.amount > 0 ? s.sealFund / s.amount : 0;
-  const sealChangeRate = prevSealFund > 0 && s.sealFund > 0 ? (s.sealFund - prevSealFund) / prevSealFund * 100 : 0;
-  // 封单增减 = 主力行为代理（涨停封单撤/加本质是主力单）
-  const bigNetFlow = prevSealFund > 0 ? s.sealFund - prevSealFund : 0;
-  return classifyBoardTrap({
-    sealRatio, sealChangeRate, bigNetFlow,
-    blasted: s.blastCount > 0, // zbc 炸板次数 >0 = 曾炸板
-  });
+  const stocks = input.stocks;
+  if (stocks.length < 2) return { type: null, reasons: ["板块涨停家数不足（<2）"] };
+  const totalSeal = stocks.reduce((s, x) => s + (x.sealFund > 0 ? x.sealFund : 0), 0);
+  const totalAmount = stocks.reduce((s, x) => s + (x.amount > 0 ? x.amount : 0), 0);
+  if (totalSeal <= 0) return { type: null, reasons: ["板块无封单数据"] };
+  const sealRatio = totalAmount > 0 ? totalSeal / totalAmount : 0;
+  const sealChangeRate = input.prevTotalSealFund > 0 ? (totalSeal - input.prevTotalSealFund) / input.prevTotalSealFund * 100 : 0;
+  const bigNetFlow = input.prevTotalSealFund > 0 ? totalSeal - input.prevTotalSealFund : 0;
+  const blastRatio = opts?.blastRatio ?? 0.3;
+  const blasted = stocks.filter(s => s.blastCount > 0).length / stocks.length >= blastRatio;
+  return classifyBoardTrap({ sealRatio, sealChangeRate, bigNetFlow, blasted }, opts);
 }

@@ -1,6 +1,6 @@
 // v9.101.1（T-D4）：盘口三分类纯函数单测（诱多/假摔/强势介入）
 import { describe, it, expect } from "vitest";
-import { classifyBoardTrap, classifyBoardTrapFromLimit } from "../boardTrap";
+import { classifyBoardTrap, classifyBoardTrapForBoard } from "../boardTrap";
 
 describe("v9.101.1 classifyBoardTrap（盘口三分类）", () => {
   it("诱多：封单快速撤单 + 大单流出", () => {
@@ -42,32 +42,57 @@ describe("v9.101.1 classifyBoardTrap（盘口三分类）", () => {
   });
 });
 
-// v9.106.1（验收遗留 #2）：涨停池适配函数接线单测（classifyBoardTrapFromLimit —— 封单变化代理大单方向）
-describe("v9.106.1 classifyBoardTrapFromLimit（涨停池适配接线）", () => {
-  it("封单撤单 ≥30%（prevSealFund 有效）→ 诱多", () => {
-    const r = classifyBoardTrapFromLimit({ sealFund: 5e7, amount: 1e9, blastCount: 0 }, 1e8);
+// v9.106.2（用户定调：同概念批量涨停视为板块异动）：板块级聚合三分类单测（classifyBoardTrapForBoard）
+describe("v9.106.2 classifyBoardTrapForBoard（板块级聚合接线）", () => {
+  it("板块批量涨停封单整体撤 ≥30% → 板块诱多", () => {
+    const r = classifyBoardTrapForBoard({
+      stocks: [
+        { sealFund: 6e7, amount: 2e8, blastCount: 0 },
+        { sealFund: 4e7, amount: 1e8, blastCount: 0 },
+      ],
+      prevTotalSealFund: 2e8, // 上轮 2 亿 → 本轮 1 亿（-50%）
+    });
     expect(r.type).toBe("诱多");
     expect(r.reasons.join()).toContain("快速撤单");
   });
 
-  it("炸板（zbc>0）但封单变化温和 → 假摔", () => {
-    const r = classifyBoardTrapFromLimit({ sealFund: 9.5e7, amount: 1e9, blastCount: 2 }, 1e8);
+  it("板块炸板占比 ≥30% 且封单变化温和 → 板块假摔", () => {
+    const r = classifyBoardTrapForBoard({
+      stocks: [
+        { sealFund: 5e7, amount: 2e8, blastCount: 1 },
+        { sealFund: 6e7, amount: 1e8, blastCount: 0 },
+        { sealFund: 4e7, amount: 1e8, blastCount: 1 },
+      ],
+      prevTotalSealFund: 1.6e8, // 变化温和（-6%）
+    });
     expect(r.type).toBe("假摔");
     expect(r.reasons.join()).toContain("筹码未走");
   });
 
-  it("封成比高 + 封单稳定/增封 → 强势介入", () => {
-    const r = classifyBoardTrapFromLimit({ sealFund: 1.05e8, amount: 3e7, blastCount: 0 }, 1e8);
+  it("板块封成比高 + 封单稳定/增 → 板块强势介入", () => {
+    const r = classifyBoardTrapForBoard({
+      stocks: [
+        { sealFund: 6e7, amount: 2e7, blastCount: 0 },
+        { sealFund: 5e7, amount: 2e7, blastCount: 0 },
+      ],
+      prevTotalSealFund: 1e8,
+    });
     expect(r.type).toBe("强势介入");
   });
 
-  it("首轮无快照（prevSealFund<=0）→ 不误判（变化率 0）", () => {
-    const r = classifyBoardTrapFromLimit({ sealFund: 3e8, amount: 1e9, blastCount: 0 }, 0);
+  it("首轮无快照（prevTotalSealFund<=0）→ 不误判", () => {
+    const r = classifyBoardTrapForBoard({
+      stocks: [
+        { sealFund: 6e7, amount: 2e8, blastCount: 0 },
+        { sealFund: 4e7, amount: 1e8, blastCount: 0 },
+      ],
+      prevTotalSealFund: 0,
+    });
     expect(r.type).toBeNull();
   });
 
-  it("非涨停股封单为 0 → 不误判", () => {
-    const r = classifyBoardTrapFromLimit({ sealFund: 0, amount: 1e8, blastCount: 0 }, 0);
+  it("板块涨停家数不足 2 只 → 不判（个股异动不归板块）", () => {
+    const r = classifyBoardTrapForBoard({ stocks: [{ sealFund: 6e7, amount: 2e8, blastCount: 0 }], prevTotalSealFund: 1e8 });
     expect(r.type).toBeNull();
   });
 });

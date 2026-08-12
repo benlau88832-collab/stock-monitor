@@ -6,9 +6,6 @@
 // 前端事件流（内存+localStorage 会话级），未来可无缝接真实 tick 数据源
 // v9.27（P0-4）：接入诱多探测引擎 detectTrap —— S 级命中诱多 → 强制"禁止追高·疑似诱多"
 import { detectTrap } from "./trapDetector";
-// v9.106.1（验收遗留 #2）：接入盘口三分类 boardTrap（v9.101.1 T-D4 纯函数此前全库无引用=死代码）——
-//   异动分级时并行算诱多/假摔/强势介入，标签带进 S/A/B 事件卡
-import { classifyBoardTrapFromLimit, type BoardTrapResult } from "./boardTrap";
 // v9.62（V9-L1）：个股异动阈值统一引用 thresholds.ts
 import { PULSE_PCT_HIGH, PULSE_VR_HIGH, PULSE_VR_EXTREME, PULSE_TURNOVER_HIGH, PULSE_PCT_MID, PULSE_VR_MID, PULSE_TURNOVER_MID } from "./thresholds";
 
@@ -39,18 +36,11 @@ export interface AnomalyEvent {
   pct: number;
   volumeRatio: number | null;
   turnoverRate: number;
-  /** v9.106.1（验收遗留 #2）：盘口三分类标签（诱多/假摔/强势介入），事件卡展示 */
-  boardTrap?: BoardTrapResult;
 }
 
 const MAX_EVENTS = 50;
 /** 同 code+level 冷却：15 分钟内不重复 emit（避免刷屏） */
 const COOLDOWN_MS = 15 * 60 * 1000;
-
-// v9.106.1（验收遗留 #2）：封单快照（code → {sealFund, ts}）—— boardTrap 封单变化率输入
-// 自选股行情 60s 刷新，相邻帧同值 → 变化率 0（稳定）；快照超 6h 视为过期（隔夜跨日不误判）
-const sealSnapshots = new Map<string, { sealFund: number; ts: number }>();
-const SEAL_SNAPSHOT_TTL = 6 * 60 * 60 * 1000;
 
 let events: AnomalyEvent[] = [];
 const listeners = new Set<() => void>();
@@ -94,8 +84,6 @@ export interface AnomalyVerdict {
   action: string;
   mainlineHit: boolean;
   mainlineName: string | null;
-  /** v9.106.1（验收遗留 #2）：盘口三分类（诱多/假摔/强势介入），数据足时并行计算 */
-  boardTrap?: BoardTrapResult;
 }
 
 /** 是否呼应主线：个股名与主线名做子词匹配 */
@@ -127,21 +115,6 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
     isMainline: hit,
   });
 
-  // v9.106.1（验收遗留 #2）：并行算盘口三分类（boardTrap 接线 —— 原 v9.101.1 T-D4 纯函数全库无引用）
-  // 封单快照：仅当 sealFund>0 有数据时才有意义；每次有值即更新快照（保留变化轨迹）
-  let boardTrap: BoardTrapResult | undefined;
-  if (s.sealFund != null && s.sealFund > 0) {
-    const snap = sealSnapshots.get(s.code);
-    const prevSealFund = snap && Date.now() - snap.ts < SEAL_SNAPSHOT_TTL ? snap.sealFund : 0;
-    boardTrap = classifyBoardTrapFromLimit(
-      { sealFund: s.sealFund, amount: s.amount ?? 0, blastCount: s.blastCount ?? 0 },
-      prevSealFund,
-    );
-    sealSnapshots.set(s.code, { sealFund: s.sealFund, ts: Date.now() });
-  }
-  // 仅命中三分类时才带标签（未命中保持 undefined，事件卡不显示）
-  const bt = boardTrap?.type ? boardTrap : undefined;
-
   if (pct >= nearLimit) {
     if (trapHit.isTrap) {
       return {
@@ -149,7 +122,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
         reason: `涨幅${pct.toFixed(1)}% 接近涨停（${trapHit.type}）`,
         aiComment: `⚠ ${trapHit.reason}`,
         action: "高风险·疑似诱多（参考）",
-        mainlineHit: hit, mainlineName: name, boardTrap: bt,
+        mainlineHit: hit, mainlineName: name,
       };
     }
     return {
@@ -158,7 +131,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       aiComment: hit ? "呼应当前主线，强势封板形态" : "孤立异动，谨慎追高",
       // 主线 + 强势封板 → 重仓参与；主线 → 轻仓参与；非主线 → 禁止追高
       action: hit ? (pct >= limitPct ? "高关注档·重仓参考（主线核心）" : "中关注档（跟主线）") : "高风险·暂不建议",
-      mainlineHit: hit, mainlineName: name, boardTrap: bt,
+      mainlineHit: hit, mainlineName: name,
     };
   }
   if (pct >= PULSE_PCT_HIGH && vr >= PULSE_VR_HIGH) {
@@ -168,7 +141,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
         reason: `${pct.toFixed(1)}% 快速拉升 + 量比${vr.toFixed(1)}（${trapHit.type}）`,
         aiComment: `⚠ ${trapHit.reason}`,
         action: "高风险·疑似诱多（参考）",
-        mainlineHit: hit, mainlineName: name, boardTrap: bt,
+        mainlineHit: hit, mainlineName: name,
       };
     }
     return {
@@ -176,7 +149,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       reason: `${pct.toFixed(1)}% 快速拉升 + 量比${vr.toFixed(1)}`,
       aiComment: hit ? "主线内放量拉升，资金加速" : "放量急拉但不在主线，防诱多",
       action: hit ? "中关注档（跟主线）" : "高风险·暂不建议",
-      mainlineHit: hit, mainlineName: name, boardTrap: bt,
+      mainlineHit: hit, mainlineName: name,
     };
   }
 
@@ -188,7 +161,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       reason: `量比${vr.toFixed(1)} 异常放量`,
       aiComment: hit ? "主线内异动放量，关注承接" : "异常放量，警惕出货",
       action: hit ? "中关注档（观察承接）" : "观察 · 暂不参与",
-      mainlineHit: hit, mainlineName: name, boardTrap: bt,
+      mainlineHit: hit, mainlineName: name,
     };
   }
   if (turnoverRate >= PULSE_TURNOVER_HIGH) {
@@ -197,7 +170,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       reason: `换手${turnoverRate.toFixed(0)}% 高换手`,
       aiComment: hit ? "主线内高换手，筹码活跃" : "高换手分歧，追高谨慎",
       action: hit ? "中关注档（筹码活跃）" : "观察 · 暂不参与",
-      mainlineHit: hit, mainlineName: name, boardTrap: bt,
+      mainlineHit: hit, mainlineName: name,
     };
   }
   if (pct >= PULSE_PCT_HIGH) {
@@ -206,7 +179,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       reason: `涨幅${pct.toFixed(1)}%`,
       aiComment: hit ? "主线内走强" : "偏离主线强势，防脉冲",
       action: hit ? "中关注档（主线走强）" : "观察 · 暂不参与",
-      mainlineHit: hit, mainlineName: name, boardTrap: bt,
+      mainlineHit: hit, mainlineName: name,
     };
   }
 
@@ -217,7 +190,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
       reason: `涨${pct.toFixed(1)}% 量比${vr.toFixed(1)} 换手${turnoverRate.toFixed(0)}%`,
       aiComment: hit ? "主线内温和异动" : "小幅异动，暂不构成信号",
       action: "无需操作",
-      mainlineHit: hit, mainlineName: name, boardTrap: bt,
+      mainlineHit: hit, mainlineName: name,
     };
   }
 
@@ -245,7 +218,6 @@ export function emitAnomaly(verdict: AnomalyVerdict, s: AnomalyInput): AnomalyEv
     pct: s.pct,
     volumeRatio: s.volumeRatio ?? null,
     turnoverRate: s.turnoverRate,
-    boardTrap: verdict.boardTrap,
   };
   events = [evt, ...events].slice(0, MAX_EVENTS);
   notify();

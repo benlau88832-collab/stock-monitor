@@ -40,7 +40,10 @@ async function fetchFourPools(dateCompact) {
     const url = `${PUSH2EX}/${api}?ut=${EM_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=10000&sort=fbt%3Aasc&date=${dateCompact}`;
     try {
       const j = await getJson(url, { timeout: 6000 });
-      pools[key] = (j?.data?.pool ?? []).map(p => ({
+      // v9.106.2（盘中实测）：push2ex 响应为双层 data.data.pool（实测 {data:{rc,data:{tc,qdate,pool}}}）——
+      // 原取 j.data.pool 恒空 → 四池全空 → 精灵浮层永远无事件（v9.102.0 遗留）
+      const pool = j?.data?.data?.pool ?? j?.data?.pool ?? [];
+      pools[key] = (pool ?? []).map(p => ({
         code: String(p.c ?? ""), name: String(p.n ?? ""),
         hybk: String(p.hybk ?? ""), fund: Number(p.fund ?? 0), lbc: Number(p.lbc ?? 1),
       }));

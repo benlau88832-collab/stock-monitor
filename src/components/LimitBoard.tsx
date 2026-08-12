@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { fmtMoney, fmtPct, pctColor, getBJDate, getBJWeekday } from "../lib/format";
 import { stockRealUrl } from "../lib/realLinks";
+// v9.106.2（用户定调：同概念批量涨停视为板块异动）：题材热度排行"板块资金性质"标签
+// 涨停池是唯一有完整封单字段（fund/amount/zbc）的地方，板块级聚合判定诱多/假摔/强势介入
+import { classifyBoardTrapForBoard } from "../lib/boardTrap";
+
+// v9.106.2：板块封单快照（date:theme → 板块总封单），供封单变化率计算；带日期防跨日串扰
+// ThemeRanking 挂载时更新快照，Tab 切换重挂载 → 快照对比 → 三分类标签出现
+const boardSealSnapshots = new Map<string, number>();
 
 // ============== 数据结构（东方财富涨停池/炸板池/跌停池真实字段） ==============
 interface ZTStock {
@@ -163,11 +170,40 @@ function StatCard({ label, value, sub, color }: { label: string; value: string |
 
 // ============== 题材热度排行 ==============
 // v9.100.0（P2-13）：接收 qdate —— 标题用真实交易日，回退昨日时显式标注（原固定"今日"误导）
+// v9.106.2（用户定调：板块异动）：批量涨停题材 → 板块级资金性质标签（诱多/假摔/强势介入）
 function ThemeRanking({ stocks, qdate }: { stocks: ZTStock[]; qdate: string | null }) {
-  const counts = new Map<string, number>();
-  for (const s of stocks) counts.set(s.theme, (counts.get(s.theme) ?? 0) + 1);
-  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const max = sorted.length > 0 ? sorted[0][1] : 1;
+  const counts = new Map<string, ZTStock[]>();
+  for (const s of stocks) {
+    const arr = counts.get(s.theme) ?? [];
+    arr.push(s);
+    counts.set(s.theme, arr);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 8);
+  const max = sorted.length > 0 ? sorted[0][1].length : 1;
+
+  // 板块级三分类：对比上一挂载快照（同日期），首帧 prev=0 不误判
+  const ds = qdate ?? "";
+  const trapOf = (theme: string, list: ZTStock[]): ReturnType<typeof classifyBoardTrapForBoard> => {
+    const prev = boardSealSnapshots.get(`${ds}:${theme}`);
+    return classifyBoardTrapForBoard({
+      stocks: list.map(s => ({ sealFund: s.sealFund, amount: s.amount, blastCount: s.blastCount })),
+      prevTotalSealFund: prev ?? 0,
+    });
+  };
+  // 挂载时更新快照（下次挂载/切 Tab 后生效）
+  useEffect(() => {
+    for (const [theme, list] of sorted) {
+      const total = list.reduce((s, x) => s + (x.sealFund > 0 ? x.sealFund : 0), 0);
+      if (total > 0) boardSealSnapshots.set(`${ds}:${theme}`, total);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stocks, qdate]);
+  const trapBadge = (t: ReturnType<typeof classifyBoardTrapForBoard>) => {
+    if (!t.type) return null;
+    const cls = t.type === "诱多" ? "bg-rose-500/25 text-rose-300" : t.type === "假摔" ? "bg-amber-500/25 text-amber-300" : "bg-emerald-500/25 text-emerald-300";
+    return <span className={`ml-1 rounded px-1 py-0.5 text-[10px] font-bold ${cls}`}>{t.type}</span>;
+  };
+
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4">
       <div className="text-xs font-bold text-amber-300 mb-2">
@@ -177,13 +213,15 @@ function ThemeRanking({ stocks, qdate }: { stocks: ZTStock[]; qdate: string | nu
         )}
       </div>
       <div className="space-y-1.5">
-        {sorted.map(([theme, count]) => (
+        {sorted.map(([theme, list]) => (
           <div key={theme} className="flex items-center gap-2 text-xs">
             <span className={`w-16 text-right shrink-0 rounded px-1 py-0.5 text-[11px] font-bold ${themeColor(theme)}`}>{theme}</span>
             <div className="flex-1 h-4 bg-slate-800 rounded overflow-hidden">
-              <div className="h-full bg-gradient-to-r from-amber-500/60 to-rose-500/60 rounded" style={{ width: `${(count / max) * 100}%` }} />
+              <div className="h-full bg-gradient-to-r from-amber-500/60 to-rose-500/60 rounded" style={{ width: `${(list.length / max) * 100}%` }} />
             </div>
-            <span className="w-8 text-right text-rose-400 font-bold">{count}只</span>
+            <span className="w-8 text-right text-rose-400 font-bold">{list.length}只</span>
+            {/* v9.106.2：板块资金性质（批量涨停才判；无标签=封单无变化/不构成，勿当缺陷） */}
+            {trapBadge(trapOf(theme, list))}
           </div>
         ))}
         {sorted.length === 0 && <div className="text-xs text-slate-500">暂无数据</div>}
