@@ -1,7 +1,7 @@
 # 项目 Handoff — 2026-08-12（会话超长交接，交由新会话继续推进）
 
-> **交接人**：实施会话（sess_bf7325ee，2026-08-12 深夜）+ 推进会话（2026-08-12 晚，v9.113.1/v9.114.0）
-> **当前 HEAD**：`dbf8454`（v9.114.0，已推送远端 `arena/019fb619-stock-monitor`）
+> **交接人**：实施会话（sess_bf7325ee，2026-08-12 深夜）+ 推进会话（2026-08-12 晚，v9.113.1/v9.114.0）+ 金融 AGI 会话（2026-08-12 深夜，v9.115.0~v9.118.0 四支柱）
+> **当前 HEAD**：`b8ecd30`（v9.118.0，已推送远端 `arena/019fb619-stock-monitor`）
 > **接手必读**：本文件 + AGENTS.md + `C:\Users\Administrator\.zcode\cli\memories\projects\022_-a062c4aeb65b9d98\memory\MEMORY.md`（含全部历史教训索引）
 
 ---
@@ -35,27 +35,37 @@
 | v9.113.0 | 0e3e5da | **终审交付层重构**：T0 dataLayer（PG 优先）/ T2 intentRouter 五档路由 + data 档直读 PG / T3 LLM 收尾（工具子集瘦身/length cap 12000/降级分真因/reactProbe）/ T4 decisionDirect+DecisionCard 决策直达 / T1-2 横幅三态 | 浏览器实测：决策卡秒级 + 横幅不弹 |
 | v9.113.1 | c6b1e2d | **T1-1 主面板管道 PG-first（D-01 收尾）**：refreshAll 第 9 路拉 PG 快照；涨停池三优先（实时 push2 直连 > PG 派生池 > push2delay 兜底，recentDelayHit 判定）；情绪/溢价/晋级率 PG 兜底；brainContext 加 boardCounts；MarketOverview PG 角标；stale 语义盘后修正 | block push2 实测：涨停 92/炸板 12%/连板梯队全显示 + 角标"涨停/情绪·PG 21:48"，不走 push2delay |
 | v9.114.0 | dbf8454 | **T5/T6 可靠性收敛+面板精简**：T5-1 boardTrap 文案核对（grep=0 不接线，板块级宿主维持）；T5-2 统一 /api/health（数据源+AI 端点+PG+SW+版本聚合，OpsPanel 统一 SLA）；T5-3 SW 强制版本更新（FORCE_RELOAD 无硬刷新即生效）；T6 主线/资金面/盘前准备三分区 | curl /api/health 全字段返回；SW v30 自动 reload 实测（sw_reloading=1+navType=reload） |
+| v9.115.0 | 137f884→7be7625 | **金融 AGI 四支柱① 单一认知层**：S1-1 buildCognition 纯函数（情绪6阶段/资金/风险闸门/龙头，每字段 Provenance 溯源+hash 双端校验）/ S1-2 cognition_snapshots 落库+cron 接入+version 自增 / S1-3 助手注入认知（快照长度降 ≥15%，AI 回答与认知一致）/ S1-4 CognitionBanner 认知横幅（驾驶舱顶部，5 维+hash/asOf）+ 情绪数据源优先级修正（sentiment_snapshot 权威） | /api/cognition 真实 PG 数据；AI 问"情绪如何"引用认知 16 冰点/696.5亿/百花医药7板，与横幅一致 |
+| v9.116.0 | f36299e | **四支柱② 决策直达层**：composeDecision 五支柱（准入/仓位/离场/风控/诱多，纯函数 <1ms 永不降级）+ DecisionCard 一键裁决面板（候选龙头自动亮 + 9:25/13:00 决策窗口 P0）+ /api/decisions（服务端 CJS 双端同构） | curl POST 600519→观望/61分/6ms；浏览器点候选龙头→五支柱卡+诱多一票否决 |
+| v9.117.0 | 99355c4 | **四支柱③ 主动智能调度**：resolveSession 时段引擎（8 阶段+2 决策窗口）+ 规则谓词四件套 + runProactiveTick（规则前置 0 token，LLM 受时段预算 400/1800/2500）+ /api/proactive + cron 落库 + ProactiveFeed（盘前准备区，时段切换+预算条） | curl ?phase=09:25→decisionWindow:true+P0；浏览器预算条 2000/2500·剩余500 |
+| v9.118.0 | b8ecd30 | **四支柱④ 操作习惯场景融合**：四场景纯函数（stageToAction 情绪周期买卖点/assessAuctionVolatility 竞价/composeIntradayAction 异动处置/buildCloseList 尾盘减仓，0 token）+ ScenarioPanel 4 tab（读认知动态，结论触达决策直达） | 浏览器：冰点→低吸·仓位15%（与认知横幅/AI 三方一致）；竞价匹配度 100→打板 |
 
-## 二、当前状态（v9.114.0）
+## 二、当前状态（v9.118.0）
 
-**已上线**：部署 v9.114.0（SW CACHE v30）；vitest 453；build 1,655.78kB；验收 19 PASS。
+**已上线**：部署 v9.118.0（SW CACHE v34）；vitest 494；build 1,679.72kB；验收 19 PASS。
 
-**已实测通过**：
-- 主面板 PG-first：block push2 → 涨停/炸板/连板梯队/情绪全 PG 快照值 + 角标"涨停/情绪·PG HH:MM"，不走 push2delay（v9.113.1）
-- 决策卡：驾驶舱"🎯 决策直达"输入 600519 → 观望/仓位0%/止损5%/PG 证据链（秒级，不经过 LLM）
-- 横幅三态：PG 可用时"15分钟延迟"不弹（盘后 stale 误判已修：25min 阈值仅盘中生效）
-- data 档："今天涨停多少只"→ PG 秒回数字
-- 统一 /api/health：curl 返回 数据源/AI 端点/PG 连通/SW 版本/应用版本；OpsPanel 统一 SLA 显示
-- SW 强制版本更新：发版后无硬刷新自动 reload（实测 sw_reloading=1 + navType=reload）
-- 复杂 ReAct ×10 降级率 0%（v9.111.0 基线）
+**金融 AGI 四支柱全部落地**（GLM审查/解决智能化/ ①②③④ 四文档，执行状态已回填 ③）：
+- ① 单一认知层：/api/cognition（cron 落库 cognition_snapshots + version/hash）+ 认知横幅 + AI 注入认知（快照降 ≥15%）
+- ② 决策直达：五支柱一键裁决（<1ms 纯函数 + 9:25/13:00 决策窗口 + 候选龙头自动亮）
+- ③ 主动智能：时段引擎 + 规则前置 + 预算条（LLM ≈2600 tok/日 受控）+ ProactiveFeed
+- ④ 场景融合：情绪周期买卖点/竞价/异动处置/尾盘减仓（0 token）
+- **全站口径统一实测**：认知横幅（冰点16）→ AI 回答 → 决策五支柱 → 场景融合 四方一致
 
-## 三、剩余待办（按《修改优化指令-v9.113.0.md》+《终审报告-v9.113.0.md》）
+**已实测通过（历史）**：
+- 主面板 PG-first：block push2 → PG 快照值 + 角标，不走 push2delay（v9.113.1）
+- 统一 /api/health + SW 强制版本更新（v9.114.0）
+- 决策卡 600519 秒级裁决；data 档 PG 秒回；复杂 ReAct ×10 降级率 0%
 
-> 2026-08-12 更新：v9.113.1（T1-1）与 v9.114.0（T5/T6）已交付（c6b1e2d / dbf8454），T0-T6 全部完成并回填《修改优化指令》执行状态总表。
+## 三、剩余待办
 
-### v9.115.0：线上观测调优
-- length cap 12000 配额监控（OpenCode Go 5h$12/周$30/月$60）
-- 路由正则按实测微调；cron 频率按需调整
+> 2026-08-12 更新：v9.113.1/v9.114.0（T0-T6）与 v9.115.0~v9.118.0（金融 AGI 四支柱）已全部交付（c6b1e2d→b8ecd30），③ 执行状态总表已回填。
+
+### 后续优化（非阻塞）
+- 主动流 LLM 润色实际接线（当前 llmUsed 仅标记，实际润色可选做：盘后复盘/明日剧本/盘前简报调 llmCore 受预算约束）
+- 认知历史回放（cognition_snapshots 按 version 时序，🟡 后置）
+- 竞价委托簿撮合模拟（数据源受限，先用量价代理——S4 已含）
+- 多模型并行投票裁决（配额有限，🟡 后置）
+- v9.115.0 遗留：盘中链（runIntradayBrain）PG 连接超时失败需观察（今日 sentiment_snapshot 缺失→情绪回退前端同步值；明日起盘中链恢复自动用权威采样）
 
 ## 四、关键约定（改代码前必读）
 
