@@ -10,6 +10,8 @@
 //   网络/超时端点 failover（根治 RC-C，AI_FALLBACK 环境变量配备用链）。
 // ============================================================
 const { postJSON, isNetworkErr } = require("./httpProxy");
+// v9.109.2（L-6）：端点健康/自愈熔断 —— empty 连续 N 次熔断该端点 M 分钟（llmCore 跳过熔断端点）
+const { recordResult, isCircuitOpen } = require("./aiHealth");
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -47,6 +49,11 @@ async function chatComplete(
   let lastErr = null;
   for (let ei = 0; ei < chain.length; ei++) {
     const ep = chain[ei];
+    // v9.109.2（L-6）：熔断端点跳过（empty 连续 N 次 → 熔断 M 分钟，到期自动半开放行）
+    if (isCircuitOpen(ep.base)) {
+      console.warn(`[llmCore] 端点熔断中跳过: ${ep.base}`);
+      continue;
+    }
     for (let attempt = 0; attempt <= emptyRetries; attempt++) {
       const forceOff = attempt > 0; // empty 重试一律强制关思考
       const body = {
@@ -70,6 +77,7 @@ async function chatComplete(
           : undefined;
         const content = String(msg.content || "").trim();
         if (!content && !tc) {
+          recordResult(ep.base, false); // L-6：empty 计数（连续 N 次熔断）
           if (attempt < emptyRetries) {
             console.warn(`[llmCore] empty content endpoint=${ei} retry ${attempt + 1}/${emptyRetries} (force thinking off)`);
             await sleep(1500 * (attempt + 1));
@@ -78,6 +86,7 @@ async function chatComplete(
           lastErr = new Error("empty content");
           break; // 本端点耗尽 → 换下一个端点
         }
+        recordResult(ep.base, true); // L-6：成功清零 streak
         return { text: content, toolCalls: tc, endpoint: ei, finish_reason: json?.choices?.[0]?.finish_reason };
       } catch (e) {
         if (/empty content/i.test(String(e?.message)) && attempt < emptyRetries) continue;

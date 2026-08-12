@@ -42,6 +42,8 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
   const [msgs, setMsgs] = useState<Msg[]>(loadMsgs);
   const [researchCtx, setResearchCtx] = useState<ResearchCtx | null>(loadResearchCtx);
   const [busy, setBusy] = useState(false);
+  // v9.109.2（A-2）：AI 端点健康（/api/ai/health，30s 轮询 + 打开时刷新）
+  const [aiHealth, setAiHealth] = useState<{ endpoints: Array<{ base: string; ok: boolean; total: number; emptyRate: number; circuit: string }>; degraded: boolean } | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   // v9.92.0（上下文感知）：订阅全局 UI 上下文（当前 Tab/个股）—— AI 自动知道用户在看什么
   const uiCtx = useSyncExternalStore(subscribeUiContext, getUiContext);
@@ -57,6 +59,22 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
   const abortRef = useRef<AbortController | null>(null);
   // v9.85.2（P2-9）：组件卸载时中止进行中请求（资源回收，避免旧请求继续烧配额）
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // v9.109.2（A-2）：AI 健康轮询（30s；打开面板时立即刷一次）
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/ai/health", { signal: AbortSignal.timeout(5000) });
+        const j = await r.json();
+        if (alive && j?.endpoints) setAiHealth(j);
+      } catch { /* 健康端点不可用静默 */ }
+    };
+    load();
+    const t = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, [open]);
 
   // 对话历史持久化（刷新不丢）
   useEffect(() => {
@@ -230,6 +248,14 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
             <div className="flex items-center gap-2">
               <span className="text-sm font-bold text-violet-300">🤖 全站 AI 助手</span>
               <span className="rounded bg-white/5 px-1.5 py-0.5 text-xs text-slate-500">可问主线/个股/资金/席位/消息</span>
+              {/* v9.109.2（A-2）：AI 端点健康指示 —— 让用户明确"AI 临时不可用"而非"功能坏了" */}
+              {aiHealth !== null && (
+                <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                  aiHealth.degraded ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300"
+                }`} title={aiHealth.degraded ? "AI 端点 empty 率高/熔断中，当前可能走规则版兜底" : "AI 端点正常"}>
+                  {aiHealth.degraded ? "⚡ AI 降级中" : "● AI 在线"}
+                </span>
+              )}
             </div>
             {/* v9.92.0（上下文感知）：AI 当前感知到的页面/个股 —— 让用户确认 AI"知道你在看什么" */}
             {(uiCtx.activeTab !== "dashboard" || uiCtx.currentStock) && (

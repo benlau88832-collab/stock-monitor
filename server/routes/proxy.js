@@ -50,7 +50,7 @@ const COOLDOWN_MS = {
   rate_limit: 120_000,         // 429：限流
   service_unavailable: 30_000, // 503
   timeout: 5_000,              // 超时
-  connection_error: 10_000,    // ECONNRESET/HTTP 000
+  connection_error: 5_000,     // ECONNRESET/HTTP 000（v9.109.2 Q-3：10s→5s 短冷却——偶发抖动不被误判长断，半开探测兜底）
   default: 15_000,
 };
 // v9.99.1（批次 5-1）：ECONNRESET 显式分类 —— 词根与前端 jsonpQueue 完全同构（crewai http_utils 对照）：

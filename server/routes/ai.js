@@ -63,6 +63,16 @@ const { parseLLMJSON, SCHEMAS } = require("../lib/llmJson");
 const { buildPrompt, TASK_CONFIG } = require("../lib/aiPrompts");
 
 module.exports = function aiRoutes(app) {
+  // v9.109.2（L-6）：AI 端点健康（熔断状态/empty 率）—— 前端 AIConsole 顶部健康指示（A-2）用
+  app.get("/api/ai/health", async (req, res) => {
+    try {
+      const { getHealth } = require("../lib/aiHealth");
+      res.json(getHealth());
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
   // /api/ai/call 必须携带 header `x-local-token`（防局域网/公网白嫖 Agnes 配额）
   // v9.84.3（5.4）：未配置 env 时读 kv local_token（index.js ensureLocalToken 自动生成），默认启用
