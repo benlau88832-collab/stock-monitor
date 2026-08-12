@@ -74,13 +74,35 @@ async function fetchMarketDaily(pool) {
       md.promotionRate = prevFirst.length > 0
         ? Math.round(prevFirst.filter(p => todayCodes.has(String(p.c))).length / prevFirst.length * 1000) / 1000
         : null;
-      // 溢价均值：昨日涨停股今日平均涨幅（push2delay ulist 批量拉 f3 涨跌幅；收盘后 = 溢价代理）
+      // 溢价均值：昨日涨停股今日平均涨幅 —— v9.127.0（蓝图数据质量修复）：
+      //   根因：push2delay ulist.np 字段错位（v9.123.0 实测 f43=434629 而非 1343，ut 混用），
+      //   依赖它的 premiumAvg 历史恒 null → 情绪周期回测样本为 0。
+      //   修复：主源腾讯 qt.gtimg.cn 批量（GBK rawBuffer + parseTencentQuotesBatch 纯函数，本机实测可用），
+      //   push2delay ulist 降级；双源皆失败 → null（诚实，回测引擎按 null 排除样本）。
       const codes = [...new Set(prevPool.map(p => String(p.c)))];
-      const secids = codes.map(c => (c.startsWith("6") ? "1." : "0.") + c).join(",");
-      const bj = await httpsGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f3,f12&secids=${secids}`);
-      const diff = bj?.data?.diff;
-      const rows = Array.isArray(diff) ? diff : (diff && typeof diff === "object" ? Object.values(diff) : []);
-      const pcts = rows.map(r => Number(r?.f3)).filter(v => Number.isFinite(v));
+      const { parseTencentQuotesBatch } = require("./lib/stockSnapshot");
+      const pcts = [];
+      for (let i = 0; i < codes.length; i += 50) {
+        const batch = codes.slice(i, i + 50);
+        const q = batch.map(c => (c.startsWith("6") ? "sh" : c.startsWith("4") || c.startsWith("8") ? "bj" : "sz") + c).join(",");
+        try {
+          const { body } = await requestRaw(`https://qt.gtimg.cn/q=${q}`, { timeout: 5000, rawBuffer: true }); // GBK → rawBuffer
+          for (const [, pct] of parseTencentQuotesBatch(body)) {
+            if (pct != null) pcts.push(pct);
+          }
+        } catch { /* 单批失败跳过，聚合其余批次 */ }
+      }
+      if (pcts.length === 0) {
+        // 腾讯失败 → push2delay ulist 降级（历史实现；字段错位风险存在，仅兜底）
+        try {
+          const secids = codes.map(c => (c.startsWith("6") ? "1." : "0.") + c).join(",");
+          const bj = await httpsGet(`https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f3,f12&secids=${secids}`);
+          const diff = bj?.data?.diff;
+          const rows = Array.isArray(diff) ? diff : (diff && typeof diff === "object" ? Object.values(diff) : []);
+          const p2 = rows.map(r => Number(r?.f3)).filter(v => Number.isFinite(v));
+          if (p2.length > 0 && p2.every(v => Math.abs(v) < 30)) pcts.push(...p2); // 错位值常为天文数字 → |v|<30 才可信
+        } catch { /* 双源皆失败 → null */ }
+      }
       md.premiumAvg = pcts.length > 0 ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length * 100) / 100 : null;
     } else { md.premiumAvg = null; md.promotionRate = null; }
   } catch (e) { console.warn("[cron] premium/promotion 计算失败:", e?.message); md.premiumAvg = null; md.promotionRate = null; }
@@ -504,7 +526,7 @@ function httpsGet(url, timeout = 6000) {
   return getJson(url, { timeout, headers: { Referer: "https://data.eastmoney.com/" }, source: "eastmoney" }).then(r => r.data);
 }
 
-const { getJson, getJsonWithFallback } = require("./lib/outbound");
+const { getJson, getJsonWithFallback, requestRaw } = require("./lib/outbound"); // v9.127.0：requestRaw（腾讯 GBK 批量行情）
 const { parseLLMJSON, SCHEMAS } = require("./lib/llmJson");
 const { withPgLock, LOCK_CRON_MAIN, LOCK_THEME, LOCK_WATCH, LOCK_INTRADAY } = require("./lib/pgLock");
 

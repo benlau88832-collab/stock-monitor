@@ -74,6 +74,10 @@
 // v9.126.0（蓝图 L4 批次 C）：情绪周期回测引擎——stageFromDaily（market_daily+sentiment 逐日重建阶段，
 //   与认知层同一 deriveSentimentStage 判定函数，回测口径=生产口径）+ stageBacktest 分阶段统计
 //   （次日溢价胜率/平均溢价/晋级率，N<5 标注样本不足）+ GET /api/backtest/stage（阈值校准参考对照蓝图表）
+// v9.127.0（蓝图批次 D 前置 + 数据质量修复）：①premiumAvg 落库链修复——根因=push2delay ulist.np 字段错位
+//   （v9.123.0 实测）→ 主源腾讯批量（parseTencentQuotesBatch GBK 纯函数）+ 错位值 |v|<30 护栏兜底；
+//   ②战法命中率 /api/backtest/strategy（decision_post T+5 PnL × 拍板动作 × 置信度桶，N<20 标注）；
+//   ③持仓体检 /api/positions（trade_ledger 净额汇总+均价+集中度，现价未注入盈亏诚实 null）
 // ============================================================
-export const APP_VERSION = "v9.126.0";
+export const APP_VERSION = "v9.127.0";
 export const BUILD_DATE = "2026-08-13";

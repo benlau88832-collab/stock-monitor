@@ -69,4 +69,22 @@ async function fetchStockSnapshotServer(code) {
   } catch { return null; }
 }
 
-module.exports = { fetchStockSnapshotServer, parseStockGet, parseTencentText, toSecid };
+/**
+ * 腾讯批量行情解析（纯函数，v9.127.0 蓝图数据质量修复用）——
+ *   输入 qt.gtimg.cn 批量响应原始 GBK Buffer（q=sh600519,sz000001,… 逗号分隔，最多约 60 只/次），
+ *   输出 [[code, pct]…]（涨跌幅 %，无效行 null）。
+ */
+function parseTencentQuotesBatch(body) {
+  try {
+    const txt = Buffer.isBuffer(body) ? new TextDecoder("gbk").decode(body) : String(body ?? "");
+    const out = [];
+    for (const m of txt.matchAll(/="([^"]*)"/g)) {
+      const f = m[1].split("~");
+      const pct = num(f[32]); // [32] 涨跌幅
+      out.push([String(f[2] ?? ""), pct]);
+    }
+    return out;
+  } catch { return []; }
+}
+
+module.exports = { fetchStockSnapshotServer, parseStockGet, parseTencentText, parseTencentQuotesBatch, toSecid };

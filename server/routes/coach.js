@@ -7,6 +7,7 @@
 // ============================================================
 const { pool } = require("../db");
 const { detectBehaviorBias } = require("../lib/behaviorCoach");
+const { netPositions, concentration } = require("../lib/positions"); // v9.127.0（蓝图 L6 持仓体检）
 
 module.exports = function coachRoutes(app) {
   app.get("/api/coach", async (req, res) => {
@@ -20,6 +21,25 @@ module.exports = function coachRoutes(app) {
         biases,
         sampleSize: r.rows.length,
         caliber: `行为偏差=规则检测(频繁交易/不止损/追高/处置效应)，trade_ledger 近500笔，窗口${days}日；N<3 不判定防误报；不承诺收益；提醒引用行为金融原理`,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // v9.127.0（蓝图 L6 持仓体检前置）：持仓净额汇总 + 集中度（现价未注入 → 未平仓盈亏 null 诚实缺数据）
+  app.get("/api/positions", async (req, res) => {
+    try {
+      const r = await pool.query(
+        `SELECT code,name,action,price,quantity,ts,date,pnl_pct FROM trade_ledger ORDER BY ts ASC LIMIT 2000`,
+      ).catch(() => ({ rows: [] }));
+      const positions = netPositions(r.rows);
+      const conc = concentration(positions);
+      res.json({
+        positions,
+        concentration: conc,
+        sampleSize: r.rows.length,
+        caliber: "持仓体检= trade_ledger 净额汇总（buy+/sell·stop-）；均价=买入加权；未平仓盈亏待现价注入为 null；集中度=成本占比近似；不承诺收益",
       });
     } catch (e) {
       res.status(500).json({ error: e.message });

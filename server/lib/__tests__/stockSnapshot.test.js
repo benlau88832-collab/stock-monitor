@@ -4,7 +4,7 @@
 //   ② ulist.np 字段错位（ut 混用）已弃用 → 主源为 stock/get。
 // ============================================================
 import { describe, it, expect } from "vitest";
-import { parseStockGet, parseTencentText, toSecid } from "../stockSnapshot";
+import { parseStockGet, parseTencentText, parseTencentQuotesBatch, toSecid } from "../stockSnapshot";
 
 describe("v9.123.0 stockSnapshot 解析纯函数（P0-1）", () => {
   it("parseStockGet：双层 data.data 嵌套正确解析（实测响应形状）", () => {
@@ -42,5 +42,16 @@ describe("v9.123.0 stockSnapshot 解析纯函数（P0-1）", () => {
   it("toSecid：沪市 1. / 深市 0.", () => {
     expect(toSecid("600519")).toBe("1.600519");
     expect(toSecid("000001")).toBe("0.000001");
+  });
+
+  // v9.127.0（蓝图数据质量修复）：premium 计算改用腾讯批量 → 批量解析纯函数锁定
+  it("parseTencentQuotesBatch：多只批量响应 → [[code,pct]…]，无效行 null", () => {
+    const f1 = new Array(40).fill("0"); f1[2] = "600519"; f1[32] = "1.23";
+    const f2 = new Array(40).fill("0"); f2[2] = "300750"; f2[32] = "-0.56";
+    const body = Buffer.from(`v_sh600519="${f1.join("~")}";\nv_sz300750="${f2.join("~")}";`, "latin1");
+    const out = parseTencentQuotesBatch(body);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toEqual(["600519", 1.23]);
+    expect(out[1]).toEqual(["300750", -0.56]);
   });
 });

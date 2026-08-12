@@ -6,6 +6,7 @@
 // ============================================================
 const { pool } = require("../db");
 const { stageFromDaily, stageBacktest } = require("../lib/stageBacktest");
+const { strategyStats } = require("../lib/strategyStats"); // v9.127.0（蓝图 L7 战法命中率）
 
 /** kv_store 读值（兼容 JSONB 对象 / {__raw} 字符串两种形态，与 brainContext.kvRead 同口径） */
 function kvParse(v) {
@@ -56,6 +57,24 @@ module.exports = function backtestRoutes(app) {
           校准原则: "按 perStage 次日溢价/胜率分布微调阈值；N<5 的阶段不作为校准依据",
         },
         caliber: "回测口径=生产口径（同一 deriveSentimentStage）；赚钱效应=次日溢价(premiumAvg T+1)>0 占比；样本=market_daily 历史行；不承诺胜率；日期带横杠",
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // v9.127.0（蓝图 L7 批次 D 前置）：战法命中率统计——decision_post（T+5 PnL 已回填）× 拍板动作 × 置信度桶
+  app.get("/api/backtest/strategy", async (req, res) => {
+    try {
+      const r = await pool.query(
+        `SELECT mainline,human_action,confidence_at_post,pnl FROM decision_post WHERE pnl IS NOT NULL ORDER BY ts DESC LIMIT 500`,
+      ).catch(() => ({ rows: [] }));
+      const buckets = strategyStats(r.rows);
+      res.json({
+        buckets,
+        sampleSize: r.rows.length,
+        minN: 20,
+        caliber: "战法命中率=decision_post 已回填 T+5 PnL 分组（拍板动作×置信度桶：0-59/60-79/80-100）；winRate=PnL>0 占比；N<20 标注样本不足不作依据；不承诺胜率",
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
