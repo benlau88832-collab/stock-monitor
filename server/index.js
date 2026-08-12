@@ -145,6 +145,9 @@ require("./routes/push")(app);
 // ---------- v9.124.0（蓝图 4A T-资讯-1）：个股资讯聚合路由（news_feed ∪ 快讯名称匹配） ----------
 require("./routes/news")(app);
 
+// ---------- v9.125.0（蓝图 L6 纪律层前置）：纪律教练路由（行为偏差检测，纯函数 0 token） ----------
+require("./routes/coach")(app);
+
 // ---------- 定时任务（收盘抓取 + LLM 分析） ----------
 require("./cron")({ pool });
 

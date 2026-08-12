@@ -68,6 +68,9 @@
 //   newsAgg.js（emweb F10/search-api/财联社 normalize 纯函数 + mapNewsToEntities 概念打标 0 token
 //   + upsertNewsFeed 幂等去重）+ GET /api/news?code=&name=（feed ∪ 快讯名称匹配兜底）+
 //   cron 盘前 9:10/盘后 15:20 抓自选+主线龙头新闻（0 LLM 失败静默）
+// v9.125.0（蓝图批次 B 离线部分）：雷达资讯聚合区（个股雷达 Tab 内选中标的 📰 资讯区，消费 /api/news，
+//   不增面板）+ 纪律教练前置（behaviorCoach 行为偏差检测纯函数：频繁交易/不止损/追高/处置效应
+//   四类信号 0 token + GET /api/coach，N<3 不判定防误报，提醒引用行为金融原理）
 // ============================================================
-export const APP_VERSION = "v9.124.0";
+export const APP_VERSION = "v9.125.0";
 export const BUILD_DATE = "2026-08-13";

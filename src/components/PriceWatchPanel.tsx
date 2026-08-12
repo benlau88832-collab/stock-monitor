@@ -18,6 +18,8 @@ interface WatchItem {
 
 interface TrendPoint { date: string; price: string; deviation_pct: string; triggered: boolean; event_text: string | null; }
 interface WatchEvent { id: number; code: string; name: string; price: string; deviation_pct: string; event_text: string; created_at: string; }
+// v9.125.0（蓝图 4A T-资讯-4）：资讯聚合条目（/api/news 返回形状）
+interface NewsItem { type: string; source: string; title: string; time: string; impact: string | null; url?: string; entities?: string[]; }
 
 const devColor = (d: number | null, tp: number): string => {
   if (d == null) return "text-slate-500";
@@ -32,6 +34,7 @@ export default function PriceWatchPanel() {
   const [selected, setSelected] = useState<string>("");
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [events, setEvents] = useState<WatchEvent[]>([]);
+  const [news, setNews] = useState<NewsItem[]>([]); // v9.125.0（蓝图 4A T-资讯-4）
 
   const refresh = useCallback(async () => {
     try {
@@ -79,6 +82,21 @@ export default function PriceWatchPanel() {
     })();
     return () => { alive = false; };
   }, [selected]);
+
+  // v9.125.0（蓝图 4A T-资讯-4）：选中标的 → 资讯聚合（news_feed ∪ 快讯名称匹配，0 token 读库）
+  useEffect(() => {
+    if (!selected) { setNews([]); return; }
+    let alive = true;
+    const w = watches.find((x) => x.code === selected);
+    (async () => {
+      try {
+        const r = await apiFetch(`/api/news?code=${encodeURIComponent(selected)}&name=${encodeURIComponent(w?.name ?? "")}`);
+        const j = await r.json();
+        if (alive && Array.isArray(j.items)) setNews(j.items.slice(0, 6));
+      } catch { if (alive) setNews([]); }
+    })();
+    return () => { alive = false; };
+  }, [selected, watches]);
 
   const setStatus = async (code: string, status: string) => {
     await apiFetch("/api/watch/update", {
@@ -200,6 +218,42 @@ export default function PriceWatchPanel() {
             {watches.find(w => w.code === selected)?.name} 价格走势（虚线 = 买入区上下沿，红点 = 触发关注区间）
           </div>
           {trendSvg ?? <div className="py-6 text-center text-slate-600">走势数据积累中（每交易日收盘快照）</div>}
+        </div>
+      )}
+
+      {/* v9.125.0（蓝图 4A T-资讯-4）：资讯聚合区 —— 个股新闻/快讯跨源聚合（研报后续批次接入） */}
+      {selected && (
+        <div className="mt-3 rounded-lg bg-black/20 p-2">
+          <div className="mb-1.5 text-[10px] text-slate-500">
+            📰 资讯聚合（{watches.find(w => w.code === selected)?.name ?? selected}）—— 个股新闻/快讯跨源聚合，每条带影响与来源
+          </div>
+          {news.length === 0 ? (
+            <div className="py-3 text-center text-slate-600">暂无聚合资讯（抓取源恢复后自动补全；快讯按名称匹配兜底）</div>
+          ) : (
+            <div className="space-y-1">
+              {news.map((n, i) => {
+                const isPos = n.impact === "positive" || n.impact === "利好";
+                const isNeg = n.impact === "negative" || n.impact === "利空";
+                return (
+                  <div key={i} className="flex items-start justify-between gap-2 rounded bg-white/5 px-2 py-1">
+                    {n.url ? (
+                      <a href={n.url} target="_blank" rel="noreferrer" className="truncate text-slate-200 hover:text-amber-200">{n.title}</a>
+                    ) : (
+                      <span className="truncate text-slate-200">{n.title}</span>
+                    )}
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      {n.impact && (
+                        <span className={`rounded px-1 text-[9px] font-bold ${isPos ? "bg-rose-500/15 text-rose-300" : isNeg ? "bg-emerald-500/15 text-emerald-300" : "bg-white/10 text-slate-400"}`}>
+                          {isPos ? "利好" : isNeg ? "利空" : n.impact}
+                        </span>
+                      )}
+                      <span className="text-[9px] text-slate-500">{n.source} · {String(n.time ?? "").slice(5, 16)}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
