@@ -1,7 +1,7 @@
 # 项目 Handoff — 2026-08-12（会话超长交接，交由新会话继续推进）
 
-> **交接人**：实施会话（sess_bf7325ee，2026-08-12 深夜）
-> **当前 HEAD**：`0e3e5da`（v9.113.0，已推送远端 `arena/019fb619-stock-monitor`）
+> **交接人**：实施会话（sess_bf7325ee，2026-08-12 深夜）+ 推进会话（2026-08-12 晚，v9.113.1/v9.114.0）
+> **当前 HEAD**：`dbf8454`（v9.114.0，已推送远端 `arena/019fb619-stock-monitor`）
 > **接手必读**：本文件 + AGENTS.md + `C:\Users\Administrator\.zcode\cli\memories\projects\022_-a062c4aeb65b9d98\memory\MEMORY.md`（含全部历史教训索引）
 
 ---
@@ -33,31 +33,25 @@
 | v9.111.0 | e177a82 | **R-1 length 截断重试**（curMaxTokens 上调 12000 前为 8000）+ R-2 agentReason→8000 + R-3 预算纳 reasoningLen + S-1 | **复杂 ReAct ×10 降级率 0%** |
 | v9.111.1 | d1c8407 | S-3 流式转发 reasoning + S-4 AIConsole 🤔 思考区/🧠 开关 | curl 双事件 |
 | v9.113.0 | 0e3e5da | **终审交付层重构**：T0 dataLayer（PG 优先）/ T2 intentRouter 五档路由 + data 档直读 PG / T3 LLM 收尾（工具子集瘦身/length cap 12000/降级分真因/reactProbe）/ T4 decisionDirect+DecisionCard 决策直达 / T1-2 横幅三态 | 浏览器实测：决策卡秒级 + 横幅不弹 |
+| v9.113.1 | c6b1e2d | **T1-1 主面板管道 PG-first（D-01 收尾）**：refreshAll 第 9 路拉 PG 快照；涨停池三优先（实时 push2 直连 > PG 派生池 > push2delay 兜底，recentDelayHit 判定）；情绪/溢价/晋级率 PG 兜底；brainContext 加 boardCounts；MarketOverview PG 角标；stale 语义盘后修正 | block push2 实测：涨停 92/炸板 12%/连板梯队全显示 + 角标"涨停/情绪·PG 21:48"，不走 push2delay |
+| v9.114.0 | dbf8454 | **T5/T6 可靠性收敛+面板精简**：T5-1 boardTrap 文案核对（grep=0 不接线，板块级宿主维持）；T5-2 统一 /api/health（数据源+AI 端点+PG+SW+版本聚合，OpsPanel 统一 SLA）；T5-3 SW 强制版本更新（FORCE_RELOAD 无硬刷新即生效）；T6 主线/资金面/盘前准备三分区 | curl /api/health 全字段返回；SW v30 自动 reload 实测（sw_reloading=1+navType=reload） |
 
-## 二、当前状态（v9.113.0）
+## 二、当前状态（v9.114.0）
 
-**已上线**：部署 v9.113.0（SW CACHE v28）；vitest 448；build 1,652.01kB；验收 19 PASS。
+**已上线**：部署 v9.114.0（SW CACHE v30）；vitest 453；build 1,655.78kB；验收 19 PASS。
 
 **已实测通过**：
+- 主面板 PG-first：block push2 → 涨停/炸板/连板梯队/情绪全 PG 快照值 + 角标"涨停/情绪·PG HH:MM"，不走 push2delay（v9.113.1）
 - 决策卡：驾驶舱"🎯 决策直达"输入 600519 → 观望/仓位0%/止损5%/PG 证据链（秒级，不经过 LLM）
-- 横幅三态：PG 可用时"15分钟延迟"不弹
+- 横幅三态：PG 可用时"15分钟延迟"不弹（盘后 stale 误判已修：25min 阈值仅盘中生效）
 - data 档："今天涨停多少只"→ PG 秒回数字
+- 统一 /api/health：curl 返回 数据源/AI 端点/PG 连通/SW 版本/应用版本；OpsPanel 统一 SLA 显示
+- SW 强制版本更新：发版后无硬刷新自动 reload（实测 sw_reloading=1 + navType=reload）
 - 复杂 ReAct ×10 降级率 0%（v9.111.0 基线）
 
 ## 三、剩余待办（按《修改优化指令-v9.113.0.md》+《终审报告-v9.113.0.md》）
 
-### v9.113.1：T1-1 主面板管道 PG-first（终审 D-01 收尾）
-- **文件**：`src/App.tsx` refreshMain（约 289-450 行 allSettled 管道）
-- **改法**：结构化字段（涨跌家数/成交额/情绪/主力资金/涨停梯队）优先 `fetchMarketSnapshot()`（dataLayer），实时指数/现价走 `fetchLiveQuote()`；仅 PG 空才回退 push2delay；各面板角标 asOf+来源
-- **涉及面板**：MarketOverview（数据来自 App 管道，:3 realLinks 是跳转链接非取数）、FundStructure、KeyIndicators、DarkPool
-- **验收**：block push2 + PG 可用 → 主面板显示 PG 新鲜值 + asOf 角标，不走 push2delay
-- **回归风险**：refreshMain 是核心管道，改前先读全（60s 主刷新 + 18s 快刷 + lastWatchFetchAt 节流）
-
-### v9.114.0：T5/T6 可靠性收敛 + 面板精简
-- **T5-1 boardTrap**：⚠ **用户 v9.106.2 定调：保持板块级宿主（LimitBoard 徽章），不接 anomalyTier**——终审 D-06 与定调冲突，只清"已接线"过时文案（grep 确认 = 0 已达成），不接线
-- **T5-2 统一 /api/health**：聚合 /api/proxy/health（源）+ /api/ai/health（端点）+ PG 连通 + SW 版本
-- **T5-3 SW 强制版本更新**：public/sw.js 增加 version 检查，消除"需硬刷新"约定
-- **T6 面板收敛**：DarkPool+FundStructure→"资金面"Tab；MainlineRanking+ThemeLadder→"主线"Tab；GlobalSignals/CommodityChain 折叠到"盘前准备"
+> 2026-08-12 更新：v9.113.1（T1-1）与 v9.114.0（T5/T6）已交付（c6b1e2d / dbf8454），T0-T6 全部完成并回填《修改优化指令》执行状态总表。
 
 ### v9.115.0：线上观测调优
 - length cap 12000 配额监控（OpenCode Go 5h$12/周$30/月$60）
