@@ -691,6 +691,8 @@ export interface AgentChatResult {
   rateLimited?: boolean;
   /** v9.67：降级原因（rateLimited / timeout / network / model）→ 前端区分文案 */
   reason?: "rateLimited" | "timeout" | "network" | "model";
+  /** v9.111.0（R-3）：上游 reasoning_content 长度（D-4 会话预算纳入恒思考消耗） */
+  reasoningLen?: number;
 }
 
 /** 单轮 Agent 对话（带工具清单；LLM 可选择返回 tool_calls 或直接出文本） */
@@ -722,7 +724,7 @@ export async function callAgentChat(
         system,
         user,
         temperature: opts?.temperature ?? 0.2,
-        maxTokens: opts?.maxTokens ?? 4000, // v9.107.1（empty content 根治）：ReAct 主路径默认 2000→4000
+        maxTokens: opts?.maxTokens ?? 8000, // v9.111.0（R-2）：ReAct 主路径默认提档（原 v9.107.1 2000→4000）
         thinking: false,
         tools,
         history: opts?.history ?? [],
@@ -756,20 +758,20 @@ export async function callAgentChat(
           body: JSON.stringify({
             task: "agentReason", system, user,
             temperature: opts?.temperature ?? 0.2,
-            maxTokens: opts?.maxTokens ?? 4000,
+            maxTokens: opts?.maxTokens ?? 8000, // v9.111.0（R-2）：ReAct 主路径默认提档（与 agentReason 对齐）
             thinking: false, tools, history: opts?.history ?? [],
           }),
           signal: ctrl.signal,
         });
         if (r2 && r2.ok) {
           const jj = await r2.json().catch(() => ({}));
-          if (jj.text) return { text: jj.text, toolCalls: jj.toolCalls };
+          if (jj.text) return { text: jj.text, toolCalls: jj.toolCalls, reasoningLen: jj.reasoningLen ?? 0 };
         }
       } catch { /* 重试失败 → 按首次错误降级 */ }
       return { text: "", reason: "model" };
     }
     if (j.error) return { text: "", reason: "model" };
-    return { text: j.text ?? "", toolCalls: j.toolCalls };
+    return { text: j.text ?? "", toolCalls: j.toolCalls, reasoningLen: j.reasoningLen ?? 0 };
   } catch {
     clearTimeout(timer);
     return { text: "", reason: "network" };

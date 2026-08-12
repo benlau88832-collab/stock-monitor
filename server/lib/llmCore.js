@@ -20,8 +20,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
  */
 function endpointChain() {
   const main = {
-    base: process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions",
-    model: process.env.AI_MODEL || "agnes-2.5-flash",
+    base: process.env.AI_BASE_URL || "https://opencode.ai/zen/go/v1/chat/completions", // v9.110.0（MOD-1 默认值清理）：agnes 已剔除
+    model: process.env.AI_MODEL || "deepseek-v4-flash", // v9.110.0（MOD-1 默认值清理）：agnes 已剔除
     key: process.env.AI_API_KEY || "",
   };
   const chain = [main];
@@ -41,16 +41,19 @@ function endpointChain() {
  * @returns {Promise<{ text: string, toolCalls?: Array<{id,name,args}>, endpoint: number, finish_reason?: string }>}
  */
 async function chatComplete(
-  { system, user, history = [], tools, maxTokens = 4000, temperature = 0.2, thinking = false, _post },
+  { system, user, history = [], tools, maxTokens = 4000, temperature = 0.2, thinking = false, _post, _aiHealth },
   { emptyRetries = 2 } = {},
 ) {
   const post = _post || postJSON;
+  const health = _aiHealth || { recordResult, isCircuitOpen };
   const chain = endpointChain();
   let lastErr = null;
+  // v9.111.0（R-1）：可变 max_tokens —— length 截断重试时上调（恒思考挤占正文 → JSON 截断是 ReAct 降级真因）
+  let curMaxTokens = maxTokens;
   for (let ei = 0; ei < chain.length; ei++) {
     const ep = chain[ei];
     // v9.109.2（L-6）：熔断端点跳过（empty 连续 N 次 → 熔断 M 分钟，到期自动半开放行）
-    if (isCircuitOpen(ep.base)) {
+    if (health.isCircuitOpen(ep.base)) {
       console.warn(`[llmCore] 端点熔断中跳过: ${ep.base}`);
       continue;
     }
@@ -59,7 +62,7 @@ async function chatComplete(
       const body = {
         model: ep.model,
         messages: [...(system ? [{ role: "system", content: system }] : []), ...history, { role: "user", content: user }],
-        max_tokens: Math.min(maxTokens, 8000),
+        max_tokens: Math.min(curMaxTokens, 8000),
         temperature: Math.max(0, Math.min(1, temperature)),
         stream: false,
         // v9.109.0（L-1/L-2）：恒发 enable_thinking（不依赖 AI_PROVIDER 字符串）——
@@ -76,8 +79,29 @@ async function chatComplete(
           ? msg.tool_calls.map(x => ({ id: String(x.id ?? ""), name: String(x.function?.name ?? ""), args: x.function?.arguments ?? "{}" }))
           : undefined;
         const content = String(msg.content || "").trim();
+        const fr = json?.choices?.[0]?.finish_reason;
+        // v9.111.0（R-1）：finish_reason=length（恒思考挤占正文 → JSON 截断）→ 重试并上调 max_tokens
+        // （原实现只对 content 空重试、截断直接 return → ReAct 必降级；这是"改完仍降级"的真因）
+        if (fr === "length") {
+          if (attempt < emptyRetries) {
+            curMaxTokens = Math.min(curMaxTokens + 2000, 8000);
+            console.warn(`[llmCore] finish_reason=length endpoint=${ei} retry ${attempt + 1}/${emptyRetries}（思考挤占→截断，max_tokens→${curMaxTokens}）`);
+            await sleep(800);
+            continue;
+          }
+          // 重试耗尽仍截断 → 抛错（截断 JSON 对 ReAct 无用，立即走降级省轮次）
+          lastErr = new Error("length truncated");
+          break;
+        }
+        // v9.110.0（MOD-2 安全网）：content 空 + reasoning 有实质内容 → 用推理输出（防未来切 R1/reasoner 模型；
+        // V4 Flash 非推理 reasoning 多为空，diag 实测 hasReasoning:true 但 content 正常，此分支多半不触发）
         if (!content && !tc) {
-          recordResult(ep.base, false); // L-6：empty 计数（连续 N 次熔断）
+          const reasoning = String(msg.reasoning_content || "").trim();
+          if (reasoning && reasoning.length >= 20) {
+            health.recordResult(ep.base, true);
+            return { text: reasoning.slice(0, 4000), toolCalls: tc, endpoint: ei, finish_reason: fr, fromReasoning: true };
+          }
+          health.recordResult(ep.base, false); // L-6：empty 计数（连续 N 次熔断）
           if (attempt < emptyRetries) {
             console.warn(`[llmCore] empty content endpoint=${ei} retry ${attempt + 1}/${emptyRetries} (force thinking off)`);
             await sleep(1500 * (attempt + 1));
@@ -86,8 +110,14 @@ async function chatComplete(
           lastErr = new Error("empty content");
           break; // 本端点耗尽 → 换下一个端点
         }
-        recordResult(ep.base, true); // L-6：成功清零 streak
-        return { text: content, toolCalls: tc, endpoint: ei, finish_reason: json?.choices?.[0]?.finish_reason };
+        health.recordResult(ep.base, true); // L-6：成功清零 streak
+        // v9.111.0（S-1 顺带）：返回 reasoning 字段（ReAct 仍以 content(JSON) 为准；供 R-3 预算/可观测）
+        const reasoningText = String(msg.reasoning_content || "");
+        return {
+          text: content, toolCalls: tc, endpoint: ei, finish_reason: fr,
+          reasoning: reasoningText.slice(0, 2000),
+          reasoningLen: reasoningText.length,
+        };
       } catch (e) {
         if (/empty content/i.test(String(e?.message)) && attempt < emptyRetries) continue;
         if (isNetworkErr(e) && ei < chain.length - 1) { lastErr = e; break; } // 网络错 → 换端点

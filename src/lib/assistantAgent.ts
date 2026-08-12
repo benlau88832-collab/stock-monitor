@@ -571,7 +571,7 @@ export async function runAssistantAgent(
     const user = round === 0 ? userCtx : (roundHistory.join("\n") + "\n\n（继续，或直接给最终答复）：");
     let r: AgentChatResult | null;
     try { r = await callAgentChat(system, user, toolDefs, { temperature: 0.2, history: opts?.history }); } catch { r = null; }
-    sessionTokens += Math.ceil((system.length + user.length) / 3) + ((r?.text?.length ?? 0) / 3); // D-4：每轮估算累加
+    sessionTokens += Math.ceil((system.length + user.length) / 3) + ((r?.text?.length ?? 0) / 3) + ((r?.reasoningLen ?? 0) / 3); // v9.111.0（R-3）：D-4 预算纳入 reasoning（恒思考下原估算严重低估 → guard 形同虚设）
     if (!r) { llmOk = false; lastReason = "model"; break; }
     if (r.rateLimited) { llmOk = false; rateLimitedFlag = true; lastReason = "rateLimited"; break; }
     if (r.reason) { llmOk = false; lastReason = r.reason; break; }

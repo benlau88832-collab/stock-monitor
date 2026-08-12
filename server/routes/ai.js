@@ -73,6 +73,46 @@ module.exports = function aiRoutes(app) {
     }
   });
 
+  // v9.110.0（MOD-3 诊断）：用真实部署配置打最小请求，对比"带/不带 chat_template_kwargs"两次，
+  // 定位 empty content 真因（chat_template_kwargs 残留？relay 不稳？非标字段？length 截断？）
+  app.get("/api/ai/diag", async (req, res) => {
+    if (!(await checkAuth(req, res))) return;
+    const baseUrl = process.env.AI_BASE_URL || "https://opencode.ai/zen/go/v1/chat/completions" // v9.110.0（MOD-1 默认值清理）：agnes 已剔除，默认指向 DeepSeek(OpenCode Go);
+    const model = process.env.AI_MODEL || "deepseek-v4-flash" // v9.110.0（MOD-1 默认值清理）：agnes 已剔除;
+    const key = process.env.AI_API_KEY || "";
+    const probe = async (withCtk) => {
+      const body = {
+        model,
+        messages: [{ role: "user", content: "用一句话回答：今天A股市场情绪如何？（示例即可）" }],
+        max_tokens: 4000, temperature: 0.2, stream: false,
+      };
+      if (withCtk) body.chat_template_kwargs = { enable_thinking: false }; // 仅这一次带，对比用
+      const t0 = Date.now();
+      try {
+        const json = await postJSON(baseUrl, body, 30000, { Authorization: "Bearer " + key });
+        const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
+        return {
+          ms: Date.now() - t0,
+          httpOk: true,
+          finish_reason: json?.choices?.[0]?.finish_reason,
+          hasContent: !!(msg.content && String(msg.content).trim()),
+          hasReasoning: !!(msg.reasoning_content && String(msg.reasoning_content).trim()),
+          contentLen: String(msg.content || "").length,
+          contentPreview: String(msg.content || "").slice(0, 150),
+          // 打印上游返回的所有 message 字段名（防 content 在非标字段，如 text/output/answer）
+          msgKeys: Object.keys(msg),
+        };
+      } catch (e) {
+        return { ms: Date.now() - t0, httpOk: false, error: String(e?.message || e).slice(0, 200) };
+      }
+    };
+    res.json({
+      config: { model, baseUrl, provider: process.env.AI_PROVIDER || "agnes", hasKey: !!key, fallback: process.env.AI_FALLBACK || "" },
+      withChatTemplateKwargs: await probe(true),
+      withoutChatTemplateKwargs: await probe(false),
+    });
+  });
+
   // v9.28（P2-3）：可选鉴权 —— server/.env 配置 LOCAL_TOKEN 后，
   // /api/ai/call 必须携带 header `x-local-token`（防局域网/公网白嫖 Agnes 配额）
   // v9.84.3（5.4）：未配置 env 时读 kv local_token（index.js ensureLocalToken 自动生成），默认启用
@@ -108,7 +148,7 @@ module.exports = function aiRoutes(app) {
     res.json({
       enabled: Boolean(process.env.AI_API_KEY),
       provider: process.env.AI_PROVIDER || "agnes",
-      model: process.env.AI_MODEL || "agnes-2.5-flash",
+      model: process.env.AI_MODEL || "deepseek-v4-flash", // v9.110.0（MOD-1 默认值清理）：agnes 已剔除
     });
   });
 
@@ -132,8 +172,8 @@ module.exports = function aiRoutes(app) {
         return res.status(429).json({ error: `rate limited (${BUCKETS[bucket].rate}/min, bucket=${bucket})`, rateLimited: true, bucket });
       }
 
-      const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
-      const model = process.env.AI_MODEL || "agnes-2.5-flash";
+      const baseUrl = process.env.AI_BASE_URL || "https://opencode.ai/zen/go/v1/chat/completions" // v9.110.0（MOD-1 默认值清理）：agnes 已剔除，默认指向 DeepSeek(OpenCode Go);
+      const model = process.env.AI_MODEL || "deepseek-v4-flash" // v9.110.0（MOD-1 默认值清理）：agnes 已剔除;
       // v9.66.1：支持 history（多轮对话上下文）—— AIConsole 深度调研"继续/深入查询"类指令能衔接上文
       const history = Array.isArray(req.body?.history)
         ? req.body.history.slice(-8).map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content ?? "").slice(0, 1200) }))
@@ -171,7 +211,7 @@ module.exports = function aiRoutes(app) {
             console.warn(`[ai] task=${task} 上游响应非法 JSON（前端将降级规则版）:`, String(r.text).slice(0, 80));
           }
         }
-        res.json({ text: r.text, toolCalls: r.toolCalls, endpoint: r.endpoint });
+        res.json({ text: r.text, toolCalls: r.toolCalls, endpoint: r.endpoint, reasoningLen: r.reasoningLen ?? 0 }); // v9.111.0（R-3）：透传 reasoning 长度供会话预算
       } catch (e) {
         console.error("[ai] call failed:", e && e.message, "| proxy:", PROXY_URL);
         const msg = String(e?.message ?? "");
@@ -217,8 +257,8 @@ module.exports = function aiRoutes(app) {
     if (!takeToken("explain")) {
       return res.status(429).json({ error: "rate limited", rateLimited: true });
     }
-    const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
-    const model = process.env.AI_MODEL || "agnes-2.5-flash";
+    const baseUrl = process.env.AI_BASE_URL || "https://opencode.ai/zen/go/v1/chat/completions" // v9.110.0（MOD-1 默认值清理）：agnes 已剔除，默认指向 DeepSeek(OpenCode Go);
+    const model = process.env.AI_MODEL || "deepseek-v4-flash" // v9.110.0（MOD-1 默认值清理）：agnes 已剔除;
     const body = {
       model,
       messages: [

@@ -23,7 +23,7 @@ const TASK_CONFIG = {
   newsDigest:  { temperature: 0.3, maxTokens: 2000, thinking: false },
   weeklyCoach: { temperature: 0.4, maxTokens: 3000, thinking: true },
   stockJudge:  { temperature: 0.3, maxTokens: 8000, thinking: true },
-  mainlineClassify: { temperature: 0.1, maxTokens: 6000, thinking: false },
+  mainlineClassify: { temperature: 0.1, maxTokens: 8000, thinking: false }, // v9.111.0（R-2）：长输出提档
   mainlineDiagnosis: { temperature: 0.2, maxTokens: 3000, thinking: false },
   // v9.26 F-05：主线精排专用任务 —— 低延迟确定性优先（thinking=false、低温、小输出）
   mainlineRank: { temperature: 0.1, maxTokens: 2000, thinking: false },
@@ -46,7 +46,7 @@ const TASK_CONFIG = {
   // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
   eventDeepDive:   { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.41（V4-A）：Agent 工具推理
-  agentReason:     { temperature: 0.2, maxTokens: 4000, thinking: false },
+  agentReason:     { temperature: 0.2, maxTokens: 8000, thinking: false }, // v9.111.0（R-2）：恒思考+JSON+工具结果最吃 token
   // v9.75（阶段三）：Critic 挑刺 —— 独立小任务（不再复用 dailyIntel 2000 token 配置）
   criticReview:    { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.75（阶段二）：失效因子归因 —— 小输出结构化
