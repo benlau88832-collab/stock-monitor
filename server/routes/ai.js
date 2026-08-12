@@ -106,10 +106,40 @@ module.exports = function aiRoutes(app) {
         return { ms: Date.now() - t0, httpOk: false, error: String(e?.message || e).slice(0, 200) };
       }
     };
+    // v9.113.0（T3-4）：reactProbe —— 大 system + 多工具描述模拟 ReAct 体量（小 probe 不代表 ReAct，
+    // 终审 D-03：ReAct 真因（length/超时）需等价体量诊断）
+    const reactProbe = await (async () => {
+      const sys = "你是A股短线交易助手（10年游资）。你有以下工具：" +
+        Array.from({ length: 18 }, (_, i) => `\n- tool${i}: 工具描述"查询/分析/裁决标的${i}，返回真实数据"`).join("") +
+        "\n规则：1.先调工具 2.输出严格JSON 3.≤300字 4.禁止编造。";
+      const body = {
+        model,
+        messages: [
+          { role: "system", content: sys },
+          { role: "user", content: "今天主线是什么，哪些是龙头哪些是跟风？请先调用工具再回答。" },
+        ],
+        max_tokens: 8000, temperature: 0.2, stream: false,
+      };
+      const t0 = Date.now();
+      try {
+        const json = await postJSON(baseUrl, body, 90000, { Authorization: "Bearer " + key });
+        const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
+        return {
+          ms: Date.now() - t0, httpOk: true,
+          finish_reason: json?.choices?.[0]?.finish_reason,
+          hasContent: !!(msg.content && String(msg.content).trim()),
+          contentLen: String(msg.content || "").length,
+          contentPreview: String(msg.content || "").slice(0, 150),
+        };
+      } catch (e) {
+        return { ms: Date.now() - t0, httpOk: false, error: String(e?.message || e).slice(0, 200) };
+      }
+    })();
     res.json({
       config: { model, baseUrl, provider: process.env.AI_PROVIDER || "agnes", hasKey: !!key, fallback: process.env.AI_FALLBACK || "" },
       withChatTemplateKwargs: await probe(true),
       withoutChatTemplateKwargs: await probe(false),
+      reactProbe,
     });
   });
 
@@ -219,6 +249,11 @@ module.exports = function aiRoutes(app) {
         if (/empty content/i.test(msg)) {
           console.warn(`[ai] empty content task=${task}（重试耗尽）`);
           return res.json({ error: "empty content" });
+        }
+        // v9.113.0（T3-3 降级分真因）：length truncated 与 true empty 区分 —— 200 同口径，前端 reason:"length"
+        if (/length truncated/i.test(msg)) {
+          console.warn(`[ai] length truncated task=${task}（重试耗尽仍被思考截断）`);
+          return res.json({ error: "length truncated" });
         }
         const reason = /timeout|ETIMEDOUT|aborted/i.test(msg) ? "timeout" : /proxy|ENOTFOUND|ECONN/i.test(msg) ? "network" : "model";
         res.status(502).json({ error: msg || "model call failed", reason });

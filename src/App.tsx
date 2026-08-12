@@ -60,6 +60,7 @@ import AlertBanner, { type AlertItem } from "./components/AlertBanner";
 import SpriteOverlay from "./components/SpriteOverlay";
 // v9.58（V8-8）：全局 AI 助手（右下角悬浮，所有 Tab 可见）
 import AIConsole from "./components/AIConsole";
+import DecisionCard from "./components/DecisionCard"; // v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI）
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
 import { checkSysRisk } from "./lib/sysRiskGuard";
 import { appendSignal } from "./lib/signalLedger";
@@ -249,6 +250,9 @@ export default function App() {
   // v9.26.19：行业资金流向（行业板块前 8 流入 + 前 8 流出 = 16 个，挂在 fundline tab）
   const [topIndustryFund, setTopIndustryFund] = useState<Array<{ code: string; name: string; mainNet: number }>>([]);
   const [watchStocks, setWatchStocks] = useState<WatchStockBrief[]>([]);
+  // v9.113.0（T1-2 横幅三态）：PG 快照可用性（dataLayer 探测，60s 刷新；state 触发横幅重算）——
+  // 结构化面板走 PG 时横幅不因 push2delay 命中就弹；初始 false（探测完成前保守弹，避免漏报）
+  const [pgSnapshotOk, setPgSnapshotOk] = useState(false);
   const [currentPhase, setCurrentPhase] = useState<SessionPhase>(() => getCurrentSession().phase);
   // v9.33（缺口3）：LLM 盘后三剧本 / 竞价龙头预判 / 风险雷达
   const [nextScenarios, setNextScenarios] = useState<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null>(null);
@@ -1224,6 +1228,20 @@ export default function App() {
   // v9.75（性能修复）：refreshFast 每 18s setOverview 产生新引用 → 本 effect 被拖成 18s 轮询，
   // 违背设计意图（主刷新 60s 才拉重接口）。加 lastWatchFetchAt 节流，60s 内重复触发直接跳过。
   const lastWatchFetchAt = useRef(0);
+  // v9.113.0（T1-2）：PG 快照可用性探测（60s；供横幅三态判定，勿阻塞渲染）
+  useEffect(() => {
+    let alive = true;
+    const probe = async () => {
+      try {
+        const { fetchMarketSnapshot } = await import("./lib/dataLayer");
+        const snap = await fetchMarketSnapshot();
+        if (alive) setPgSnapshotOk(!!snap && !snap.meta.stale);
+      } catch { if (alive) setPgSnapshotOk(false); }
+    };
+    probe();
+    const t = setInterval(probe, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
   useEffect(() => {
     if (!overview) return;
     const now = Date.now();
@@ -1428,23 +1446,28 @@ export default function App() {
   // v9.85.2：横幅改用 overview.stale（P0-5 本轮真实失败信号）—— 原用 getOverallHealth 历史统计，
   //   fallback（push2→push2delay/腾讯）已就绪后统计残留仍触发"连续失败"误报；
   //   且熔断短路已下沉到 script 层（jsonpQueue v9.85.2），proxy fallback 不再被旧熔断阻断。
+  // v9.113.0（T1-2 横幅三态）：PG 快照可用（结构化数据新鲜）→ 即使 push2delay 命中也不弹"15分钟延迟"；
+  //   仅 PG 也不可用且确为 push2delay 才弹橙级。实时源切腾讯由 fetchLiveQuote 单独轻提示。
   if (overview) {
     const circuit = getCircuitState();
     const degradedPool = overview.limitPool?.degraded === true;
     // v9.86.0（P1-16）：主源实际由 fallback 源供数（push2 → push2delay 延迟行情）→ info 级提示
     const sourceState = getSourceState();
     const delayedHost = sourceState.find(s => s.source === "push2delay.eastmoney.com");
+    // v9.113.0（T1-2）：结构化面板已走 PG（dataLayer）→ 该源不依赖 push2delay，横幅不因碰过 push2delay 就弹
+    const pgOk = pgSnapshotOk;
     if (overview.stale || degradedPool || (circuit.open && !overview.stale)) {
       alerts.push({
         id: "data_source_issue",
         level: "critical",
         message: `⚠ 数据源异常${degradedPool ? "：涨停池数据来自历史日期（接口不可达/非交易日），情绪与梯队数据可能失真" : overview.stale ? "：本轮刷新多数数据源失败，显示上一轮快照（已尝试多源 fallback）" : "：行情接口熔断中（恢复后自动刷新）"}${circuit.open ? "（已触发快速熔断）" : ""}`,
       });
-    } else if (delayedHost) {
+    } else if (delayedHost && !pgOk) {
+      // 仅 PG 也不可用且确为 push2delay → 橙"15分钟延迟"（终审 D-01：不因碰过 push2delay 就常驻）
       alerts.push({
         id: "data_source_delayed",
-        level: "info",
-        message: `ℹ 行情主源不可达，当前数据来自延迟源（push2delay，约 15 分钟延迟）`,
+        level: "warning",
+        message: `⚠ 实时源与 PG 快照均不可达，当前数据来自延迟源（push2delay，约 15 分钟延迟）`,
       });
     }
   }
@@ -1485,7 +1508,10 @@ export default function App() {
         <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-4">
         {/* ====== 驾驶舱 ====== */}
         {active === "dashboard" && (
-          <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
+          <>
+          {/* v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI，秒级） */}
+          <DecisionCard />
+      <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
             battlePlan={battlePlan} loading={loading} phase={currentPhase} watchStocks={watchStocks}
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
             onSwitchTab={(tab) => { setActive(tab as TabKey); try { import('./lib/uiContext').then(m => m.setActiveTab(tab)); } catch { /* 静默 */ } }}
@@ -1497,6 +1523,7 @@ export default function App() {
             nextGatePredict={nextGatePredict}
             llmBriefDegraded={llmBriefDegraded} // v9.99.2（B3）：盘后四任务 LLM 降级标记
             sealAlerts={sealAlerts} />
+          </>
         )}
 
         {/* ====== 资金主线（v9.49 F1 分组：强度榜首屏 → 资金结构组 → 外围组） ====== */}

@@ -133,9 +133,37 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
       setMsgs(m => [...m, { role: "user", text: q }]);
       setBusy(true);
 
+      // v9.113.0（T2-2 意图路由）：三档分流替代 isSimpleQuestion 二档 ——
+      //   summary → 流式（小 prompt，diag 已证可靠）；data → 直读 PG 模板（不烧 LLM 秒回）；其余 → ReAct
+      const { classifyIntent } = await import("../lib/intentRouter");
+      const intent = classifyIntent(q);
+
+      // data 档：直读 PG 快照，模板组装带数字回答（秒回、永不降级）
+      if (intent === "data") {
+        try {
+          const { fetchMarketSnapshot } = await import("../lib/dataLayer");
+          const snap = await fetchMarketSnapshot();
+          const m = snap?.data?.market ?? {};
+          const lines: string[] = [];
+          if (/涨停/.test(q) && m.ztCount != null) lines.push(`今日涨停 ${m.ztCount} 只`);
+          if (/跌停/.test(q) && m.dtCount != null) lines.push(`跌停 ${m.dtCount} 只`);
+          if (/炸板/.test(q) && m.blastedRate != null) lines.push(`炸板率 ${m.blastedRate}%`);
+          if (/情绪/.test(q) && m.sentiment != null) lines.push(`情绪分 ${m.sentiment}`);
+          if (/成交额/.test(q) && snap?.data?.market?.amount != null) lines.push(`成交额 ${snap.data.market.amount}`);
+          if (lines.length === 0 && m.ztCount != null) lines.push(`涨停 ${m.ztCount} 只 · 跌停 ${m.dtCount ?? 0} 只 · 炸板率 ${m.blastedRate ?? "?"}% · 情绪 ${m.sentiment ?? "?"}`);
+          const reply = lines.length > 0
+            ? `📊 ${lines.join(" · ")}（数据来自 PG 快照${snap?.meta?.stale ? "，可能延迟" : ""}）`
+            : "本地快照暂无该数据（PG 未就绪）。";
+          setMsgs(m2 => [...m2, { role: "ai", text: reply, source: "data" }]);
+          try { digestConsoleReply(reply, [], mergedCtx.topMainline); } catch { /* 静默 */ }
+          setBusy(false);
+          return;
+        } catch { /* data 档失败 → 落入流式/ReAct 兜底 */ }
+      }
+
       // v9.84.2（AI大脑层 · 3.4）：简单问答 → 真 SSE 流式（逐字渲染，无工具轮）；
       // 失败（非本地/上游异常）→ 静默回退 ReAct 完整链路
-      if (isSimpleQuestion(q)) {
+      if (intent === "summary" || isSimpleQuestion(q)) {
         try {
           const system = await buildQuickSystem(mergedCtx);
           typingRef.current = true; // 流式期间跳过对话历史持久化（每帧 setState 不落盘）

@@ -452,12 +452,31 @@ export async function runAssistantAgent(
       },
     ] : []),
   ];
-  const toolDefs = tools.map(t => ({
+  // v9.113.0（T3-1 终审 D-03 核心）：ReAct prompt 按意图注入工具子集（不再无差别全量注入 → system 体量降 ≥40%，
+  // length/超时概率大降）。分组按问题粗分类；research 保留全量（妙想工具条件加载不受影响）。
+  const { classifyIntent } = await import("./intentRouter");
+  const intent = classifyIntent(question);
+  const TOOL_WHITELIST: Record<string, string[]> = {
+    decision: ["getAdmissionVerdict", "computePositionAdvice", "checkExitSignal", "getStockFundDetail", "getStockFund", "detectStockTrap", "checkStockExitSignal", "getDecisionEvidence", "estimateMissingFields", "computePortfolioRisk", "checkSysRisk"],
+    news: ["getLocalNews", "getExternalNews", "newsByKeyword", "annsByStock", "getNewsDeep", "getDecisionEvidence"],
+    mainline: ["getFundStreak", "getThemeCalendar", "classifyMarketState", "getAdmissionVerdict", "getNewsDeep", "getDecisionEvidence", "getLocalNews"],
+    overseas: ["lookupOverseasMap", "getLocalNews", "getExternalNews", "getDecisionEvidence"],
+    all: [],
+  };
+  const groupKey = intent === "decision" ? "decision"
+    : intent === "react" && /消息|新闻|政策|公告/.test(question) ? "news"
+    : intent === "react" && /主线|龙头/.test(question) ? "mainline"
+    : intent === "react" && /外盘|美股|纳指|隔夜/.test(question) ? "overseas"
+    : "all";
+  const allow = TOOL_WHITELIST[groupKey] ?? [];
+  // 注意：runAssistantAgent 也承接 research（全量工具）与未细分 react（all）—— 仅命中白名单组才过滤
+  const effectiveTools = groupKey !== "all" && intent !== "research" ? tools.filter(t => allow.includes(t.name)) : tools;
+  const toolDefs = effectiveTools.map(t => ({
     name: t.name,
     description: t.description,
     parameters: { type: "object", properties: {}, additionalProperties: true },
   }));
-  const toolByName = new Map(tools.map(t => [t.name, t]));
+  const toolByName = new Map(effectiveTools.map(t => [t.name, t]));
 
   // V13-3（P0）：触发条件收紧为仅"个股深度调研"六个字（用户明确要求，其他问题不用妙想）
   // isDeepResearch/maxRounds 已在工具集处声明（第 44-45 行），此处不再重复
@@ -538,7 +557,7 @@ export async function runAssistantAgent(
   let roundHistory: string[] = [];
   let llmOk = true;
   let rateLimitedFlag = false;
-  let lastReason: "rateLimited" | "timeout" | "network" | "model" | undefined;
+  let lastReason: "rateLimited" | "timeout" | "network" | "model" | "length" | undefined; // v9.113.0（T3-3）：length 截断单独分类
   const calledTools = new Set<string>();
   // v9.108.2（D-4 成本控制）：会话 token 预算 —— 估算每轮 prompt+completion 累计，超阈值强制走 fallback（防弱模型循环烧配额）
   let sessionTokens = 0;
@@ -627,7 +646,8 @@ export async function runAssistantAgent(
   // v9.108.1（D-3）：fallbackAnswer 已 async（个股类接实时 /api/db/stock/:code）
   // v9.109.1（A-1）：传结构化 brain（主线类区分龙头/跟风）
   const reason = lastReason;
-  const failReason = llmOk ? "输出无法解析" : rateLimitedFlag ? "配额受限" : reason === "timeout" ? "上游超时" : reason === "network" ? "网络不通" : "empty content/调用失败";
+  // v9.113.0（T3-3 降级分真因）：length truncated 显示精确原因（不再笼统"empty content/调用失败"）
+  const failReason = llmOk ? "输出无法解析" : rateLimitedFlag ? "配额受限" : reason === "timeout" ? "上游超时" : reason === "network" ? "网络不通" : reason === "length" ? "正文被思考截断" : "empty content/调用失败";
   const brain = await fetchBrainContext();
   const reply = await fallbackAnswer(snapshot, question, failReason, brain ?? undefined);
   // v9.99.1（批次 5-2）：失败阶段推导

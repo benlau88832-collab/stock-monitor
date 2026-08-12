@@ -695,7 +695,7 @@ export interface AgentChatResult {
   /** v9.45（V5-1）：true = 服务端配额受限（429，非模型不可用）→ 前端显式标注，不静默降级 */
   rateLimited?: boolean;
   /** v9.67：降级原因（rateLimited / timeout / network / model）→ 前端区分文案 */
-  reason?: "rateLimited" | "timeout" | "network" | "model";
+  reason?: "rateLimited" | "timeout" | "network" | "model" | "length"; // v9.113.0（T3-3）：length truncated 与 true empty 区分
   /** v9.111.0（R-3）：上游 reasoning_content 长度（D-4 会话预算纳入恒思考消耗） */
   reasoningLen?: number;
 }
@@ -775,6 +775,8 @@ export async function callAgentChat(
       } catch { /* 重试失败 → 按首次错误降级 */ }
       return { text: "", reason: "model" };
     }
+    // v9.113.0（T3-3）：length truncated（正文被思考截断）与 true empty 区分 —— 前端可显示精确降级原因
+    if (j.error && /length truncated/i.test(String(j.error))) return { text: "", reason: "length" };
     if (j.error) return { text: "", reason: "model" };
     return { text: j.text ?? "", toolCalls: j.toolCalls, reasoningLen: j.reasoningLen ?? 0 };
   } catch {

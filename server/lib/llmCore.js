@@ -49,6 +49,8 @@ async function chatComplete(
   const chain = endpointChain();
   let lastErr = null;
   // v9.111.0（R-1）：可变 max_tokens —— length 截断重试时上调（恒思考挤占正文 → JSON 截断是 ReAct 降级真因）
+  // v9.113.0（T3-2）：重试上限与 base 上限（8000）解耦 —— 给真截断留 headroom（终审 D-04：cap==base 则重试无加空间）
+  const RETRY_HARD_CAP = 12000;
   let curMaxTokens = maxTokens;
   for (let ei = 0; ei < chain.length; ei++) {
     const ep = chain[ei];
@@ -84,7 +86,7 @@ async function chatComplete(
         // （原实现只对 content 空重试、截断直接 return → ReAct 必降级；这是"改完仍降级"的真因）
         if (fr === "length") {
           if (attempt < emptyRetries) {
-            curMaxTokens = Math.min(curMaxTokens + 2000, 8000);
+            curMaxTokens = Math.min(curMaxTokens + 2000, RETRY_HARD_CAP);
             console.warn(`[llmCore] finish_reason=length endpoint=${ei} retry ${attempt + 1}/${emptyRetries}（思考挤占→截断，max_tokens→${curMaxTokens}）`);
             await sleep(800);
             continue;
