@@ -71,6 +71,8 @@ import { emit as emitAlert } from "./lib/alertBus";
 import { localDateStr, localDateStrOffset, getBJDate } from "./lib/format";
 // v9.77（P0-11 修复）：读 server 已落库的 market_daily（昨日炸板率）→ 复活主线退潮前兆"炸板率环比+15pp"规则
 import { kvGet } from "./lib/cloudStore";
+// v9.113.1（T1-1 D-01 收尾）：统一数据层 —— 结构化快照 PG 优先 + PG 派生涨停池（仅 PG 空才退 push2delay）
+import { fetchMarketSnapshot, buildPgLimitPool } from "./lib/dataLayer";
 
 // 告警跃迁护栏：只在 false→true 时报一次，避免每分钟刷屏
 const lastSignalActive: Record<string, boolean> = {};
@@ -150,6 +152,9 @@ export interface OverviewData {
   fetchedAt?: number;
   /** v9.85.0（P0-5）：本轮刷新多数数据源失败 → 保留旧值并标记过期（UI 显示"数据已过期"而非误导为最新） */
   stale?: boolean;
+  /** v9.113.1（T1-1 D-01 收尾）：结构化字段（涨停/情绪/梯队/溢价/晋级率）数据源元信息 —— 角标显示 PG 快照 asOf；
+   *  poolFromPg=true = 当前涨停池为 PG 派生（实时池不可用），UI 明示"PG 快照"不冒充实时 */
+  pgMeta?: { source: "pg"; asOf: number; stale: boolean; poolFromPg: boolean } | null;
 }
 
 export interface FundStructureData {
@@ -290,7 +295,8 @@ export default function App() {
     if (isFirstLoad) setLoading(true);
     try {
       // Parallel fetches
-      const [indices, breadth, fundMain, globals, turnover, fundHistory, limitPoolRes, turnoverHistRes] = await Promise.allSettled([
+      // v9.113.1（T1-1 D-01 收尾）：第 9 路并行拉 PG 结构化快照（情绪/涨停梯队/溢价/晋级率，cron 落库）
+      const [indices, breadth, fundMain, globals, turnover, fundHistory, limitPoolRes, turnoverHistRes, pgSnapRes] = await Promise.allSettled([
         fetchIndexOverview(),
         fetchMarketBreadth(),
         fetchMarketMainFund(),
@@ -299,6 +305,7 @@ export default function App() {
         fetchMarketFundHistory(30),
         fetchLimitPoolSummary(),
         fetchTurnoverHistory(10),
+        fetchMarketSnapshot(),
       ]);
 
       // === Overview ===
@@ -307,23 +314,51 @@ export default function App() {
       const limitPool = limitPoolRes.status === "fulfilled" ? limitPoolRes.value : null;
       const turnoverData = turnover.status === "fulfilled" ? turnover.value : { amount: 0, available: false };
       const fm0 = fundMain.status === "fulfilled" ? fundMain.value : null;
+
+      // v9.113.1（T1-1 D-01 收尾）：PG 快照派生涨停池 —— 三优先：实时池成功非 degraded（push2 直连最新）
+      //   > PG 派生池（cron 落库，push2 断时仍新鲜）> 实时降级池（push2delay 15min 旧，仅 PG 也空时兜底）。
+      //   终审 D-01：前端曾死磕 push2→push2delay 15min 陈旧数据，PG 2-20min 快照被冷落 —— 本改动让结构化字段 PG 优先。
+      const pgSnap = pgSnapRes.status === "fulfilled" ? pgSnapRes.value : null;
+      const pgMkt = pgSnap?.data?.market ?? null;
+      // v9.113.1（T1-1）：push2delay 最近 60s 有命中 → 实时池实为 15min 延迟数据（push2 断源），
+      //   不视为"实时池成功"——让位 PG 派生池（cron 2-20min 落库，比 push2delay 更新鲜）
+      const recentDelayHit = getSourceState().some(s => s.host.includes("push2delay") && Date.now() - s.at < 60_000);
+      const realtimePoolOk = Boolean(limitPool && !limitPool.degraded && limitPool.totalCount > 0 && !recentDelayHit);
+      const pgPool = buildPgLimitPool(pgSnap);
+      const displayPool = realtimePoolOk ? limitPool : (pgPool ?? limitPool);
+      const poolFromPg = !realtimePoolOk && pgPool !== null;
+      // PG 情绪兜底判定：sentiment:今日 键独立落库（盘中每 5min），不依赖 market_daily（盘中未落库回退昨日）
+      const sentAsOf = pgSnap?.data?.sources?.sentiment ?? null;
+      const sentFresh = sentAsOf != null && Date.now() - sentAsOf < 25 * 60 * 1000;
+      // PG market 字段（涨停/溢价/晋级率）今日判定：market_daily 未回退最近交易日且快照新鲜（盘后收盘链落库后可用）
+      const mktFresh = pgSnap != null && !pgSnap.data.fallbackDate && !pgSnap.meta.stale;
+      const pgMeta: OverviewData["pgMeta"] = pgSnap ? {
+        source: "pg",
+        asOf: pgSnap.meta.asOf,
+        stale: pgSnap.meta.stale || Boolean(pgSnap.data.fallbackDate),
+        poolFromPg,
+      } : null;
       
       // ============== 溢价/晋级率/最高板计算（修改点1） ==============
-      // 今日最高板（同步，不依赖网络）
+      // 今日最高板（同步，不依赖网络）；v9.113.1（T1-1）：实时池不可用时用 PG market.maxBoardHeight（cron 精确值）
       let maxBoardHeight: number | null = null;
-      if (limitPool && limitPool.rawZTPool && limitPool.rawZTPool.length > 0) {
+      if (displayPool && displayPool.rawZTPool && displayPool.rawZTPool.length > 0 && realtimePoolOk) {
         let maxLbc = 0;
-        for (const s of limitPool.rawZTPool) {
+        for (const s of displayPool.rawZTPool) {
           const lbc = s.lbc ?? 1;
           if (lbc > maxLbc) maxLbc = lbc;
         }
         maxBoardHeight = maxLbc > 0 ? maxLbc : null;
+      } else if (pgMkt && typeof pgMkt.maxBoardHeight === "number") {
+        maxBoardHeight = pgMkt.maxBoardHeight;
       }
 
       // 昨日快照 → 溢价 + 晋级率（v9.36 B2：逻辑抽到 lib/prevZtStats.ts）
-      const prevZTPool = loadPrevZTSnapshot(limitPool?.qdate ?? null);
+      // v9.113.1（T1-1）：用展示池 qdate（PG 可用时 = 今日真实交易日，找昨日快照更准）
+      const prevZTPool = loadPrevZTSnapshot(displayPool?.qdate ?? null);
 
       // 涨停池快照写入主刷新管道（与 Tab 解耦，确保高低切/断板检测次日有数据）
+      // v9.113.1（T1-1）：只写实时完整池 —— PG 派生池（ladder 20 条精简）不得落盘，否则污染次日溢价/晋级率计算
       if (limitPool && limitPool.rawZTPool && limitPool.rawZTPool.length > 0) {
         saveZTSnapshot(limitPool.qdate ?? tradeDateStr(), limitPool.rawZTPool);
       }
@@ -344,11 +379,12 @@ export default function App() {
         let sentimentFactors: SentimentFactors | null = null;
         // v9.77（P0-6 修复）：涨停池被静默回退到昨日（接口失败）→ 池子派生的情绪因子失真，
         // 抑制 limitDiff/limitUpBonus/blastedPenalty，避免把昨日涨停数当今日判断情绪强弱。
-        const lpDegraded = Boolean(limitPool?.degraded);
+        // v9.113.1（T1-1）：池引用改 displayPool（实时池→PG 派生池→降级池 三优先）
+        const lpDegraded = Boolean(displayPool?.degraded);
         if (brData && brData.total > 0) {
           const upRatio = brData.up / brData.total;
           const upDownScore = Math.round(upRatio * 40 * 10) / 10;
-          const limitDiff = lpDegraded ? 0 : limitPool ? limitPool.limitUpCount - limitPool.limitDownCount : 0;
+          const limitDiff = lpDegraded ? 0 : displayPool ? displayPool.limitUpCount - displayPool.limitDownCount : 0;
           const limitScore = Math.round(Math.max(-15, Math.min(15, limitDiff * 0.3)) * 10) / 10;
           const avgPctScore = Math.round(Math.max(-15, Math.min(15, brData.avgPct * 3)) * 10) / 10;
           let indexScore = 0;
@@ -357,9 +393,9 @@ export default function App() {
             indexScore = Math.round(Math.max(-15, Math.min(15, avgIdxPct * 5)) * 10) / 10;
           }
           // 涨停池加分（涨停多=市场活跃）—— degraded 时不计
-          const limitUpBonus = lpDegraded ? 0 : limitPool ? Math.round(Math.min(10, limitPool.limitUpCount * 0.1) * 10) / 10 : 0;
+          const limitUpBonus = lpDegraded ? 0 : displayPool ? Math.round(Math.min(10, displayPool.limitUpCount * 0.1) * 10) / 10 : 0;
           // 炸板率扣分（炸板多=情绪不稳）—— degraded 时不计
-          const blastedPenalty = lpDegraded ? 0 : limitPool ? Math.round(Math.min(8, limitPool.blastedRate * 0.15) * 10) / 10 : 0;
+          const blastedPenalty = lpDegraded ? 0 : displayPool ? Math.round(Math.min(8, displayPool.blastedRate * 0.15) * 10) / 10 : 0;
           // 主力资金方向加减分
           const fundFlowScore = fm0 ? Math.round(Math.max(-8, Math.min(8, fm0.mainNet / 1e10)) * 10) / 10 : 0;
 
@@ -387,18 +423,28 @@ export default function App() {
           else if (sentiment >= 25) sentimentLabel = "恐慌";
           else sentimentLabel = "极度恐慌";
         }
-        // 若当前情绪为 null（数据缺失），尝试用昨日情绪填充，仍为 null 则保持 null
+        // 若当前情绪为 null（数据缺失）：v9.113.1（T1-1）PG 情绪兜底（sentiment:今日 盘中 5min 落库，实时源断时仍新鲜）→ 昨日 → null
         if (sentiment == null) {
-          sentiment = prevSentiment; // 可能为 null（首日无数据）
-          if (sentiment != null) {
-            // 从存储恢复的昨日情绪，需要反推 sentimentLabel
-            if (sentiment >= 80) sentimentLabel = "极度贪婪";
-            else if (sentiment >= 65) sentimentLabel = "贪婪";
-            else if (sentiment >= 45) sentimentLabel = "中性";
-            else if (sentiment >= 25) sentimentLabel = "恐慌";
+          if (sentFresh && pgMkt && typeof pgMkt.sentiment === "number") {
+            const pgSent = pgMkt.sentiment;
+            sentiment = pgSent;
+            if (pgSent >= 80) sentimentLabel = "极度贪婪";
+            else if (pgSent >= 65) sentimentLabel = "贪婪";
+            else if (pgSent >= 45) sentimentLabel = "中性";
+            else if (pgSent >= 25) sentimentLabel = "恐慌";
             else sentimentLabel = "极度恐慌";
           } else {
-            sentimentLabel = "数据不足";
+            sentiment = prevSentiment; // 可能为 null（首日无数据）
+            if (sentiment != null) {
+              // 从存储恢复的昨日情绪，需要反推 sentimentLabel
+              if (sentiment >= 80) sentimentLabel = "极度贪婪";
+              else if (sentiment >= 65) sentimentLabel = "贪婪";
+              else if (sentiment >= 45) sentimentLabel = "中性";
+              else if (sentiment >= 25) sentimentLabel = "恐慌";
+              else sentimentLabel = "极度恐慌";
+            } else {
+              sentimentLabel = "数据不足";
+            }
           }
         }
         return { sentiment, sentimentLabel, sentimentFactors };
@@ -411,6 +457,7 @@ export default function App() {
       setOverview(prev => {
         // v9.90.0：stale 判定扩大 —— 加入主力资金/全球指数（原只统计 4 项，
         //   主力资金/全球指数/板块资金流全挂时横幅不亮，与健康面板 0% 口径不一致）
+        // v9.113.1（T1-1）：pgSnapRes 不计入 failures —— PG 快照是增强兜底非必备，断源不标 stale
         const failures = [indices.status, breadth.status, limitPoolRes.status, turnover.status, fundMain.status, globals.status]
           .filter(s => s === "rejected").length;
         if (!prev) {
@@ -419,7 +466,7 @@ export default function App() {
             indices: idxData, breadth: brData,
             sentiment: firstSentiment.sentiment, sentimentLabel: firstSentiment.sentimentLabel,
             sentimentFactors: firstSentiment.sentimentFactors, sentimentYesterday: prevSentiment,
-            limitPool,
+            limitPool: displayPool,
             turnoverAmount: turnoverData.amount,
             turnoverYesterday: yesterdayAmount,
             turnoverAvg5d,
@@ -429,16 +476,19 @@ export default function App() {
             maxBoardHeight,
             fetchedAt: Date.now(), // v9.77（P0-5）：抓取完成时间，供"数据截至 X 秒前"展示
             stale: failures >= 3,
+            pgMeta, // v9.113.1（T1-1）：结构化字段数据源元信息（角标 asOf）
           };
         }
         // 非首帧：仅用本轮 fulfilled 的字段覆盖，rejected 保留旧值
-        const merged: OverviewData = { ...prev, fetchedAt: Date.now(), stale: failures >= 3 };
+        const merged: OverviewData = { ...prev, fetchedAt: Date.now(), stale: failures >= 3, pgMeta };
         if (indices.status === "fulfilled") merged.indices = idxData;
         if (breadth.status === "fulfilled") merged.breadth = brData;
-        if (limitPoolRes.status === "fulfilled") merged.limitPool = limitPool;
+        // v9.113.1（T1-1）：涨停池三优先 —— 实时池 fulfilled 或 PG 派生池可用都写入
+        if (limitPoolRes.status === "fulfilled" || poolFromPg) merged.limitPool = displayPool;
         if (turnover.status === "fulfilled") merged.turnoverAmount = turnoverData.amount;
         // 情绪/最高板等派生字段：仅当依赖的原始数据 fulfilled 才更新（否则保留旧值）
-        if (breadth.status === "fulfilled" || limitPoolRes.status === "fulfilled") {
+        // v9.113.1（T1-1）：poolFromPg 时情绪可能已用 PG 快照兜底（breadth 实时失败场景）
+        if (breadth.status === "fulfilled" || limitPoolRes.status === "fulfilled" || poolFromPg) {
           merged.sentiment = firstSentiment.sentiment;
           merged.sentimentLabel = firstSentiment.sentimentLabel;
           merged.sentimentFactors = firstSentiment.sentimentFactors;
@@ -678,7 +728,13 @@ export default function App() {
       const commodities: GlobalIndex[] = globalRes.status === "fulfilled" ? globalRes.value.commodities : [];
 
       // ==== 情绪终值（premium 就绪后重算）+ overview 合并（premium 补位）====
-      const prem = premiumRes.status === "fulfilled" ? premiumRes.value : { premiumAvg: null, premiumDist: null, promotionRate: null };
+      // v9.113.1（T1-1）：premium 实时计算空（昨日涨停股现价拉取失败/断源）→ PG market.premiumAvg/promotionRate 兜底
+      //   （要求 market 今日数据 mktFresh：盘中 market_daily 未落库回退昨日 → 不兜底避免把昨日值当今日）
+      let prem = premiumRes.status === "fulfilled" ? premiumRes.value : { premiumAvg: null, premiumDist: null, promotionRate: null };
+      if (mktFresh && pgMkt) {
+        if (prem.premiumAvg == null && typeof pgMkt.premiumAvg === "number") prem = { ...prem, premiumAvg: pgMkt.premiumAvg };
+        if (prem.promotionRate == null && typeof pgMkt.promotionRate === "number") prem = { ...prem, promotionRate: pgMkt.promotionRate };
+      }
       const finalSentiment = computeSentimentNow(prem.premiumAvg, prem.promotionRate);
       // 情绪分落盘/轨迹采样/信号账本 —— 只执行一次（premium 补齐后）
       // v9.106.1（验收观察项①）：写入键用数据日期 limitPool.qdate（接口真实交易日）——凌晨跨日不再把昨日情绪错标到次日
@@ -708,7 +764,7 @@ export default function App() {
         // 需要 overview 数据（此处 limitPool/sentiment 已算好）
         const overviewForGate: OverviewData = {
           indices: idxData, breadth: brData, sentiment: finalSentiment.sentiment, sentimentLabel: finalSentiment.sentimentLabel,
-          sentimentFactors: finalSentiment.sentimentFactors, sentimentYesterday: prevSentiment, limitPool,
+          sentimentFactors: finalSentiment.sentimentFactors, sentimentYesterday: prevSentiment, limitPool: displayPool,
           turnoverAmount: turnoverData.amount, turnoverYesterday: yesterdayAmount,
           turnoverAvg5d, premiumAvg: prem.premiumAvg, promotionRate: prem.promotionRate, maxBoardHeight,
         };
@@ -1068,10 +1124,13 @@ export default function App() {
       const limitPool = await fetchLimitPoolSummary();
       // v9.79（性能/韧性）：18s 高频通道接口抖动时，不要用空池/降级池覆盖上一轮有效池
       // （原无条件 setOverview 会用 totalCount=0 的空池或昨日回退池打空白涨停/情绪模块）
+      // v9.113.1（T1-1）：快刷池实为 push2delay（15min 旧）且上一轮是 PG 派生池 → 不覆盖（PG cron 更新鲜）
+      const delayHitNow = getSourceState().some(s => s.host.includes("push2delay") && Date.now() - s.at < 60_000);
       setOverview(prev => {
         if (!prev) return prev;
         const hasData = (limitPool?.rawZTPool?.length ?? 0) > 0 || (limitPool?.totalCount ?? 0) > 0;
-        const isWorse = Boolean(limitPool?.degraded) || (!hasData && (prev.limitPool?.totalCount ?? 0) > 0);
+        const isWorse = Boolean(limitPool?.degraded) || (!hasData && (prev.limitPool?.totalCount ?? 0) > 0)
+          || (delayHitNow && prev.pgMeta?.poolFromPg === true);
         return { ...prev, limitPool: isWorse ? prev.limitPool : limitPool };
       });
       // v12-6（P1）：涨停池可能截断 → 全局 console 警告（五问条/温度条等主显示点不逐个透传，落一条日志兜底）

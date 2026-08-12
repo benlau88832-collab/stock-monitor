@@ -209,7 +209,7 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
     return <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-6 text-rose-300">市场概览数据获取失败</div>;
   }
 
-  const { indices, breadth, sentiment, sentimentLabel, sentimentFactors, sentimentYesterday, limitPool, turnoverAmount, turnoverYesterday, turnoverAvg5d, premiumAvg, promotionRate, maxBoardHeight, fetchedAt, stale } = data;
+  const { indices, breadth, sentiment, sentimentLabel, sentimentFactors, sentimentYesterday, limitPool, turnoverAmount, turnoverYesterday, turnoverAvg5d, premiumAvg, promotionRate, maxBoardHeight, fetchedAt, stale, pgMeta } = data;
 
   // 连板分布文字
   const boardDistText = limitPool ? Object.entries(limitPool.boardCounts)
@@ -297,10 +297,18 @@ export default function MarketOverview({ data, loading }: { data: OverviewData |
               </div>
 
               <div className="text-[11px] text-amber-300/60">
-                数据来源：东方财富push2行情+涨停池接口 ·{" "}
+                {/* v9.113.1（T1-1 D-01 收尾）：poolFromPg=true 时涨停/梯队/情绪来自 PG 快照（push2 断源兜底），明示来源不冒充实时 */}
+                数据来源：{pgMeta?.poolFromPg ? "PG 快照 + 东方财富行情" : "东方财富push2行情+涨停池接口"} ·{" "}
                 <a href={marketBreadthUrl()} target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-300">点击验证 →</a>
                 {/* v9.77（P0-5）：数据截至时间 —— 明确告知数据年龄，防止按旧数据决策 */}
                 {fetchedAt && <span className="text-slate-500"> · 数据截至 {new Date(fetchedAt).toTimeString().slice(0, 8)}</span>}
+                {/* v9.113.1（T1-1）：PG 快照角标（asOf 为 cron 落库时间，勿冒充实时） */}
+                {pgMeta?.poolFromPg && (
+                  <span className="ml-1 rounded bg-emerald-500/15 px-1.5 py-0.5 font-bold text-emerald-300"
+                    title="涨停/梯队/情绪等结构化字段来自 PG 快照（cron 2-20 分钟落库，比 push2delay 15 分钟延迟更新鲜）；指数/涨跌家数/成交额仍实时">
+                    涨停/情绪·PG {new Date(pgMeta.asOf).toTimeString().slice(0, 5)}
+                  </span>
+                )}
                 {/* v9.85.0（P0-5）：数据源多数失败 → 显式标注过期（保留旧值不再冒充最新） */}
                 {stale && <span className="ml-1 rounded bg-rose-500/15 px-1.5 py-0.5 font-bold text-rose-300">⚠ 数据源异常·显示上一轮快照</span>}
               </div>

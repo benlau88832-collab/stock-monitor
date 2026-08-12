@@ -28,6 +28,9 @@
 //   4.4 推送多通道并发（Server酱/企微/Bark/飞书 webhook/Qmsg 酱 QQ，hostGuard 白名单）
 // v9.84.3：半成品清理（阶段5）—— ETF matchScore 随机数→真实评分 + MarketOverview 历史分位数接 PG 250 日 + LOCAL_TOKEN 默认启用
 // v9.84.4：数据链与AI链路修复 —— JSONP 本地优先走服务端 /api/proxy（浏览器直连 10-15s 超时 vs 服务端秒回）+ callAgentChat 补带 x-local-token
+// v9.113.0：终审交付层重构（T0 dataLayer PG 优先 / T2 intentRouter 五档路由 / T3 LLM 收尾 / T4 decisionDirect 决策直达 / T1-2 横幅三态）
+// v9.113.1（T1-1 D-01 收尾）：主面板数据管道 PG-first —— refreshAll 第 9 路并行拉 PG 快照，
+//   涨停池三优先（实时 push2 直连 > PG 派生池 > push2delay 兜底）+ 情绪/溢价/晋级率 PG 兜底 + MarketOverview PG 角标
 // ============================================================
-export const APP_VERSION = "v9.113.0";
+export const APP_VERSION = "v9.113.1";
 export const BUILD_DATE = "2026-08-12";

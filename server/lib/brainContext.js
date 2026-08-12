@@ -85,7 +85,7 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
   };
 
   // ---------- 涨停梯队（当日 zt_snapshot） ----------
-  let limitLadder = { total: 0, maxBoard: 0, ladder: [], boards: [] };
+  let limitLadder = { total: 0, maxBoard: 0, ladder: [], boards: [], boardCounts: {} };
   if (ztR.status === "fulfilled" && ztR.value.rows[0]) {
     const data = ztR.value.rows[0].data;
     const poolArr = Array.isArray(data) ? data : data?.pool;
@@ -99,11 +99,16 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
         const b = r.hybk || "其他";
         byBoard.set(b, (byBoard.get(b) ?? 0) + 1);
       }
+      // v9.113.1（T1-1 D-01 收尾）：boardCounts 全量连板高度分布（lbc→只数）——
+      // 前端 PG-first 涨停池合成需要完整分布（ladder 仅 20 条截断，缺失则连板分布失真）
+      const byLbc = new Map();
+      for (const r of rows) byLbc.set(r.lbc, (byLbc.get(r.lbc) ?? 0) + 1);
       limitLadder = {
         total: rows.length,
         maxBoard: rows.length ? Math.max(...rows.map(r => r.lbc)) : 0,
         ladder: rows.sort((a, b) => b.lbc - a.lbc).slice(0, 20),
         boards: [...byBoard.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([board, count]) => ({ board, count })),
+        boardCounts: Object.fromEntries([...byLbc.entries()].sort((a, b) => b[0] - a[0])),
       };
     }
   }
