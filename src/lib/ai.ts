@@ -264,6 +264,8 @@ export async function streamChat(
   opts: { system: string; user: string; temperature?: number; maxTokens?: number; thinking?: boolean },
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
+  /** v9.111.1（S-4）：思考过程增量回调（服务端 S-3 转发 reasoning 事件；默认 noop） */
+  onReasoning?: (chunk: string) => void,
 ): Promise<{ text: string; ok: boolean; error?: string } | null> {
   if (!isLocalServer()) return null;
   // v9.84.3（5.4）：服务端 LOCAL_TOKEN 自动携带（服务端未启用鉴权时带也无害）
@@ -310,6 +312,9 @@ export async function streamChat(
           const j = JSON.parse(dataStr);
           // v9.85.0（P1-6）：流中途错误 → 部分文本不再当成功（返回 ok:false，调用方删除部分渲染）
           if (j.error) return { text: full, ok: false, error: String(j.error).slice(0, 120) };
+          // v9.111.1（S-4）：思考过程增量（full 仍只算 content，空答判定不变）
+          const reasoningChunk = j.reasoning ?? "";
+          if (reasoningChunk) { try { onReasoning?.(reasoningChunk); } catch { /* 渲染回调失败静默 */ } }
           const delta = j.delta ?? "";
           if (delta) { full += delta; onDelta(delta); }
         } catch { /* 跳过坏行 */ }

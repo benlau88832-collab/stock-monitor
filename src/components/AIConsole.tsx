@@ -44,6 +44,21 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
   const [busy, setBusy] = useState(false);
   // v9.109.2（A-2）：AI 端点健康（/api/ai/health，30s 轮询 + 打开时刷新）
   const [aiHealth, setAiHealth] = useState<{ endpoints: Array<{ base: string; ok: boolean; total: number; emptyRate: number; circuit: string }>; degraded: boolean } | null>(null);
+  // v9.111.1（S-4）：思考过程区（流式 reasoning 展示）
+  const [reasoning, setReasoning] = useState("");
+  const [showReasoningAuto, setShowReasoningAuto] = useState(false); // 正文未开始时显示思考
+  const reasoningRef = useRef("");
+  // "显示思考过程"开关（默认开，localStorage 记忆）
+  const [showReasoning, setShowReasoning] = useState<boolean>(() => {
+    try { return localStorage.getItem("ai_show_reasoning") !== "0"; } catch { return true; }
+  });
+  const toggleShowReasoning = () => {
+    setShowReasoning(v => {
+      const nv = !v;
+      try { localStorage.setItem("ai_show_reasoning", nv ? "1" : "0"); } catch { /* 静默 */ }
+      return nv;
+    });
+  };
   const bodyRef = useRef<HTMLDivElement>(null);
   // v9.92.0（上下文感知）：订阅全局 UI 上下文（当前 Tab/个股）—— AI 自动知道用户在看什么
   const uiCtx = useSyncExternalStore(subscribeUiContext, getUiContext);
@@ -124,10 +139,15 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
         try {
           const system = await buildQuickSystem(mergedCtx);
           typingRef.current = true; // 流式期间跳过对话历史持久化（每帧 setState 不落盘）
+          // v9.111.1（S-4）：思考过程区（先流式渲染 reasoning；正文开始后自动收起）
+          setReasoning("");
+          setShowReasoningAuto(false);
           const t = setTimeout(() => ctrl.abort(), 60000); // 前端兜底：上游 45s + 缓冲（ctrl 来自 ask 顶部）
           const streamed = await streamChat(
             { system, user: q, maxTokens: 4000 }, // v9.107.0（全站助手）：简单问答流式 max_tokens 提档
             (delta) => {
+              // 正文开始 → 思考区自动收起
+              if (reasoningRef.current) { setShowReasoningAuto(false); reasoningRef.current = ""; }
               // 增量追加到当前最后一条 ai 消息
               setMsgs(m => {
                 const last = m[m.length - 1];
@@ -136,6 +156,11 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
               });
             },
             ctrl.signal,
+            (chunk) => { // v9.111.1（S-4）：思考增量
+              reasoningRef.current = (reasoningRef.current ?? "") + chunk;
+              setReasoning(reasoningRef.current);
+              setShowReasoningAuto(true);
+            },
           );
           clearTimeout(t);
           typingRef.current = false;
@@ -256,6 +281,14 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
                   {aiHealth.degraded ? "⚡ AI 降级中" : "● AI 在线"}
                 </span>
               )}
+              {/* v9.111.1（S-4）：显示思考过程开关（默认开） */}
+              <button
+                onClick={toggleShowReasoning}
+                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                  showReasoning ? "bg-sky-500/20 text-sky-300" : "bg-white/5 text-slate-500"
+                }`}
+                title={showReasoning ? "思考过程可见（点击关闭）" : "思考过程已隐藏（点击开启）"}
+              >🧠 {showReasoning ? "开" : "关"}</button>
             </div>
             {/* v9.92.0（上下文感知）：AI 当前感知到的页面/个股 —— 让用户确认 AI"知道你在看什么" */}
             {(uiCtx.activeTab !== "dashboard" || uiCtx.currentStock) && (
@@ -284,6 +317,17 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
 
           {/* 消息区 */}
           <div ref={bodyRef} className="flex-1 space-y-2 overflow-y-auto p-3">
+            {/* v9.111.1（S-4）：思考过程区 —— reasoning 本就被生成、此前全链路丢弃；先流式展示，
+                正文开始自动收起；开关可关闭（默认开，localStorage 记忆） */}
+            {showReasoning && showReasoningAuto && reasoning && (
+              <div className="rounded border border-sky-500/20 bg-sky-500/5 p-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-sky-300/80">🤔 思考中…</span>
+                  <button onClick={() => setShowReasoningAuto(false)} className="text-[10px] text-slate-500 hover:text-slate-300">收起</button>
+                </div>
+                <div className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed text-sky-200/60">{reasoning}</div>
+              </div>
+            )}
             {msgs.length === 0 && (
               <div className="text-[11px] text-slate-500 space-y-1">
                 <div>试试点这些：</div>

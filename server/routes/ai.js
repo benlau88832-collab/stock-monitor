@@ -336,10 +336,12 @@ module.exports = function aiRoutes(app) {
           try {
             const j = JSON.parse(dataStr);
             const choice = j?.choices?.[0]?.delta ?? {};
-            // v9.84.2（3.4）：DeepSeek 推理模型流式返回 reasoning_content（思考过程）——
-            // 不转发给前端（只渲染 content 增量）
+            // v9.111.1（S-3）：转发思考过程（reasoning 本就被生成、此前全链路丢弃=白烧；零额外 token，
+            // 前端 🤔 思考区展示；正文截断时用户仍能看到推理）
+            const reasoning = choice.reasoning_content ?? "";
+            if (reasoning) safeWrite(`data: ${JSON.stringify({ reasoning })}\n\n`);
             const delta = choice.content ?? "";
-            if (delta) contentLen += delta.length; // v9.108.0（T-1）：累计真实正文
+            if (delta) contentLen += delta.length; // v9.108.0（T-1）：累计真实正文（不含 reasoning）
             if (delta && !safeWrite(`data: ${JSON.stringify({ delta })}\n\n`)) {
               // 背压：客户端消费慢 → pause 上游，等 drain 再恢复
               r.pause();
