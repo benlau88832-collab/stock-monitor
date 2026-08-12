@@ -716,7 +716,7 @@ export async function callAgentChat(
         system,
         user,
         temperature: opts?.temperature ?? 0.2,
-        maxTokens: opts?.maxTokens ?? 2000,
+        maxTokens: opts?.maxTokens ?? 4000, // v9.107.1（empty content 根治）：ReAct 主路径默认 2000→4000
         thinking: false,
         tools,
         history: opts?.history ?? [],

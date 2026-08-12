@@ -49,58 +49,58 @@ export type AITask =
 // ============== 任务分级参数 ==============
 export interface TaskConfigItem { temperature: number; maxTokens: number; thinking: boolean; }
 export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
-  preopenPlan: { temperature: 0.4, maxTokens: 900, thinking: false },
-  closeReview: { temperature: 0.3, maxTokens: 1200, thinking: true },
-  annRank:     { temperature: 0.1, maxTokens: 1500, thinking: false },
-  ladderScan:  { temperature: 0.3, maxTokens: 700, thinking: false },
-  newsDigest:  { temperature: 0.3, maxTokens: 400, thinking: false },
-  weeklyCoach: { temperature: 0.4, maxTokens: 1500, thinking: true },
+  preopenPlan: { temperature: 0.4, maxTokens: 2000, thinking: false },
+  closeReview: { temperature: 0.3, maxTokens: 2000, thinking: true },
+  annRank:     { temperature: 0.1, maxTokens: 2000, thinking: false },
+  ladderScan:  { temperature: 0.3, maxTokens: 2000, thinking: false },
+  newsDigest:  { temperature: 0.3, maxTokens: 2000, thinking: false },
+  weeklyCoach: { temperature: 0.4, maxTokens: 3000, thinking: true },
   stockJudge:  { temperature: 0.3, maxTokens: 8000, thinking: true },
-  mainlineClassify: { temperature: 0.1, maxTokens: 4000, thinking: false },
-  mainlineDiagnosis: { temperature: 0.2, maxTokens: 1500, thinking: false },
+  mainlineClassify: { temperature: 0.1, maxTokens: 6000, thinking: false },
+  mainlineDiagnosis: { temperature: 0.2, maxTokens: 3000, thinking: false },
   // v9.26 F-05：主线精排专用任务 —— 低延迟确定性优先（thinking=false、低温、小输出）
-  mainlineRank: { temperature: 0.1, maxTokens: 1500, thinking: false },
+  mainlineRank: { temperature: 0.1, maxTokens: 2000, thinking: false },
   // v9.26 A.6：异动事件一句话解释（事件驱动，每 eventId 一次，小 schema）
-  eventExplain: { temperature: 0.2, maxTokens: 300, thinking: false },
+  eventExplain: { temperature: 0.2, maxTokens: 2000, thinking: false },
   supervisor:  { temperature: 0.4, maxTokens: 4000, thinking: false },
-  policyDiff:  { temperature: 0.2, maxTokens: 1500, thinking: true },
+  policyDiff:  { temperature: 0.2, maxTokens: 3000, thinking: true },
   // v9.28（P1-9）：独立业务 task —— 主题新闻评分 / 个股新闻评分 / 每日情报
   // 均关闭 thinking（结构化 JSON 输出），避免此前复用 stockJudge(thinking=true) 的高延迟与配额浪费
-  themeNewsScore: { temperature: 0.2, maxTokens: 1200, thinking: false },
-  stockNewsScore: { temperature: 0.2, maxTokens: 1200, thinking: false },
+  themeNewsScore: { temperature: 0.2, maxTokens: 2000, thinking: false },
+  stockNewsScore: { temperature: 0.2, maxTokens: 2000, thinking: false },
   dailyIntel:     { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.33（缺口2/3）：盘后自动复盘 / 次日三剧本 / 龙头预判 / 风险雷达
-  dailyReviewAuto: { temperature: 0.3, maxTokens: 2000, thinking: false },
-  nextDayScenarios: { temperature: 0.4, maxTokens: 1000, thinking: false },
-  leaderPredict:   { temperature: 0.2, maxTokens: 600, thinking: false },
-  riskRadar:       { temperature: 0.2, maxTokens: 800, thinking: false },
+  dailyReviewAuto: { temperature: 0.3, maxTokens: 4000, thinking: false },
+  nextDayScenarios: { temperature: 0.4, maxTokens: 2000, thinking: false },
+  leaderPredict:   { temperature: 0.2, maxTokens: 2000, thinking: false },
+  riskRadar:       { temperature: 0.2, maxTokens: 2000, thinking: false },
   // v9.38（V3-12）：事件三级分类（政策级/行业级/事件级）—— 批量小输出
-  eventClassify:   { temperature: 0.1, maxTokens: 1500, thinking: false },
+  eventClassify:   { temperature: 0.1, maxTokens: 2000, thinking: false },
   // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
-  eventDeepDive:   { temperature: 0.3, maxTokens: 800, thinking: false },
+  eventDeepDive:   { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.41（V4-A）：Agent 工具推理
-  agentReason:     { temperature: 0.2, maxTokens: 2000, thinking: false },
+  agentReason:     { temperature: 0.2, maxTokens: 4000, thinking: false },
   // v9.75（阶段三）：Critic 挑刺 —— 独立小任务（不再复用 dailyIntel 2000 token 配置）
-  criticReview:    { temperature: 0.3, maxTokens: 600, thinking: false },
+  criticReview:    { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.75（阶段二）：失效因子归因 —— 小输出结构化
-  factorAttribution: { temperature: 0.2, maxTokens: 800, thinking: false },
+  factorAttribution: { temperature: 0.2, maxTokens: 2000, thinking: false },
   // v9.75（阶段二）：次日闸门预测 —— 小输出结构化
-  nextGatePredict: { temperature: 0.3, maxTokens: 600, thinking: false },
+  nextGatePredict: { temperature: 0.3, maxTokens: 2000, thinking: false },
   // P3-4：用户风格学习 —— 周度低频，中等输出
-  userStyleProfile: { temperature: 0.4, maxTokens: 800, thinking: false },
+  userStyleProfile: { temperature: 0.4, maxTokens: 2000, thinking: false },
   // v9.94.1：快讯分析总结 —— 中低温小输出（结论+要点，非 JSON）
   newsAnalysis: { temperature: 0.4, maxTokens: 2000, thinking: false }, // v9.104.0：700→2000（推理模型铁律）
   // v9.104.0（第四批 C，T-C3）：盘中快评（轻量四段式，≤200 字）
   intradayQuickComment: { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.105.0（第五批 E）：政策首写裁决（规则候选→LLM 精筛）/ 政策解读报告
-  policyFirstWrite: { temperature: 0.2, maxTokens: 2000, thinking: false },
+  policyFirstWrite: { temperature: 0.2, maxTokens: 3000, thinking: false },
   policyInterpretation: { temperature: 0.3, maxTokens: 3000, thinking: false },
   // v9.95.2：两融情绪研判 —— 小输出结构化
-  marginSentiment: { temperature: 0.2, maxTokens: 800, thinking: false },
+  marginSentiment: { temperature: 0.2, maxTokens: 2000, thinking: false },
   // v9.95.3：个股聚合研判 —— 中等输出结构化
-  stockAggregate: { temperature: 0.2, maxTokens: 900, thinking: false },
+  stockAggregate: { temperature: 0.2, maxTokens: 2000, thinking: false },
   // v9.96.0：情绪叙事报告 —— 中温长文（Markdown）
-  emotionReport: { temperature: 0.4, maxTokens: 1500, thinking: false },
+  emotionReport: { temperature: 0.4, maxTokens: 3000, thinking: false },
 };
 
 // ============== 任务负载类型 ==============
