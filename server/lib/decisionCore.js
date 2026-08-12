@@ -1,5 +1,6 @@
 // ============================================================
 // server/lib/decisionCore.js —— 决策直达五支柱纯函数核心（v9.116.0，S2-1）
+// v9.121.0（卓越 S2-1b）：+ assessTactics 游资战术（接力分/情绪买卖点/买点/卖点纪律/梯队位置）
 // 无 I/O、无 db 依赖（可单测）；decisionLayer.js 负责数据装配。
 // 前端 src/lib/decisions/kernel.ts 的 CJS 等价（双端同构：同一套规则公式）。
 // 合规：输出带 sampleSize + caliber，不承诺胜率，保留免责声明。
@@ -16,6 +17,70 @@ function cognSubset(cog) {
   };
 }
 
+// ============================================================
+// v9.121.0（卓越 S2-1b）：游资战术五件套（纯函数）—— 决策卡从"准入分"升级到"战术动作"
+// ============================================================
+
+/** 龙头接力环境分（0-100）：溢价/接力健康/高度空间/闸门/陷阱 */
+function relayEnvScore(cog) {
+  const s = cog?.sentiment?.value ?? {};
+  const l = cog?.leader?.value ?? {};
+  const r = cog?.risk?.value ?? {};
+  let score = 50;
+  if ((s.premium ?? 0) > 0) score += 15;
+  if (l.relayOk === true) score += 12;
+  if ((l.height ?? 0) <= 4) score += 8; else score -= 10; // 高位接力空间小
+  if (r.gateOpen === true) score += 10; else score -= 18;
+  if (!(r.traps ?? []).length) score += 5;
+  return Math.max(0, Math.min(100, score));
+}
+
+/** 情绪周期买卖点（游资核心坐标系） */
+function stageActionOf(stage) {
+  const map = {
+    冰点: "低吸首板试错(轻仓)", 退潮: "回避接力，管住手", 启动: "打首板/低吸梯队",
+    发酵: "接力核心龙头", 高潮: "只持不开，防爆头", 分歧: "高低切，减高位",
+  };
+  return map[stage] ?? "观望为主";
+}
+
+/** 买点时机（时段/涨停状态/量价）—— sessionPhase 可选注入（服务端 currentSession；前端本地时间） */
+function buyPointOf(stock, cog, sessionPhase) {
+  const isAuction = sessionPhase === "竞价" || /09:2/.test(cog?.session?.window ?? "");
+  if (isAuction) return "竞价打板/低吸";
+  if (stock?.limitUp && (stock?.relay ?? 0) >= 2) return "回封接力";
+  if (!stock?.limitUp && (stock?.pct ?? 0) >= 3 && (stock?.pct ?? 0) <= 7 && (stock?.mainNet ?? 0) > 0) return "回踩低吸";
+  if (stock?.limitUp && (stock?.relay ?? 0) === 1) return "首板打板(需量能)";
+  return "盘中分时确认";
+}
+
+/** 卖点纪律（阶段决定） */
+function sellDisciplineOf(stage) {
+  return stage === "高潮" || stage === "分歧" ? "断板即走；烂板减半；14:50未封减仓" : "破均线/量能背离减仓；止损不犹豫";
+}
+
+/** 梯队位置（主线 tier1/tier2） */
+function ladderPosOf(stock, cog) {
+  const tier1 = cog?.mainline?.value?.ladder?.tier1 ?? [];
+  const tier2 = cog?.mainline?.value?.ladder?.tier2 ?? [];
+  const name = stock?.name ?? "";
+  if (tier1.some((n) => name.includes(n.slice(0, 2)) || n.includes(name.slice(0, 2)))) return "tier1龙头";
+  if (tier2.some((n) => name.includes(n.slice(0, 2)) || n.includes(name.slice(0, 2)))) return "tier2跟风";
+  return "非主线梯队";
+}
+
+/** 游资战术总装（纯函数；sessionPhase 可选） */
+function assessTactics(stock, cog, sessionPhase) {
+  const stage = cog?.sentiment?.value?.stage ?? "启动";
+  return {
+    relayScore: relayEnvScore(cog),
+    stageAction: stageActionOf(stage),
+    buyPoint: buyPointOf(stock, cog, sessionPhase),
+    sellDiscipline: sellDisciplineOf(stage),
+    ladderPos: ladderPosOf(stock, cog),
+  };
+}
+
 /** 诱多识别（④ kernel detectTrap 移植）：主力净流出/放量不足/炸板环境首板 */
 function detectTrap(stock, cog) {
   const traps = [];
@@ -29,7 +94,7 @@ function detectTrap(stock, cog) {
 }
 
 /** 主裁决编排（纯函数，无 IO）—— 与前端 composeDecisionCore 同规则 */
-function composeDecisionCore(stock, cog, ctx) {
+function composeDecisionCore(stock, cog, ctx, sessionPhase) {
   const t0 = Date.now();
   const stage = cog?.sentiment?.value?.stage ?? "启动";
   const gateOpen = cog?.risk?.value?.gateOpen !== false;
@@ -96,9 +161,11 @@ function composeDecisionCore(stock, cog, ctx) {
     stopLossPct: parsePct(exit.detail, 0),
     targetPct: parsePct(exit.detail, 1),
     suggestedPositionPct: position.score,
+    // v9.121.0（卓越 S2-1b）：游资战术（接力分/情绪买卖点/买点/卖点纪律/梯队位置）—— 五支柱不动，纯加字段
+    tactics: assessTactics(stock, cog, sessionPhase),
     evidence: {
       sampleSize: 1,
-      caliber: "五支柱(准入/仓位/离场/风控/诱多)规则阈值法，认知层 v" + (cog?.version ?? "?") + "，非概率预测",
+      caliber: "五支柱(准入/仓位/离场/风控/诱多)规则阈值法 + 游资战术，认知层 v" + (cog?.version ?? "?") + "，非概率预测",
       asOf: new Date().toISOString(),
     },
     reasons,
@@ -114,4 +181,4 @@ function parsePct(detail, idx) {
   return Math.abs(parseInt(m[idx], 10));
 }
 
-module.exports = { composeDecisionCore, detectTrap, cognSubset };
+module.exports = { composeDecisionCore, detectTrap, cognSubset, assessTactics, relayEnvScore, stageActionOf, buyPointOf, sellDisciplineOf, ladderPosOf };

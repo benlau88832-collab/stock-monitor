@@ -131,6 +131,24 @@ export default function DecisionCard() {
           {result.reasons.length > 0 && <div className="text-emerald-300/80">✓ {result.reasons.join("；")}</div>}
           {result.blocks.length > 0 && <div className="text-red-300/80">✗ {result.blocks.join("；")}</div>}
 
+          {/* v9.121.0（卓越 S2-1b）：游资战术行（接力分/情绪买卖点/买点/卖点纪律/梯队位置） */}
+          {result.tactics && (
+            <div className="rounded bg-black/20 p-2">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">🎯 游资战术</span>
+                <span className={`text-[11px] font-bold ${result.tactics.relayScore >= 70 ? "text-emerald-300" : result.tactics.relayScore >= 50 ? "text-amber-300" : "text-red-300"}`}>
+                  接力分 {result.tactics.relayScore}
+                </span>
+              </div>
+              <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-300">
+                <div>情绪买卖点：<b className="text-amber-300">{result.tactics.stageAction}</b></div>
+                <div>买点：<b className="text-cyan-300">{result.tactics.buyPoint}</b></div>
+                <div>卖点纪律：<span className="text-slate-400">{result.tactics.sellDiscipline}</span></div>
+                <div>梯队位置：<b className={result.tactics.ladderPos === "tier1龙头" ? "text-rose-300" : result.tactics.ladderPos === "tier2跟风" ? "text-amber-300" : "text-slate-400"}>{result.tactics.ladderPos}</b></div>
+              </div>
+            </div>
+          )}
+
           <div className="rounded bg-black/20 p-2">
             <div className="text-slate-500">证据链</div>
             <div className="mt-0.5 text-slate-300">

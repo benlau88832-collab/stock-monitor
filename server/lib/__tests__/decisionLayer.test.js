@@ -1,6 +1,7 @@
-// v9.116.0（S2-1）：决策直达五支柱单测 —— 闸门关→回避 / 诱多→回避 / 确定性 / latency<1ms
+// v9.116.0（S2-1）+ v9.121.0（卓越 S2-1b）：决策直达五支柱 + 游资战术单测
 import { describe, it, expect } from "vitest";
 import { composeDecisionCore, detectTrap } from "../decisionCore";
+import { relayEnvScore, stageActionOf, buyPointOf, assessTactics } from "../decisionCore";
 
 // 认知层 stub（闸门放开/风险低/发酵）
 function cogStub(over = {}) {
@@ -54,5 +55,36 @@ describe("v9.116.0 决策直达 composeDecisionCore（S2-1）", () => {
   it("detectTrap：主力净流出 → 命中；无信号 → pass", () => {
     expect(detectTrap({ mainNet: -1e7 }, cogStub()).pass).toBe(false);
     expect(detectTrap({ mainNet: 1e7, pct: 2, turnoverRate: 8, relay: 1 }, cogStub()).pass).toBe(true);
+  });
+});
+
+// v9.121.0（卓越 S2-1b）：游资战术五件套（⑤ 验收 4 例）
+describe("v9.121.0 assessTactics（游资战术，S2-1b）", () => {
+  it("relayEnvScore：闸门关 → 扣分且 < 闸门开", () => {
+    const open = relayEnvScore(cogStub());
+    const closed = relayEnvScore(cogStub({ risk: { value: { level: "高", traps: ["炸板率偏高"], gateOpen: false } } }));
+    expect(closed).toBeLessThan(open);
+    expect(open).toBeGreaterThanOrEqual(0);
+    expect(open).toBeLessThanOrEqual(100);
+  });
+
+  it("stageActionOf(发酵) === '接力核心龙头'；高潮 → 只持不开", () => {
+    expect(stageActionOf("发酵")).toBe("接力核心龙头");
+    expect(stageActionOf("高潮")).toBe("只持不开，防爆头");
+  });
+
+  it("buyPointOf：竞价窗口 → '竞价打板/低吸'；涨停2板 → 回封接力", () => {
+    expect(buyPointOf(null, cogStub(), "竞价")).toBe("竞价打板/低吸");
+    expect(buyPointOf({ code: "600001", limitUp: true, relay: 2 }, cogStub(), "盘中")).toBe("回封接力");
+  });
+
+  it("composeDecisionCore 返回含 tactics（五支柱不动）", () => {
+    const stock = { code: "600519", name: "贵州茅台", pct: 1.2, mainNet: 8e7, turnoverRate: 1.5, relay: 0 };
+    const v = composeDecisionCore(stock, cogStub(), { riskAppetite: "短线" }, "盘中");
+    expect(v.tactics).toBeDefined();
+    expect(typeof v.tactics.relayScore).toBe("number");
+    expect(typeof v.tactics.stageAction).toBe("string");
+    expect(v.tactics.sellDiscipline).toContain("止损"); // 非高潮/分歧阶段
+    expect(v.pillars.admission).toBeDefined(); // 五支柱不受影响
   });
 });

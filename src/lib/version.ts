@@ -53,6 +53,8 @@
 // v9.120.0（卓越 S1-1b/S1-1c 认知推理层）：reasoning.js 纯函数（assessCoherence 跨5维共振+背离 /
 //   deriveDrivers 因果驱动链 / computeDelta 环比变化率 / makeForecast 前瞻预判 / buildNarrative 一句话理解）+
 //   /api/reasoning 端点（含 prevCog 历史版 + 利好新闻催化）+ 助手注入 narrative + ReasoningPanel 推理面板
+// v9.121.0（卓越 S2-1b 决策直达游资战术）：assessTactics 五件套（接力分/情绪买卖点/买点/卖点纪律/梯队位置）+
+//   composeDecisionCore 返回加 tactics（双端同构）+ DecisionCard 游资战术行（五支柱不动纯加字段）
 // ============================================================
-export const APP_VERSION = "v9.120.0";
+export const APP_VERSION = "v9.121.0";
 export const BUILD_DATE = "2026-08-13";
