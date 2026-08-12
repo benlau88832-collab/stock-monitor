@@ -1,6 +1,6 @@
-// v9.115.0（S1-1）：认知层纯函数单测 —— buildCognition/verifyCognition/hash/口径/闸门
+// v9.115.0（S1-1/S1-2）：认知层纯函数单测 —— buildCognition/verifyCognition/hash/口径/闸门/落库
 import { describe, it, expect } from "vitest";
-import { buildCognition, verifyCognition, hashString, rawFromBrainContext } from "../cognition";
+import { buildCognition, verifyCognition, hashString, rawFromBrainContext, nextVersion, persistCognition } from "../cognition";
 
 // 演示原始快照（口径与参考实现 mockData 一致；不带 _pg → 走公式口径）
 function mockRaw(over = {}) {
@@ -107,5 +107,33 @@ describe("v9.115.0 认知层 buildCognition（S1-1）", () => {
   it("hashString 确定性 + 不同内容不同 hash", () => {
     expect(hashString("abc")).toBe(hashString("abc"));
     expect(hashString("abc")).not.toBe(hashString("abd"));
+  });
+});
+
+// v9.115.0（S1-2）：落库 —— mock pool 验证 SQL 与 version 序列（③ 验收：cron tick → 表 +1 行，version 自增）
+describe("v9.115.0 认知落库 nextVersion/persistCognition（S1-2）", () => {
+  it("nextVersion：表空 → 1；max=5 → 6（单调递增）", async () => {
+    const empty = { query: async () => ({ rows: [{ v: 0 }] }) };
+    expect(await nextVersion(empty)).toBe(1);
+    const has = { query: async () => ({ rows: [{ v: 5 }] }) };
+    expect(await nextVersion(has)).toBe(6);
+  });
+
+  it("persistCognition：INSERT 八字段（version/hash/as_of/主题/阶段/资金/风险/payload）", async () => {
+    const calls = [];
+    const pool = { query: async (sql, params) => { calls.push({ sql, params }); return { rows: [{ id: 42 }] }; } };
+    const cog = buildCognition(mockRaw(), 3);
+    const id = await persistCognition(pool, cog);
+    expect(id).toBe(42);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toContain("INSERT INTO cognition_snapshots");
+    expect(calls[0].params[0]).toBe(3);                        // version
+    expect(calls[0].params[1]).toBe(cog.hash);                 // hash
+    expect(calls[0].params[2]).toBe(cog.asOf);                 // as_of 带横杠
+    expect(calls[0].params[3]).toBe("半导体设备/光刻胶");        // primary_theme
+    expect(calls[0].params[4]).toBe(cog.sentiment.value.stage); // sentiment_stage
+    expect(calls[0].params[5]).toBe(cog.capital.value.signal);  // capital_signal
+    expect(calls[0].params[6]).toBe(cog.risk.value.level);      // risk_level
+    expect(JSON.parse(calls[0].params[7]).hash).toBe(cog.hash); // payload 完整认知
   });
 });

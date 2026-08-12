@@ -178,6 +178,20 @@ CREATE TABLE IF NOT EXISTS policy_docs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(source_url)
 );
+-- v9.115.0（S1-2）：认知快照落库 —— 认知作为一等公民持久化（历史回放/双端同构校验/version 序列权威源）
+CREATE TABLE IF NOT EXISTS cognition_snapshots (
+  id             SERIAL PRIMARY KEY,
+  version        INTEGER NOT NULL,
+  hash           TEXT NOT NULL,
+  as_of          TEXT NOT NULL,
+  primary_theme  TEXT,
+  sentiment_stage TEXT,
+  capital_signal TEXT,
+  risk_level     TEXT,
+  payload        TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cog_version ON cognition_snapshots(version);
 `;
 
 async function initDb() {

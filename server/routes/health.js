@@ -38,6 +38,20 @@ module.exports = function healthRoutes(app) {
       const m = html.match(/<title>[^<]*?v(\d+\.\d+\.\d+)/);
       out.version = m ? `v${m[1]}` : null;
     } catch { out.version = null; }
+    // ⑥ v9.115.0（S1-2）：认知层 check（version/hash/asOf —— 全站唯一认知状态）
+    try {
+      const { getCognition } = require("./cognition");
+      const cog = await getCognition();
+      out.cognition = {
+        ok: !!cog && !!cog.hash,
+        version: cog?.version ?? null,
+        hash: cog?.hash ?? null,
+        asOf: cog?.asOf ?? null,
+        stage: cog?.sentiment?.value?.stage ?? null,
+      };
+    } catch (e) {
+      out.cognition = { ok: false, error: e.message };
+    }
     res.json(out);
   });
 };

@@ -389,6 +389,18 @@ async function runIntradayBrain(pool, force = false) {
     }
     console.log(`[cron] 🚨 封单衰减 ${ds}: ${sealAlerts.map(a => `${a.name}(${a.changePct}%)`).join(" | ")}`);
   }
+  // ⑥ v9.115.0（S1-2）：认知快照构建 + 落库（version 单调递增，表为权威序列）——
+  //   全站唯一认知由 cron 驱动刷新，/api/cognition 读表最新；失败不影响既有主链
+  try {
+    const { buildBrainContext } = require("./lib/brainContext");
+    const { buildCognition, rawFromBrainContext, nextVersion, persistCognition } = require("./lib/cognition");
+    const ctx = await buildBrainContext(pool);
+    const raw = rawFromBrainContext(ctx);
+    const ver = await nextVersion(pool);
+    const cog = buildCognition(raw, ver);
+    await persistCognition(pool, cog);
+    console.log(`[cron] 🧠 认知快照 v${cog.version} ${ds}: hash=${cog.hash} 情绪${cog.sentiment.value.stage}(${cog.sentiment.value.score}) 主线${cog.mainline.value.primaryTheme} 闸门${cog.risk.value.gateOpen ? "开" : "关"}`);
+  } catch (e) { console.warn("[cron] 认知快照失败（不影响主链）:", e.message); }
   return { sentiment, anomalies: anomalies.length, sealAlerts: sealAlerts.length };
 }
 

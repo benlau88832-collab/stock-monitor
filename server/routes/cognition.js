@@ -1,28 +1,22 @@
 // ============================================================
-// server/routes/cognition.js —— GET /api/cognition（v9.115.0，S1-1）
-// 全站唯一认知端点：实时读 PG（buildBrainContext）→ 适配 → buildCognition。
-// 内存缓存 + 数据变化（date/sources 时间戳）时 version 自增 → hash 随内容变化，
-// 同一次请求周期内全站消费同一份认知（双端同构 golden）。
-// S1-2 将把 version/hash/payload 落库 cognition_snapshots（此处缓存为 S1-1 先行形态）。
+// server/routes/cognition.js —— GET /api/cognition（v9.115.0，S1-1/S1-2）
+// 全站唯一认知端点：优先读 cognition_snapshots 表最新行（cron 驱动刷新的权威版本，
+//   version 单调递增、hash 随内容变化 —— 双端同构 golden 校验源）；
+// 表空（cron 尚未跑）→ 即时构建并落库（version = 表 max+1，与 cron 共用序列）。
 // ============================================================
 const { pool } = require("../db");
-const { buildCognition, rawFromBrainContext } = require("../lib/cognition");
+const { buildCognition, rawFromBrainContext, nextVersion, persistCognition, latestCognition } = require("../lib/cognition");
 
-let cached = null;   // MarketCognition
-let cacheKey = null; // 数据指纹（date + market/sentiment 落库时间戳）
-let cogVersion = 0;  // 单调递增版本号（数据变化时 +1）
-
-/** 全站唯一认知（memoized）—— 数据指纹变化才重建，version 单调递增 */
+/** 全站唯一认知（表最新优先；无行则构建+落库） */
 async function getCognition() {
+  const latest = await latestCognition(pool);
+  if (latest) return latest;
   const { buildBrainContext } = require("../lib/brainContext");
   const ctx = await buildBrainContext(pool);
-  const key = `${ctx.date}:${ctx.fallbackDate ?? ""}:${ctx.sources?.market ?? 0}:${ctx.sources?.sentiment ?? 0}`;
-  if (key !== cacheKey) {
-    cacheKey = key;
-    cogVersion += 1;
-    cached = buildCognition(rawFromBrainContext(ctx), cogVersion);
-  }
-  return cached;
+  const ver = await nextVersion(pool);
+  const cog = buildCognition(rawFromBrainContext(ctx), ver);
+  await persistCognition(pool, cog);
+  return cog;
 }
 
 module.exports = function cognitionRoutes(app) {

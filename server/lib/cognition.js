@@ -229,4 +229,43 @@ function isoFromSources(ts, dateStr) {
   return dateStr ? `${dateStr}T00:00:00.000Z` : new Date().toISOString();
 }
 
-module.exports = { buildCognition, verifyCognition, rawFromBrainContext, hashString, deriveSentimentStage };
+// ============================================================
+// v9.115.0（S1-2）：认知落库 —— version 序列权威源 = 表 max(version)+1
+// （cron 与 /api/cognition 共用同一序列，避免内存/表 version 漂移）
+// ============================================================
+/** 下一版本号：表内 max(version)+1（表空 → 1）；pool 注入便于单测 */
+async function nextVersion(pool) {
+  const r = await pool.query("SELECT COALESCE(MAX(version),0) AS v FROM cognition_snapshots");
+  return Number(r.rows?.[0]?.v ?? 0) + 1;
+}
+
+/** 认知快照落库（INSERT 单行；payload 为完整 MarketCognition JSON，供回放/校验） */
+async function persistCognition(pool, cog) {
+  const r = await pool.query(
+    `INSERT INTO cognition_snapshots(version,hash,as_of,primary_theme,sentiment_stage,capital_signal,risk_level,payload)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [
+      cog.version,
+      cog.hash,
+      cog.asOf,
+      cog.mainline?.value?.primaryTheme ?? null,
+      cog.sentiment?.value?.stage ?? null,
+      cog.capital?.value?.signal ?? null,
+      cog.risk?.value?.level ?? null,
+      JSON.stringify(cog),
+    ],
+  );
+  return r.rows?.[0]?.id ?? null;
+}
+
+/** 读表内最新认知（cron 落库的权威版本）；无行 → null */
+async function latestCognition(pool) {
+  const r = await pool.query("SELECT payload FROM cognition_snapshots ORDER BY id DESC LIMIT 1");
+  if (!r.rows?.length) return null;
+  try { return JSON.parse(r.rows[0].payload); } catch { return null; }
+}
+
+module.exports = {
+  buildCognition, verifyCognition, rawFromBrainContext, hashString, deriveSentimentStage,
+  nextVersion, persistCognition, latestCognition,
+};
