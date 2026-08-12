@@ -101,9 +101,12 @@ export function sellDisciplineOf(stage?: string): string {
 export function ladderPosOf(stock: StockInput | null, cog: CognSubset): string {
   const tier1 = cog.mainline?.value?.ladder?.tier1 ?? [];
   const tier2 = cog.mainline?.value?.ladder?.tier2 ?? [];
-  const name = stock?.name ?? "";
-  if (tier1.some((n) => name.includes(n.slice(0, 2)) || n.includes(name.slice(0, 2)))) return "tier1龙头";
-  if (tier2.some((n) => name.includes(n.slice(0, 2)) || n.includes(name.slice(0, 2)))) return "tier2跟风";
+  const name = (stock?.name ?? "").trim();
+  // v9.123.0（卓越审查 P0-1）：空名守卫（与 decisionCore.js 同规则双端同构）——
+  //   n.includes("") 恒 true，无名股票被误判"tier1龙头"
+  if (!name) return "非主线梯队";
+  if (tier1.some((n) => n === name || (n.length >= 2 && name.includes(n.slice(0, 2))))) return "tier1龙头";
+  if (tier2.some((n) => n === name || (n.length >= 2 && name.includes(n.slice(0, 2))))) return "tier2跟风";
   return "非主线梯队";
 }
 
@@ -322,11 +325,22 @@ export async function composeDecision(input: { code?: string; mainline?: string 
   const p = (positionRes ?? {}) as Record<string, any>;
   const e = (exitRes ?? {}) as { level?: string; reasons?: string[] };
   const er = e.reasons ?? [];
+  // v9.123.0（卓越审查 P1-5）：工具失败(null/无结论)时 omit 对应支柱 → 核心走认知近似兜底
+  //   （此前无条件注入"准入工具未给出"占位，composeDecisionCore 的 ctx.admission ?? 兜底永不触发，"永不降级"名存实亡）
+  const admission = a.action
+    ? { pass: a.action === "可上车" || a.action === "进攻", score: Number(a.confidence) || 50, detail: String(a.reason ?? "准入工具未给出") }
+    : undefined;
+  const position = Number(p.suggestedPct)
+    ? { pass: (Number(p.suggestedPct) || 0) >= 10, score: Number(p.suggestedPct) || 0, detail: `建议仓位 ${p.suggestedPct ?? 0}%（工具计算）` }
+    : undefined;
+  const exit = e.level
+    ? { pass: true, score: e.level === "red" ? 30 : e.level === "yellow" ? 60 : 80, detail: `离场${e.level}${er.length ? "：" + er.slice(0, 2).join("；") : ""}` }
+    : undefined;
   const v = composeDecisionCore(stock, cog, {
     riskAppetite: "短线",
-    admission: { pass: a.action === "可上车" || a.action === "进攻", score: Number(a.confidence) || 50, detail: String(a.reason ?? "准入工具未给出") },
-    position: { pass: (Number(p.suggestedPct) || 0) >= 10, score: Number(p.suggestedPct) || 0, detail: `建议仓位 ${p.suggestedPct ?? 0}%（工具计算）` },
-    exit: { pass: true, score: e.level === "red" ? 30 : e.level === "yellow" ? 60 : 80, detail: `离场${e.level ?? "none"}${er.length ? "：" + er.slice(0, 2).join("；") : ""}` },
+    ...(admission ? { admission } : {}),
+    ...(position ? { position } : {}),
+    ...(exit ? { exit } : {}),
     sysRisk: { hs300Pct: null, limitDownCount: 0 }, // 沪深300/跌停由认知风险等级覆盖（服务端/页面另有完整 sysRisk 面板）
   }, resolveLocalPhase());
   return { ...v, latencyMs: Date.now() - t0 };

@@ -57,6 +57,13 @@
 //   composeDecisionCore 返回加 tactics（双端同构）+ DecisionCard 游资战术行（五支柱不动纯加字段）
 // v9.122.0（卓越 S3-2b 主动智能消费预判）：runProactiveTick 第 4 参 reasoning —— forecast.conditions
 //   作为额外触发源（每条产出一条"前瞻预判"洞察，P0/P1、0 token、可触达决策卡）；路由/cron 双路径注入
+// v9.123.0（卓越审查修复批次 P0×4+P1×7）：决策直达个股真实装配（stockSnapshot.js：push2delay→腾讯，
+//   装配失败降级 {code}）+ ladderPosOf 空名守卫（双端）+ 决策读认知表（version 0 废弃）+
+//   资金明暗盘数据链（f66/f72/f78/f84 → 暗盘/明盘真实计算，明细缺失诚实"流入/流出"，五维共振恢复真五维）+
+//   主动流润色质量闸（政策语料空不润色 + 拒绝语黑名单）+ 认知 session 真实时段注入（双时钟合并）+
+//   llmCore length 重试 headroom 生效（发送上限对齐 12000，diag 实测网关接受）+ forecast 六阶段全覆盖（启动/分歧）+
+//   龙头数据缺失不误报 P0 + 前端决策卡工具失败走认知近似兜底 + buildReasoning 60s 缓存/轻量变体 +
+//   复盘链注入认知单行 + 双端决策核 golden 测试（新增 10+ 用例，T-2~T-14）
 // ============================================================
-export const APP_VERSION = "v9.122.0";
+export const APP_VERSION = "v9.123.0";
 export const BUILD_DATE = "2026-08-13";

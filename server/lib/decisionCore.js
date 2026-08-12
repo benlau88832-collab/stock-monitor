@@ -10,6 +10,8 @@
 function cognSubset(cog) {
   return {
     version: cog?.version,
+    // v9.123.0（卓越审查 P1-1）：session 透传（buyPointOf 竞价判据 /09:2/ 依赖 window；此前服务端路径恒 undefined）
+    session: cog?.session,
     risk: cog?.risk ? { value: cog.risk.value } : undefined,
     sentiment: cog?.sentiment ? { value: cog.sentiment.value } : undefined,
     mainline: cog?.mainline ? { value: cog.mainline.value } : undefined,
@@ -63,9 +65,12 @@ function sellDisciplineOf(stage) {
 function ladderPosOf(stock, cog) {
   const tier1 = cog?.mainline?.value?.ladder?.tier1 ?? [];
   const tier2 = cog?.mainline?.value?.ladder?.tier2 ?? [];
-  const name = stock?.name ?? "";
-  if (tier1.some((n) => name.includes(n.slice(0, 2)) || n.includes(name.slice(0, 2)))) return "tier1龙头";
-  if (tier2.some((n) => name.includes(n.slice(0, 2)) || n.includes(name.slice(0, 2)))) return "tier2跟风";
+  const name = (stock?.name ?? "").trim();
+  // v9.123.0（卓越审查 P0-1）：空名守卫——"".slice(0,2)="" 且 n.includes("") 恒 true，
+  //   无名股票被误判"tier1龙头"（服务端装配失败降级 {code} 时必现）
+  if (!name) return "非主线梯队";
+  if (tier1.some((n) => n === name || (n.length >= 2 && name.includes(n.slice(0, 2))))) return "tier1龙头";
+  if (tier2.some((n) => n === name || (n.length >= 2 && name.includes(n.slice(0, 2))))) return "tier2跟风";
   return "非主线梯队";
 }
 

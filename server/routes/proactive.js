@@ -15,7 +15,8 @@ async function getCog() {
   const latest = await latestCognition(pool);
   if (latest) return latest;
   const ctx = await buildBrainContext(pool);
-  return buildCognition(rawFromBrainContext(ctx), 1);
+  // v9.123.0（卓越审查 P1-1）：真实时段注入
+  return buildCognition(rawFromBrainContext(ctx), 1, currentSession());
 }
 
 module.exports = function proactiveRoutes(app) {

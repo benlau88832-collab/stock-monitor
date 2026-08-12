@@ -6,6 +6,8 @@
 // ============================================================
 const { pool } = require("../db");
 const { buildCognition, rawFromBrainContext, nextVersion, persistCognition, latestCognition } = require("../lib/cognition");
+// v9.123.0（卓越审查 P1-1）：兜底构建时注入真实时段（此前硬编码"盘中"）
+const { currentSession } = require("../lib/proactiveSession");
 
 /** 全站唯一认知（表最新优先；无行则构建+落库） */
 async function getCognition() {
@@ -14,7 +16,7 @@ async function getCognition() {
   const { buildBrainContext } = require("../lib/brainContext");
   const ctx = await buildBrainContext(pool);
   const ver = await nextVersion(pool);
-  const cog = buildCognition(rawFromBrainContext(ctx), ver);
+  const cog = buildCognition(rawFromBrainContext(ctx), ver, currentSession());
   await persistCognition(pool, cog);
   return cog;
 }

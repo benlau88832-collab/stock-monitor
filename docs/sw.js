@@ -5,7 +5,12 @@
 // v9.99.1：CACHE v2→v3 —— ①fetch 显式 { cache: "no-store" }：服务端 ETag + max-age=0 时
 //   SW 的 fetch() 会拿到 304 回退 HTTP 磁盘缓存的旧 body（network-first 形同虚设，发新版页面旧版 JS 的坑）；
 //   ②v3 强制旧 SW 退役（activate 清 v2 缓存）
-const CACHE = "stock-monitor-v28";
+// v9.113.1（T1-1）：CACHE v28→v29 —— 主面板 PG-first 改造发版
+// v9.114.0（T5-3）：SW 版本强制更新 —— CACHE 名 +1 同时，activate 通知所有打开页面强制 reload，
+//   消除"需硬刷新"约定（浏览器可能持旧 SW/旧页面；skipWaiting 已保证新 SW 立即接管）
+// v9.122.0（卓越 S3-2b）：CACHE v37→v38 —— 前瞻预判接入发版
+// v9.123.0（卓越审查修复）：CACHE v38→v39 —— 决策卡游资战术/认知时段/资金明暗盘前端口径发版
+const CACHE = "stock-monitor-v39";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {
@@ -17,11 +22,16 @@ self.addEventListener("install", (e) => {
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    )
+    (async () => {
+      // 清理旧缓存（CACHE 名每次 +1，旧缓存一律删除）
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+      await self.clients.claim();
+      // v9.114.0（T5-3）：新 SW 激活 = 新版本上线 → 通知所有窗口强制刷新（无硬刷新即生效）
+      const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      wins.forEach((c) => c.postMessage({ type: "FORCE_RELOAD" }));
+    })()
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (e) => {

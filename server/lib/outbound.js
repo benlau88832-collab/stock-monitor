@@ -18,8 +18,10 @@ const { isNetworkErr, PROXY_AGENT } = require("./httpProxy");
 // v9.30.3：模拟浏览器 UA（node 默认 "node" 会被 emappdata 等接口 ban 导致 socket hang up）
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-/** 低层请求：返回 {status, body}；超时/连接错误 reject */
-function requestRaw(url, { timeout = 6000, headers = {}, viaProxy = false, method = "GET", body } = {}) {
+/** 低层请求：返回 {status, body}；超时/连接错误 reject。
+ *  v9.123.0（卓越审查 P0-1）：rawBuffer=true 时 body 返回原始 Buffer（GBK 等非 utf8 源用，
+ *  默认 utf8 字符串——GBK 字节经 utf8 解码后为不可逆 U+FFFD，腾讯行情中文名必需 rawBuffer） */
+function requestRaw(url, { timeout = 6000, headers = {}, viaProxy = false, method = "GET", body, rawBuffer = false } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const lib = u.protocol === "https:" ? https : http;
@@ -32,7 +34,8 @@ function requestRaw(url, { timeout = 6000, headers = {}, viaProxy = false, metho
       const chunks = [];
       r.on("data", c => chunks.push(c));
       r.on("end", () => {
-        resolve({ status: r.statusCode, body: Buffer.concat(chunks).toString("utf8") });
+        const buf = Buffer.concat(chunks);
+        resolve({ status: r.statusCode, body: rawBuffer ? buf : buf.toString("utf8") });
       });
     });
     req.on("error", reject);

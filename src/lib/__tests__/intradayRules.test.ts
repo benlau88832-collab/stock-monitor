@@ -52,4 +52,16 @@ describe("v9.102.0 evaluatePoolDiff（5 条规则）", () => {
     const s = { zt: [mk("600001")], zb: [], dt: [] };
     expect(evaluatePoolDiff(s, s)).toHaveLength(0);
   });
+
+  // v9.123.0（T-11）：R3 精确阈值边界（prev<20 且 cur>=35 才触发）
+  it("R3 边界：19.9%→35% 触发 S 级；20%→35% 不触发；19.9%→34.99% 不触发", () => {
+    const mkN = (n: number, prefix: string) => Array.from({ length: n }, (_, i) => mk(`${prefix}${i}`));
+    const prev = { zt: mkN(801, "a"), zb: mkN(199, "b"), dt: [] };   // 199/1000 = 19.9%
+    const cur = { zt: mkN(65, "c"), zb: mkN(35, "d"), dt: [] };      // 35/100 = 35%
+    expect(evaluatePoolDiff(prev, cur).find((e: any) => e.type === "炸板率突变")?.level).toBe("S");
+    const prev20 = { zt: mkN(800, "a"), zb: mkN(200, "b"), dt: [] }; // 200/1000 = 20.0%
+    expect(evaluatePoolDiff(prev20, cur).find((e: any) => e.type === "炸板率突变")).toBeUndefined();
+    const cur35minus = { zt: mkN(66, "c"), zb: mkN(34, "d"), dt: [] }; // 34/100 = 34.0%
+    expect(evaluatePoolDiff(prev, cur35minus).find((e: any) => e.type === "炸板率突变")).toBeUndefined();
+  });
 });

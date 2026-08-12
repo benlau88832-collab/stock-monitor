@@ -157,7 +157,12 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
       .filter(i => i && i.name)
       .sort((a, b) => (num(b.mainNet) ?? -Infinity) - (num(a.mainNet) ?? -Infinity))
       .slice(0, 10)
-      .map(i => ({ board: i.name, mainNet: num(i.mainNet) }));
+      .map(i => ({
+        board: i.name,
+        mainNet: num(i.mainNet),
+        // v9.123.0（卓越审查 P0-3）：明暗盘明细透传（认知层暗盘/明盘判定用；旧数据无字段 → null）
+        superBig: num(i.superBig), big: num(i.big), mid: num(i.mid), small: num(i.small),
+      }));
   }
 
   // ---------- 龙虎榜（净买入 top15） ----------

@@ -101,6 +101,18 @@ describe("v9.109.0 llmCore.chatComplete", () => {
     expect(post).toHaveBeenCalledTimes(3);
   });
 
+  // v9.123.0（卓越审查 P1-2）：maxTokens=8000 任务 length 重试 headroom 生效
+  //   （原 Math.min(curMaxTokens,8000) 使 12000 上限永不生效 → 重试空转两次必抛）
+  it("maxTokens=8000 且 length → 重试 max_tokens 升至 10000 → 返回完整 text", async () => {
+    const post = makePost();
+    post.mockResolvedValueOnce({ choices: [{ message: { content: "截" }, finish_reason: "length" }] });
+    post.mockResolvedValueOnce({ choices: [{ message: { content: '{"final":{"reply":"完整"}}' }, finish_reason: "stop" }] });
+    const r = await chatComplete({ system: "s", user: "u", maxTokens: 8000, _post: post, _aiHealth: STUB_HEALTH });
+    expect(r.text).toContain("完整");
+    const secondBody = post.mock.calls[1][1];
+    expect(secondBody.max_tokens).toBeGreaterThanOrEqual(10000); // 8000 + 2000 上调
+  });
+
   // v9.111.0（S-1/R-3）：正常返回带 reasoning/reasoningLen 字段（供 D-4 会话预算纳入恒思考消耗）
   it("正常返回带 reasoning/reasoningLen 字段", async () => {
     const post = makePost();

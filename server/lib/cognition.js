@@ -90,10 +90,15 @@ function buildCapital(raw) {
   const funds = raw.boardFund ?? [];
   const net = funds.reduce((a, b) => a + (b.bigNet ?? 0), 0);
   const gap = funds.reduce((a, b) => a + (b.darkLightGap ?? 0), 0);
-  const signal = gap > 10 && net > 0 ? "吸筹" : gap > 0 && net > 0 ? "洗盘" : gap < 0 && net < 0 ? "出货" : "中性";
+  // v9.123.0（卓越审查 P0-3）：明暗盘明细缺失时按净额方向诚实输出"流入/流出"——
+  //   此前 gap 恒 0 → signal 恒"中性" → 资金维共振/主力资金规则在生产永久哑火
+  const hasGap = funds.some((b) => b.darkLightGap != null);
+  const signal = !hasGap
+    ? (net > 0 ? "流入" : net < 0 ? "流出" : "数据不足")
+    : (gap > 10 && net > 0 ? "吸筹" : gap > 0 && net > 0 ? "洗盘" : gap < 0 && net < 0 ? "出货" : "中性");
   return {
     value: { netFlow: Math.round(net * 10) / 10, darkVsLight: Math.round(gap * 10) / 10, signal },
-    provenance: pgProvenance(raw.asOf, funds.length, "明暗盘：暗盘=超大+大单 明盘=中+小单，方向相反绝对值大→洗/出", 0.85),
+    provenance: pgProvenance(raw.asOf, funds.length, "明暗盘：暗盘=超大+大单 明盘=中+小单，方向相反绝对值大→洗/出；明细缺失→按净额方向流入/流出", 0.85),
   };
 }
 
@@ -130,6 +135,9 @@ function buildLeader(raw) {
       code: top.code,
       height: top.relay ?? 1,
       relayOk: (raw.sentimentRaw?.premium ?? 0) > 0 && (raw.limit?.broken?.length ?? 0) <= 1,
+      // v9.123.0（卓越审查 P1-4）：溢价数据缺失标记——premium=null 时 relayOk 恒 false，
+      //   下游规则须区分"数据缺失"与"接力转弱"（盘前溢价未就绪不应误报断板告警）
+      relayData: (raw.sentimentRaw?.premium ?? null) == null ? "missing" : "ok",
     },
     provenance: pgProvenance(raw.asOf, up.length, "龙头=涨停池最高连板，接力环境=溢价>0且炸板≤1"),
   };
@@ -141,7 +149,7 @@ function buildLeader(raw) {
  * @param {number} version 单调递增版本号
  * @returns {object} MarketCognition { version, hash, generatedAt, session, asOf, mainline, sentiment, capital, risk, leader }
  */
-function buildCognition(raw, version) {
+function buildCognition(raw, version, session) {
   const mainline = buildMainline(raw);
   const sentiment = buildSentiment(raw);
   const capital = buildCapital(raw);
@@ -161,7 +169,9 @@ function buildCognition(raw, version) {
     hash: hashString(payload),
     generatedAt: raw.asOf,
     asOf: raw.asOf,
-    session: { phase: "盘中", window: "09:30-11:30", decisionWindow: false, note: "认知已锁定，全站消费 v" + version },
+    // v9.123.0（卓越审查 P1-1）：session 由调用方注入（proactiveSession.currentSession 真实时段）——
+    //   缺省保持"盘中"仅作纯函数兼容（生产调用点必须注入，此前硬编码导致盘前/盘后认知时段错标）
+    session: session ?? { phase: "盘中", window: "09:30-11:30", decisionWindow: false, note: "认知已锁定，全站消费 v" + version },
     mainline,
     sentiment,
     capital,
@@ -203,13 +213,18 @@ function rawFromBrainContext(ctx) {
       leaders: (t.picks ?? []).slice(0, 3).map((p) => p.name ?? "").filter(Boolean),
       followers: (t.picks ?? []).slice(3, 6).map((p) => p.name ?? "").filter(Boolean),
     })),
-    boardFund: (ctx.boardFund?.items ?? []).map((b) => ({
-      name: b.board ?? "",
+    boardFund: (ctx.boardFund?.items ?? []).map((b) => {
       // v9.115.0（S1-1 单位对齐）：fund_streak.items.mainNet 单位=元（东财 f62），认知层口径=亿（演示/展示统一）
-      bigNet: (b.mainNet ?? 0) / 1e8,
-      darkLightGap: 0,
-      signal: "中性",
-    })),
+      // v9.123.0（卓越审查 P0-3）：明暗盘真实计算——暗盘=超大+大单，明盘=中+小单；
+      //   明细字段缺失 → darkLightGap=null（buildCapital 诚实降级为"流入/流出"，此前硬编码 0 → 恒"中性"）
+      const hasGap = [b.superBig, b.big, b.mid, b.small].every((v) => v != null);
+      return {
+        name: b.board ?? "",
+        bigNet: (b.mainNet ?? 0) / 1e8,
+        darkLightGap: hasGap ? ((b.superBig ?? 0) + (b.big ?? 0) - (b.mid ?? 0) - (b.small ?? 0)) / 1e8 : null,
+        signal: "中性",
+      };
+    }),
     stocks: {},
     overseas: [],
     news: [],

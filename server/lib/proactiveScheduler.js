@@ -170,7 +170,10 @@ async function refineInsightsWithLLM(insights, cog, budget, callLLM) {
         temperature: 0.3,
       });
       const t = String(text ?? "").trim();
-      if (t.length >= 10) {
+      // v9.123.0（卓越审查 P0-4）：质量闸——模型对占位语料的"拒绝语/元输出"不得出面板
+      //   （实测 policy-brief 曾直出"请提供盘面要点，我将按不超过100字…"）；命中即回退规则原文（永不降级）
+      const REFUSAL_RE = /请提供|无法|不能|没有.{0,8}(要点|内容|数据|信息)|作为.{0,12}助手|请告诉/;
+      if (t.length >= 10 && !REFUSAL_RE.test(t)) {
         it.body = t;
         remaining -= it.tokenCost;
         used += it.tokenCost;

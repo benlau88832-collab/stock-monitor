@@ -394,10 +394,12 @@ async function runIntradayBrain(pool, force = false) {
   try {
     const { buildBrainContext } = require("./lib/brainContext");
     const { buildCognition, rawFromBrainContext, nextVersion, persistCognition } = require("./lib/cognition");
+    const { currentSession } = require("./lib/proactiveSession");
     const ctx = await buildBrainContext(pool);
     const raw = rawFromBrainContext(ctx);
     const ver = await nextVersion(pool);
-    const cog = buildCognition(raw, ver);
+    // v9.123.0（卓越审查 P1-1）：真实时段注入（此前 buildCognition 硬编码"盘中"）
+    const cog = buildCognition(raw, ver, currentSession());
     await persistCognition(pool, cog);
     // ⑦ v9.117.0（S3-3）：主动智能流落库（时段洞察 + LLM 预算）—— 前端 ProactiveFeed 读 kv 最新
     try { await runProactiveStore(pool, ds, cog); } catch (e) { console.warn("[cron] 主动流落库失败（不影响主链）:", e.message); }
@@ -426,11 +428,12 @@ async function runProactiveStore(pool, ds, cogArg) {
     }
   }
   const session = currentSession();
-  // v9.122.0（卓越 S3-2b）：推理层预判接入（cron 路径）—— forecast.conditions 触发源
+  // v9.122.0（卓越 S3-2b）+ v9.123.0（P1-6）：推理层预判接入（cron 路径）——
+  //   轻量变体：认知在手，只补 prevCog 环比 + 利好快讯催化（60s 缓存，不重聚合 brainContext）
   let reasoning = null;
   try {
-    const { enrichCognition } = require("./lib/reasoning");
-    reasoning = enrichCognition(cog, { news: [] }, null);
+    const { buildReasoningForCog } = require("./routes/reasoning");
+    reasoning = await buildReasoningForCog(cog);
   } catch { reasoning = null; }
   const tick = runProactiveTick(cog, session, undefined, reasoning);
   // v9.119.0（润色有效性）：policy-brief 骨架补真实政策快讯（PG news 政策类，润色才有要点可组织）
@@ -443,6 +446,12 @@ async function runProactiveStore(pool, ds, cogArg) {
       if (polR.rows.length) {
         pb.body = `政策要点：${polR.rows.map((r) => r.title).join("；")}`;
         pb.evidence = { sampleSize: polR.rows.length, caliber: "政策语料库 PG 实时查询，LLM 摘要（预算内）", asOf: cog?.asOf ?? "" };
+      } else {
+        // v9.123.0（卓越审查 P0-4）：语料为空不润色——模型对占位文本只会输出拒绝语（实测），
+        //   诚实文案 + 0 token（不烧 600 无效预算）
+        pb.body = "今日暂无政策催化（语料 N=0），盘前重点回到主线/隔夜映射。";
+        pb.llmUsed = false; pb.tokenCost = 0;
+        pb.evidence = { sampleSize: 0, caliber: "政策语料 N=0，规则骨架", asOf: cog?.asOf ?? "" };
       }
     }
   } catch { /* 政策语料查询失败 → 保留规则骨架 */ }
@@ -1128,7 +1137,8 @@ async function runEventClassify({ pool }) {
 const HOST_FUND = "https://push2delay.eastmoney.com";
 async function fetchBoardFundServer() {
   const fs = encodeURIComponent("m:90+t:2");
-  const fields = "f12,f14,f62";
+  // v9.123.0（卓越审查 P0-3）：加明暗盘明细字段——f66 超大单/f72 大单（暗盘）、f78 中单/f84 小单（明盘）
+  const fields = "f12,f14,f62,f66,f72,f78,f84";
   const urlOf = (po) => `${HOST_FUND}/api/qt/clist/get?ut=${EM_UT}&pn=1&pz=100&po=${po}&np=1&fltt=2&invt=2&fid=f62&fs=${fs}&fields=${fields}`;
   const norm = (j) => {
     const d = j?.data?.diff;
@@ -1136,6 +1146,8 @@ async function fetchBoardFundServer() {
     if (d && typeof d === "object") return Object.values(d);
     return [];
   };
+  // 明细字段缺失（接口未返回）→ null（下游按 null 判"无明暗盘数据"诚实降级，不冒充 0）
+  const numF = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v))) ? null : Number(v);
   const merged = new Map();
   // 串行拉取（并发会限流）；失败降级（只有一端也能用）
   for (const po of [1, 0]) {
@@ -1143,7 +1155,10 @@ async function fetchBoardFundServer() {
       const j = await httpsGet(urlOf(po));
       for (const it of norm(j)) {
         const code = String(it?.f12 ?? "");
-        if (code) merged.set(code, { code, name: String(it?.f14 ?? ""), mainNet: Number(it?.f62 ?? 0) });
+        if (code) merged.set(code, {
+          code, name: String(it?.f14 ?? ""), mainNet: Number(it?.f62 ?? 0),
+          superBig: numF(it?.f66), big: numF(it?.f72), mid: numF(it?.f78), small: numF(it?.f84),
+        });
       }
     } catch (e) { console.warn(`[cron] fund po=${po} failed:`, e.message); }
   }
@@ -2138,9 +2153,19 @@ async function runPostSummary(pool) {
     ? "今日无拍板记录"
     : posts.map(p => `${p.mainline ?? p.code ?? "?"} → ${p.human_action}${p.pnl != null ? `（T+5 ${p.pnl}%）` : ""}`).join("；");
 
+  // v9.123.0（卓越审查 P1-7）：复盘链消费认知层——注入认知单行（与 /api/cognition 同源，不再各自取数各自判）
+  let cogLine = "";
+  try {
+    const { latestCognition } = require("./lib/cognition");
+    const cog = await latestCognition(pool);
+    if (cog) {
+      cogLine = `【认知层 v${cog.version}】情绪${cog.sentiment.value.stage}(${cog.sentiment.value.score}) · 主线${cog.mainline.value.primaryTheme}(强度${cog.mainline.value.strength}) · 资金${cog.capital.value.signal} · 风险${cog.risk.value.level}·闸门${cog.risk.value.gateOpen ? "开" : "关"} · 龙头${cog.leader.value.name}${cog.leader.value.height}板`;
+    }
+  } catch { /* 认知不可用 → 不注入，保留原 prompt */ }
+
   // 3. LLM 生成（callModelText）
   const prompt = `日期：${dateStr}
-今日拍板：${postsText}
+${cogLine ? cogLine + "\n" : ""}今日拍板：${postsText}
 今日市场：情绪${sentiment ?? "?"}分 · 涨停${ztCount ?? "?"}只 · 炸板率${blastedRate ?? "?"}% · 最高板${maxBoard ?? "?"}
 
 请按以下三段输出（每段≤3行，引用具体数字）：

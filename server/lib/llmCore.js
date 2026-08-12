@@ -64,7 +64,9 @@ async function chatComplete(
       const body = {
         model: ep.model,
         messages: [...(system ? [{ role: "system", content: system }] : []), ...history, { role: "user", content: user }],
-        max_tokens: Math.min(curMaxTokens, 8000),
+        // v9.123.0（卓越审查 P1-2）：发送上限对齐 RETRY_HARD_CAP（diag 实测网关接受 max_tokens=10000；
+        //   原 Math.min(curMaxTokens,8000) 使 12000 headroom 永不生效——maxTokens=8000 的任务 length 重试空转两次必抛）
+        max_tokens: Math.min(curMaxTokens, RETRY_HARD_CAP),
         temperature: Math.max(0, Math.min(1, temperature)),
         stream: false,
         // v9.109.0（L-1/L-2）：恒发 enable_thinking（不依赖 AI_PROVIDER 字符串）——

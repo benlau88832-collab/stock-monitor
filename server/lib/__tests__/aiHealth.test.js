@@ -1,5 +1,5 @@
 // v9.109.2（L-6）：aiHealth 端点健康/自愈熔断单测
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { recordResult, isCircuitOpen, getHealth, CIRCUIT_EMPTY_THRESHOLD, _reset } from "../aiHealth";
 
 beforeEach(() => { _reset(); });
@@ -34,5 +34,19 @@ describe("v9.109.2 aiHealth 自愈熔断（L-6）", () => {
     const h = getHealth();
     expect(h.endpoints[0]).toHaveProperty("circuit");
     expect(h.circuitThreshold).toBe(CIRCUIT_EMPTY_THRESHOLD);
+  });
+
+  // v9.123.0（T-12）：到期半开真断言——vi.useFakeTimers 推进 5 分钟（原用例未真验证时间驱动分支）
+  it("熔断到期自动半开放行（推进 5 分钟后 isCircuitOpen=false）", () => {
+    vi.useFakeTimers();
+    try {
+      const base = "https://main.test/v1/chat/completions";
+      for (let i = 0; i < CIRCUIT_EMPTY_THRESHOLD; i++) recordResult(base, false);
+      expect(isCircuitOpen(base)).toBe(true);
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1000); // 熔断 5 分钟到期
+      expect(isCircuitOpen(base)).toBe(false); // 半开放行（circuitUntil 已清）
+      recordResult(base, false); // 到期后 1 次失败 < 阈值 → 不立即熔断
+      expect(isCircuitOpen(base)).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 });

@@ -2,6 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveSession } from "../proactiveSession";
 import { runProactiveTick, refineInsightsWithLLM } from "../proactiveScheduler";
+import { ruleLeaderHealth } from "../proactiveRules"; // v9.123.0（卓越审查 P1-4）
 
 // 认知层 stub（闸门放开/发酵/健康）
 function cogStub(over = {}) {
@@ -88,6 +89,16 @@ describe("v9.117.0 主动调度 runProactiveTick（S3-2）", () => {
     expect(dw.kind).toBe("决策提示");
     expect(dw.action).toContain("裁决");
   });
+
+  // v9.123.0（卓越审查 P1-4）：龙头数据缺失（涨停池空/溢价未就绪）不误报断板告警
+  it("ruleLeaderHealth：数据缺失（relayData=missing）→ 不 fired；真转弱 → alert", () => {
+    const missing = ruleLeaderHealth(cogStub({ leader: { value: { name: "—", code: "", height: 0, relayOk: false, relayData: "missing" } } }));
+    expect(missing.fired).toBe(false);
+    expect(missing.severity).toBe("info");
+    const weak = ruleLeaderHealth(cogStub({ leader: { value: { name: "龙头A", code: "600001", height: 3, relayOk: false, relayData: "ok" } } }));
+    expect(weak.fired).toBe(true);
+    expect(weak.severity).toBe("alert");
+  });
 });
 
 // v9.119.0（S3-3 补全）：LLM 润色接线 —— 预算降级 / 失败回退 / 成功润色（依赖注入 mock，不真调 LLM）
@@ -128,6 +139,30 @@ describe("v9.119.0 refineInsightsWithLLM（LLM 润色接线）", () => {
     const tick = mkTick();
     const { insights } = await refineInsightsWithLLM(tick.insights, cogStub(), tick.budget, async () => "好");
     expect(insights.find((i) => i.id === "eod-review").llmUsed).toBe(false);
+  });
+
+  // v9.123.0（卓越审查 P0-4）：质量闸——模型对占位语料的"拒绝语/元输出"不得出面板
+  it("LLM 返回拒绝语（'请提供…'）→ 回退规则原文", async () => {
+    const tick = mkTick();
+    const { insights } = await refineInsightsWithLLM(tick.insights, cogStub(), tick.budget, async () => "请提供盘面要点，我将按不超过100字整理成中文简报。");
+    const eod = insights.find((i) => i.id === "eod-review");
+    expect(eod.llmUsed).toBe(false);
+    expect(eod.tokenCost).toBe(0);
+    expect(eod.body).toContain("今日主线"); // 规则原文保留
+  });
+
+  // v9.123.0（T-8）：部分预算——复盘(1200)降级、剧本(800)照常润色
+  it("部分预算 remaining=1000 → 仅 1200 条目降级、800 条目润色", async () => {
+    const tick = mkTick();
+    const partial = { ...tick.budget, remaining: 1000, llmUsedTokens: 0 };
+    const { insights, budget } = await refineInsightsWithLLM(tick.insights, cogStub(), partial, async () => "明日剧本情景已整理完毕。");
+    const eod = insights.find((i) => i.id === "eod-review");
+    const play = insights.find((i) => i.id === "next-day-playbook");
+    expect(eod.llmUsed).toBe(false);
+    expect(eod.body).toContain("预算不足");
+    expect(play.llmUsed).toBe(true);
+    expect(budget.llmUsedTokens).toBe(800);
+    expect(budget.remaining).toBe(200);
   });
 });
 

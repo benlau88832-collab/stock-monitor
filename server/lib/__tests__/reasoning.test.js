@@ -77,6 +77,18 @@ describe("v9.120.0 推理层 makeForecast（S1-1b）", () => {
     const fcD = makeForecast(cogStub({ sentiment: { value: { stage: "退潮", score: 30 } } }), cohWeak);
     expect(fcD.nextWindow).toContain("防守");
   });
+
+  // v9.123.0（卓越审查 P1-3）：六阶段全覆盖——启动=进攻试错、分歧=只持不开（此前四阶段全落"防守等待冰点"）
+  it("启动 → 进攻试错分支；分歧 → 只持不开", () => {
+    const cohWeak = assessCoherence(cogStub({
+      risk: { value: { level: "高", traps: ["炸板率偏高"], gateOpen: false } },
+      capital: { value: { signal: "出货", netFlow: -12.4, darkVsLight: -6.2 } },
+    }));
+    const fcS = makeForecast(cogStub({ sentiment: { value: { stage: "启动", score: 55 } } }), cohWeak);
+    expect(fcS.nextWindow).toContain("进攻试错");
+    const fcF = makeForecast(cogStub({ sentiment: { value: { stage: "分歧", score: 55 } } }), cohWeak);
+    expect(fcF.nextWindow).toContain("只持不开");
+  });
 });
 
 describe("v9.120.0 推理层 enrichCognition（S1-1b）", () => {

@@ -19,23 +19,29 @@ function ruleSentimentFlip(cog, prevStage) {
 /** 龙头高度突破 / 断板风险 */
 function ruleLeaderHealth(cog) {
   const l = cog?.leader?.value ?? {};
-  const fired = !l.relayOk || (l.height ?? 0) >= 5;
+  // v9.123.0（卓越审查 P1-4）：数据缺失（溢价未就绪/涨停池空）不判定——
+  //   此前 relayOk=false 被当作"接力转弱"误报 P0 告警（盘前 premium=null 必触发）
+  const missing = l.relayData === "missing" || ((l.height ?? 0) === 0 && (l.name === "—" || !l.name));
+  const fired = !missing && (!l.relayOk || (l.height ?? 0) >= 5);
   return {
     rule: "龙头接力健康度",
     fired,
-    severity: !l.relayOk ? "alert" : (l.height ?? 0) >= 5 ? "warn" : "info",
-    detail: `${l.name ?? "—"} ${l.height ?? 0}板，接力${l.relayOk ? "健康" : "转弱（警惕断板）"}`,
+    severity: missing ? "info" : !l.relayOk ? "alert" : (l.height ?? 0) >= 5 ? "warn" : "info",
+    detail: missing ? "龙头数据缺失（涨停池/昨日溢价未就绪），不判定"
+      : `${l.name ?? "—"} ${l.height ?? 0}板，接力${l.relayOk ? "健康" : "转弱（警惕断板）"}`,
   };
 }
 
 /** 资金面信号（吸筹/出货） */
 function ruleCapitalSignal(cog) {
   const c = cog?.capital?.value ?? {};
-  const fired = c.signal === "出货" || c.signal === "吸筹";
+  // v9.123.0（卓越审查 P0-3）：信号词表扩展——明暗盘数据缺失时 buildCapital 诚实输出"流入/流出"
+  //   （此前适配层 darkLightGap 恒 0 → signal 恒"中性" → 本规则永久哑火）
+  const fired = ["出货", "吸筹", "流出"].includes(c.signal);
   return {
     rule: "主力资金信号",
     fired,
-    severity: c.signal === "出货" ? "alert" : "info",
+    severity: c.signal === "出货" || c.signal === "流出" ? "alert" : "info",
     detail: `暗-明 ${(c.darkVsLight ?? 0) > 0 ? "+" : ""}${c.darkVsLight ?? 0}，判定${c.signal ?? "?"}（净额${c.netFlow ?? 0}亿）`,
   };
 }

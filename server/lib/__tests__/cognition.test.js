@@ -108,6 +108,23 @@ describe("v9.115.0 认知层 buildCognition（S1-1）", () => {
     expect(hashString("abc")).toBe(hashString("abc"));
     expect(hashString("abc")).not.toBe(hashString("abd"));
   });
+
+  // v9.123.0（卓越审查 P0-3）：明暗盘明细缺失 → 按净额方向诚实输出"流入/流出"（此前恒"中性" → 资金维共振永久哑火）
+  it("明暗盘缺失 → signal '流入/流出'；明细齐全保持'吸筹'", () => {
+    const rawIn = mockRaw({ boardFund: [{ name: "半导体", bigNet: 31.2 }] });
+    expect(buildCognition(rawIn, 1).capital.value.signal).toBe("流入");
+    const rawOut = mockRaw({ boardFund: [{ name: "食品", bigNet: -12.4 }] });
+    expect(buildCognition(rawOut, 1).capital.value.signal).toBe("流出");
+    expect(buildCognition(mockRaw(), 1).capital.value.signal).toBe("吸筹");
+  });
+
+  // v9.123.0（卓越审查 P1-1）：session 由调用方注入；缺省保持"盘中"（纯函数兼容旧调用）
+  it("注入 session → 竞价 9:25 decisionWindow=true；缺省'盘中'", () => {
+    const sess = { phase: "竞价", window: "09:20-09:25 不可撤单", decisionWindow: true, note: "" };
+    expect(buildCognition(mockRaw(), 1, sess).session.phase).toBe("竞价");
+    expect(buildCognition(mockRaw(), 1, sess).session.decisionWindow).toBe(true);
+    expect(buildCognition(mockRaw(), 1).session.phase).toBe("盘中");
+  });
 });
 
 // v9.115.0（S1-2）：落库 —— mock pool 验证 SQL 与 version 序列（③ 验收：cron tick → 表 +1 行，version 自增）

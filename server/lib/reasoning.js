@@ -21,7 +21,8 @@ function assessCoherence(cog) {
   const m = cog?.mainline?.value ?? {};
   const votes = [
     { dim: "情绪", bullish: BULLISH_STAGES.includes(s.stage), evidence: `${s.stage ?? "?"}·温度${s.score ?? "?"}` },
-    { dim: "资金", bullish: c.signal === "吸筹" || c.signal === "洗盘", evidence: `${c.signal ?? "?"}·净${c.netFlow ?? 0}亿` },
+    // v9.123.0（卓越审查 P0-3）：词表扩展"流入"（明暗盘明细缺失时的诚实降级信号）
+    { dim: "资金", bullish: ["吸筹", "洗盘", "流入"].includes(c.signal), evidence: `${c.signal ?? "?"}·净${c.netFlow ?? 0}亿` },
     { dim: "风险闸门", bullish: r.gateOpen === true && (r.level === "低" || r.level === "中"), evidence: `闸门${r.gateOpen ? "开" : "关"}·风险${r.level ?? "?"}` },
     { dim: "龙头接力", bullish: l.relayOk === true, evidence: `${l.name ?? "—"}${l.height ?? 0}板·接力${l.relayOk ? "可" : "弱"}` },
     { dim: "主线强度", bullish: (m.strength ?? 0) >= 70 && m.hotspotRotation === "持续", evidence: `${m.primaryTheme ?? "?"}·强度${m.strength ?? "?"}` },
@@ -52,6 +53,7 @@ function deriveDrivers(cog, raw) {
     `情绪：${s.stage ?? "?"}(温度${s.score ?? "?"})`,
   ];
   const primaryDriver = c.signal === "出货" ? "资金(出货主导)"
+    : c.signal === "流出" ? "资金(流出主导)"
     : s.stage === "高潮" ? "情绪(高潮驱动)"
     : "主线(题材驱动)";
   return { catalyst, chain, primaryDriver };
@@ -97,6 +99,26 @@ function makeForecast(cog, coh) {
       conditions: [{ iff: "出现首分歧(龙头开板/封单骤减)", then: "只持不开，减仓锁定" }],
     };
   }
+  // v9.123.0（卓越审查 P1-3）：六阶段全覆盖——启动=进攻试错、分歧=只持不开
+  //   （此前启动/分歧/冰点/退潮四阶段全落"防守等待冰点"，与游资战术"打首板"自相矛盾）
+  if (stage === "启动") {
+    return {
+      nextWindow: "下一窗口：进攻试错，打首板/低吸梯队",
+      watch: ["新主线首板是否放量", "晋级率是否回升", "跌停数是否收敛"],
+      conditions: [
+        { iff: "炸板率>20% 或 接力溢价转负", then: "试错失败：撤出追高，管住手" },
+        { iff: "首板晋级2板+板块扩散", then: "加仓核心梯队，迎接发酵" },
+      ],
+    };
+  }
+  if (stage === "分歧") {
+    return {
+      nextWindow: "下一窗口：分歧日只持不开",
+      watch: ["高标是否断板", "是否出现新主线承接"],
+      conditions: [{ iff: "分歧转退潮(跌停潮+炸板潮)", then: "清跟风，保留核心底仓" }],
+    };
+  }
+  // 冰点/退潮：防守为主
   return {
     nextWindow: "下一窗口：防守为主，等待冰点回暖",
     watch: ["跌停数是否收敛", "是否有新题材首板试错"],
