@@ -23,6 +23,17 @@ async function kvRead(pool, key) {
   return v;
 }
 
+/** v9.108.2（D-2）：读 kv 值 + updated_at（多源 asOf 用；无行返回 null） */
+async function kvReadMeta(pool, key) {
+  const r = await pool.query("SELECT value, updated_at FROM kv_store WHERE key=$1", [key]);
+  if (!r.rows.length) return null;
+  let v = r.rows[0].value;
+  if (v && typeof v === "object" && "__raw" in v) {
+    try { v = JSON.parse(v.__raw); } catch { return null; }
+  }
+  return { value: v, ts: r.rows[0].updated_at ? new Date(r.rows[0].updated_at).getTime() : null };
+}
+
 function num(v) { return typeof v === "number" && Number.isFinite(v) ? v : null; }
 
 /**
@@ -31,34 +42,46 @@ function num(v) { return typeof v === "number" && Number.isFinite(v) ? v : null;
  * @param dateStr 可选，默认今日（YYYY-MM-DD）
  */
 async function buildBrainContext(pool, dateStr = bjDateStr()) {
-  const [mdR, sentR, intraR, themeR, bsR, evR, fundR, lhbR, ztR, annR] = await Promise.allSettled([
-    kvRead(pool, `market_daily:${dateStr}`),
-    kvRead(pool, `sentiment:${dateStr}`),
-    kvRead(pool, `market_intraday:${dateStr}`),
-    kvRead(pool, "theme_analysis:latest"),
-    kvRead(pool, `black_swan:${dateStr}`),
-    kvRead(pool, `event_classify:${dateStr}`),
-    kvRead(pool, `fund_streak:${dateStr}`),
-    kvRead(pool, `lhb:${dateStr}`),
-    pool.query("SELECT data FROM zt_snapshot WHERE date=$1 LIMIT 1", [dateStr]),
+  // v9.108.2（D-2）：market_daily 今日为空 → 回退最近 5 个交易日（自动切换最近可用日，满足"看不到今天就退而求昨天"）
+  // 每源带 updated_at（多源 asOf + 延迟标注）
+  let mdMeta = await kvReadMeta(pool, `market_daily:${dateStr}`);
+  let usedDate = dateStr;
+  let fallbackDate = null;
+  if (!mdMeta || mdMeta.value == null) {
+    for (let i = 1; i <= 5; i++) {
+      const d = new Date(Date.now() + 8 * 3600 * 1000 - i * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      const cand = await kvReadMeta(pool, `market_daily:${d}`);
+      if (cand && cand.value != null) { mdMeta = cand; usedDate = d; fallbackDate = d; break; }
+    }
+  }
+  const [sentMeta, intraR, themeMeta, bsR, evR, fundMeta, lhbR, ztR, annR] = await Promise.allSettled([
+    kvReadMeta(pool, `sentiment:${usedDate}`),
+    kvRead(pool, `market_intraday:${usedDate}`),
+    kvReadMeta(pool, "theme_analysis:latest"),
+    kvRead(pool, `black_swan:${usedDate}`),
+    kvRead(pool, `event_classify:${usedDate}`),
+    kvReadMeta(pool, `fund_streak:${usedDate}`),
+    kvRead(pool, `lhb:${usedDate}`),
+    pool.query("SELECT data FROM zt_snapshot WHERE date=$1 LIMIT 1", [usedDate]),
     pool.query(
       `SELECT title, column_name, score, stock_name, stock_code, time
        FROM announcements WHERE time LIKE $1 AND score >= 3 ORDER BY time DESC LIMIT 10`,
-      [`${dateStr}%`],
+      [`${usedDate}%`],
     ),
   ]);
 
   // ---------- 市场情绪/指标 ----------
+  const mdValue = mdMeta?.value ?? null;
   const market = {
-    ztCount: num(mdR.status === "fulfilled" ? mdR.value?.ztCount : null),
-    zbCount: num(mdR.status === "fulfilled" ? mdR.value?.zbCount : null),
-    dtCount: num(mdR.status === "fulfilled" ? mdR.value?.dtCount : null),
-    blastedRate: num(mdR.status === "fulfilled" ? mdR.value?.blastedRate : null),
-    maxBoardHeight: num(mdR.status === "fulfilled" ? mdR.value?.maxBoardHeight : null),
-    premiumAvg: num(mdR.status === "fulfilled" ? mdR.value?.premiumAvg : null),
-    promotionRate: num(mdR.status === "fulfilled" ? mdR.value?.promotionRate : null),
-    lhbBoostCount: num(mdR.status === "fulfilled" ? mdR.value?.lhbBoostCount : null),
-    sentiment: sentR.status === "fulfilled" ? num(sentR.value) : null,
+    ztCount: num(mdValue?.ztCount),
+    zbCount: num(mdValue?.zbCount),
+    dtCount: num(mdValue?.dtCount),
+    blastedRate: num(mdValue?.blastedRate),
+    maxBoardHeight: num(mdValue?.maxBoardHeight),
+    premiumAvg: num(mdValue?.premiumAvg),
+    promotionRate: num(mdValue?.promotionRate),
+    lhbBoostCount: num(mdValue?.lhbBoostCount),
+    sentiment: sentMeta.status === "fulfilled" ? num(sentMeta.value?.value) : null,
   };
 
   // ---------- 涨停梯队（当日 zt_snapshot） ----------
@@ -87,8 +110,8 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
 
   // ---------- 主线 Top3（theme_analysis:latest） ----------
   let mainlines = { asOf: null, top: [], all: [] };
-  if (themeR.status === "fulfilled" && themeR.value?.themes) {
-    const themes = themeR.value.themes;
+  if (themeMeta.status === "fulfilled" && themeMeta.value?.value?.themes) {
+    const themes = themeMeta.value.value.themes;
     const sorted = [...themes].sort((a, b) => (num(b.heat) ?? 0) - (num(a.heat) ?? 0));
     const slim = (t) => ({
       theme: t.theme, heat: t.heat, trend: t.trend, verdict: t.verdict,
@@ -97,7 +120,7 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
       etfs: (t.etfs ?? []).slice(0, 5),
     });
     mainlines = {
-      asOf: themeR.value.key ?? null,
+      asOf: themeMeta.value.value.key ?? null,
       top: sorted.slice(0, 3).map(slim),
       all: sorted.slice(0, 8).map(slim),
     };
@@ -106,8 +129,9 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
   // ---------- 板块资金（fund_streak 当日，mainNet 排序 top10） ----------
   // fund_streak items 结构：{ code, name(板块名), mainNet }（fetchBoardFundServer 落库）
   let boardFund = { items: [] };
-  if (fundR.status === "fulfilled" && Array.isArray(fundR.value?.items)) {
-    boardFund.items = fundR.value.items
+  const fundValue = fundMeta.status === "fulfilled" ? fundMeta.value?.value : null;
+  if (fundValue && Array.isArray(fundValue.items)) {
+    boardFund.items = fundValue.items
       .filter(i => i && i.name)
       .sort((a, b) => (num(b.mainNet) ?? -Infinity) - (num(a.mainNet) ?? -Infinity))
       .slice(0, 10)
@@ -154,8 +178,20 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
     return { mode, factor: Math.max(0.2, Math.min(1, pos / 100)), label: `${mode}（情绪${m.sentiment ?? "?"}·炸板${m.blastedRate ?? "?"}%·最高${m.maxBoardHeight ?? "?"}板）` };
   })();
 
+  // v9.108.2（D-2）：多源 asOf（每源 updated_at）+ snapshotVersion + fallbackDate（回退最近可用日标记）
+  const tsOf = (p) => (p.status === "fulfilled" && p.value?.ts ? p.value.ts : null);
+  const sources = {
+    market: mdMeta?.ts ?? null,
+    sentiment: sentMeta.status === "fulfilled" ? sentMeta.value?.ts ?? null : null,
+    theme: tsOf(themeMeta),
+    fund: tsOf(fundMeta),
+    zt: ztR.status === "fulfilled" && ztR.value.rows[0] ? Date.now() : null, // zt_snapshot 无 updated_at 列，近似当前
+  };
   return {
-    date: dateStr,
+    date: usedDate, // v9.108.2（D-2）：数据实际日期（回退时为最近可用交易日）
+    fallbackDate,  // 非空 = 今日无数据，回退到了该日期
+    snapshotVersion: Date.now(), // 每次 build 递增（时间戳整数）
+    sources,
     market,
     limitLadder,
     mainlines,

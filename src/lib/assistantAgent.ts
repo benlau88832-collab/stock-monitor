@@ -17,6 +17,12 @@ import { matchOverseas } from "../shared/overseas-map";
 // ============== v9.84.2（AI大脑层 · 3.1）：大脑快照（60s 缓存） ==============
 export interface BrainContext {
   date?: string;
+  /** v9.108.2（D-2）：今日无数据时回退的最近可用交易日（非空 = 数据来自该日） */
+  fallbackDate?: string | null;
+  /** v9.108.2（D-2）：快照版本（每次 build 递增时间戳） */
+  snapshotVersion?: number;
+  /** v9.108.2（D-2）：每源 updated_at（ms），延迟标注用 */
+  sources?: { market?: number | null; sentiment?: number | null; theme?: number | null; fund?: number | null; zt?: number | null };
   market?: { ztCount: number | null; blastedRate: number | null; maxBoardHeight: number | null; premiumAvg: number | null; sentiment: number | null };
   limitLadder?: { total: number; maxBoard: number; ladder: Array<{ code: string; name: string; lbc: number; hybk: string }>; boards: Array<{ board: string; count: number }> };
   mainlines?: { asOf: string | null; top: Array<{ theme: string; heat: number; verdict: string; action: string; trend?: string; picks: Array<{ code: string; name: string; correlation: number }> }> };
@@ -48,10 +54,13 @@ export async function fetchBrainContext(force = false): Promise<BrainContext | n
 /** 大脑快照 → 紧凑文本（注入 LLM 上下文） */
 // v9.107.0（全站助手架构）：主线 Top3 完整化（强度/趋势/裁决/龙头前3）——原只提取"热度+verdict"，龙头/趋势全丢；
 // + 数据截至时间戳（mainlines.asOf，来源 theme_analysis 落库时间）
+// v9.108.2（D-2）：多源 asOf（市场/主线/资金各自 updated_at）+ 超阈值"⚠延迟"标注 + fallbackDate 回退标注
 export function brainContextToText(b: BrainContext): string {
   if (!b) return "";
   const parts: string[] = [];
   const m = b.market ?? ({} as NonNullable<BrainContext["market"]>);
+  // v9.108.2（D-2）：回退最近可用日显式标注（今日无数据时不误导为"今日"）
+  if (b.fallbackDate) parts.push(`⚠ 回退历史数据（${b.fallbackDate.slice(5)}，今日快照未生成）`);
   parts.push(`【大脑快照 ${b.date ?? ""}】情绪${m.sentiment ?? "?"} · 涨停${m.ztCount ?? "?"}只 · 炸板率${m.blastedRate ?? "?"}% · 最高${m.maxBoardHeight ?? "?"}板 · 昨日涨停溢价${m.premiumAvg ?? "?"}%`);
   if (b.limitLadder?.boards?.length) {
     parts.push(`涨停板块分布：${b.limitLadder.boards.slice(0, 5).map(x => `${x.board}${x.count}只`).join("、")}`);
@@ -72,7 +81,24 @@ export function brainContextToText(b: BrainContext): string {
   if (b.blackSwans?.length) parts.push(`⚠ 黑天鹅${b.blackSwans.length}条：${b.blackSwans.slice(0, 3).map(x => `<untrusted-data>${x.title}</untrusted-data>`).join("；")}`); // v9.88.0（P1-11）外部标题标记
   if (b.strongNews?.length) parts.push(`公告强催化：${b.strongNews.slice(0, 3).map(x => `<untrusted-data>${x.name}${x.title}</untrusted-data>`).join("；")}`); // v9.88.0（P1-11）外部标题标记
   if (b.gate) parts.push(`次日闸门：${b.gate.label}`);
-  if (b.mainlines?.asOf) parts.push(`数据截至：${b.mainlines.asOf}`); // v9.107.0：时间戳（两次问数值一致的锚点）
+  // v9.108.2（D-2）：多源数据截至（原单一 theme asOf → 每源各自时间；超阈值追加"⚠延迟"）
+  // 阈值：盘中 10min / 盘后 6h（按北京时间小时判定）
+  const bjNow = Date.now() + 8 * 3600 * 1000;
+  const bjHour = new Date(bjNow).getUTCHours();
+  const staleMs = (bjHour >= 9 && bjHour < 15) ? 10 * 60 * 1000 : 6 * 3600 * 1000;
+  const fmtHM = (ts: number | null | undefined) => {
+    if (!ts) return "?";
+    const d = new Date(ts + 8 * 3600 * 1000);
+    return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+  };
+  const src = b.sources ?? {};
+  const markStale = (name: string, ts: number | null | undefined) =>
+    ts && Date.now() - ts > staleMs ? `${name}@${fmtHM(ts)}⚠延迟` : `${name}@${fmtHM(ts)}`;
+  if (src.market || src.theme || src.fund) {
+    parts.push(`数据截至：${markStale("主线", src.theme)} · ${markStale("市场", src.market)} · ${markStale("资金", src.fund)}`);
+  } else if (b.mainlines?.asOf) {
+    parts.push(`数据截至：${b.mainlines.asOf}`); // v9.107.0 兼容：旧服务端无 sources 时回退单源
+  }
   return parts.join("\n");
 }
 
@@ -501,6 +527,9 @@ export async function runAssistantAgent(
   let rateLimitedFlag = false;
   let lastReason: "rateLimited" | "timeout" | "network" | "model" | undefined;
   const calledTools = new Set<string>();
+  // v9.108.2（D-4 成本控制）：会话 token 预算 —— 估算每轮 prompt+completion 累计，超阈值强制走 fallback（防弱模型循环烧配额）
+  let sessionTokens = 0;
+  const SESSION_TOKEN_LIMIT = 6000;
 
   // ============== v9.107.0（全站助手架构 · 改动2）：路由统一 ==============
   // 删除原 5 处正则直出分支（消息类 3 处 return + 外部搜索直出 + 主线类直出）——
@@ -521,9 +550,15 @@ export async function runAssistantAgent(
   for (let round = 0; round < maxRounds; round++) {
     // v9.85.2（P2-9）：外部取消（关闭对话框/组件卸载）→ 立即中止 ReAct，不再消耗 LLM 配额
     if (opts?.signal?.aborted) throw new Error("request aborted");
+    // v9.108.2（D-4）：token 预算超限 → break 走 fallback（估算：中文≈1 token/字，prompt+completion 各半保守）
+    if (sessionTokens >= SESSION_TOKEN_LIMIT) {
+      console.warn(`[agent] session token 预算耗尽（${sessionTokens}/${SESSION_TOKEN_LIMIT}）→ 走规则兜底`);
+      llmOk = false; lastReason = "model"; break;
+    }
     const user = round === 0 ? userCtx : (roundHistory.join("\n") + "\n\n（继续，或直接给最终答复）：");
     let r: AgentChatResult | null;
     try { r = await callAgentChat(system, user, toolDefs, { temperature: 0.2, history: opts?.history }); } catch { r = null; }
+    sessionTokens += Math.ceil((system.length + user.length) / 3) + ((r?.text?.length ?? 0) / 3); // D-4：每轮估算累加
     if (!r) { llmOk = false; lastReason = "model"; break; }
     if (r.rateLimited) { llmOk = false; rateLimitedFlag = true; lastReason = "rateLimited"; break; }
     if (r.reason) { llmOk = false; lastReason = r.reason; break; }

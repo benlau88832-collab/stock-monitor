@@ -181,7 +181,10 @@ module.exports = function aiRoutes(app) {
         ? msg.tool_calls.map(tc => ({ id: String(tc.id ?? ""), name: String(tc.function?.name ?? ""), args: tc.function?.arguments ?? "{}" }))
         : undefined;
       if (!msg.content && !toolCalls) {
-        return res.json({ error: "empty content", finish_reason: json && json.choices && json.choices[0] ? json.choices[0].finish_reason : undefined });
+        // v9.108.2（D-6 可观测）：empty content 结构化埋点（task/finish_reason）—— 供日志统计 empty 来源与截断模式
+        const fr = json && json.choices && json.choices[0] ? json.choices[0].finish_reason : undefined;
+        console.warn(`[ai] empty content task=${task} finish_reason=${fr ?? "unknown"}`);
+        return res.json({ error: "empty content", finish_reason: fr });
       }
       // v9.87.0（P1-8）：JSON 类 task 上游响应做 schema 校验 —— 仅 warn 日志不阻断
       // （前端 parseLLMJSON 仍有自己的降级链；此处让"坏 JSON 率"可观测）
