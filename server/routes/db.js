@@ -433,7 +433,9 @@ module.exports = function dbRoutes(app) {
       const daysAgo = new Date(bjNow.getTime() - 45 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
       // 各块并行且互不阻塞（某一源挂不影响其余）
-      const [conceptsR, nameR, newsR, annsR, reportsR, watchR, watchLogR, seatsR, ztR, policyR, sentimentR, indicatorsR, newsAllR] = await Promise.allSettled([
+      // v9.108.1（T-6c P2-5）：移除冗余死桩 —— 快讯已由 v9.97.0-fix 的 nameLike 真实匹配（:469-473）提供，
+      //   原 newsR 占位（恒空桩）结果从未使用（返回组装用 newsRowsR，见 :524）
+      const [conceptsR, nameR, annsR, reportsR, watchR, watchLogR, seatsR, ztR, policyR, sentimentR, indicatorsR, newsAllR] = await Promise.allSettled([
         getConcepts(pool, [code]),
         // v9.97.0-fix：news 表 code 是东财文章 ID 而非股票代码 → 快讯按"股票名/代码"标题匹配（zt_snapshot 取名称）
         (async () => {
@@ -443,7 +445,6 @@ module.exports = function dbRoutes(app) {
           const hit = (Array.isArray(poolArr) ? poolArr : []).find(p2 => String(p2?.c ?? p2?.code ?? "") === code);
           return hit?.name ?? hit?.n ?? null;
         })(),
-        pool.query("SELECT title,summary,boards,sentiment,stars,time,url FROM news WHERE 1=0", []),
         pool.query("SELECT art_code,stock_name,title,column_name,score,time,url FROM announcements WHERE stock_code=$1 ORDER BY time DESC LIMIT 20", [code]),
         pool.query("SELECT report_date,phase,summary_json,valuation_json,levels_json,full_text,created_at FROM research_reports WHERE code=$1 ORDER BY report_date DESC LIMIT 5", [code]),
         pool.query("SELECT code,name,buy_low,buy_high,stop_loss,trigger_pct,note,updated_at FROM price_watch WHERE code=$1 AND status='active'", [code]),

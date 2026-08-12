@@ -208,8 +208,9 @@ export async function buildQuickSystem(siteContext: AssistantSiteContext): Promi
  * v9.107.0（全站助手架构 · 改动3）：规则兜底组装 —— LLM 不可用时的最后防线
  * 从快照按问题粗分类提取组装回答，任何问题都有回答、永不空白。
  * 分类：主线类 / 个股类 / 消息类 / 情绪类 / 其他 → 快照通用摘要
+ * v9.108.1（D-3）：改 async —— 个股类先尝试实时 /api/db/stock/:code（AI 不可用时也给带数字的回答）
  */
-export function fallbackAnswer(snapshot: string, question: string, reason?: string): string {
+export async function fallbackAnswer(snapshot: string, question: string, reason?: string): Promise<string> {
   const q = question.trim();
   const lines = snapshot.split("\n").map(s => s.trim()).filter(Boolean);
   const head = `⚠ 规则版（AI 暂不可用${reason ? `：${reason}` : ""}）——以下为本地数据摘要\n`;
@@ -236,11 +237,30 @@ export function fallbackAnswer(snapshot: string, question: string, reason?: stri
     }
     return head + "本地快照暂无主线数据（AI 不可用且规则库未产出）。";
   }
-  // 个股类（股票名 2-4 字中文 / 6位代码）→ 快照中该股相关（强催化/龙虎榜/黑天鹅）
+  // 个股类（股票名 2-4 字中文 / 6位代码）→ 先实时 /api/db/stock/:code（v9.108.1 D-3），再快照匹配
   const codeMatch = q.match(/\d{6}/);
   const nameMatch = q.match(/([\u4e00-\u9fa5]{2,4})(?=为什么|为何|涨停|大涨|大跌|下跌|走势|异动|什么情况|怎么样|还能买|能不能买|能不能上|分析)/);
   const target = codeMatch ? codeMatch[0] : nameMatch ? nameMatch[1] : null;
   if (target) {
+    // 先尝试实时个股数据（AI 不可用时也能给带数字的回答）
+    if (/^\d{6}$/.test(target)) {
+      try {
+        const r = await fetch(`/api/db/stock/${target}`, { signal: AbortSignal.timeout(6000) });
+        const j = await r.json();
+        const quote = j?.quote ?? null;
+        const fund = j?.fund ?? null;
+        const newsN = Array.isArray(j?.news) ? j.news.length : 0;
+        const annsN = Array.isArray(j?.anns) ? j.anns.length : 0;
+        const seatsN = Array.isArray(j?.seats) ? j.seats.length : 0;
+        const parts: string[] = [];
+        if (quote?.pct != null) parts.push(`涨幅${Number(quote.pct).toFixed(2)}%`);
+        if (fund?.mainNet != null) parts.push(`主力净流入${fmtMoney(Number(fund.mainNet))}`);
+        if (annsN > 0) parts.push(`公告${annsN}条`);
+        if (seatsN > 0) parts.push(`龙虎榜席位${seatsN}条`);
+        if (newsN > 0) parts.push(`相关快讯${newsN}条`);
+        if (parts.length) return head + `【${target} 实时摘要（规则版）】${target}：` + parts.join(" · ");
+      } catch { /* 落到快照匹配 */ }
+    }
     const hits = lines.filter(l => l.includes(target) && /强催化|龙虎榜|黑天鹅|公告|快讯/.test(l));
     if (hits.length) return head + `【${target} 相关本地数据】\n` + hits.slice(0, 6).join("\n");
     return head + `本地无 ${target} 的盘口数据（AI 不可用且本地库未覆盖该股）。`;
@@ -431,8 +451,51 @@ export async function runAssistantAgent(
   const ctxNote = opts?.researchCtx ? researchCtxNote(opts.researchCtx) : "";
   // v9.107.0（全站助手架构）：统一快照（与快速问答共用 buildFullSnapshot，60s 缓存复用）
   const snapshot = await buildFullSnapshot(siteContext);
+
+  // v9.108.1（D-1 工具编排）：ReAct 前确定性预取 —— 按问题粗分类并行拉本地数据塞进上下文，
+  // 弱模型即使后续不调工具，第一轮就已有真实数据可答（Promise.allSettled 任一失败不影响主流程）
+  const preflight: string[] = [];
+  const codeMatchQ = question.match(/\d{6}/);
+  const overseas = /美股|纳指|英伟达|特斯拉|黄金|原油|美债|外盘|隔夜/.test(question);
+  const jobs: Promise<string>[] = [];
+  if (codeMatchQ) {
+    const code = codeMatchQ[0];
+    jobs.push((async () => {
+      try {
+        const { fetchStockOne } = await import("./api");
+        const d = await fetchStockOne(code);
+        return d ? `[预取·个股${code}] ${JSON.stringify(d).slice(0, 400)}` : "";
+      } catch { return ""; }
+    })());
+    jobs.push((async () => {
+      try {
+        const r = await fetch(`/api/db/stock/${code}`, { signal: AbortSignal.timeout(6000) });
+        const j = await r.json();
+        return j ? `[预取·个股详情${code}] ${JSON.stringify({ anns: j.anns?.length ?? 0, seats: j.seats?.length ?? 0, reports: j.reports?.length ?? 0, news: j.news?.length ?? 0 }).slice(0, 200)}` : "";
+      } catch { return ""; }
+    })());
+  }
+  if (/消息|新闻|政策|公告|事件|快讯/.test(question)) {
+    jobs.push((async () => {
+      const { getAllSince } = await import("./dataStore");
+      const { news } = getAllSince(getBJDateStr(new Date(Date.now() - 2 * 86400000)));
+      return `[预取·本地快讯] ${news.slice(0, 6).map(n => n.title).join("；")}`;
+    })().catch(() => ""));
+  }
+  if (overseas) {
+    jobs.push((async () => {
+      const { matchOverseas } = await import("../shared/overseas-map");
+      const h = matchOverseas(question);
+      return h.length ? `[预取·外围映射] ${h.slice(0, 3).map(x => `${x.aBoard}:${(x.stocks ?? []).slice(0, 2).join("/")}`).join("；")}` : "";
+    })());
+  }
+  const preResults = await Promise.allSettled(jobs);
+  for (const pr of preResults) if (pr.status === "fulfilled" && pr.value) preflight.push(pr.value);
+
   const userCtx = (ctxNote ? "【调研会话状态】\n" + ctxNote + "\n\n" : "")
-    + snapshot + "\n\n【用户提问】" + question + "\n\n本轮请输出JSON（工具调用或最终答复）：";
+    + snapshot + "\n\n"
+    + (preflight.length ? "【预取数据（确定性，非 LLM 调用）】\n" + preflight.join("\n") + "\n\n" : "")
+    + "【用户提问】" + question + "\n\n本轮请输出JSON（工具调用或最终答复）：";
   let roundHistory: string[] = [];
   let llmOk = true;
   let rateLimitedFlag = false;
@@ -513,9 +576,10 @@ export async function runAssistantAgent(
   }
   // v9.107.0（全站助手架构 · 改动3）：LLM 失败 → 规则兜底组装（fallbackAnswer）——
   // 从全站快照按问题分类提取回答，任何问题都有回答、永不空白；统一前缀标注规则版
+  // v9.108.1（D-3）：fallbackAnswer 已 async（个股类接实时 /api/db/stock/:code）
   const reason = lastReason;
   const failReason = llmOk ? "输出无法解析" : rateLimitedFlag ? "配额受限" : reason === "timeout" ? "上游超时" : reason === "network" ? "网络不通" : "empty content/调用失败";
-  const reply = fallbackAnswer(snapshot, question, failReason);
+  const reply = await fallbackAnswer(snapshot, question, failReason);
   // v9.99.1（批次 5-2）：失败阶段推导
   const stage = llmOk ? "parse" : rateLimitedFlag ? "rate-limit" : reason === "timeout" ? "timeout" : reason === "network" ? "network" : "llm-call";
   return {
