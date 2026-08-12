@@ -64,6 +64,8 @@ import AIConsole from "./components/AIConsole";
 import CognitionBanner from "./components/CognitionBanner";
 // v9.117.0（S3-3）：主动智能流（时段洞察 + LLM 预算，盘前准备区）
 import ProactiveFeed from "./components/ProactiveFeed";
+// v9.118.0（S4-2）：操作习惯场景融合（竞价/异动/尾盘/情绪周期四场景）
+import ScenarioPanel from "./components/ScenarioPanel";
 import DecisionCard from "./components/DecisionCard"; // v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI）
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
 import { checkSysRisk } from "./lib/sysRiskGuard";
@@ -1577,6 +1579,8 @@ export default function App() {
           <CognitionBanner />
           {/* v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI，秒级） */}
           <DecisionCard />
+          {/* v9.118.0（S4-2）：操作习惯场景融合（独立条，不增面板）—— 竞价/异动/尾盘/情绪周期四场景 */}
+          <ScenarioPanel />
       <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
             battlePlan={battlePlan} loading={loading} phase={currentPhase} watchStocks={watchStocks}
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}

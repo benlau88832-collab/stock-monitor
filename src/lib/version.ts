@@ -44,6 +44,9 @@
 // v9.117.0（S3 主动智能）：时段引擎 resolveSession（8 阶段 + 9:25/13:00 决策窗口）+ 规则谓词四件套 +
 //   runProactiveTick 时段洞察（规则前置 0 token，LLM 仅盘后复盘/剧本/盘前简报受预算标记）+
 //   /api/proactive 路由 + cron 主动流落库 + ProactiveFeed 面板（盘前准备区，时段切换 + 预算条）
+// v9.118.0（S4 操作习惯场景融合）：四场景纯函数（stageToAction 情绪周期买卖点 / assessAuctionVolatility 竞价 /
+//   composeIntradayAction 异动处置 / buildCloseList 尾盘减仓，0 token）+ ScenarioPanel 四 tab 面板
+//   （读认知层动态，结论可触达决策直达——独立条不增面板）
 // ============================================================
-export const APP_VERSION = "v9.117.0";
+export const APP_VERSION = "v9.118.0";
 export const BUILD_DATE = "2026-08-12";
