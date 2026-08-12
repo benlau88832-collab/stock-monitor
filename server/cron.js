@@ -400,20 +400,55 @@ async function runIntradayBrain(pool, force = false) {
     const cog = buildCognition(raw, ver);
     await persistCognition(pool, cog);
     // ⑦ v9.117.0（S3-3）：主动智能流落库（时段洞察 + LLM 预算）—— 前端 ProactiveFeed 读 kv 最新
-    try {
-      const { resolveSession, currentSession } = require("./lib/proactiveSession");
-      const { runProactiveTick } = require("./lib/proactiveScheduler");
-      const session = currentSession();
-      const { insights, budget } = runProactiveTick(cog, session);
-      await pool.query(
-        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
-         ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
-        [`proactive:${ds}`, JSON.stringify({ ts: Date.now(), session, insights: insights.slice(0, 8), budget })],
-      );
-    } catch (e) { console.warn("[cron] 主动流落库失败（不影响主链）:", e.message); }
+    try { await runProactiveStore(pool, ds, cog); } catch (e) { console.warn("[cron] 主动流落库失败（不影响主链）:", e.message); }
     console.log(`[cron] 🧠 认知快照 v${cog.version} ${ds}: hash=${cog.hash} 情绪${cog.sentiment.value.stage}(${cog.sentiment.value.score}) 主线${cog.mainline.value.primaryTheme} 闸门${cog.risk.value.gateOpen ? "开" : "关"}`);
   } catch (e) { console.warn("[cron] 认知快照失败（不影响主链）:", e.message); }
   return { sentiment, anomalies: anomalies.length, sealAlerts: sealAlerts.length };
+}
+
+/**
+ * v9.119.0（S3-3 补全）：主动智能流落库（独立时段入口）——
+ * 认知层（表最新优先）→ runProactiveTick 时段洞察 → LLM 润色（受时段预算，失败回退规则原文）→ kv proactive:latest
+ * 由时段调度（盘前/竞价/早盘/午后/尾盘/盘后）与 runIntradayBrain 尾部共同调用；失败不影响主链。
+ */
+async function runProactiveStore(pool, ds, cogArg) {
+  const { buildBrainContext } = require("./lib/brainContext");
+  const { buildCognition, rawFromBrainContext, latestCognition } = require("./lib/cognition");
+  const { currentSession } = require("./lib/proactiveSession");
+  const { runProactiveTick, refineInsightsWithLLM } = require("./lib/proactiveScheduler");
+  let cog = cogArg ?? null;
+  if (!cog) {
+    const latest = await latestCognition(pool);
+    if (latest) cog = latest;
+    else {
+      const ctx = await buildBrainContext(pool);
+      cog = buildCognition(rawFromBrainContext(ctx), 1);
+    }
+  }
+  const session = currentSession();
+  const tick = runProactiveTick(cog, session);
+  // v9.119.0（润色有效性）：policy-brief 骨架补真实政策快讯（PG news 政策类，润色才有要点可组织）
+  try {
+    const pb = tick.insights.find((i) => i.id === "policy-brief");
+    if (pb) {
+      const polR = await pool.query(
+        `SELECT title FROM news WHERE title ~ '央行|证监会|国务院|发改委|财政部|工信部|国常会|降准|降息|政策' ORDER BY time DESC LIMIT 3`,
+      );
+      if (polR.rows.length) {
+        pb.body = `政策要点：${polR.rows.map((r) => r.title).join("；")}`;
+        pb.evidence = { sampleSize: polR.rows.length, caliber: "政策语料库 PG 实时查询，LLM 摘要（预算内）", asOf: cog?.asOf ?? "" };
+      }
+    }
+  } catch { /* 政策语料查询失败 → 保留规则骨架 */ }
+  // LLM 润色：仅预算充足条目（盘后复盘 1200/剧本 800/盘前简报 600），失败自动回退规则原文
+  const refined = await refineInsightsWithLLM(tick.insights, cog, tick.budget);
+  await pool.query(
+    `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+    [`proactive:latest`, JSON.stringify({ ts: Date.now(), date: ds, session, insights: refined.insights.slice(0, 8), budget: refined.budget })],
+  );
+  const llmN = refined.insights.filter((i) => i.llmUsed).length;
+  console.log(`[cron] 📡 主动流 ${session.phase}(${session.window}): ${refined.insights.length} 条洞察 · LLM润色${llmN}条 · 预算${refined.budget.llmUsedTokens}/${refined.budget.llmBudgetTokens}`);
 }
 
 // ---------- 通用 https GET ----------
@@ -1654,6 +1689,26 @@ function startCron({ pool }) {
       if (r.total > 0) console.log(`[cron] P0-3 拍板盈亏回填: ${r.backfilled}/${r.total} 条`);
     } catch (e) { console.error("[cron] 拍板盈亏回填失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
+
+  // ---------- v9.119.0（S3-3 补全）：主动智能流时段调度（盘前/竞价/早盘/午后/尾盘/盘后） ----------
+  // 每时段入口产出时段洞察 + LLM 润色（受时段预算，失败回退规则原文）→ kv proactive:latest
+  // 前端 ProactiveFeed 读 /api/proactive（优先 kv 润色版，无则实时规则版）
+  const PROACTIVE_SCHEDULE = [
+    ["5 9 * * 1-5", "盘前"],
+    ["25 9 * * 1-5", "竞价"],
+    ["0 10 * * 1-5", "早盘"],
+    ["35 13 * * 1-5", "午后"],
+    ["35 14 * * 1-5", "尾盘"],
+    ["5 15 * * 1-5", "盘后"],
+  ];
+  for (const [expr, label] of PROACTIVE_SCHEDULE) {
+    cron.schedule(expr, async () => {
+      try {
+        if (!isTradingDayCN()) return;
+        await runProactiveStore(pool, bjDateStr());
+      } catch (e) { console.error(`[cron] 主动流(${label})失败:`, e.message); }
+    }, { timezone: "Asia/Shanghai" });
+  }
 
   // ---------- P1-4：盘后主动汇报（15:10 LLM 生成今日拍板命中度 + 明日剧本 → 推送） ----------
   cron.schedule("10 15 * * 1-5", async () => {

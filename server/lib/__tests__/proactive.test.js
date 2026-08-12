@@ -1,7 +1,7 @@
-// v9.117.0（S3-1/S3-2）：时段引擎 + 主动调度单测 —— 8 阶段/2 决策窗口/非交易日/规则前置/预算
+// v9.117.0（S3-1/S3-2）+ v9.119.0（S3-3 补全）：时段引擎 + 主动调度单测 —— 8 阶段/决策窗口/规则前置/预算/LLM 润色
 import { describe, it, expect } from "vitest";
 import { resolveSession } from "../proactiveSession";
-import { runProactiveTick } from "../proactiveScheduler";
+import { runProactiveTick, refineInsightsWithLLM } from "../proactiveScheduler";
 
 // 认知层 stub（闸门放开/发酵/健康）
 function cogStub(over = {}) {
@@ -64,11 +64,13 @@ describe("v9.117.0 主动调度 runProactiveTick（S3-2）", () => {
     expect(riskHit.kind).toBe("风险告警");
   });
 
-  it("③ budget.remaining ≥ 0（时段预算约束）", () => {
+  it("③ budget.remaining ≥ 0（时段预算约束；骨架 0 实际消耗）", () => {
     const { budget } = runProactiveTick(cogStub(), resolveSession(15, 30)); // 盘后
     expect(budget.remaining).toBeGreaterThanOrEqual(0);
     expect(budget.llmBudgetTokens).toBe(2500);
-    expect(budget.llmUsedTokens).toBe(2000); // 复盘1200 + 剧本800
+    // v9.119.0 语义：llmUsedTokens 只计实际润色消耗（规则骨架 0）—— 剩余预算足够润色复盘/剧本
+    expect(budget.llmUsedTokens).toBe(0);
+    expect(budget.remaining).toBe(2500);
   });
 
   it("盘后洞察含 LLM 标记（复盘/剧本，tokenCost 受控）", () => {
@@ -85,5 +87,46 @@ describe("v9.117.0 主动调度 runProactiveTick（S3-2）", () => {
     expect(dw.priority).toBe("P0");
     expect(dw.kind).toBe("决策提示");
     expect(dw.action).toContain("裁决");
+  });
+});
+
+// v9.119.0（S3-3 补全）：LLM 润色接线 —— 预算降级 / 失败回退 / 成功润色（依赖注入 mock，不真调 LLM）
+describe("v9.119.0 refineInsightsWithLLM（LLM 润色接线）", () => {
+  function mkTick(phase = "盘后") {
+    return runProactiveTick(cogStub(), resolveSession(15, 30));
+  }
+
+  it("预算不足 → LLM 条目降级为规则原文（0 token，预算硬上限）", async () => {
+    const tick = mkTick();
+    const poorBudget = { ...tick.budget, remaining: 0, llmUsedTokens: tick.budget.llmBudgetTokens }; // 预算耗尽
+    const { insights, budget } = await refineInsightsWithLLM(tick.insights, cogStub(), poorBudget, async () => "LLM 不应被调用");
+    expect(insights.filter((i) => i.llmUsed)).toHaveLength(0);
+    expect(budget.llmUsedTokens).toBe(tick.budget.llmBudgetTokens); // 预算已耗尽，无新增消耗
+    expect(insights.find((i) => i.id === "eod-review").body).toContain("预算不足");
+  });
+
+  it("LLM 调用失败 → 回退规则原文（永不降级）", async () => {
+    const tick = mkTick();
+    const { insights } = await refineInsightsWithLLM(tick.insights, cogStub(), tick.budget, async () => { throw new Error("upstream 503"); });
+    const eod = insights.find((i) => i.id === "eod-review");
+    expect(eod.llmUsed).toBe(false);
+    expect(eod.tokenCost).toBe(0);
+    expect(eod.body).toContain("今日主线"); // 规则原文保留
+  });
+
+  it("LLM 成功 → body 被润色且 tokenCost 计入预算（复盘1200+剧本800=2000）", async () => {
+    const tick = mkTick();
+    const { insights, budget } = await refineInsightsWithLLM(tick.insights, cogStub(), tick.budget, async () => "今日半导体主线延续，龙头封板。复盘要点已整理。");
+    const eod = insights.find((i) => i.id === "eod-review");
+    expect(eod.llmUsed).toBe(true);
+    expect(eod.body).toContain("半导体");
+    expect(budget.llmUsedTokens).toBe(2000); // 复盘 1200 + 剧本 800 实际消耗
+    expect(budget.remaining).toBe(2500 - 2000);
+  });
+
+  it("LLM 返回过短（<10 字）→ 视为失败回退", async () => {
+    const tick = mkTick();
+    const { insights } = await refineInsightsWithLLM(tick.insights, cogStub(), tick.budget, async () => "好");
+    expect(insights.find((i) => i.id === "eod-review").llmUsed).toBe(false);
   });
 });

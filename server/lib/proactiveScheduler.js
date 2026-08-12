@@ -18,9 +18,11 @@ function runProactiveTick(cog, session, prevStage) {
   ];
   const fired = hits.filter((h) => h.fired);
   const insights = [];
-  // 时段预算：盘前/盘后给 LLM 更多（复盘/剧本），盘中极省（规则为主）
+  // 时段预算：盘前/盘后给 LLM 更多（复盘/剧本），盘中极省（规则为主）。
+  // v9.119.0 语义修正：llmUsedTokens 只计"实际润色消耗"（规则骨架 0 实际消耗）——
+  //   原实现预扣标记 tokenCost 导致剩余预算不够润色复盘（2500-2000=500 < 1200，永远降级）
   const llmBudgetTokens = session.phase === "盘后" ? 2500 : session.phase === "盘前" ? 1800 : 400;
-  let used = 0;
+  let used = 0; // 实际 LLM 消耗（润色接线后累加；runProactiveTick 本身 0）
 
   const base = (over) => ({
     llmUsed: false,
@@ -38,7 +40,6 @@ function runProactiveTick(cog, session, prevStage) {
       body: `主线候选：${cog?.mainline?.value?.primaryTheme ?? "数据不足"}（强度${cog?.mainline?.value?.strength ?? "?"}）。闸门${cog?.risk?.value?.gateOpen ? "放开" : "关闭"}，风险${cog?.risk?.value?.level ?? "?"}。关注外围与政策催化，核对自选股。`,
       action: "进入「盘前准备」分区核对自选",
     }));
-    used += 600;
     insights.push(base({
       id: "policy-brief",
       phase: session.phase, window: session.window, priority: "P2", kind: "盘前简报",
@@ -90,17 +91,15 @@ function runProactiveTick(cog, session, prevStage) {
       llmUsed: true, tokenCost: 1200,
       evidence: { sampleSize: cog?.sentiment?.provenance?.sampleSize ?? 0, caliber: "LLM 复盘，骨架来自认知层（预算内）", asOf: cog?.asOf ?? "" },
     }));
-    used += 1200;
     insights.push(base({
       id: "next-day-playbook",
       phase: session.phase, window: session.window, priority: "P2", kind: "明日剧本",
       title: "明日剧本：两种情景",
-      body: `情景A(主线延续)：低吸梯队 tier2；情景B(分歧退潮)：高低切，回避高位接力。预算内双情景简述。`,
+      body: `情景A(主线延续)：低吸梯队 ${(cog?.mainline?.value?.ladder?.tier2 ?? []).join("、") || "tier2"}；情景B(分歧退潮)：高低切，回避高位接力。预算内双情景简述。`,
       action: "展开明日自选",
       llmUsed: true, tokenCost: 800,
       evidence: { sampleSize: 2, caliber: "情景推演 N=2，LLM 润色（预算内）", asOf: cog?.asOf ?? "" },
     }));
-    used += 800;
   }
 
   // 2) 规则命中叠加（全纯，token=0）
@@ -123,4 +122,48 @@ function runProactiveTick(cog, session, prevStage) {
   return { insights, budget };
 }
 
-module.exports = { runProactiveTick };
+/**
+ * v9.119.0（S3-3 补全）：LLM 润色实际接线 —— 对 llmUsed=true 的洞察调 callModelText 组织语言。
+ * 约束：① 仅当 budget.remaining ≥ tokenCost 才润色（时段预算硬上限）；② 润色失败回退规则原文（永不降级）；
+ * ③ prompt 强制"引用给定数字、≤100字、禁止编造"（骨架来自认知层，LLM 只组织语言）。
+ * @param {Function} [callLLM] 依赖注入（测试用；缺省 require ./httpProxy 的 callModelText）
+ * 返回 { insights, budget }（llmUsed=true 的条目 body 被润色，tokenCost 计入 budget）。
+ */
+async function refineInsightsWithLLM(insights, cog, budget, callLLM) {
+  const callModelText = callLLM ?? require("./httpProxy").callModelText;
+  let remaining = budget.remaining;
+  let used = budget.llmUsedTokens; // 实际消耗（runProactiveTick 骨架 0，仅润色累加）
+  const out = insights.map((it) => ({ ...it }));
+  for (const it of out) {
+    if (!it.llmUsed || it.tokenCost <= 0) continue;
+    if (remaining < it.tokenCost) {
+      it.llmUsed = false; // 预算不足 → 该条降级为规则原文（0 token）
+      it.tokenCost = 0;
+      it.body = it.body + "（预算不足，规则骨架）";
+      continue;
+    }
+    const prompt = `用不超过100字把下面的盘面要点组织成自然的中文简报，保留全部数字与结论，禁止编造任何新数字或事实。\n\n${it.body}`;
+    try {
+      const text = await callModelText(prompt, {
+        system: "你是A股短线游资助手。只组织语言，不添加事实，不编造数字。",
+        maxTokens: Math.min(800, it.tokenCost + 200), // 恒思考模型提档给思考空间（llmCore 铁律）
+        temperature: 0.3,
+      });
+      const t = String(text ?? "").trim();
+      if (t.length >= 10) {
+        it.body = t;
+        remaining -= it.tokenCost;
+        used += it.tokenCost;
+      } else {
+        it.llmUsed = false;
+        it.tokenCost = 0;
+      }
+    } catch {
+      it.llmUsed = false; // 润色失败 → 规则原文（永不降级）
+      it.tokenCost = 0;
+    }
+  }
+  return { insights: out, budget: { ...budget, llmUsedTokens: used, remaining } };
+}
+
+module.exports = { runProactiveTick, refineInsightsWithLLM };

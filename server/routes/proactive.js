@@ -21,9 +21,19 @@ async function getCog() {
 module.exports = function proactiveRoutes(app) {
   app.get("/api/proactive", async (req, res) => {
     try {
-      const cog = await getCog();
       const hhmm = String(req.query.phase ?? "");
       const phaseName = String(req.query.phaseName ?? "");
+      const useLatest = !hhmm && !phaseName; // 无时段参数 → 返回当前时段（优先 cron 润色版 kv）
+      if (useLatest) {
+        // v9.119.0（S3-3 补全）：优先读 cron 时段调度落库的润色版（proactive:latest）
+        const r = await pool.query("SELECT value FROM kv_store WHERE key=$1", ["proactive:latest"]);
+        if (r.rows[0]?.value) {
+          let v = r.rows[0].value;
+          if (v && typeof v === "object" && "__raw" in v) { try { v = JSON.parse(v.__raw); } catch { v = null; } }
+          if (v && v.session) return res.json(v);
+        }
+      }
+      const cog = await getCog();
       let session;
       if (/^\d{2}:\d{2}$/.test(hhmm)) {
         const [h, m] = hhmm.split(":").map(Number);

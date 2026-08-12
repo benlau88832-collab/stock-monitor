@@ -47,6 +47,9 @@
 // v9.118.0（S4 操作习惯场景融合）：四场景纯函数（stageToAction 情绪周期买卖点 / assessAuctionVolatility 竞价 /
 //   composeIntradayAction 异动处置 / buildCloseList 尾盘减仓，0 token）+ ScenarioPanel 四 tab 面板
 //   （读认知层动态，结论可触达决策直达——独立条不增面板）
+// v9.119.0（S3-3 补全 + 验收对齐）：主动流 LLM 润色实际接线（refineInsightsWithLLM 受时段预算、
+//   失败回退规则原文永不降级）+ cron 时段调度六入口（盘前/竞价/早盘/午后/尾盘/盘后 → kv proactive:latest）+
+//   /api/proactive 优先读润色版 + /api/health checks 数组（对齐 ③ 全局验收命令）
 // ============================================================
-export const APP_VERSION = "v9.118.0";
-export const BUILD_DATE = "2026-08-12";
+export const APP_VERSION = "v9.119.0";
+export const BUILD_DATE = "2026-08-13";

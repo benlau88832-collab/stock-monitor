@@ -8,8 +8,8 @@
 // v9.113.1（T1-1）：CACHE v28→v29 —— 主面板 PG-first 改造发版
 // v9.114.0（T5-3）：SW 版本强制更新 —— CACHE 名 +1 同时，activate 通知所有打开页面强制 reload，
 //   消除"需硬刷新"约定（浏览器可能持旧 SW/旧页面；skipWaiting 已保证新 SW 立即接管）
-// v9.118.0（S4-2）：CACHE v33→v34 —— 场景融合发版
-const CACHE = "stock-monitor-v34";
+// v9.119.0（S3-3 补全）：CACHE v34→v35 —— LLM 润色接线 + 时段调度发版
+const CACHE = "stock-monitor-v35";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {

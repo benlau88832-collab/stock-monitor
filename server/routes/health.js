@@ -52,6 +52,16 @@ module.exports = function healthRoutes(app) {
     } catch (e) {
       out.cognition = { ok: false, error: e.message };
     }
+    // ⑦ v9.119.0（补全）：checks 数组 —— 对齐《详细指令》全局验收命令 curl /api/health | jq '.checks'
+    // （五合一健康 + 认知 build，字段与既有 out.* 同源）
+    out.checks = [
+      { name: "pg_connectivity", ok: out.pg?.ok === true, latencyMs: out.pg?.latencyMs ?? null },
+      { name: "cognition_build", ok: out.cognition?.ok === true, detail: out.cognition?.ok ? `v${out.cognition.version} hash=${out.cognition.hash}` : "build failed" },
+      { name: "market_source", ok: (Array.isArray(out.sources) ? out.sources.some((s) => s.state === "ok") : false), detail: "数据源健康（push2/push2delay 等 host 状态）" },
+      { name: "ai_endpoint", ok: out.ai?.degraded === false, detail: "deepseek-v4-flash（恒思考）/ OpenCode Go failover" },
+      { name: "sw_version", ok: !!out.sw?.cache, detail: out.sw?.cache ?? "sw.js 未读取" },
+    ];
+    out.ok = out.checks.every((c) => c.ok);
     res.json(out);
   });
 };
