@@ -1,7 +1,7 @@
 # 项目 Handoff — 2026-08-12（会话超长交接，交由新会话继续推进）
 
-> **交接人**：实施会话（sess_bf7325ee，2026-08-12 深夜）+ 推进会话（2026-08-12 晚，v9.113.1/v9.114.0）+ 金融 AGI 会话（2026-08-12 深夜~08-13，v9.115.0~v9.119.0 四支柱+补全）
-> **当前 HEAD**：`3806428`（v9.119.0，已推送远端 `arena/019fb619-stock-monitor`）
+> **交接人**：实施会话（sess_bf7325ee，2026-08-12 深夜）+ 推进会话（2026-08-12 晚，v9.113.1/v9.114.0）+ 金融 AGI 会话（2026-08-12 深夜~08-13，v9.115.0~v9.122.0 四支柱+补全+卓越升级）
+> **当前 HEAD**：`5b8298b`（v9.122.0，已推送远端 `arena/019fb619-stock-monitor`）
 > **接手必读**：本文件 + AGENTS.md + `C:\Users\Administrator\.zcode\cli\memories\projects\022_-a062c4aeb65b9d98\memory\MEMORY.md`（含全部历史教训索引）
 
 ---
@@ -40,18 +40,22 @@
 | v9.117.0 | 99355c4 | **四支柱③ 主动智能调度**：resolveSession 时段引擎（8 阶段+2 决策窗口）+ 规则谓词四件套 + runProactiveTick（规则前置 0 token，LLM 受时段预算 400/1800/2500）+ /api/proactive + cron 落库 + ProactiveFeed（盘前准备区，时段切换+预算条） | curl ?phase=09:25→decisionWindow:true+P0；浏览器预算条 2000/2500·剩余500 |
 | v9.118.0 | b8ecd30 | **四支柱④ 操作习惯场景融合**：四场景纯函数（stageToAction 情绪周期买卖点/assessAuctionVolatility 竞价/composeIntradayAction 异动处置/buildCloseList 尾盘减仓，0 token）+ ScenarioPanel 4 tab（读认知动态，结论触达决策直达） | 浏览器：冰点→低吸·仓位15%（与认知横幅/AI 三方一致）；竞价匹配度 100→打板 |
 | v9.119.0 | 3806428 | **补全收尾**：主动流 LLM 润色实际接线（refineInsightsWithLLM 受时段预算，失败回退规则原文永不降级；预算语义修正——llmUsedTokens 只计实际消耗）+ cron 时段调度六入口（盘前/竞价/早盘/午后/尾盘/盘后 → kv proactive:latest）+ policy-brief 补真实政策快讯 + /api/proactive 优先读润色版 + /api/health checks 数组（对齐 ③ 全局验收命令） | 真实 LLM 润色实测（政策简报 600 tok，事实全保留语言自然化）；curl /api/health checks 五源全 ok |
+| v9.120.0 | 803eb8c | **卓越 S1-1b/S1-1c 认知推理层**：reasoning.js 纯函数（assessCoherence 跨5维共振+背离 / deriveDrivers 因果链 / computeDelta 环比 / makeForecast 前瞻预判 / buildNarrative 一句话理解）+ /api/reasoning（prevCog 历史版+利好催化）+ 助手注入 narrative + ReasoningPanel 推理面板 | curl：防御混沌(20分)/因果链/防守预判；浏览器推理面板全维显示 |
+| v9.121.0 | 5c07934 | **卓越 S2-1b 游资战术**：assessTactics 五件套（接力分/情绪买卖点/买点/卖点纪律/梯队位置，双端同构）+ DecisionCard 战术行 | curl tactics 五件套；浏览器接力分55/低吸试错/盘中分时确认 |
+| v9.122.0 | 5b8298b | **卓越 S3-2b 主动消费预判**：runProactiveTick 第 4 参 reasoning —— forecast.conditions 每条产"前瞻预判"洞察（P0/P1·0 token·触达决策卡）；路由/cron 双路径注入 | curl/浏览器：前瞻预判 1 条（若冰点+新主线放量→轻仓低吸试错） |
 
-## 二、当前状态（v9.119.0）
+## 二、当前状态（v9.122.0）
 
-**已上线**：部署 v9.119.0（SW CACHE v35）；vitest 498；build 1,679.72kB；验收 19 PASS。
+**已上线**：部署 v9.122.0（SW CACHE v38）；vitest 517；build 1,686.98kB；验收 19 PASS。
 
-**金融 AGI 四支柱全部落地 + 补全收尾**（GLM审查/解决智能化/ ①②③④ 四文档，③ 执行状态已回填）：
-- ① 单一认知层：/api/cognition（cron 落库 cognition_snapshots + version/hash）+ 认知横幅 + AI 注入认知（快照降 ≥15%）
-- ② 决策直达：五支柱一键裁决（<1ms 纯函数 + 9:25/13:00 决策窗口 + 候选龙头自动亮）
-- ③ 主动智能：时段引擎 + 规则前置 + **LLM 润色已实际接线**（refineInsightsWithLLM 受预算，cron 时段调度六入口，policy-brief 补真实政策快讯）+ ProactiveFeed
+**金融 AGI 四支柱 + 补全收尾 + 卓越升级全部落地**（GLM审查/解决智能化/ ①②③④⑤ 五文档，执行状态均已回填）：
+- ① 单一认知层：/api/cognition（cron 落库 + version/hash）+ 认知横幅 + AI 注入认知
+- ② 决策直达：五支柱一键裁决 + **游资战术行**（接力分/情绪买卖点/买点/卖点纪律/梯队位置，卓越 S2-1b）
+- ③ 主动智能：时段引擎 + 规则前置 + **LLM 润色已接线** + **前瞻预判接入**（forecast.conditions → 主动流洞察，卓越 S3-2b）
 - ④ 场景融合：情绪周期买卖点/竞价/异动处置/尾盘减仓（0 token）
-- **验收对齐**：/api/health checks 数组（③ 全局验收命令 curl /api/health | jq '.checks' 直接可用）
-- **全站口径统一实测**：认知横幅（冰点16）→ AI 回答 → 决策五支柱 → 场景融合 四方一致
+- **卓越推理层**（S1-1b/S1-1c）：共振投票/因果链/环比变化/前瞻预判/narrative 一句话理解 + /api/reasoning + 助手注入 narrative + ReasoningPanel
+- **验收对齐**：/api/health checks 数组（③ 全局验收命令直接可用）
+- **全站口径统一实测**：认知横幅（冰点16）→ AI 回答 → 决策五支柱+战术 → 推理 narrative → 场景融合 五方一致
 
 **已实测通过（历史）**：
 - 主面板 PG-first：block push2 → PG 快照值 + 角标，不走 push2delay（v9.113.1）
@@ -60,14 +64,14 @@
 
 ## 三、剩余待办
 
-> 2026-08-13 更新：v9.113.1/v9.114.0（T0-T6）与 v9.115.0~v9.119.0（金融 AGI 四支柱+补全收尾）已全部交付（c6b1e2d→3806428），③ 执行状态总表已回填，验收命令全部对齐。
+> 2026-08-13 更新：v9.113.1/v9.114.0（T0-T6）、v9.115.0~v9.119.0（四支柱+补全）、v9.120.0~v9.122.0（卓越升级）已全部交付（c6b1e2d→5b8298b），③⑤ 执行状态总表已回填，验收命令全部对齐。
 
 ### 后续优化（非阻塞，🟡 后置项）
 - 认知历史回放（cognition_snapshots 按 version 时序）
 - 竞价委托簿撮合模拟（数据源受限，先用量价代理——S4 已含）
 - 多模型并行投票裁决（配额有限）
 - 线上观测调优（length cap 12000 配额监控；路由正则按实测微调；cron 频率按需调整）
-- 观察项：盘中链（runIntradayBrain）PG 连接超时历史失败——今日盘中时段起观察 cron 日志确认恢复（sentiment_snapshot 恢复后情绪源自动用权威采样）
+- 观察项：盘中链（runIntradayBrain）PG 连接超时历史失败——盘中时段起观察 cron 日志确认恢复（sentiment_snapshot 恢复后情绪源自动用权威采样）；kv proactive:latest 将在明早 cron 时段调度首入口（09:05）写入含前瞻预判的新版
 
 ## 四、关键约定（改代码前必读）
 

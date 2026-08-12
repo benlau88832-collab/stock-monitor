@@ -1,0 +1,297 @@
+# 《卓越智能化升级 · 优化修改指令 v9.115.1》（供 DeepSeek V4 Flash 执行）
+
+> 配套：①战略诊断 ②修改方案 ③详细指令(基线任务书) ④参考实现。**本篇是 ③ 的"卓越"增量任务书，不替代 ③。**
+> 背景：③ 的 v9.115.0 认知层(buildCognition)只输出**"水位"**（情绪几分、资金多少）——本质是"测量"，这是客户觉得"笨"的最后一公里。本升级把"测量"升到**"理解+前瞻"**：跨信号共振、因果驱动、变化率、预判、一句话市场理解。
+> **全部纯函数、0 LLM token、可回测、永不降级。**
+> 执行方：DeepSeek V4 Flash——每任务给 文件/函数/伪代码/验收/依赖/回归；改一处验一处；禁"优化 XX"模糊词。
+> 基线前提：③ 的 **S1-1（认知层 buildCognition）必须先完成并通过验收**；本升级在其上叠加。
+> 纪律：①每阶段 `npx vitest run` + `npm run build` + 起 server curl；②改 schema/依赖重跑 typegen+tsc+build；③版本三处同步(package.json / /api/health appVersion / 横幅)；④注释带版本标记 `// v9.115.1 卓越`；⑤日期带横杠。
+> LLM 标注：每任务标【依赖LLM:否/可选】——本升级除 S1-1c 注入助手外**全部不依赖 LLM**。
+
+---
+
+## 0. 升级总览
+
+| # | 升级 | 治的"笨" | 任务 | 归属版本 | 依赖LLM |
+|---|---|---|---|---|---|
+| ① | 跨信号共振/分歧判断 | 各维度各说各、不会综合 | S1-1b `assessCoherence` | v9.115.1 | 否 |
+| ② | 因果驱动链 | 只知"是什么"不知"为什么" | S1-1b `deriveDrivers` | v9.115.1 | 否 |
+| ③ | 变化率(看趋势) | 只看水位不看动量 | S1-1b `computeDelta` | v9.115.1 | 否 |
+| ④ | 前瞻预判(情景触发) | 只复盘不前瞻 | S1-1b `makeForecast` | v9.115.1 | 否 |
+| ⑤ | narrative 一句话理解 | AI 各自重建市场理解 | S1-1b `buildNarrative` | v9.115.1 | 否 |
+| ⑥ | 推理注入助手 + 端点 | 助手仍自建理解 | S1-1c | v9.115.1 | 可选 |
+| ⑦ | 决策直达注入游资战术 | 决策只有准入分、无战术 | S2-1b `assessTactics` | v9.116.0 | 否 |
+| ⑧ | 主动智能消费预判 | 预判不联动执行 | S3-2b | v9.117.0 | 否 |
+
+> 优先级：①–⑥ 是"卓越"核心（必做，构成 v9.115.1 一次发版）；⑦⑧ 是联动增强（高价值，分别并入 ③ 既定的 v9.116.0 / v9.117.0）。
+
+---
+
+## 执行状态总表（2026-08-13 回填：四任务全部交付，按实际版本线 v9.120.0~v9.122.0）
+
+| 任务 | 版本 | 主题 | 状态 | 依赖LLM | commit |
+|---|---|---|---|---|---|
+| S1-1b 认知推理层 reasoning.js | v9.120.0 | 共振/因果/变化率/预判/narrative | ✅ 完成 | 否 | 803eb8c |
+| S1-1c 推理端点 + 注入助手 | v9.120.0 | /api/reasoning + system 注入 | ✅ 完成 | 可选 | 803eb8c |
+| S2-1b 决策直达游资战术 | v9.121.0 | assessTactics 五项 | ✅ 完成 | 否 | 5c07934 |
+| S3-2b 主动智能消费预判 | v9.122.0 | forecast.conditions 触发 | ✅ 完成 | 否 | 5b8298b |
+
+> 验收汇总：vitest 517 全过（70 files）/ tsc 0 错 / build 1,686.98kB / verify-acceptance 19 PASS（环境项除外）
+> curl 实测：/api/reasoning → 防御混沌(20分)/因果链/首帧无环比/防守预判；POST /api/decisions → tactics 五件套；/api/proactive?phaseName=盘中 → 前瞻预判 1 条（P1·0 token）
+> 浏览器实测：推理面板（narrative+5维投票+因果+环比+预判）/ 决策卡游资战术行（接力分55/低吸试错/盘中分时确认）/ 主动流预判链路（同源 fetch 确认）
+> token 成本：全部纯函数 0 token（S1-1c 注入助手不额外烧 LLM）
+
+---
+
+## 阶段 v9.115.1：认知推理层（卓越核心，一次发版）
+
+### S1-1b 认知推理层 `server/lib/reasoning.js` 【依赖LLM:否】
+
+- **新增文件**：`server/lib/reasoning.js`（CJS）。导出 `enrichCognition` 及 5 个子函数。
+- **依赖**：③ S1-1 已完成（输入 `cog` 即 `buildCognition` 产物；`raw` 即 PG 快照；`prevCog` 为上一版认知，由 cron 保留）。
+
+#### 数据结构（实现为普通对象，字段如下）
+```
+CognitionReasoning {
+  coherence: { status, score, votes:[{dim,bullish,evidence}], conflicts:[] }
+  drivers:   { catalyst, primaryDriver, chain:[] }
+  delta:     { hasPrev, sentimentD, capitalD, leaderHeightD, trend }
+  forecast:  { nextWindow, watch:[], conditions:[{iff, then}] }
+  narrative: string
+  provenance:{ source:"derived", asOf, confidence:0.82, caliber }
+}
+status ∈ {"共振进攻","多头占优","分歧注意","防御混沌"}
+```
+
+#### 子函数 1：`assessCoherence(cog) → Coherence`
+```
+// 跨5维度多头投票（游资看的是"共振"而非单点）
+votes = [
+  { dim:"情绪",   bullish: cog.sentiment.stage ∈ {启动,发酵,高潮}, evidence:`${stage}·温度${score}` },
+  { dim:"资金",   bullish: cog.capital.signal ∈ {吸筹,洗盘},        evidence:`${signal}·净${net}亿` },
+  { dim:"风险闸门", bullish: cog.risk.gateOpen && cog.risk.level ∈ {低,中}, evidence:`闸门${开/关}·风险${level}` },
+  { dim:"龙头接力", bullish: cog.leader.relayOk,                   evidence:`${name}${height}板·接力${可/弱}` },
+  { dim:"主线强度", bullish: cog.mainline.strength>=70 && rotation=="持续", evidence:`${theme}·强度${strength}` },
+]
+bull = votes.filter(bullish).length
+status = bull>=4 ? "共振进攻" : bull==3 ? "多头占优" : bull==2 ? "分歧注意" : "防御混沌"
+// 背离检测（典型假信号）
+conflicts = []
+if 情绪.bullish && !资金.bullish → push "情绪回暖但资金出货(量价背离)"
+if !闸门.bullish && 情绪.bullish  → push "情绪亢奋但闸门未开(假进攻)"
+score = clamp( round(bull/5*100 - conflicts.length*12), 0, 100 )
+```
+
+#### 子函数 2：`deriveDrivers(cog, raw) → DriverChain`
+```
+catalyst = raw.news.find(利好)?.title ?? cog.mainline.primaryTheme
+chain = [
+  `催化：${catalyst}`,
+  `主线：${cog.mainline.primaryTheme}(强度${strength})`,
+  `资金：${cog.capital.signal}(${net}亿)`,
+  `情绪：${cog.sentiment.stage}(温度${score})`,
+]
+primaryDriver = cog.capital.signal=="出货" ? "资金(出货主导)"
+              : cog.sentiment.stage=="高潮" ? "情绪(高潮驱动)"
+              : "主线(题材驱动)"
+```
+
+#### 子函数 3：`computeDelta(cog, prevCog?) → Delta`
+```
+if !prevCog → { hasPrev:false, trend:"首帧，无环比", ...0 }
+sentimentD    = cog.sentiment.score - prev.sentiment.score
+capitalD      = cog.capital.netFlow - prev.capital.netFlow
+leaderHeightD = cog.leader.height   - prev.leader.height
+bits = []
+sentimentD>0 → "情绪回升${sentimentD}"；<0 → "情绪回落${-sentimentD}"
+capitalD>0   → "资金转正流入"；<0 → "资金转流出"
+leaderHeightD>0 → "龙头晋级${leaderHeightD}板"；<0 → "龙头断板"
+trend = bits.join("；") || "环比持平"
+```
+> 真实产品 `prevCog`：cron 每次刷新认知后保留上一版（按 version 时序），无需额外存储设计。
+
+#### 子函数 4：`makeForecast(cog, coh) → Forecast`
+```
+stage = cog.sentiment.stage；l = cog.leader
+if coh.status=="共振进攻" || stage=="发酵":
+  nextWindow = "下一窗口(午后开盘/尾盘)：关注进攻延续性"
+  watch = [`${l.name}能否封板 / 接力梯队是否扩散(tier2→tier1)`, "两市成交额是否放大", "炸板率是否抬头"]
+  conditions = [
+    { iff:"炸板率>20% 或 昨涨停今溢价转负", then:"高低切：减高位接力，低吸新主线首板" },
+    { iff:"龙头放量烂板/尾盘炸板",          then:"接力梯队瓦解预警，清跟风" },
+  ]
+elif stage=="高潮":
+  nextWindow = "下一窗口：警惕首分歧"
+  watch = ["跟风板是否大面积回落", "龙头是否爆量滞涨"]
+  conditions = [ { iff:"出现首分歧(龙头开板/封单骤减)", then:"只持不开，减仓锁定" } ]
+else:  // 退潮/冰点/启动偏弱
+  nextWindow = "下一窗口：防守为主，等待冰点回暖"
+  watch = ["跌停数是否收敛", "是否有新题材首板试错"]
+  conditions = [ { iff:"情绪冰点+新主线首板放量", then:"轻仓低吸试错" } ]
+```
+
+#### 子函数 5：`buildNarrative(cog, coh, drv, fc) → string`
+```
+head = `市场${coh.status}(${coh.score}分)：${drv.primaryDriver}驱动【${mainline.theme}】，资金${capital.signal}、闸门${开/关}、龙头${name}${height}板。`
+conflict = coh.conflicts.length ? ` 背离提醒：${conflicts.join("；")}。` : ""
+tail = fc.conditions[0] ? `前瞻：${conditions[0].iff} → ${conditions[0].then}。` : ""
+return head + conflict + tail
+```
+
+#### 总入口：`enrichCognition(cog, raw, prevCog?) → CognitionReasoning`
+```
+coherence = assessCoherence(cog)
+drivers   = deriveDrivers(cog, raw)
+delta     = computeDelta(cog, prevCog)
+forecast  = makeForecast(cog, coherence)
+narrative = buildNarrative(cog, coherence, drivers, forecast)
+provenance = { source:"derived", asOf:cog.asOf, confidence:0.82,
+  caliber:"共振=跨5维度多头投票；因果=催化→主线→资金→情绪；预判=阶段×共振情景触发" }
+return { coherence, drivers, delta, forecast, narrative, provenance }
+```
+
+#### 验收
+- **vitest** `server/lib/__tests__/reasoning.test.js`（CJS，用例名）：
+  - `assessCoherence：5维度全多→共振进攻且score高`
+  - `assessCoherence：情绪多但资金出货→conflicts含"量价背离"`
+  - `deriveDrivers：出货时primaryDriver含"资金(出货主导)"`
+  - `computeDelta：无prev→hasPrev=false`
+  - `computeDelta：score升+net升+height升→trend含"情绪回升""资金转正""龙头晋级"`
+  - `makeForecast：发酵→conditions含"高低切"`
+  - `enrichCognition：同输入确定性输出`
+- **curl**（S1-1c 落地后）：`curl -s localhost:8080/api/reasoning | jq '.coherence.status,.drivers.chain,.delta.trend,.forecast.conditions'`
+- **依赖**：③ S1-1。**回归风险**：低（纯新增，不改 cognition.js）。
+
+---
+
+### S1-1c 推理端点 + 注入助手 system prompt 【依赖LLM:可选】
+
+- **新增路由**：`server/routes/reasoning.js` → `GET /api/reasoning` 返回 `enrichCognition(getCognition(), getRaw(), getPrevCognition())`。
+- **改动文件**：
+  - `src/lib/assistantAgent.ts`（`runAssistantAgent` system 构造 `:464-477`）
+  - `server/lib/aiPrompts.js`
+- **改法**：system prompt 不再"描述市场全貌"，改为注入 `reasoning.narrative` 一行 JSON（如 `{"市场":"共振进攻(100)：主线驱动半导体，资金吸筹，闸门放开，龙头3板；前瞻：炸板率>20%→高低切"}`）+ 指令"如需细节调 getDecisionEvidence"。助手**消费**推理而非**重建**。
+- **token 影响**：system 长度再降约 15-25%（替代冗长背景描述）。
+- **验收**：
+  - **vitest** `assistantAgent.test`：注入后 system 含 `"narrative"`；长度下降 ≥15%
+  - **浏览器**：问"今天主线/情绪/该不该上"→ 回答与 narrative 一致（不再各说各）
+  - **回归**：fallbackAnswer 五分类、思考模式(reasoning)透传不破坏。
+- **依赖**：S1-1b。**回归风险**：中（动 prompt，必回归降级链与思考透传）。
+
+---
+
+## 阶段 v9.116.0 增量：决策直达注入游资战术
+
+### S2-1b `assessTactics` —— 决策卡从"准入分"升级到"战术动作" 【依赖LLM:否】
+
+- **改动文件**：`server/lib/decisionLayer.js`（③ S2-1 的 `composeDecision` 产物）+ `DecisionVerdict` 加 `tactics` 字段。
+- **新增子函数**（均纯函数）：
+
+```
+Tactics { relayScore:number(0-100); stageAction:string; buyPoint:string; sellDiscipline:string; ladderPos:string }
+
+relayEnvScore(cog):                       // 龙头接力环境分
+  s=50; premium>0 →+15; leader.relayOk →+12;
+  leader.height<=4 →+8 else -10;          // 高位接力空间小
+  gateOpen →+10 else -18; traps空 →+5
+  return clamp(s,0,100)
+
+stageActionOf(stage):                     // 情绪周期买卖点（游资核心坐标系）
+  冰点→"低吸首板试错(轻仓)"  退潮→"回避接力，管住手"
+  启动→"打首板/低吸梯队"     发酵→"接力核心龙头"
+  高潮→"只持不开，防爆头"     分歧→"高低切，减高位"
+
+buyPointOf(stock, cog):                   // 买点时机
+  if cog.session.phase=="竞价" || window含"09:2" → "竞价打板/低吸"
+  elif stock.limitUp && stock.relay>=2 → "回封接力"
+  elif !limitUp && pct∈[3,7] && bigNet>0 → "回踩低吸"
+  elif limitUp && relay==1 → "首板打板(需量能)"
+  else → "盘中分时确认"
+
+sellDisciplineOf(stage):
+  stage∈{高潮,分歧} → "断板即走；烂板减半；14:50未封减仓"
+  else → "破均线/量能背离减仓；止损不犹豫"
+
+ladderPosOf(stock, cog):
+  tier1含该股名 → "tier1龙头"；tier2含 → "tier2跟风"；else "非主线梯队"
+
+assessTactics(stock, cog) = { relayScore:relayEnvScore(cog), stageAction:stageActionOf(stage),
+  buyPoint:buyPointOf(stock,cog), sellDiscipline:sellDisciplineOf(stage), ladderPos:ladderPosOf(stock,cog) }
+```
+- **接入**：`composeDecision` 末尾 `const tactics = assessTactics(stock, cog);` 并加入返回对象（既有五支柱 pillars 不动）。
+- **验收**：
+  - **vitest** `decisionLayer.test` 新增：`relayEnvScore：闸门关→扣分且<开`；`stageActionOf(发酵)==="接力核心龙头"`；`buyPointOf：竞价窗口→"竞价打板/低吸"`；`composeDecision 返回含 tactics`
+  - **curl**：`curl -s -XPOST localhost:8080/api/decisions -d '{"code":"600519"}' | jq '.tactics'`
+  - **浏览器**：决策卡新增"游资战术"行（接力分/情绪买卖点/买点/卖点纪律/梯队位置）
+- **依赖**：③ S2-1。**回归风险**：低（加字段，不改既有支柱与一票否决逻辑）。
+
+---
+
+## 阶段 v9.117.0 增量：主动智能消费预判
+
+### S3-2b 把 forecast.conditions 接入主动调度 【依赖LLM:否】
+
+- **改动文件**：`server/lib/proactiveScheduler.js`（③ S3-2 的 `runProactiveTick`）。
+- **改法**：`runProactiveTick` 入参增加 `reasoning`（或内部 `enrichCognition`）；把 `reasoning.forecast.conditions` 作为**额外触发源**——每条 condition 产出一个 P1/P2 洞察 `{ kind:"前瞻预判", title:"若${iff}", body:"→ ${then}", llmUsed:false, tokenCost:0 }`，并 `action` 可触达决策卡。
+- **验收**：
+  - **curl**：`curl -s "localhost:8080/api/proactive?phaseName=盘中" | jq '.insights[] | select(.kind=="前瞻预判")'`（非空）
+  - **vitest** `proactiveScheduler.test`：发酵阶段→insights 含 kind="前瞻预判" 且 llmUsed=false
+- **依赖**：S1-1b + ③ S3-2。**回归风险**：中（动调度器，回归精灵推送分级与降级链）。
+
+---
+
+## 前端任务（各版本配套，进既有分区，不新增面板）
+
+> 铁律：**不增面板**。以下均为既有分区内"提升智能密度"。
+
+| 版本 | 改动 | 位置 | 浏览器验收 |
+|---|---|---|---|
+| v9.115.1 | 认知推理面板（共振投票/背离/因果链/变化率/预判情景）+ narrative 条 | 认知横幅下方，三分区上方 | 切换数据→共振状态/趋势/预判随之变化；narrative 与 AI 回答一致 |
+| v9.116.0 | 决策卡"游资战术"行 | 作战区 DecisionCard 内 | 点候选→显示接力分/情绪买卖点/买点/卖点纪律 |
+| v9.117.0 | 主动流新增"前瞻预判"卡片 | 盘前/主动流分区 | 出现"若X→Y"卡片，可触达决策卡 |
+
+> 数据来源：前端 `fetch('/api/reasoning')` 渲染推理面板；`/api/decisions` 已含 tactics。
+
+---
+
+## 全局验收总命令（每版本执行完跑一遍）
+
+```bash
+# 1) 类型 + 单测 + 构建
+npx next typegen && npm exec tsc -- --noEmit --pretty false
+npx vitest run
+npm run build
+# 2) 起server后端到端
+curl -s localhost:8080/api/reasoning | jq '.coherence.status,.drivers.chain,.delta.trend,.forecast.conditions'
+curl -s -XPOST localhost:8080/api/decisions -H 'Content-Type: application/json' -d '{"code":"600519"}' | jq '.decision,.tactics'
+curl -s "localhost:8080/api/proactive?phaseName=盘中" | jq '.insights[]|select(.kind=="前瞻预判")'
+curl -s localhost:8080/api/health | jq '.checks'
+```
+
+---
+
+## 回归红线（不得破坏）
+
+1. **认知层不变**：`buildCognition` 契约不动；推理层是其上的纯函数叠加。
+2. **决策直达仍 0 LLM、<1ms、永不降级**：tactics 是加字段，不改一票否决逻辑。
+3. **PG-first 不推倒**：推理层入参 `raw/prevCog` 来自认知层（PG 落库键）。
+4. **恒思考不关**：S1-1c 注入助手沿用 `llmCore.js:87` 提档 + length 重试。
+5. **不增面板**：推理面板/narrative/战术行/预判卡均进既有分区。
+6. **双端同构 golden**：`enrichCognition` 纯函数，输入相同输出相同。
+7. **合规**：推理/战术输出带 caliber（provenance 已含），不承诺胜率，免责声明保留，日期带横杠。
+
+---
+
+## 不做项（明确排除）
+
+- ❌ 不为推理/战术调 LLM（纯函数；仅 S1-1c 注入助手可选 LLM）。
+- ❌ 不改 `buildCognition` 契约（叠加而非重写）。
+- ❌ 不增加面板数量。
+- ❌ 不承诺胜率/不输出收益预测。
+- ❌ 不把决策主路径交给 LLM。
+
+---
+
+## 执行顺序铁律
+
+**S1-1b（推理层）→ S1-1c（端点+注入）→ 发布 v9.115.1**；其后 S2-1b 并入 v9.116.0、S3-2b 并入 v9.117.0。**S1-1b 未绿不上 S1-1c。**
