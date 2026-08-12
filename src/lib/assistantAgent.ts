@@ -235,8 +235,10 @@ export async function buildQuickSystem(siteContext: AssistantSiteContext): Promi
  * 从快照按问题粗分类提取组装回答，任何问题都有回答、永不空白。
  * 分类：主线类 / 个股类 / 消息类 / 情绪类 / 其他 → 快照通用摘要
  * v9.108.1（D-3）：改 async —— 个股类先尝试实时 /api/db/stock/:code（AI 不可用时也给带数字的回答）
+ * v9.109.1（A-1）：主线类接收结构化 brain —— 从 picks 按 correlation 区分龙头（前2）/跟风（后3），
+ *   直击用户报障"哪些是龙头标的哪些是跟风"（快照文本只有龙头名，无区分）
  */
-export async function fallbackAnswer(snapshot: string, question: string, reason?: string): Promise<string> {
+export async function fallbackAnswer(snapshot: string, question: string, reason?: string, brain?: BrainContext): Promise<string> {
   const q = question.trim();
   const lines = snapshot.split("\n").map(s => s.trim()).filter(Boolean);
   const head = `⚠ 规则版（AI 暂不可用${reason ? `：${reason}` : ""}）——以下为本地数据摘要\n`;
@@ -253,8 +255,19 @@ export async function fallbackAnswer(snapshot: string, question: string, reason?
     return out;
   };
 
-  // 主线类（含"主线"）→ 主线Top3 + 闸门
+  // 主线类（含"主线"）→ 主线Top3 + 龙头/跟风区分（v9.109.1 A-1：有结构化 brain 时用 picks 区分）+ 闸门
   if (/主线/.test(q)) {
+    // v9.109.1（A-1）：优先结构化 brain —— 按 picks 顺序区分龙头（前2）/跟风（后3），correlation 降序
+    const top = brain?.mainlines?.top ?? [];
+    if (top.length) {
+      const linesOut = top.slice(0, 3).map(t => {
+        const picks = [...(t.picks ?? [])].sort((a, b) => (b.correlation ?? 0) - (a.correlation ?? 0));
+        const leader = picks.slice(0, 2).map(p => p.name).filter(Boolean).join("/") || "—";
+        const follower = picks.slice(2, 5).map(p => p.name).filter(Boolean).join("/") || "—";
+        return `${t.theme}(强度${t.heat ?? "?"}·裁决${t.verdict ?? "?"}·龙头:${leader}·跟风:${follower})`;
+      });
+      return head + "【今日主线（规则版）】\n" + linesOut.join("\n") + (brain?.gate ? `\n次日闸门：${brain.gate.label}` : "");
+    }
     const mainlines = grab("主线Top3");
     const gate = grab("次日闸门");
     if (mainlines.length) {
@@ -612,9 +625,11 @@ export async function runAssistantAgent(
   // v9.107.0（全站助手架构 · 改动3）：LLM 失败 → 规则兜底组装（fallbackAnswer）——
   // 从全站快照按问题分类提取回答，任何问题都有回答、永不空白；统一前缀标注规则版
   // v9.108.1（D-3）：fallbackAnswer 已 async（个股类接实时 /api/db/stock/:code）
+  // v9.109.1（A-1）：传结构化 brain（主线类区分龙头/跟风）
   const reason = lastReason;
   const failReason = llmOk ? "输出无法解析" : rateLimitedFlag ? "配额受限" : reason === "timeout" ? "上游超时" : reason === "network" ? "网络不通" : "empty content/调用失败";
-  const reply = await fallbackAnswer(snapshot, question, failReason);
+  const brain = await fetchBrainContext();
+  const reply = await fallbackAnswer(snapshot, question, failReason, brain ?? undefined);
   // v9.99.1（批次 5-2）：失败阶段推导
   const stage = llmOk ? "parse" : rateLimitedFlag ? "rate-limit" : reason === "timeout" ? "timeout" : reason === "network" ? "network" : "llm-call";
   return {

@@ -61,6 +61,37 @@ describe("v9.107.0 fallbackAnswer（规则兜底，任何问题都有回答）",
   });
 });
 
+
+describe("v9.109.1 fallbackAnswer 主线类龙头/跟风区分（A-1）", () => {
+  const brainWithPicks: BrainContext = {
+    date: "2026-08-12",
+    market: { ztCount: 73, blastedRate: 13, maxBoardHeight: 7, premiumAvg: 3.1, sentiment: 68 },
+    mainlines: {
+      asOf: "2026-08-12:1330",
+      top: [
+        { theme: "医药", heat: 80, trend: "发酵期", verdict: "观望", action: "",
+          picks: [
+            { code: "600721", name: "百花医药", correlation: 0.9 },
+            { code: "600881", name: "开开实业", correlation: 0.8 },
+            { code: "002437", name: "誉衡药业", correlation: 0.5 },
+            { code: "600216", name: "浙江医药", correlation: 0.3 },
+          ] },
+      ],
+    },
+    gate: { mode: "normal", factor: 0.7, label: "normal（情绪68·炸板13%·最高7板）" },
+  };
+  it("带 brain → 主线类输出龙头/跟风区分", async () => {
+    const r = await fallbackAnswer(SNAPSHOT, "今天主线是什么，哪些是龙头哪些是跟风", "empty content", brainWithPicks);
+    expect(r).toContain("龙头:百花医药/开开实业");
+    expect(r).toContain("跟风:誉衡药业/浙江医药");
+    expect(r).toContain("次日闸门");
+  });
+  it("无 brain → 回退快照文本主线Top3", async () => {
+    const r = await fallbackAnswer(SNAPSHOT, "今天主线是什么", "empty content");
+    expect(r).toContain("主线Top3");
+  });
+});
+
 describe("v9.107.0 brainContextToText（上下文全量注入）", () => {
   const brain: BrainContext = {
     date: "2026-08-12",
