@@ -144,60 +144,38 @@ module.exports = function aiRoutes(app) {
       const cfg = TASK_CONFIG[task];
       const effectiveMaxTokens = cfg ? cfg.maxTokens : (Number(maxTokens) || 4000); // v9.107.0（全站助手）：默认 2000→4000
       const effectiveTemperature = cfg ? cfg.temperature : (temperature != null ? Number(temperature) : 0.2);
-      const body = {
-        model,
-        messages: [
-          { role: "system", content: sysText },
-          ...history,
-          { role: "user", content: userText },
-        ],
-        max_tokens: Math.min(effectiveMaxTokens, 8000),
-        // v9.87.0（P2-1）：temperature 钳制 0-1（原可传任意值）
-        temperature: Math.max(0, Math.min(1, effectiveTemperature)),
-        stream: false,
-      };
-      // 2026-08-04 公告后：Endpoint=.cn + agnes-2.5-flash（免费）；thinking 显式关闭才有 content。
-      // 必须显式传 enable_thinking:false 才返回 content（JSON 任务尤其需要）。
-      // 任务要求 thinking=true 时（复盘/周教练）才开启。
-      // v9.83（模型切换）：chat_template_kwargs 是 Agnes 专属参数，DeepSeek 等 OpenAI 兼容网关不传
-      // （DeepSeek 推理模型自身决定思考，max_tokens 已给足 2000 保证 content 完整输出）
-      if ((process.env.AI_PROVIDER || "agnes") === "agnes") {
-        body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
-      }
-      // v9.41（V4-A）：Agent 原生 tool_calls 透传（Agnes OpenAI 兼容 /v1/chat/completions）
-      if (Array.isArray(tools) && tools.length > 0) {
-        // OpenAI 格式要求 {type:"function", function:{name,description,parameters}} 包装层
-        body.tools = tools.map(t => ({ type: "function", function: t }));
-        if (toolChoice) body.tool_choice = toolChoice;
-      }
-
-      // v9.67：30s → 20s（PM2 日志反复 upstream timeout 30s，缩短超时让前端快速拿到降级响应而不是 35s 卡死）
-      // v9.83.2：20s → 45s —— 切换到 DeepSeek 推理模型后思考会占时间，20s 会把正常长思考截成 upstream timeout
-      // v9.92.3-fix（用户报障：提问'现在可以加仓吗'超时降级）：45s → 90s —— DeepSeek 推理+代理 127.0.0.1:7897 慢，45s 仍截断正常长思考
-      const json = await postJSON(baseUrl, body, 90000, { Authorization: "Bearer " + (process.env.AI_API_KEY || "") });
-      const msg = (json && json.choices && json.choices[0] && json.choices[0].message) || {};
-      // v9.41：Agent 需要 tool_calls（LLM 决定下一步调哪个工具）
-      const toolCalls = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0
-        ? msg.tool_calls.map(tc => ({ id: String(tc.id ?? ""), name: String(tc.function?.name ?? ""), args: tc.function?.arguments ?? "{}" }))
-        : undefined;
-      if (!msg.content && !toolCalls) {
-        // v9.108.2（D-6 可观测）：empty content 结构化埋点（task/finish_reason）—— 供日志统计 empty 来源与截断模式
-        const fr = json && json.choices && json.choices[0] ? json.choices[0].finish_reason : undefined;
-        console.warn(`[ai] empty content task=${task} finish_reason=${fr ?? "unknown"}`);
-        return res.json({ error: "empty content", finish_reason: fr });
-      }
-      // v9.87.0（P1-8）：JSON 类 task 上游响应做 schema 校验 —— 仅 warn 日志不阻断
-      // （前端 parseLLMJSON 仍有自己的降级链；此处让"坏 JSON 率"可观测）
-      if (msg.content && SCHEMAS[task]) {
-        const parsed = parseLLMJSON(msg.content, SCHEMAS[task]);
-        if (parsed === null) {
-          console.warn(`[ai] task=${task} 上游响应非法 JSON（前端将降级规则版）:`, String(msg.content).slice(0, 80));
+      // v9.109.0（L-2 根治 RC-A/B/C）：统一走 llmCore.chatComplete —— empty content 重试（重试强制关 thinking）
+      // + 恒发 enable_thinking:false（不再依赖 AI_PROVIDER 字符串门控，实测 opencode 网关接受且 content 正常）
+      // + 网络/超时端点 failover（AI_FALLBACK 链）
+      try {
+        const { chatComplete } = require("../lib/llmCore");
+        const r = await chatComplete({
+          system: sysText, user: userText, history, tools,
+          maxTokens: effectiveMaxTokens, temperature: effectiveTemperature, thinking: Boolean(thinking),
+        });
+        // v9.87.0（P1-8）：JSON 类 task 上游响应做 schema 校验 —— 仅 warn 日志不阻断
+        // （前端 parseLLMJSON 仍有自己的降级链；此处让"坏 JSON 率"可观测）
+        if (r.text && SCHEMAS[task]) {
+          const parsed = parseLLMJSON(r.text, SCHEMAS[task]);
+          if (parsed === null) {
+            console.warn(`[ai] task=${task} 上游响应非法 JSON（前端将降级规则版）:`, String(r.text).slice(0, 80));
+          }
         }
+        res.json({ text: r.text, toolCalls: r.toolCalls, endpoint: r.endpoint });
+      } catch (e) {
+        console.error("[ai] call failed:", e && e.message, "| proxy:", PROXY_URL);
+        const msg = String(e?.message ?? "");
+        // v9.109.0（L-2）：重试耗尽才到这 —— empty content 透传 error（前端走规则兜底）
+        if (/empty content/i.test(msg)) {
+          console.warn(`[ai] empty content task=${task}（重试耗尽）`);
+          return res.json({ error: "empty content" });
+        }
+        const reason = /timeout|ETIMEDOUT|aborted/i.test(msg) ? "timeout" : /proxy|ENOTFOUND|ECONN/i.test(msg) ? "network" : "model";
+        res.status(502).json({ error: msg || "model call failed", reason });
       }
-      res.json({ text: msg.content || "", toolCalls });
     } catch (e) {
+      // v9.109.0（L-2）：外层 catch —— 前置步骤（鉴权/限流/prompt 构建）异常兜底
       console.error("[ai] call failed:", e && e.message, "| proxy:", PROXY_URL);
-      // v9.67：分类降级原因（前端可显式标注）—— timeout / network / model
       const msg = String(e?.message ?? "");
       const reason = /timeout|ETIMEDOUT|aborted/i.test(msg) ? "timeout" : /proxy|ENOTFOUND|ECONN/i.test(msg) ? "network" : "model";
       res.status(502).json({ error: msg || "model call failed", reason });
@@ -241,11 +219,10 @@ module.exports = function aiRoutes(app) {
       temperature: Math.max(0, Math.min(1, temperature != null ? Number(temperature) : 0.2)),
       stream: true,
     };
-    // v9.84.2（3.4）：chat_template_kwargs 是 Agnes 专属参数 —— 与 /api/ai/call 同口径，
-    // 仅 Agnes 传（DeepSeek 网关不识别），v9.83 修了 call 漏了 stream
-    if ((process.env.AI_PROVIDER || "agnes") === "agnes") {
-      body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
-    }
+    // v9.109.0（L-1 根治 RC-A）：恒发 enable_thinking（不依赖 AI_PROVIDER 字符串门控）——
+    // thinking 非 true 一律 false（实测 opencode 网关接受且 content 正常；原 Agnes 专属注释作废，
+    // 见 /api/ai/call 同款改造 :147-149）
+    body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
     const u = new URL(baseUrl);
     const payload = JSON.stringify(body);
     const reqOpts = {
@@ -322,11 +299,29 @@ module.exports = function aiRoutes(app) {
         }
       });
       r.on("end", () => {
-        // v9.108.0（T-1 P0-1）：正文为空（reasoning-only/empty content）→ 注入中性兜底文案
-        // （服务端拿不到完整 brainContext 避免再查库，带数据兜底由前端 T-1b 做）
+        // v9.108.0（T-1 P0-1）：正文为空（reasoning-only/empty content）→ 注入兜底（杜绝空白答复）
+        // v9.109.0（L-5）：先尝试非流式 chatComplete（自带 empty 重试+thinking 关）回填真实正文，失败再用中性兜底
         if (contentLen === 0) {
-          console.warn("[ai] stream empty content 兜底注入（task=" + streamTask + "）");
-          safeWrite(`data: ${JSON.stringify({ delta: "（AI 本轮未返回内容，以下为本地盘面摘要兜底）盘面数据请以页面卡片为准；如需深入分析请再问一次。" })}\n\n`);
+          let recovered = null;
+          try {
+            const { chatComplete } = require("../lib/llmCore");
+            (async () => {
+              try {
+                const r2 = await chatComplete({ system: sysText, user: userText, maxTokens: Number(maxTokens) || 4000, temperature: temperature != null ? Number(temperature) : 0.2, thinking: Boolean(thinking) });
+                recovered = r2.text;
+              } catch { /* 保持 null */ }
+              const fb = recovered || "（AI 本轮未返回内容，以下为本地盘面摘要兜底）盘面数据请以页面卡片为准；如需深入分析请再问一次。";
+              safeWrite(`data: ${JSON.stringify({ delta: fb })}\n\n`);
+              safeWrite(`data: [DONE]\n\n`);
+              try { res.end(); } catch { /* 静默 */ }
+            })();
+          } catch {
+            const fb = "（AI 本轮未返回内容，以下为本地盘面摘要兜底）盘面数据请以页面卡片为准；如需深入分析请再问一次。";
+            safeWrite(`data: ${JSON.stringify({ delta: fb })}\n\n`);
+            safeWrite(`data: [DONE]\n\n`);
+            try { res.end(); } catch { /* 静默 */ }
+          }
+          return; // 上方异步回填完成时统一收尾
         }
         safeWrite(`data: [DONE]\n\n`);
         try { res.end(); } catch { /* 静默 */ }

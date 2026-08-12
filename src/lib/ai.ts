@@ -745,6 +745,29 @@ export async function callAgentChat(
     }
     const j = await resp.json();
     clearTimeout(timer);
+    // v9.109.0（L-4 根治 RC-D）：服务端重试耗尽仍 empty → 客户端再给 1 次（1s 退避，防瞬时网关抖动；
+    //   二次请求 thinking:false 与首次一致 —— 服务端 llmCore 已强制关 thinking）
+    if (j.error && /empty content/i.test(String(j.error))) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const r2 = await fetch("/api/ai/call", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
+          body: JSON.stringify({
+            task: "agentReason", system, user,
+            temperature: opts?.temperature ?? 0.2,
+            maxTokens: opts?.maxTokens ?? 4000,
+            thinking: false, tools, history: opts?.history ?? [],
+          }),
+          signal: ctrl.signal,
+        });
+        if (r2 && r2.ok) {
+          const jj = await r2.json().catch(() => ({}));
+          if (jj.text) return { text: jj.text, toolCalls: jj.toolCalls };
+        }
+      } catch { /* 重试失败 → 按首次错误降级 */ }
+      return { text: "", reason: "model" };
+    }
     if (j.error) return { text: "", reason: "model" };
     return { text: j.text ?? "", toolCalls: j.toolCalls };
   } catch {

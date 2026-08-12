@@ -91,49 +91,18 @@ function isNetworkErr(e) {
 // ---------- 调 LLM 拿纯文本（cron.js 的 callLLM 语义） ----------
 // opts: { system?, maxTokens?, temperature?, thinking? }
 // 返回 message.content 字符串（空则 reject）
-// v9.83（模型切换）：支持 DeepSeek 推理模型 —— max_tokens 600→2000（推理模型思考会占用 token，
-// 实测 600 时思考占满导致 content 为空）；chat_template_kwargs 是 Agnes 专属参数，非 agnes 不传
+// v9.109.0（L-2 根治 RC-A/B/C）：薄封装调用 llmCore.chatComplete —— empty 重试/thinking 恒发/failover
+// 逻辑统一下沉到 llmCore（原手写重试 :115-136 删除，消除双份实现）
 async function callModelText(payloadText, opts = {}) {
-  const baseUrl = process.env.AI_BASE_URL || "https://apihub.agnes-ai.cn/v1/chat/completions";
-  const model = process.env.AI_MODEL || "agnes-2.5-flash";
-  const isAgnes = (process.env.AI_PROVIDER || "agnes") === "agnes";
-  const body = {
-    model,
-    messages: [
-      { role: "system", content: opts.system || "你是A股资深盘面分析师。基于今日快讯与公告数据，输出当日市场速览（≤150字）：1) 主线方向 2) 强催化公告要点 3) 风险提示。直接输出正文，不要markdown。" },
-      { role: "user", content: payloadText },
-    ],
-    max_tokens: opts.maxTokens || 4000, // v9.107.0（全站助手）：默认 2000→4000，推理模型 max_tokens 不足 content 为空
+  const { chatComplete } = require("./llmCore");
+  const { text } = await chatComplete({
+    system: opts.system || "你是A股资深盘面分析师。基于今日快讯与公告数据，输出当日市场速览（≤150字）：1) 主线方向 2) 强催化公告要点 3) 风险提示。直接输出正文，不要markdown。",
+    user: payloadText,
+    maxTokens: opts.maxTokens || 4000,
     temperature: opts.temperature ?? 0.2,
-    stream: false,
-  };
-  if (isAgnes) body.chat_template_kwargs = { enable_thinking: opts.thinking ?? false };
-  // v9.93.3-fix（cron 主题分析 empty content）：60s → 90s —— v9.92.3 只放宽了 routes/ai.js，
-  // cron 的 callModelText 仍是 60s：DeepSeek 长思考被截断 → content 空 → 主题分析整管线失败
-  // v9.93.3-fix2：empty content 重试 2 次（退避 2s/4s）—— DeepSeek 网关在并发限流时偶发空响应
-  // （cron 启动链的公告评分/快讯分级/主题分析同时调 LLM 实测触发），重试即恢复
-  const MAX_EMPTY_RETRY = 2;
-  for (let attempt = 0; attempt <= MAX_EMPTY_RETRY; attempt++) {
-    try {
-      const json = await postJSON(baseUrl, body, 90000, {
-        Authorization: "Bearer " + (process.env.AI_API_KEY || ""),
-      });
-      const content = (json.choices?.[0]?.message?.content || "").trim();
-      if (!content) {
-        if (attempt < MAX_EMPTY_RETRY) {
-          console.warn(`[callModelText] empty content，重试 ${attempt + 1}/${MAX_EMPTY_RETRY}…`);
-          await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
-          continue;
-        }
-        throw new Error("empty content");
-      }
-      return content;
-    } catch (e) {
-      if (attempt < MAX_EMPTY_RETRY && /empty content/.test(String(e?.message ?? ""))) continue;
-      throw e;
-    }
-  }
-  throw new Error("empty content");
+    thinking: opts.thinking ?? false,
+  });
+  return text;
 }
 
 module.exports = { postJSON, callModelText, PROXY_URL, isNetworkErr };
