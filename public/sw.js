@@ -9,7 +9,8 @@
 // v9.114.0（T5-3）：SW 版本强制更新 —— CACHE 名 +1 同时，activate 通知所有打开页面强制 reload，
 //   消除"需硬刷新"约定（浏览器可能持旧 SW/旧页面；skipWaiting 已保证新 SW 立即接管）
 // v9.122.0（卓越 S3-2b）：CACHE v37→v38 —— 前瞻预判接入发版
-const CACHE = "stock-monitor-v38";
+// v9.123.0（卓越审查修复）：CACHE v38→v39 —— 决策卡游资战术/认知时段/资金明暗盘前端口径发版
+const CACHE = "stock-monitor-v39";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {

@@ -33,6 +33,22 @@ CREATE TABLE IF NOT EXISTS news (
   time       TEXT,
   url        TEXT
 );
+-- v9.124.0（蓝图 4A 资讯聚合）：跨源资讯流统一表（个股新闻/财联社快讯/券商研报摘要等）
+-- code=股票代码（聚合维度，与 news 表的"文章ID"语义不同）；entities=概念打标（mapNewsToEntities）
+CREATE TABLE IF NOT EXISTS news_feed (
+  id            SERIAL PRIMARY KEY,
+  type          TEXT NOT NULL DEFAULT 'stock_news',
+  source        TEXT NOT NULL DEFAULT 'emweb',
+  code          TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  summary       TEXT,
+  url           TEXT,
+  impact        TEXT,
+  entities      JSONB DEFAULT '[]'::jsonb,
+  time          TEXT,
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_news_feed_code_time ON news_feed(code, time DESC);
 CREATE TABLE IF NOT EXISTS announcements (
   art_code   TEXT PRIMARY KEY,
   stock_code TEXT,

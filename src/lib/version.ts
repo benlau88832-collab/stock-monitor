@@ -64,6 +64,10 @@
 //   llmCore length 重试 headroom 生效（发送上限对齐 12000，diag 实测网关接受）+ forecast 六阶段全覆盖（启动/分歧）+
 //   龙头数据缺失不误报 P0 + 前端决策卡工具失败走认知近似兜底 + buildReasoning 60s 缓存/轻量变体 +
 //   复盘链注入认知单行 + 双端决策核 golden 测试（新增 10+ 用例，T-2~T-14）
+// v9.124.0（蓝图 4A 资讯聚合·批次 A）：个股雷达信息透明化数据层——news_feed 跨源资讯表 +
+//   newsAgg.js（emweb F10/search-api/财联社 normalize 纯函数 + mapNewsToEntities 概念打标 0 token
+//   + upsertNewsFeed 幂等去重）+ GET /api/news?code=&name=（feed ∪ 快讯名称匹配兜底）+
+//   cron 盘前 9:10/盘后 15:20 抓自选+主线龙头新闻（0 LLM 失败静默）
 // ============================================================
-export const APP_VERSION = "v9.123.0";
+export const APP_VERSION = "v9.124.0";
 export const BUILD_DATE = "2026-08-13";

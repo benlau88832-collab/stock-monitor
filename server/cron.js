@@ -466,6 +466,36 @@ async function runProactiveStore(pool, ds, cogArg) {
   console.log(`[cron] 📡 主动流 ${session.phase}(${session.window}): ${refined.insights.length} 条洞察 · LLM润色${llmN}条 · 预算${refined.budget.llmUsedTokens}/${refined.budget.llmBudgetTokens}`);
 }
 
+/**
+ * v9.124.0（蓝图 4A T-资讯-1）：个股新闻聚合落库 ——
+ * 自选（price_watch）+ 主线龙头（认知层 leader.code）→ fetchStockNewsServer → upsertNewsFeed。
+ * 0 LLM、0 token；抓取/落库单条失败静默（网络中断/DNS 抖动不阻塞主链）。
+ */
+async function runNewsFeedSync(pool) {
+  try {
+    const { fetchStockNewsServer, upsertNewsFeed } = require("./lib/newsAgg");
+    const watchR = await pool.query(`SELECT code,name FROM price_watch WHERE status='active' LIMIT 30`).catch(() => ({ rows: [] }));
+    const codes = new Set(watchR.rows.map((r) => r.code).filter(Boolean));
+    try {
+      const { latestCognition } = require("./lib/cognition");
+      const cog = await latestCognition(pool);
+      if (cog?.leader?.value?.code) codes.add(cog.leader.value.code);
+    } catch { /* 认知不可用 → 仅自选 */ }
+    let added = 0;
+    for (const code of [...codes].slice(0, 40)) {
+      try {
+        const items = await fetchStockNewsServer(code);
+        added += await upsertNewsFeed(pool, items);
+      } catch { /* 单股失败跳过 */ }
+    }
+    if (added > 0) console.log(`[cron] 资讯聚合 news_feed +${added} 条（${codes.size} 只标的）`);
+    return { codes: codes.size, added };
+  } catch (e) {
+    console.warn("[cron] 资讯聚合失败（不影响主链）:", e.message);
+    return { codes: 0, added: 0 };
+  }
+}
+
 // ---------- 通用 https GET ----------
 // v9.81（性能）：默认超时 15s→6s —— 东财断源时服务端外部等待快速失败，不再占连接池
 // v9.86.0（P2-7）：改为统一出站客户端 outbound.getJson 薄封装 —— 签名不变（返回 Promise<JSON>，
@@ -1731,6 +1761,17 @@ function startCron({ pool }) {
     }, { timezone: "Asia/Shanghai" });
   }
 
+  // ---------- v9.124.0（蓝图 4A T-资讯-1）：个股新闻聚合落库（盘前 9:10 / 盘后 15:20） ----------
+  // 自选（price_watch）+ 主线龙头（认知 leader.code）新闻入 news_feed；0 LLM，失败静默不阻塞主链
+  for (const expr of ["10 9 * * 1-5", "20 15 * * 1-5"]) {
+    cron.schedule(expr, async () => {
+      try {
+        if (!isTradingDayCN()) return;
+        await runNewsFeedSync(pool);
+      } catch (e) { console.warn(`[cron] 资讯聚合失败（不影响主链）:`, e.message); }
+    }, { timezone: "Asia/Shanghai" });
+  }
+
   // ---------- P1-4：盘后主动汇报（15:10 LLM 生成今日拍板命中度 + 明日剧本 → 推送） ----------
   cron.schedule("10 15 * * 1-5", async () => {
     try {
@@ -2262,6 +2303,7 @@ module.exports.runThemeAnalysis = runThemeAnalysis;
 module.exports.runTradeBackfill = runTradeBackfill;
 module.exports.runPostSummary = runPostSummary;
 module.exports.runUserStyleProfile = runUserStyleProfile;
+module.exports.runNewsFeedSync = runNewsFeedSync; // v9.124.0（蓝图 4A T-资讯-1）
 module.exports.fetchAnnouncements = fetchAnnouncements;
 module.exports.fetchPolicyNews = fetchPolicyNews;
 module.exports.analyzeDaily = analyzeDaily;
