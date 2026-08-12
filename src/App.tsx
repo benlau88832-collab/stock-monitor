@@ -62,6 +62,8 @@ import SpriteOverlay from "./components/SpriteOverlay";
 import AIConsole from "./components/AIConsole";
 // v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解可视化）
 import CognitionBanner from "./components/CognitionBanner";
+// v9.117.0（S3-3）：主动智能流（时段洞察 + LLM 预算，盘前准备区）
+import ProactiveFeed from "./components/ProactiveFeed";
 import DecisionCard from "./components/DecisionCard"; // v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI）
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
 import { checkSysRisk } from "./lib/sysRiskGuard";
@@ -1628,11 +1630,13 @@ export default function App() {
               </div>
             </details>
             {/* 盘前准备组（默认折叠）—— GlobalSignals/CommodityChain 收敛于此（D-09），盘中决策非核心不占主屏 */}
+            {/* v9.117.0（S3-3）：主动智能流进盘前区（③ 定调：主动流进盘前准备） */}
             <details className="rounded-xl border border-white/10 bg-white/5">
               <summary className="cursor-pointer select-none px-4 py-2 text-sm font-bold text-slate-200 hover:text-slate-100">
                 ⏰ 盘前准备（全球 · 两融 · 产业链）
               </summary>
               <div className="space-y-3 px-4 pb-4">
+                <ProactiveFeed />
                 <GlobalSignals data={globalData} loading={loading} />
                 {/* 两融观察：全市场融资余额/净买入/历史趋势（独立拉取，T+1 数据） */}
                 <MarginPanel />

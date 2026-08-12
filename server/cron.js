@@ -399,6 +399,18 @@ async function runIntradayBrain(pool, force = false) {
     const ver = await nextVersion(pool);
     const cog = buildCognition(raw, ver);
     await persistCognition(pool, cog);
+    // ⑦ v9.117.0（S3-3）：主动智能流落库（时段洞察 + LLM 预算）—— 前端 ProactiveFeed 读 kv 最新
+    try {
+      const { resolveSession, currentSession } = require("./lib/proactiveSession");
+      const { runProactiveTick } = require("./lib/proactiveScheduler");
+      const session = currentSession();
+      const { insights, budget } = runProactiveTick(cog, session);
+      await pool.query(
+        `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+         ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+        [`proactive:${ds}`, JSON.stringify({ ts: Date.now(), session, insights: insights.slice(0, 8), budget })],
+      );
+    } catch (e) { console.warn("[cron] 主动流落库失败（不影响主链）:", e.message); }
     console.log(`[cron] 🧠 认知快照 v${cog.version} ${ds}: hash=${cog.hash} 情绪${cog.sentiment.value.stage}(${cog.sentiment.value.score}) 主线${cog.mainline.value.primaryTheme} 闸门${cog.risk.value.gateOpen ? "开" : "关"}`);
   } catch (e) { console.warn("[cron] 认知快照失败（不影响主链）:", e.message); }
   return { sentiment, anomalies: anomalies.length, sealAlerts: sealAlerts.length };

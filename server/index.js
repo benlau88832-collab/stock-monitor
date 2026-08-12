@@ -118,6 +118,9 @@ require("./routes/cognition")(app);
 // ---------- v9.116.0（S2-2）：决策直达路由（五支柱纯函数，秒级不依赖 LLM） ----------
 require("./routes/decisions")(app);
 
+// ---------- v9.117.0（S3-3）：主动智能流路由（时段洞察 + LLM 预算） ----------
+require("./routes/proactive")(app);
+
 // ---------- 东财代理路由 ----------
 require("./routes/proxy")(app);
 

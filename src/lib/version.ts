@@ -41,6 +41,9 @@
 // v9.116.0（S2 决策直达层）：composeDecision 五支柱（准入/仓位/离场/风控/诱多，纯函数 <1ms 永不降级）+
 //   DecisionCard 升级一键裁决面板（候选龙头自动亮 + 9:25/13:00 决策窗口 P0 高亮）+ /api/decisions 路由
 //   （服务端 decisionLayer.js CJS 双端同构）
+// v9.117.0（S3 主动智能）：时段引擎 resolveSession（8 阶段 + 9:25/13:00 决策窗口）+ 规则谓词四件套 +
+//   runProactiveTick 时段洞察（规则前置 0 token，LLM 仅盘后复盘/剧本/盘前简报受预算标记）+
+//   /api/proactive 路由 + cron 主动流落库 + ProactiveFeed 面板（盘前准备区，时段切换 + 预算条）
 // ============================================================
-export const APP_VERSION = "v9.116.0";
+export const APP_VERSION = "v9.117.0";
 export const BUILD_DATE = "2026-08-12";
