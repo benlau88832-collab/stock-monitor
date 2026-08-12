@@ -1299,6 +1299,7 @@ export async function fetchStockBriefBatch(codes: string[]): Promise<Map<string,
   if (codes.length === 0) return new Map();
   // push2 ulist.np 单次最多约 100 只 secids；v9.26.17 自动分批支持 > 100 只
   const map = new Map<string, StockBrief>();
+  let allFailed = true;
   for (let i = 0; i < codes.length; i += 100) {
     const chunk = codes.slice(i, i + 100);
     const secids = chunk.map(c => toSecid(c)).join(",");
@@ -1320,9 +1321,63 @@ export async function fetchStockBriefBatch(codes: string[]): Promise<Map<string,
           });
         }
       }
+      if (diff.length > 0) allFailed = false;
     } catch { /* 单批失败跳过 */ }
   }
+  // v9.109.2（Q-2）：push2（含 push2delay 降级）全批失败 → 腾讯实时报价兜底（qt.gtimg.cn，秒级实时，
+  // 字段实测：[1]名称 [2]代码 [3]现价 [31]涨跌额 [32]涨跌幅 [37]成交额(万元) [38]换手率%）
+  if (allFailed && map.size === 0) {
+    try {
+      const tencent = await fetchTencentQuotes(codes);
+      for (const [code, b] of tencent) map.set(code, b);
+      if (tencent.size > 0) recordApiCall("腾讯实时报价", true, 0);
+    } catch { /* 腾讯也失败 → 返回空（调用方降级） */ }
+  }
   return map;
+}
+
+/**
+ * v9.109.2（Q-2）：腾讯实时报价文本解析（纯函数，可单测）
+ * 输入 qt.gtimg.cn 响应文本（GBK 已解码），输出 Map<code, StockBrief>
+ * 字段映射（~ 分隔，实测样例）：[1]名称 [2]代码 [3]现价 [31]涨跌额 [32]涨跌幅 [37]成交额(万元) [38]换手率%
+ */
+export function parseTencentQuote(txt: string): Map<string, StockBrief> {
+  const map = new Map<string, StockBrief>();
+  for (const line of txt.split(";")) {
+    const m = line.match(/v_([a-z]{2}\d{6})="([^"]*)"/);
+    if (!m) continue;
+    const code = m[1].slice(2);
+    const f = m[2].split("~");
+    if (f.length < 39) continue;
+    const price = num(f[3]);
+    if (price == null || price <= 0) continue;
+    map.set(code, {
+      code,
+      name: String(f[1] ?? ""),
+      price,
+      pct: num(f[32]),          // 涨跌幅 %
+      amount: num(f[37]) * 1e4, // 成交额（万元 → 元）
+      turnoverRate: num(f[38]), // 换手率 %
+    });
+  }
+  return map;
+}
+
+/**
+ * v9.109.2（Q-2）：腾讯实时报价（qt.gtimg.cn 文本接口，GBK 编码）
+ * 走服务端 /api/proxy（hostGuard 白名单已含 qt.gtimg.cn，sources.js tencentQuote 注册）
+ * 返回字段：name/price/pct/amount/turnoverRate（量比腾讯无稳定字段 → 省略，异动分级量比条件自然不触发）
+ */
+async function fetchTencentQuotes(codes: string[]): Promise<Map<string, StockBrief>> {
+  const secids = codes.map(c => `${c.startsWith("6") ? "sh" : "sz"}${c}`).join(",");
+  const url = `https://qt.gtimg.cn/q=${secids}`;
+  try {
+    const resp = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(6000) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    const txt = new TextDecoder("gbk").decode(buf);
+    return parseTencentQuote(txt);
+  } catch { return new Map(); }
 }
 
 /** 全市场 股票代码 -> 申万行业（f128=行业），分页拉取 */
