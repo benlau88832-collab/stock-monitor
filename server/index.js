@@ -112,6 +112,9 @@ app.use("/api", async (req, res, next) => {
 // ---------- DB 读写路由 ----------
 require("./routes/db")(app);
 
+// ---------- v9.115.0（S1-1）：单一 AI 认知层路由 ----------
+require("./routes/cognition")(app);
+
 // ---------- 东财代理路由 ----------
 require("./routes/proxy")(app);
 

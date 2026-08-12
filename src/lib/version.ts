@@ -35,6 +35,9 @@
 //   T5-2 统一 /api/health（数据源+AI 端点+PG 连通+SW 版本聚合，OpsPanel 统一 SLA）/
 //   T5-3 SW 版本强制更新（activate 通知页面强制 reload，消除"需硬刷新"约定）/
 //   T6 面板收敛（主线/资金面/盘前准备三分区语义对齐，主 Tab 5 个保持收敛）
+// v9.115.0（S1-1 单一 AI 认知层）：server/lib/cognition.js buildCognition 纯函数（情绪周期6阶段/资金信号/
+//   风险闸门/龙头接力，每字段带 Provenance 溯源）+ verifyCognition hash 校验 + rawFromBrainContext 适配
+//   （PG buildBrainContext 输出 → 认知 raw，只换数据源下游零改动）+ GET /api/cognition 全站唯一认知端点
 // ============================================================
-export const APP_VERSION = "v9.114.0";
+export const APP_VERSION = "v9.115.0";
 export const BUILD_DATE = "2026-08-12";
