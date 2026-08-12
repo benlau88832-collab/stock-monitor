@@ -50,6 +50,9 @@
 // v9.119.0（S3-3 补全 + 验收对齐）：主动流 LLM 润色实际接线（refineInsightsWithLLM 受时段预算、
 //   失败回退规则原文永不降级）+ cron 时段调度六入口（盘前/竞价/早盘/午后/尾盘/盘后 → kv proactive:latest）+
 //   /api/proactive 优先读润色版 + /api/health checks 数组（对齐 ③ 全局验收命令）
+// v9.120.0（卓越 S1-1b/S1-1c 认知推理层）：reasoning.js 纯函数（assessCoherence 跨5维共振+背离 /
+//   deriveDrivers 因果驱动链 / computeDelta 环比变化率 / makeForecast 前瞻预判 / buildNarrative 一句话理解）+
+//   /api/reasoning 端点（含 prevCog 历史版 + 利好新闻催化）+ 助手注入 narrative + ReasoningPanel 推理面板
 // ============================================================
-export const APP_VERSION = "v9.119.0";
+export const APP_VERSION = "v9.120.0";
 export const BUILD_DATE = "2026-08-13";

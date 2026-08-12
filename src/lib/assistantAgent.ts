@@ -137,9 +137,28 @@ export function brainExtrasToText(b: BrainContext): string {
 }
 
 /**
+ * v9.120.0（卓越 S1-1c）：推理层 narrative 单行注入（/api/reasoning）——
+ * 助手"消费理解"而非"重建理解"：system/上下文注入一句话市场理解（共振状态/驱动/前瞻）。
+ * 失败静默（认知行已兜底，不阻塞快照）。
+ */
+export async function buildReasoningNote(): Promise<string | null> {
+  try {
+    const resp = await fetch("/api/reasoning", { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return null;
+    const j = await resp.json();
+    if (!j?.narrative) return null;
+    const coh = j.coherence ?? {};
+    const fc = j.forecast ?? {};
+    const conds = Array.isArray(fc.conditions) ? fc.conditions.slice(0, 2).map((c: any) => `若${c.iff}→${c.then}`).join("；") : "";
+    return `【市场理解（推理层 v${coh.status ?? "?"}）】${j.narrative}${conds ? ` 情景触发：${conds}` : ""}`;
+  } catch { return null; }
+}
+
+/**
  * v9.107.0（全站助手架构）：全站快照（brainContextToText + 最近2日消息摘要 + 页面状态 合并为一份）
  * —— 快速问答与 ReAct 两条路径共用同一份快照（上下文一致性 + 60s 缓存复用）
  * v9.115.0（S1-3）：认知层单行优先（消费认知不重建）；认知不可用回退原全量快照
+ * v9.120.0（卓越 S1-1c）：推理层 narrative 追加（市场理解行，助手不再各自重建）
  */
 export async function buildFullSnapshot(siteContext: AssistantSiteContext): Promise<string> {
   const brain = await fetchBrainContext();
@@ -152,6 +171,9 @@ export async function buildFullSnapshot(siteContext: AssistantSiteContext): Prom
   } else {
     parts.push(brain ? brainContextToText(brain) : "【大脑快照】暂不可用（数据源未就绪）");
   }
+  // v9.120.0（卓越）：推理层一句话市场理解（共振/驱动/前瞻）——认知行之后、消息摘要之前
+  const reasonNote = await buildReasoningNote();
+  if (reasonNote) parts.push(reasonNote);
   // 最近 2 日消息摘要（本地 PG/库，政策优先）—— 原 buildQuickSystem 的 newsNote 逻辑并入快照
   try {
     const { getAllSince } = await import("./dataStore");

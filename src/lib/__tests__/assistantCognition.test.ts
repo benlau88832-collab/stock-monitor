@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../cloudStore", () => ({ isLocalServer: () => true }));
 
-import { buildCognitionNote, buildFullSnapshot, brainContextToText, type BrainContext } from "../assistantAgent";
+import { buildCognitionNote, buildReasoningNote, buildFullSnapshot, brainContextToText, type BrainContext } from "../assistantAgent";
 
 // 固定 brain stub（全量：市场/涨停板块分布/主线Top3/板块资金/龙虎榜/黑天鹅/强催化/闸门/多源 asOf）
 const brain: BrainContext = {
@@ -44,11 +44,16 @@ const cog = {
   leader: { value: { name: "百花医药", code: "600721", height: 7, relayOk: true } },
 };
 
-function mockFetch(okCog = true, okBrain = true) {
+function mockFetch(okCog = true, okBrain = true, okReason = true) {
   global.fetch = vi.fn((url: any) => {
     const u = String(url);
     if (u.includes("/api/cognition")) {
       return okCog ? Promise.resolve({ ok: true, json: async () => cog }) : Promise.resolve({ ok: false });
+    }
+    if (u.includes("/api/reasoning")) {
+      return okReason
+        ? Promise.resolve({ ok: true, json: async () => ({ narrative: "市场共振进攻(100分)：主线驱动半导体，资金吸筹、闸门放开、龙头3板。前瞻：炸板率>20% → 高低切。", coherence: { status: "共振进攻" }, forecast: { conditions: [{ iff: "炸板率>20%", then: "高低切" }] } }) })
+        : Promise.resolve({ ok: false });
     }
     if (u.includes("/api/brain/context")) {
       return okBrain ? Promise.resolve({ ok: true, json: async () => brain }) : Promise.resolve({ ok: false });
@@ -95,5 +100,25 @@ describe("v9.115.0 助手注入认知（S1-3）", () => {
   it("快照行兼容 fallbackAnswer：grab('大脑快照') 可命中认知行", async () => {
     const snap = await buildFullSnapshot({});
     expect(snap.split("\n")[0]).toContain("大脑快照");
+  });
+
+  // v9.120.0（卓越 S1-1c）：推理层 narrative 注入助手上下文
+  it("buildReasoningNote：含市场理解（narrative + 情景触发）", async () => {
+    const note = await buildReasoningNote();
+    expect(note).not.toBeNull();
+    expect(note!).toContain("市场理解（推理层 v共振进攻）");
+    expect(note!).toContain("高低切");
+  });
+
+  it("buildFullSnapshot 含推理行（认知行之后）", async () => {
+    const snap = await buildFullSnapshot({});
+    expect(snap).toContain("市场理解（推理层");
+  });
+
+  it("推理端点不可用 → 快照无推理行（静默降级，认知行仍完整）", async () => {
+    mockFetch(true, true, false);
+    const snap = await buildFullSnapshot({});
+    expect(snap).not.toContain("市场理解（推理层");
+    expect(snap).toContain("认知层"); // 认知行不受影响
   });
 });

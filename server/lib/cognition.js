@@ -267,7 +267,14 @@ async function latestCognition(pool) {
   try { return JSON.parse(r.rows[0].payload); } catch { return null; }
 }
 
+/** v9.120.0（卓越 S1-1b）：读上一版认知（id 倒数第 2 行，computeDelta 环比用）；无历史 → null */
+async function prevCognition(pool) {
+  const r = await pool.query("SELECT payload FROM cognition_snapshots ORDER BY id DESC LIMIT 2 OFFSET 1");
+  if (!r.rows?.length) return null;
+  try { return JSON.parse(r.rows[0].payload); } catch { return null; }
+}
+
 module.exports = {
   buildCognition, verifyCognition, rawFromBrainContext, hashString, deriveSentimentStage,
-  nextVersion, persistCognition, latestCognition,
+  nextVersion, persistCognition, latestCognition, prevCognition,
 };

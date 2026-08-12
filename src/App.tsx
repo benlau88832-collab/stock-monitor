@@ -62,6 +62,8 @@ import SpriteOverlay from "./components/SpriteOverlay";
 import AIConsole from "./components/AIConsole";
 // v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解可视化）
 import CognitionBanner from "./components/CognitionBanner";
+// v9.120.0（卓越 S1-1c）：认知推理面板（共振/因果/变化率/预判，认知横幅下方）
+import ReasoningPanel from "./components/ReasoningPanel";
 // v9.117.0（S3-3）：主动智能流（时段洞察 + LLM 预算，盘前准备区）
 import ProactiveFeed from "./components/ProactiveFeed";
 // v9.118.0（S4-2）：操作习惯场景融合（竞价/异动/尾盘/情绪周期四场景）
@@ -1577,6 +1579,8 @@ export default function App() {
           {/* v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解，5 维 + version/hash/asOf 溯源）——
               不增面板：横幅形态置于驾驶舱顶部，作战卡/决策卡/精灵/问答均消费同一认知 */}
           <CognitionBanner />
+          {/* v9.120.0（卓越 S1-1c）：认知推理面板（共振/因果/变化率/预判 + narrative）—— 认知横幅下方 */}
+          <ReasoningPanel />
           {/* v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI，秒级） */}
           <DecisionCard />
           {/* v9.118.0（S4-2）：操作习惯场景融合（独立条，不增面板）—— 竞价/异动/尾盘/情绪周期四场景 */}

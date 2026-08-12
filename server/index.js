@@ -121,6 +121,9 @@ require("./routes/decisions")(app);
 // ---------- v9.117.0（S3-3）：主动智能流路由（时段洞察 + LLM 预算） ----------
 require("./routes/proactive")(app);
 
+// ---------- v9.120.0（卓越 S1-1c）：认知推理路由（共振/因果/变化率/预判/narrative） ----------
+require("./routes/reasoning")(app);
+
 // ---------- 东财代理路由 ----------
 require("./routes/proxy")(app);
 
