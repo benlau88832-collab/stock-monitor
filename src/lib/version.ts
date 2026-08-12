@@ -71,6 +71,9 @@
 // v9.125.0（蓝图批次 B 离线部分）：雷达资讯聚合区（个股雷达 Tab 内选中标的 📰 资讯区，消费 /api/news，
 //   不增面板）+ 纪律教练前置（behaviorCoach 行为偏差检测纯函数：频繁交易/不止损/追高/处置效应
 //   四类信号 0 token + GET /api/coach，N<3 不判定防误报，提醒引用行为金融原理）
+// v9.126.0（蓝图 L4 批次 C）：情绪周期回测引擎——stageFromDaily（market_daily+sentiment 逐日重建阶段，
+//   与认知层同一 deriveSentimentStage 判定函数，回测口径=生产口径）+ stageBacktest 分阶段统计
+//   （次日溢价胜率/平均溢价/晋级率，N<5 标注样本不足）+ GET /api/backtest/stage（阈值校准参考对照蓝图表）
 // ============================================================
-export const APP_VERSION = "v9.125.0";
+export const APP_VERSION = "v9.126.0";
 export const BUILD_DATE = "2026-08-13";

@@ -148,6 +148,9 @@ require("./routes/news")(app);
 // ---------- v9.125.0（蓝图 L6 纪律层前置）：纪律教练路由（行为偏差检测，纯函数 0 token） ----------
 require("./routes/coach")(app);
 
+// ---------- v9.126.0（蓝图 L4 批次 C）：情绪周期回测路由（分阶段次日溢价/晋级率统计） ----------
+require("./routes/backtest")(app);
+
 // ---------- 定时任务（收盘抓取 + LLM 分析） ----------
 require("./cron")({ pool });
 
