@@ -1135,7 +1135,8 @@ let watchRunning = false;
 let themeRunning = false;
 // v9.84.2/3：盘中大脑快照防重叠
 let intradayBusy = false;
-// v9.102.0（第二批 A，T-A1）：盘中精灵秒级轮询防重叠（内部串行四池 8-15s/轮，*/2s 检查 + busy 跳过）
+// v9.102.0（第二批 A，T-A1）：盘中精灵每 2 分钟轮询防重叠（内部串行四池 8-15s/轮，*/2 分钟位检查 + busy 跳过）
+// v9.108.3（复验缺口②）：文案对齐 —— 原残留"高频率轮询…*/2s 检查"表述与 T-4A 修正矛盾
 let sprintBusy = false;
 // v9.54（V7-15）：A股交易日历 —— 节假日休市判定（2026 年法定休市区间；与前端 tradeCalendar.ts 口径一致）
 const HOLIDAY_RANGES_2026 = [
@@ -1584,7 +1585,7 @@ function startCron({ pool }) {
   }, { timezone: "Asia/Shanghai" });
 
   // v9.102.0（第二批 A，T-A1）：盘中精灵轮询 —— push2ex 四池串行巡检
-  // v9.108.0（T-4A P1-3 名实对齐）：cron `*/2` 在分钟位 = 每 2 分钟，非秒级（原注释"*/2s"误导）
+  // v9.108.0（T-4A P1-3 名实对齐）：cron `*/2` 在分钟位 = 每 2 分钟，非高频率（原注释"*/2s"误导）
   // 通达信"盘中精灵"效果：涨停潮/炸板突变/封单异动第一时间提醒
   // 东财风控：内部串行 QPS≤2 + 每池 1.5-3s 抖动；busy 跳过 + PG lock（与盘中大脑共享 LOCK_INTRADAY）
   cron.schedule("*/2 * 9-15 * * 1-5", async () => {

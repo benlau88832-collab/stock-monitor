@@ -29,5 +29,5 @@
 // v9.84.3：半成品清理（阶段5）—— ETF matchScore 随机数→真实评分 + MarketOverview 历史分位数接 PG 250 日 + LOCAL_TOKEN 默认启用
 // v9.84.4：数据链与AI链路修复 —— JSONP 本地优先走服务端 /api/proxy（浏览器直连 10-15s 超时 vs 服务端秒回）+ callAgentChat 补带 x-local-token
 // ============================================================
-export const APP_VERSION = "v9.108.2";
+export const APP_VERSION = "v9.108.3";
 export const BUILD_DATE = "2026-08-12";
