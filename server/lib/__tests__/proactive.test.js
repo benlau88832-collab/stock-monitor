@@ -130,3 +130,39 @@ describe("v9.119.0 refineInsightsWithLLM（LLM 润色接线）", () => {
     expect(insights.find((i) => i.id === "eod-review").llmUsed).toBe(false);
   });
 });
+
+// v9.122.0（卓越 S3-2b）：推理层前瞻预判接入主动调度（⑤ 验收）
+describe("v9.122.0 runProactiveTick 消费 forecast.conditions（S3-2b）", () => {
+  it("传入 reasoning → insights 含 kind=前瞻预判 且 llmUsed=false（0 token）", () => {
+    const reasoning = {
+      forecast: {
+        conditions: [
+          { iff: "炸板率>20% 或 昨涨停今溢价转负", then: "高低切：减高位接力，低吸新主线首板" },
+          { iff: "龙头放量烂板/尾盘炸板", then: "接力梯队瓦解预警，清跟风" },
+        ],
+      },
+    };
+    const { insights } = runProactiveTick(cogStub(), resolveSession(10, 45), undefined, reasoning);
+    const fc = insights.filter((i) => i.kind === "前瞻预判");
+    expect(fc.length).toBe(2);
+    expect(fc[0].title).toContain("炸板率>20%");
+    expect(fc[0].body).toContain("高低切");
+    expect(fc[0].llmUsed).toBe(false);
+    expect(fc[0].tokenCost).toBe(0);
+    expect(fc[0].priority).toBe("P1"); // 非决策窗口
+  });
+
+  it("决策窗口 + reasoning → 前瞻预判 P0（一键裁决触达）", () => {
+    const reasoning = { forecast: { conditions: [{ iff: "龙头开板", then: "只持不开" }] } };
+    const { insights } = runProactiveTick(cogStub(), resolveSession(9, 25), undefined, reasoning);
+    const fc = insights.find((i) => i.kind === "前瞻预判");
+    expect(fc).toBeDefined();
+    expect(fc.priority).toBe("P0");
+    expect(fc.action).toContain("决策卡");
+  });
+
+  it("无 reasoning（推理层不可用）→ 无前瞻预判洞察（静默兼容）", () => {
+    const { insights } = runProactiveTick(cogStub(), resolveSession(10, 45));
+    expect(insights.filter((i) => i.kind === "前瞻预判")).toHaveLength(0);
+  });
+});

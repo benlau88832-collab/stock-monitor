@@ -426,7 +426,13 @@ async function runProactiveStore(pool, ds, cogArg) {
     }
   }
   const session = currentSession();
-  const tick = runProactiveTick(cog, session);
+  // v9.122.0（卓越 S3-2b）：推理层预判接入（cron 路径）—— forecast.conditions 触发源
+  let reasoning = null;
+  try {
+    const { enrichCognition } = require("./lib/reasoning");
+    reasoning = enrichCognition(cog, { news: [] }, null);
+  } catch { reasoning = null; }
+  const tick = runProactiveTick(cog, session, undefined, reasoning);
   // v9.119.0（润色有效性）：policy-brief 骨架补真实政策快讯（PG news 政策类，润色才有要点可组织）
   try {
     const pb = tick.insights.find((i) => i.id === "policy-brief");

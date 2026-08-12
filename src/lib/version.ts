@@ -55,6 +55,8 @@
 //   /api/reasoning 端点（含 prevCog 历史版 + 利好新闻催化）+ 助手注入 narrative + ReasoningPanel 推理面板
 // v9.121.0（卓越 S2-1b 决策直达游资战术）：assessTactics 五件套（接力分/情绪买卖点/买点/卖点纪律/梯队位置）+
 //   composeDecisionCore 返回加 tactics（双端同构）+ DecisionCard 游资战术行（五支柱不动纯加字段）
+// v9.122.0（卓越 S3-2b 主动智能消费预判）：runProactiveTick 第 4 参 reasoning —— forecast.conditions
+//   作为额外触发源（每条产出一条"前瞻预判"洞察，P0/P1、0 token、可触达决策卡）；路由/cron 双路径注入
 // ============================================================
-export const APP_VERSION = "v9.121.0";
+export const APP_VERSION = "v9.122.0";
 export const BUILD_DATE = "2026-08-13";

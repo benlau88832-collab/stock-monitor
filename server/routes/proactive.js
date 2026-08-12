@@ -34,6 +34,12 @@ module.exports = function proactiveRoutes(app) {
         }
       }
       const cog = await getCog();
+      // v9.122.0（卓越 S3-2b）：推理层预判接入（实时路径）—— forecast.conditions 触发源
+      let reasoning = null;
+      try {
+        const { buildReasoning } = require("./reasoning");
+        reasoning = await buildReasoning();
+      } catch { reasoning = null; }
       let session;
       if (/^\d{2}:\d{2}$/.test(hhmm)) {
         const [h, m] = hhmm.split(":").map(Number);
@@ -44,7 +50,7 @@ module.exports = function proactiveRoutes(app) {
       } else {
         session = currentSession();
       }
-      const { insights, budget } = runProactiveTick(cog, session);
+      const { insights, budget } = runProactiveTick(cog, session, undefined, reasoning);
       res.json({ cognitionVersion: cog.version, session, insights, budget });
     } catch (e) {
       res.status(500).json({ error: e.message });

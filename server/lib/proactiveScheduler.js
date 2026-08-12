@@ -8,8 +8,12 @@
 // ============================================================
 const { ruleCapitalSignal, ruleLeaderHealth, ruleRiskGate, ruleSentimentFlip } = require("./proactiveRules");
 
-/** 按当前时段生成主动洞察 —— 纯函数（LLM 仅标记用量，不在此实际调用） */
-function runProactiveTick(cog, session, prevStage) {
+/**
+ * 按当前时段生成主动洞察 —— 纯函数（LLM 仅标记用量，不在此实际调用）。
+ * @param {object} [reasoning] v9.122.0（卓越 S3-2b）：推理层产物（enrichCognition）——
+ *   forecast.conditions 作为额外触发源（每条产出一条"前瞻预判"洞察，P1/P2，0 token）
+ */
+function runProactiveTick(cog, session, prevStage, reasoning) {
   const hits = [
     ruleSentimentFlip(cog, prevStage),
     ruleLeaderHealth(cog),
@@ -112,6 +116,22 @@ function runProactiveTick(cog, session, prevStage) {
       title: h.rule + "：" + h.detail,
       body: `规则命中(severity=${h.severity})，纯函数判定，0 token。`,
     }));
+  }
+
+  // 3) v9.122.0（卓越 S3-2b）：推理层前瞻预判接入 —— forecast.conditions 每条产出一条洞察（0 token）
+  const conds = reasoning?.forecast?.conditions;
+  if (Array.isArray(conds) && conds.length) {
+    conds.slice(0, 3).forEach((c, i) => {
+      insights.push(base({
+        id: "forecast-" + i,
+        phase: session.phase, window: session.window,
+        priority: session.decisionWindow ? "P0" : "P1",
+        kind: "前瞻预判",
+        title: `若${c.iff}`,
+        body: `→ ${c.then}`,
+        action: "打开决策卡，一键裁决",
+      }));
+    });
   }
 
   const budget = {
