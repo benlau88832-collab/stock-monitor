@@ -54,8 +54,12 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
       if (cand && cand.value != null) { mdMeta = cand; usedDate = d; fallbackDate = d; break; }
     }
   }
-  const [sentMeta, intraR, themeMeta, bsR, evR, fundMeta, lhbR, ztR, annR] = await Promise.allSettled([
+  const [sentMeta, snapMeta, intraR, themeMeta, bsR, evR, fundMeta, lhbR, ztR, annR] = await Promise.allSettled([
     kvReadMeta(pool, `sentiment:${usedDate}`),
+    // v9.115.0（S1-4 情绪源优先级修正）：sentiment_snapshot（服务端权威盘中每 5min 采样）——
+    //   原只读 sentiment:键（前端 localStorage 经 cloudStore 同步的局部值，可能残留旧会话），
+    //   盘中链正常时 snapshot 优先；snapshot 缺失（盘中链断/盘后未跑）回退 sentiment:键
+    kvReadMeta(pool, `sentiment_snapshot:${usedDate}`),
     kvRead(pool, `market_intraday:${usedDate}`),
     kvReadMeta(pool, "theme_analysis:latest"),
     kvRead(pool, `black_swan:${usedDate}`),
@@ -72,6 +76,19 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
 
   // ---------- 市场情绪/指标 ----------
   const mdValue = mdMeta?.value ?? null;
+  // v9.115.0（S1-4）：情绪值两优先 —— sentiment_snapshot（服务端盘中每 5min 采样，权威）> sentiment（前端同步）> null
+  const sentVal = (() => {
+    if (snapMeta.status === "fulfilled" && snapMeta.value?.ts) {
+      const sv = Number(snapMeta.value.value?.sentiment);
+      if (Number.isFinite(sv)) return { score: sv, ts: snapMeta.value.ts };
+    }
+    if (sentMeta.status === "fulfilled" && sentMeta.value?.ts) {
+      const snap = sentMeta.value.value;
+      const sv = snap && typeof snap === "object" ? Number(snap.sentiment) : Number(snap);
+      if (Number.isFinite(sv)) return { score: sv, ts: sentMeta.value.ts };
+    }
+    return null;
+  })();
   const market = {
     ztCount: num(mdValue?.ztCount),
     zbCount: num(mdValue?.zbCount),
@@ -81,7 +98,7 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
     premiumAvg: num(mdValue?.premiumAvg),
     promotionRate: num(mdValue?.promotionRate),
     lhbBoostCount: num(mdValue?.lhbBoostCount),
-    sentiment: sentMeta.status === "fulfilled" ? num(sentMeta.value?.value) : null,
+    sentiment: sentVal ? sentVal.score : null,
   };
 
   // ---------- 涨停梯队（当日 zt_snapshot） ----------
@@ -187,7 +204,7 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
   const tsOf = (p) => (p.status === "fulfilled" && p.value?.ts ? p.value.ts : null);
   const sources = {
     market: mdMeta?.ts ?? null,
-    sentiment: sentMeta.status === "fulfilled" ? sentMeta.value?.ts ?? null : null,
+    sentiment: sentVal ? sentVal.ts : null, // v9.115.0（S1-4）：与 market.sentiment 同源（snapshot 优先）
     theme: tsOf(themeMeta),
     fund: tsOf(fundMeta),
     zt: ztR.status === "fulfilled" && ztR.value.rows[0] ? Date.now() : null, // zt_snapshot 无 updated_at 列，近似当前

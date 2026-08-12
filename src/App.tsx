@@ -60,6 +60,8 @@ import AlertBanner, { type AlertItem } from "./components/AlertBanner";
 import SpriteOverlay from "./components/SpriteOverlay";
 // v9.58（V8-8）：全局 AI 助手（右下角悬浮，所有 Tab 可见）
 import AIConsole from "./components/AIConsole";
+// v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解可视化）
+import CognitionBanner from "./components/CognitionBanner";
 import DecisionCard from "./components/DecisionCard"; // v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI）
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
 import { checkSysRisk } from "./lib/sysRiskGuard";
@@ -1568,6 +1570,9 @@ export default function App() {
         {/* ====== 驾驶舱 ====== */}
         {active === "dashboard" && (
           <>
+          {/* v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解，5 维 + version/hash/asOf 溯源）——
+              不增面板：横幅形态置于驾驶舱顶部，作战卡/决策卡/精灵/问答均消费同一认知 */}
+          <CognitionBanner />
           {/* v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI，秒级） */}
           <DecisionCard />
       <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
