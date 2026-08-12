@@ -77,6 +77,8 @@ function buildSentiment(raw) {
     limitScore: s.limitScore ?? null,
     avgPct: s.avgPct ?? null,
     premium: s.premium ?? null,
+    // v9.115.0（S1-3）：炸板率 0-100 暴露（助手快照行/决策层消费；认知层统一口径）
+    blastedRate: Math.round(brokenRate * 1000) / 10,
   };
   return {
     value,

@@ -103,13 +103,55 @@ export function brainContextToText(b: BrainContext): string {
 }
 
 /**
+ * v9.115.0（S1-3）：认知层单行摘要（/api/cognition）—— 替代快照中的市场概述段落。
+ * 认知层是全站唯一市场理解（情绪周期/主线/资金/风险/龙头，带 version/hash 溯源）；
+ * 助手"消费认知"而非"重建理解"（③ S1-3：system/上下文不再描述市场全貌）。
+ * 行首保留"大脑快照"字样 + 全量关键数字 → fallbackAnswer 的 grab("大脑快照") 规则兜底兼容。
+ */
+export async function buildCognitionNote(): Promise<string | null> {
+  try {
+    const resp = await fetch("/api/cognition", { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return null;
+    const c = await resp.json();
+    if (!c || !c.hash) return null;
+    const s = c.sentiment?.value ?? {};
+    const m = c.mainline?.value ?? {};
+    const cp = c.capital?.value ?? {};
+    const r = c.risk?.value ?? {};
+    const l = c.leader?.value ?? {};
+    return `【大脑快照（认知层 v${c.version}·hash ${c.hash}）】情绪${s.score ?? "?"}分(${s.stage ?? "?"}) · 涨停${s.limitScore ?? "?"}只 · 炸板率${s.blastedRate ?? "?"}% · 最高${l.height ?? "?"}板 · 昨日涨停溢价${s.premium ?? "?"}% · 主线${m.primaryTheme ?? "?"}(强度${m.strength ?? "?"}) · 资金${cp.signal ?? "?"}(净${cp.netFlow ?? "?"}亿) · 风险${r.level ?? "?"}·闸门${r.gateOpen ? "放开" : "关闭"} · 龙头${l.name ?? "—"}(${l.height ?? 0}板·接力${l.relayOk ? "可" : "弱"}) · asOf ${c.asOf?.slice(0, 16) ?? "?"}`;
+  } catch { return null; }
+}
+
+/**
+ * v9.115.0（S1-3）：认知层未覆盖段（回退标注/黑天鹅/公告强催化/龙虎榜）——
+ * 认知行替代市场概述后保留这些外部数据（认知层不承载，问答仍需要）
+ */
+export function brainExtrasToText(b: BrainContext): string {
+  const parts: string[] = [];
+  if (b.fallbackDate) parts.push(`⚠ 回退历史数据（${b.fallbackDate.slice(5)}，今日快照未生成）`);
+  if (b.blackSwans?.length) parts.push(`⚠ 黑天鹅${b.blackSwans.length}条：${b.blackSwans.slice(0, 3).map(x => `<untrusted-data>${x.title}</untrusted-data>`).join("；")}`); // v9.88.0（P1-11）外部标题标记
+  if (b.strongNews?.length) parts.push(`公告强催化：${b.strongNews.slice(0, 3).map(x => `<untrusted-data>${x.name}${x.title}</untrusted-data>`).join("；")}`); // v9.88.0（P1-11）外部标题标记
+  if (b.lhb?.items?.length) parts.push(`龙虎榜净买入Top：${b.lhb.items.slice(0, 4).map(i => `${i.name}${fmtMoney(i.netBuy)}`).join("、")}`);
+  return parts.join("\n");
+}
+
+/**
  * v9.107.0（全站助手架构）：全站快照（brainContextToText + 最近2日消息摘要 + 页面状态 合并为一份）
  * —— 快速问答与 ReAct 两条路径共用同一份快照（上下文一致性 + 60s 缓存复用）
+ * v9.115.0（S1-3）：认知层单行优先（消费认知不重建）；认知不可用回退原全量快照
  */
 export async function buildFullSnapshot(siteContext: AssistantSiteContext): Promise<string> {
   const brain = await fetchBrainContext();
   const parts: string[] = [];
-  parts.push(brain ? brainContextToText(brain) : "【大脑快照】暂不可用（数据源未就绪）");
+  const cogNote = await buildCognitionNote();
+  if (cogNote) {
+    parts.push(cogNote);
+    const extras = brain ? brainExtrasToText(brain) : "";
+    if (extras) parts.push(extras);
+  } else {
+    parts.push(brain ? brainContextToText(brain) : "【大脑快照】暂不可用（数据源未就绪）");
+  }
   // 最近 2 日消息摘要（本地 PG/库，政策优先）—— 原 buildQuickSystem 的 newsNote 逻辑并入快照
   try {
     const { getAllSince } = await import("./dataStore");
