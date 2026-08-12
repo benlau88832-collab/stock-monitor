@@ -19,7 +19,7 @@ export interface BrainContext {
   date?: string;
   market?: { ztCount: number | null; blastedRate: number | null; maxBoardHeight: number | null; premiumAvg: number | null; sentiment: number | null };
   limitLadder?: { total: number; maxBoard: number; ladder: Array<{ code: string; name: string; lbc: number; hybk: string }>; boards: Array<{ board: string; count: number }> };
-  mainlines?: { asOf: string | null; top: Array<{ theme: string; heat: number; verdict: string; action: string; picks: Array<{ code: string; name: string; correlation: number }> }> };
+  mainlines?: { asOf: string | null; top: Array<{ theme: string; heat: number; verdict: string; action: string; trend?: string; picks: Array<{ code: string; name: string; correlation: number }> }> };
   boardFund?: { items: Array<{ board: string; mainNet: number }> };
   lhb?: { items: Array<{ code: string; name: string; netBuy: number }> };
   blackSwans?: Array<{ code: string; title: string; level: string }>;
@@ -46,6 +46,8 @@ export async function fetchBrainContext(force = false): Promise<BrainContext | n
 }
 
 /** 大脑快照 → 紧凑文本（注入 LLM 上下文） */
+// v9.107.0（全站助手架构）：主线 Top3 完整化（强度/趋势/裁决/龙头前3）——原只提取"热度+verdict"，龙头/趋势全丢；
+// + 数据截至时间戳（mainlines.asOf，来源 theme_analysis 落库时间）
 export function brainContextToText(b: BrainContext): string {
   if (!b) return "";
   const parts: string[] = [];
@@ -55,7 +57,11 @@ export function brainContextToText(b: BrainContext): string {
     parts.push(`涨停板块分布：${b.limitLadder.boards.slice(0, 5).map(x => `${x.board}${x.count}只`).join("、")}`);
   }
   if (b.mainlines?.top?.length) {
-    parts.push(`主线Top：${b.mainlines.top.map(t => `${t.theme}(热度${t.heat ?? "?"},${t.verdict ?? "?"})`).join(" / ")}`);
+    // v9.107.0：主线 Top3 完整化 —— heat/trend/verdict/picks 前3 全提取（原只给"热度+verdict"）
+    parts.push(`主线Top3：${b.mainlines.top.slice(0, 3).map(t => {
+      const picks = (t.picks ?? []).slice(0, 3).map(p => p.name).filter(Boolean).join("/");
+      return `${t.theme}(强度${t.heat ?? "?"}·${t.trend ?? "?"}·裁决${t.verdict ?? "?"}${picks ? "·龙头:" + picks : ""})`;
+    }).join("、")}`);
   }
   if (b.boardFund?.items?.length) {
     parts.push(`板块主力净流入Top：${b.boardFund.items.slice(0, 4).map(i => `${i.board}${fmtMoney(i.mainNet)}`).join("、")}`);
@@ -66,6 +72,47 @@ export function brainContextToText(b: BrainContext): string {
   if (b.blackSwans?.length) parts.push(`⚠ 黑天鹅${b.blackSwans.length}条：${b.blackSwans.slice(0, 3).map(x => `<untrusted-data>${x.title}</untrusted-data>`).join("；")}`); // v9.88.0（P1-11）外部标题标记
   if (b.strongNews?.length) parts.push(`公告强催化：${b.strongNews.slice(0, 3).map(x => `<untrusted-data>${x.name}${x.title}</untrusted-data>`).join("；")}`); // v9.88.0（P1-11）外部标题标记
   if (b.gate) parts.push(`次日闸门：${b.gate.label}`);
+  if (b.mainlines?.asOf) parts.push(`数据截至：${b.mainlines.asOf}`); // v9.107.0：时间戳（两次问数值一致的锚点）
+  return parts.join("\n");
+}
+
+/**
+ * v9.107.0（全站助手架构）：全站快照（brainContextToText + 最近2日消息摘要 + 页面状态 合并为一份）
+ * —— 快速问答与 ReAct 两条路径共用同一份快照（上下文一致性 + 60s 缓存复用）
+ */
+export async function buildFullSnapshot(siteContext: AssistantSiteContext): Promise<string> {
+  const brain = await fetchBrainContext();
+  const parts: string[] = [];
+  parts.push(brain ? brainContextToText(brain) : "【大脑快照】暂不可用（数据源未就绪）");
+  // 最近 2 日消息摘要（本地 PG/库，政策优先）—— 原 buildQuickSystem 的 newsNote 逻辑并入快照
+  try {
+    const { getAllSince } = await import("./dataStore");
+    const since2 = getBJDateStr(new Date(Date.now() - 2 * 86400000));
+    const { news, ann } = getAllSince(since2);
+    if (news.length + ann.length > 0) {
+      const policy = news.filter(n => /国务院|央行|证监会|发改委|财政部|工信部|国常会|降准|降息/.test(n.title));
+      const note = [
+        "【本地最近2日消息摘要（PG/本地库）】",
+        policy.length ? "政策：" + policy.slice(0, 5).map(n => `<untrusted-data>${n.title}</untrusted-data>`).join("；") : "",
+        "重要快讯：" + news.slice(0, 8).map(n => `<untrusted-data>${n.title}</untrusted-data>`).join("；"),
+        ann.length ? "公告：" + ann.slice(0, 5).map(a => `<untrusted-data>${a.stockName ?? ""}${a.title}</untrusted-data>`).join("；") : "",
+      ].filter(Boolean).join("\n");
+      if (note.includes("政策") || note.includes("重要快讯") || note.includes("公告")) parts.push(note);
+    }
+  } catch { /* 本地库不可用 → 跳过 */ }
+  // 页面状态（当前页面/个股/主线/情绪/自选）
+  const page = [
+    "【页面状态】",
+    "当前页面：" + (siteContext.activeTab ? TAB_LABELS[siteContext.activeTab] ?? siteContext.activeTab : "驾驶舱"),
+    siteContext.currentStock ? `当前查看个股：${siteContext.currentStock.name}(${siteContext.currentStock.code})` : "",
+    "当前最强主线：" + (siteContext.topMainline ?? "暂无")
+      + (siteContext.topMainlineScore != null ? "（强度" + siteContext.topMainlineScore + "分）" : "")
+      + (siteContext.topMainlineZtCount ? "·涨停" + siteContext.topMainlineZtCount + "只" : ""),
+    "市场情绪：" + (siteContext.sentiment ?? "?") + "（" + (siteContext.sentimentLabel ?? "数据不足") + "）",
+    siteContext.marketNet != null ? "全市场主力净流入：" + fmtMoney(siteContext.marketNet) : "",
+    siteContext.watchStocks ? "用户自选股：" + siteContext.watchStocks : "",
+  ].filter(Boolean).join("\n");
+  parts.push(page);
   return parts.join("\n");
 }
 
@@ -145,36 +192,74 @@ export function isSimpleQuestion(q: string): boolean {
   return /情绪|情况|消息|政策|事件|解释|什么意思|怎么样|如何|多少|趋势|原因|为什么/.test(t);
 }
 
-/** v9.84.2（3.4）：快速问答 system 拼装（大脑快照 + 页面状态，无工具） */
+/** v9.84.2（3.4）：快速问答 system 拼装（全站快照，无工具）
+ *  v9.107.0（全站助手架构）：改用 buildFullSnapshot（与 ReAct 共用一份快照），删原独立 newsNote 拼装 */
 export async function buildQuickSystem(siteContext: AssistantSiteContext): Promise<string> {
-  const brain = await fetchBrainContext();
-  // v9.84.6：注入最近 2 日本地快讯/公告摘要 —— 简单问答也有本地 PG 数据上下文（不再"无数据空答"）
-  let newsNote = "";
-  try {
-    const { getAllSince } = await import("./dataStore");
-    const since2 = getBJDateStr(new Date(Date.now() - 2 * 86400000));
-    const { news, ann } = getAllSince(since2);
-    if (news.length + ann.length > 0) {
-      const policy = news.filter(n => /国务院|央行|证监会|发改委|财政部|工信部|国常会|降准|降息/.test(n.title));
-      newsNote = [
-        "【本地最近2日消息摘要（PG/本地库）】",
-        policy.length ? "政策：" + policy.slice(0, 5).map(n => `<untrusted-data>${n.title}</untrusted-data>`).join("；") : "",
-        "重要快讯：" + news.slice(0, 8).map(n => `<untrusted-data>${n.title}</untrusted-data>`).join("；"),
-        ann.length ? "公告：" + ann.slice(0, 5).map(a => `<untrusted-data>${a.stockName ?? ""}${a.title}</untrusted-data>`).join("；") : "",
-      ].filter(Boolean).join("\n");
-    }
-  } catch { /* 本地库不可用 → 跳过 */ }
   const head = "你是A股短线交易助手（10年游资操盘手）。基于下面的本地消息摘要与大盘快照，直接回答用户问题。要求：先说结论再说依据；优先引用本地数据，本地没有的直说没有；回答≤250字。";
-  const snap = brain ? brainContextToText(brain) : "";
-  const page = [
-    // v9.92.0：上下文感知 —— 当前页面与个股注入（AI 知道你在看哪只股）
-    "当前页面：" + (siteContext.activeTab ? TAB_LABELS[siteContext.activeTab] ?? siteContext.activeTab : "驾驶舱"),
-    siteContext.currentStock ? `当前查看个股：${siteContext.currentStock.name}(${siteContext.currentStock.code})` : "",
-    "当前最强主线：" + (siteContext.topMainline ?? "暂无"),
-    "市场情绪：" + (siteContext.sentiment ?? "?") + "（" + (siteContext.sentimentLabel ?? "数据不足") + "）",
-    siteContext.watchStocks ? "用户自选股：" + siteContext.watchStocks : "",
-  ].filter(Boolean).join("\n");
-  return head + "\n\n" + (newsNote ? newsNote + "\n\n" : "") + (snap ? snap + "\n\n" : "") + "【页面状态】\n" + page;
+  const snap = await buildFullSnapshot(siteContext);
+  return head + "\n\n" + snap;
+}
+
+/**
+ * v9.107.0（全站助手架构 · 改动3）：规则兜底组装 —— LLM 不可用时的最后防线
+ * 从快照按问题粗分类提取组装回答，任何问题都有回答、永不空白。
+ * 分类：主线类 / 个股类 / 消息类 / 情绪类 / 其他 → 快照通用摘要
+ */
+export function fallbackAnswer(snapshot: string, question: string, reason?: string): string {
+  const q = question.trim();
+  const lines = snapshot.split("\n").map(s => s.trim()).filter(Boolean);
+  const head = `⚠ 规则版（AI 暂不可用${reason ? `：${reason}` : ""}）——以下为本地数据摘要\n`;
+  const grab = (kw: string) => lines.filter(l => l.includes(kw));
+  // 按段提取：命中行 + 后续行直到下一个【】段头（消息摘要是多行段落）
+  const grabSection = (kw: string): string[] => {
+    const idx = lines.findIndex(l => l.includes(kw));
+    if (idx < 0) return [];
+    const out = [lines[idx]];
+    for (let i = idx + 1; i < lines.length; i++) {
+      if (lines[i].startsWith("【")) break;
+      out.push(lines[i]);
+    }
+    return out;
+  };
+
+  // 主线类（含"主线"）→ 主线Top3 + 闸门
+  if (/主线/.test(q)) {
+    const mainlines = grab("主线Top3");
+    const gate = grab("次日闸门");
+    if (mainlines.length) {
+      return head + "【今日主线】\n" + mainlines.join("\n")
+        + (gate.length ? "\n" + gate.join("\n") : "");
+    }
+    return head + "本地快照暂无主线数据（AI 不可用且规则库未产出）。";
+  }
+  // 个股类（股票名 2-4 字中文 / 6位代码）→ 快照中该股相关（强催化/龙虎榜/黑天鹅）
+  const codeMatch = q.match(/\d{6}/);
+  const nameMatch = q.match(/([\u4e00-\u9fa5]{2,4})(?=为什么|为何|涨停|大涨|大跌|下跌|走势|异动|什么情况|怎么样|还能买|能不能买|能不能上|分析)/);
+  const target = codeMatch ? codeMatch[0] : nameMatch ? nameMatch[1] : null;
+  if (target) {
+    const hits = lines.filter(l => l.includes(target) && /强催化|龙虎榜|黑天鹅|公告|快讯/.test(l));
+    if (hits.length) return head + `【${target} 相关本地数据】\n` + hits.slice(0, 6).join("\n");
+    return head + `本地无 ${target} 的盘口数据（AI 不可用且本地库未覆盖该股）。`;
+  }
+  // 消息类（消息/新闻/政策/公告/事件/快讯）→ 本地最近 2 日消息摘要（政策优先，整段提取）
+  if (/消息|新闻|政策|公告|事件|快讯|资讯/.test(q)) {
+    const msgs = grabSection("本地最近2日消息摘要");
+    if (msgs.length) return head + msgs.join("\n");
+    const news = grab("重要快讯");
+    return head + (news.length ? news.join("\n") : "本地快照暂无消息数据（cron 可能尚未抓取或非交易日）。");
+  }
+  // 情绪/行情类 → 市场行 + 涨停板块分布
+  if (/情绪|行情|大盘|市场|怎么样|如何|什么情况|趋势/.test(q)) {
+    const market = grab("大脑快照");
+    const boards = grab("涨停板块分布");
+    if (market.length) {
+      return head + market.join("\n") + (boards.length ? "\n" + boards.join("\n") : "");
+    }
+    return head + "本地快照暂无市场数据。";
+  }
+  // 其他 → 快照通用摘要（前 8 行）
+  const summary = lines.slice(0, 8);
+  return head + "【本地数据摘要】\n" + (summary.length ? summary.join("\n") : "本地快照为空（数据源未就绪）。");
 }
 
 /** v9.92.0：Tab key → 中文名（上下文注入用） */
@@ -311,19 +396,6 @@ export async function runAssistantAgent(
   }));
   const toolByName = new Map(tools.map(t => [t.name, t]));
 
-  const ctxSummary = [
-    // v9.92.0：上下文感知 —— 页面与个股注入 ReAct（AI 自动知道用户在看哪只股/哪个页）
-    "当前页面：" + (siteContext.activeTab ? TAB_LABELS[siteContext.activeTab] ?? siteContext.activeTab : "驾驶舱"),
-    siteContext.currentStock ? "当前查看个股：" + siteContext.currentStock.name + "(" + siteContext.currentStock.code + ")" : "",
-    "当前最强主线：" + (siteContext.topMainline ?? "暂无")
-      + (siteContext.topMainlineScore != null ? "（强度" + siteContext.topMainlineScore + "分）" : "")
-      + (siteContext.topMainlineZtCount ? "·涨停" + siteContext.topMainlineZtCount + "只" : "")
-      + (siteContext.topMainlineHeight ? "·最高" + siteContext.topMainlineHeight + "板" : ""),
-    "市场情绪：" + (siteContext.sentiment ?? "?") + "（" + (siteContext.sentimentLabel ?? "数据不足") + "）",
-    siteContext.marketNet != null ? "全市场主力净流入：" + fmtMoney(siteContext.marketNet) : "",
-    siteContext.watchStocks ? "用户自选股：" + siteContext.watchStocks : "",
-  ].filter(Boolean).join("\n");
-
   // V13-3（P0）：触发条件收紧为仅"个股深度调研"六个字（用户明确要求，其他问题不用妙想）
   // isDeepResearch/maxRounds 已在工具集处声明（第 44-45 行），此处不再重复
   const system = "你是这个A股实时监控终端的全站分析师助手（10年游资操盘手）。用户会问你任何关于主线/个股/资金/消息/席位/仓位的问题。\n\n"
@@ -353,67 +425,20 @@ export async function runAssistantAgent(
 
   // v9.67：注入调研会话状态（若 AIConsole 正在调研某标的）—— 结构化上下文优先于纯文本历史
   const ctxNote = opts?.researchCtx ? researchCtxNote(opts.researchCtx) : "";
-  // v9.84.2（AI大脑层 · 3.1）：大脑快照注入（服务端聚合，60s 缓存，失败静默）
-  const brainNote = await fetchBrainContext().then(b => (b ? brainContextToText(b) : ""));
+  // v9.107.0（全站助手架构）：统一快照（与快速问答共用 buildFullSnapshot，60s 缓存复用）
+  const snapshot = await buildFullSnapshot(siteContext);
   const userCtx = (ctxNote ? "【调研会话状态】\n" + ctxNote + "\n\n" : "")
-    + (brainNote ? brainNote + "\n\n" : "")
-    + "【当前页面状态】\n" + ctxSummary + "\n\n【用户提问】" + question + "\n\n本轮请输出JSON（工具调用或最终答复）：";
+    + snapshot + "\n\n【用户提问】" + question + "\n\n本轮请输出JSON（工具调用或最终答复）：";
   let roundHistory: string[] = [];
   let llmOk = true;
   let rateLimitedFlag = false;
   let lastReason: "rateLimited" | "timeout" | "network" | "model" | undefined;
   const calledTools = new Set<string>();
 
-  // ============== V14-2（= V13-7 补做）：简单问题快捷直答（0 次 LLM，秒回不超时） ==============
-  const q = question.trim();
-  // ① 消息/新闻/快讯/公告/事件类 → 直接读本地快讯（不调 LLM，不调妙想）
-  // v9.84.6：支持"周末/隔夜/近N天"时间窗 —— 原只认"昨天/今日"，问"周末有什么消息"
-  //   只取当日（周日）空库 → "暂无消息"。周末/隔夜 → 取最近 3 个自然日（覆盖周五收盘）。
-  // v9.94.2（PRD 修正：不越俎代庖）：仅"纯查询"（无分析意图词）直出秒回；
-  //   含分析意图（重要/总结/走势/美股/如何/怎么看/影响…）→【不拦截】落到下方 ReAct 主循环，
-  //   由 LLM 自主决策：先 getLocalNews 查本地 → 不足/问美股再 getExternalNews 外部补 → 自己组织回答。
-  //   不再用正则+固定模板短路（v9.94.1 教训：那是规则引擎不是 AI 主观能动性）。
+  // ============== v9.107.0（全站助手架构 · 改动2）：路由统一 ==============
+  // 删除原 5 处正则直出分支（消息类 3 处 return + 外部搜索直出 + 主线类直出）——
+  // 不再用正则判定问题类型短路；所有问题统一：全站快照 → LLM（简单问答/ReAct 由调用方意图粗分）
   if (opts?.signal?.aborted) throw new Error("request aborted"); // v9.85.2（P2-9）：已取消则不进入任何分支
-  const wantsAnalysis = /重要|重点|总结|分析|解读|走势|美股|外盘|纳指|道指|标普|美债|美联储|如何|怎么样|怎么看|影响|点评|值得关注|机会/.test(q);
-  if (/消息|新闻|快讯|公告|事件|海内外|国内外/.test(q) && !q.includes("个股深度调研") && !wantsAnalysis) {
-    try {
-      const { getAllSince } = await import("./dataStore");
-      let since = getBJDateStr(); // v15-1：北京时间今日（原 toISOString UTC 会偏一天）
-      if (/昨天|昨日/.test(q)) { since = getBJDateStr(new Date(Date.now() - 86400000)); }
-      else if (/周末|周六|周日|隔夜|休市|假期|最近几天|近几天|近3天|近三日/.test(q)) {
-        since = getBJDateStr(new Date(Date.now() - 3 * 86400000));
-      }
-      const dm = q.match(/(\d{1,2})[.月](\d{1,2})/);
-      if (dm) since = `${new Date().getFullYear()}-${String(+dm[1]).padStart(2, "0")}-${String(+dm[2]).padStart(2, "0")}`;
-      const { news, ann } = getAllSince(since);
-      if (news.length === 0 && ann.length === 0) {
-        // v9.84.6：本地未覆盖 → 外部搜索兜底（东财新闻检索，本地服务端代理秒回）
-        // 关键词提取：优先取"XX消息/XX政策/XX事件"中的 XX；纯问"有什么消息"→ 泛搜 A股
-        const kwMatch = q.match(/([A-Za-z0-9\u4e00-\u9fa5]{2,6})(消息|新闻|政策|事件|利好|利空)/);
-        const kw = kwMatch ? kwMatch[1].replace(/周末|今日|昨日|有什么|重要|哪些/g, "") : "";
-        const finalKw = (kw && !/消息|新闻|政策|事件/.test(kw)) ? kw : "A股";
-        const ext = await fetchExternalNews(finalKw, 8);
-        if (ext.length > 0) {
-          const lines = [`📅 ${since} 起本地快讯为空，已补外部搜索（${finalKw}）：`];
-          ext.slice(0, 8).forEach(n => lines.push(`  • ${n.title}`));
-          return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getExternalNews"], degraded: false, source: "data" };
-        }
-        return { reply: `${since} 起暂无本地快讯/公告，外部搜索也无新增结果（cron 可能尚未抓取或非交易日）。`, toolsCalled: ["getLocalNews", "getExternalNews"], degraded: false };
-      }
-      const lines = [`📅 ${since} 起本地消息（快讯${news.length}·公告${ann.length}）`];
-      const policy = news.filter(n => /国务院|央行|证监会|发改委|财政部/.test(n.title));
-      if (policy.length) { lines.push("🏛️ 政策："); policy.slice(0, 5).forEach(n => lines.push(`  • ${n.title}`)); }
-      const market = news.filter(n => !policy.includes(n)).slice(0, 10);
-      if (market.length) { lines.push("📊 市场："); market.forEach(n => lines.push(`  • ${n.title}`)); }
-      const strong = ann.filter(a => /业绩|中标|增持|回购|重组|获批/.test(a.title)).slice(0, 5);
-      if (strong.length) { lines.push("📋 公告："); strong.forEach(a => lines.push(`  • ${a.stockName ?? ""}：${a.title}`)); }
-      return { reply: lines.join("\n").slice(0, 800), toolsCalled: ["getLocalNews"], degraded: false, source: "data" };
-    } catch { /* 快捷失败→继续 ReAct */ }
-  }
-  // ② 主线类 → 直接用 siteContext（当前页面状态已打包最强主线）
-  if (/主线.*什么|今日主线|最强主线/.test(q) && siteContext.topMainline) {
-    return { reply: `今日最强主线：${siteContext.topMainline}（强度${siteContext.topMainlineScore ?? "?"}分，涨停${siteContext.topMainlineZtCount ?? "?"}只）`, toolsCalled: ["siteContext"], degraded: false, source: "data" };
-  }
 
   for (let round = 0; round < maxRounds; round++) {
     // v9.85.2（P2-9）：外部取消（关闭对话框/组件卸载）→ 立即中止 ReAct，不再消耗 LLM 配额
@@ -480,30 +505,12 @@ export async function runAssistantAgent(
     }
     roundHistory.push("（第" + (round + 1) + "轮 LLM 输出无法解析）");
   }
-  // v9.67：智能降级文案 —— 按"调了几个工具"和降级原因分类，不再一刀切
-  // V14-2（= V13-8 补做）：降级时提取已获取工具数据（title 字段）拼入文案，不再空白
-  const toolCount = calledTools.size;
+  // v9.107.0（全站助手架构 · 改动3）：LLM 失败 → 规则兜底组装（fallbackAnswer）——
+  // 从全站快照按问题分类提取回答，任何问题都有回答、永不空白；统一前缀标注规则版
   const reason = lastReason;
-  let fbData = "";
-  if (roundHistory.length > 0) {
-    const titles = roundHistory.join("\n").match(/"title":\s*"([^"]+)"/g);
-    if (titles?.length) fbData = "\n\n📝 已获取数据参考：\n" + titles.slice(0, 8).map(t => "• " + t.replace(/"title":\s*"/, "").replace(/"$/, "")).join("\n");
-  }
-  let reply: string;
-  if (llmOk) {
-    reply = "抱歉，本轮未能给出可靠答复（AI 输出异常）。可换个问法重试，或到对应 Tab 查看详细数据。";
-  } else if (rateLimitedFlag) {
-    reply = `⏸ AI 配额受限（达 ${maxRounds > 5 ? "深度" : "标准"}桶上限）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。可稍后重试，或查看工具轨迹中已调用的工具结果。`;
-  } else if (reason === "timeout") {
-    reply = `⏸ AI 上游超时（90s 内未返回，DeepSeek 经代理 127.0.0.1:7897 调用慢）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。建议重试，或临时关闭代理后再试。`;
-  } else if (reason === "network") {
-    reply = `⏸ AI 网络不通（无法连接到妙想 API）${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具但最终结论未生成` : ""}。检查网络/代理后重试，或直接查看各 Tab 的实时数据。`;
-  } else {
-    reply = `⏸ AI 服务异常${toolCount > 0 ? `，本轮已成功调 ${toolCount} 个工具（${[...calledTools].join("/")}）但最终结论未生成` : ""}。建议稍后重试，或直接查看各 Tab 的实时数据。`;
-  }
-  // V14-2（V13-8）：降级时有已获取数据 → 附上（不再"AI 输出异常"空白）
-  reply = fbData ? reply + fbData : reply;
-  // v9.99.1（批次 5-2）：失败阶段推导 —— 与上方 reply 分支一一对应
+  const failReason = llmOk ? "输出无法解析" : rateLimitedFlag ? "配额受限" : reason === "timeout" ? "上游超时" : reason === "network" ? "网络不通" : "empty content/调用失败";
+  const reply = fallbackAnswer(snapshot, question, failReason);
+  // v9.99.1（批次 5-2）：失败阶段推导
   const stage = llmOk ? "parse" : rateLimitedFlag ? "rate-limit" : reason === "timeout" ? "timeout" : reason === "network" ? "network" : "llm-call";
   return {
     reply,

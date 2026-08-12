@@ -142,7 +142,7 @@ module.exports = function aiRoutes(app) {
         return res.status(400).json({ error: "prompt too long (system<=4000, user<=16000)" });
       }
       const cfg = TASK_CONFIG[task];
-      const effectiveMaxTokens = cfg ? cfg.maxTokens : (Number(maxTokens) || 2000);
+      const effectiveMaxTokens = cfg ? cfg.maxTokens : (Number(maxTokens) || 4000); // v9.107.0（全站助手）：默认 2000→4000
       const effectiveTemperature = cfg ? cfg.temperature : (temperature != null ? Number(temperature) : 0.2);
       const body = {
         model,
@@ -234,7 +234,7 @@ module.exports = function aiRoutes(app) {
         { role: "system", content: sysText },
         { role: "user", content: userText },
       ],
-      max_tokens: Math.min(Number(maxTokens) || 2000, 8000),
+      max_tokens: Math.min(Number(maxTokens) || 4000, 8000), // v9.107.0（全站助手）：stream 端点默认 2000→4000
       temperature: Math.max(0, Math.min(1, temperature != null ? Number(temperature) : 0.2)),
       stream: true,
     };

@@ -108,7 +108,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           typingRef.current = true; // 流式期间跳过对话历史持久化（每帧 setState 不落盘）
           const t = setTimeout(() => ctrl.abort(), 60000); // 前端兜底：上游 45s + 缓冲（ctrl 来自 ask 顶部）
           const streamed = await streamChat(
-            { system, user: q, maxTokens: 2000 },
+            { system, user: q, maxTokens: 4000 }, // v9.107.0（全站助手）：简单问答流式 max_tokens 提档
             (delta) => {
               // 增量追加到当前最后一条 ai 消息
               setMsgs(m => {

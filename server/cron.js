@@ -948,7 +948,7 @@ async function generateDailyReview({ pool }) {
     const blackSwans = d10Events.map(e => e.title).join("；");
     const userText = `日期：${dateStr}\n今日主线：${mainlines}\n涨停${poolArr.length}只\n板块TOP：${d4Boards.slice(0, 3).map(b => `${b.name}${b.count}只`).join("、")}\n连板梯队：${d3Ladder.map(x => `${x.name}${x.lbc}板`).join("、") || "无"}\n资金TOP：${d2StockFund.slice(0, 3).map(x => `${x.name}${(x.fund / 1e8).toFixed(1)}亿`).join("、")}\n强催化公告：${strongAnn || "无"}\n黑天鹅公告：${blackSwans || "无"}`;
     if (process.env.AI_API_KEY) {
-      try { reviewText = await callLLM(userText, { system, maxTokens: 2000, temperature: 0.3 }); } // v9.101.0（P1-06 返工）：1000→2000，复盘 LLM 失败 root cause（empty content）
+      try { reviewText = await callLLM(userText, { system, maxTokens: 4000, temperature: 0.3 }); } // v9.107.0（全站助手）：复盘提档 2000→4000（原 v9.101.0 P1-06：1000→2000 复盘 empty content 根因）
       catch (e) { reviewText = `【今日主线回顾】${mainlines}\n【错过与教训】LLM调用失败(${e.message})\n【明日关注清单】请稍后重试\n【风险提示】炸板数据见情绪卡`; }
     } else {
       reviewText = `【今日主线回顾】规则版：${mainlines}\n【错过与教训】未配置服务端 LLM Key\n【明日关注清单】请配置 AI_API_KEY 后自动生成\n【风险提示】涨停${poolArr.length}只`;
@@ -1023,7 +1023,7 @@ async function runEventClassify({ pool }) {
     const userText = `事件列表（标题|来源）：\n${events.map(e => `- ${e.title} | ${e.source}`).join("\n")}\n\n输出严格JSON数组，每事件一项：\n[{"title":"原标题","level":"政策|行业|事件","beneficiaries":["受益板块1","板块2"],"catalystScore":0-100,"timeSensitivity":"即时|短期|中长期","reason":"≤25字"}]\n分级规则：\n- 政策级：国务院/央行/证监会/发改委/国常会/部委发文 → beneficiaries 给受益行业清单\n- 行业级：产业链事件/涨价/订单/技术突破 → beneficiaries 给细分方向\n- 事件级：个股公告/中标/减持 → beneficiaries 给该股行业\ncatalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业级 40-64 / 个股级 20-40`;
     if (process.env.AI_API_KEY) {
       try {
-        const text = await callLLM(userText, { system, maxTokens: 3000, temperature: 0.1 });
+        const text = await callLLM(userText, { system, maxTokens: 4000, temperature: 0.1 }); // v9.107.0（全站助手）：事件分级提档 3000→4000
         const parsed = parseLLMJSON(text, SCHEMAS.eventClassify); // v9.89.0：修复 v9.87.0 残留（原 parseLoose 未定义，LLM 分级恒作废）
         // v9.85.2（P2-2）：LLM 分级结果标注 source/confidence
         if (parsed && parsed.length > 0) items = parsed.map(x => ({ ...x, source: "llm", confidence: "high" }));
@@ -1762,7 +1762,7 @@ ${JSON.stringify(themes.map(t => ({
     let analysisLlmFailed = false;
     let analysisText = null;
     try {
-      analysisText = await callLLM(analysisPrompt, { maxTokens: 3000, temperature: 0.2 });
+      analysisText = await callLLM(analysisPrompt, { maxTokens: 4000, temperature: 0.2 }); // v9.107.0（全站助手）：themeAnalysis 提档 3000→4000
     } catch (e) {
       analysisLlmFailed = true;
       console.warn("[themeAnalysis] Step3 LLM 失败，规则兜底 verdict:", e.message);
@@ -2063,7 +2063,7 @@ async function runPostSummary(pool) {
   let summary = null;
   try {
     const { callModelText } = require("./lib/httpProxy");
-    summary = await callModelText(prompt, { system: "你是A股短线游资盘后复盘助手。严格按给定三段标题输出，每段≤3行，引用具体数字。", maxTokens: 2000, temperature: 0.3 }); // v9.101.0（P1-06 返工）：600→2000
+    summary = await callModelText(prompt, { system: "你是A股短线游资盘后复盘助手。严格按给定三段标题输出，每段≤3行，引用具体数字。", maxTokens: 4000, temperature: 0.3 }); // v9.107.0（全站助手）：盘后拍板提档 2000→4000 // v9.101.0（P1-06 返工）：600→2000
   } catch (e) {
     summary = `【今日拍板命中度】规则版：${postsText}\n【明日剧本】情绪${sentiment ?? "?"}分，炸板${blastedRate ?? "?"}%，明日以情绪延续性为准\n【明日应关注】看最高板${maxBoard ?? "?"}梯队 + 竞价高开方向`;
   }
@@ -2123,7 +2123,7 @@ async function runUserStyleProfile(pool) {
   let result = null;
   try {
     const { callModelText } = require("./lib/httpProxy");
-    const text = await callModelText(prompt, { system: "你是A股行为金融分析师。只输出JSON。", maxTokens: 2000, temperature: 0.4 }); // v9.101.0（P1-06 返工）：800→2000
+    const text = await callModelText(prompt, { system: "你是A股行为金融分析师。只输出JSON。", maxTokens: 4000, temperature: 0.4 }); // v9.107.0（全站助手）：行为金融提档 2000→4000 // v9.101.0（P1-06 返工）：800→2000
     // v9.87.0（P1-8）：统一解析 + schema 归一化（字段类型/数组元素）
     result = parseLLMJSON(text, SCHEMAS.userStyle);
   } catch { /* LLM 失败 → 规则版 */ }

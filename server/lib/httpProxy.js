@@ -103,7 +103,7 @@ async function callModelText(payloadText, opts = {}) {
       { role: "system", content: opts.system || "你是A股资深盘面分析师。基于今日快讯与公告数据，输出当日市场速览（≤150字）：1) 主线方向 2) 强催化公告要点 3) 风险提示。直接输出正文，不要markdown。" },
       { role: "user", content: payloadText },
     ],
-    max_tokens: opts.maxTokens || 2000,
+    max_tokens: opts.maxTokens || 4000, // v9.107.0（全站助手）：默认 2000→4000，推理模型 max_tokens 不足 content 为空
     temperature: opts.temperature ?? 0.2,
     stream: false,
   };

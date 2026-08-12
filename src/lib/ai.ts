@@ -278,7 +278,7 @@ export async function streamChat(
         system: opts.system,
         user: opts.user,
         temperature: opts.temperature ?? 0.2,
-        maxTokens: opts.maxTokens ?? 2000,
+        maxTokens: opts.maxTokens ?? 4000, // v9.107.0（全站助手）：默认 2000→4000
         thinking: opts.thinking ?? false,
       }),
       signal,
