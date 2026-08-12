@@ -114,11 +114,34 @@ function todayStr(): string {
 }
 
 // ============== 数据获取（v9.49 L4：统一走 api.ts fetchLimitPoolSummary） ==============
+// v9.109.3（Q-1）：push2ex 断源（空池）时优先 PG zt_snapshot（/api/brain/context，cron 落库不被 WAF 断，
+// 2-20min 新鲜）→ 涨停梯队仍显示今日真实数据；PG 也空才回退昨日
 async function fetchPools(date?: string): Promise<{
-  zt: ZTStock[]; zb: ZBStock[]; dt: DTStock[]; qdate: string | null;
+  zt: ZTStock[]; zb: ZBStock[]; dt: DTStock[]; qdate: string | null; pgFallback: boolean;
 }> {
   const d = date || todayStr();
-  const summary = await fetchLimitPoolSummary(d);
+  let summary: Awaited<ReturnType<typeof fetchLimitPoolSummary>> | null = null;
+  try { summary = await fetchLimitPoolSummary(d); } catch { summary = null; }
+  let pgFallback = false;
+  if (!summary || (summary.rawZTPool ?? []).length === 0) {
+    // Q-1：push2ex 断源 → PG zt_snapshot（brainContext.limitLadder 今日数据）
+    try {
+      const r = await fetch("/api/brain/context", { signal: AbortSignal.timeout(6000) });
+      const j = await r.json();
+      const ladder = j?.limitLadder?.ladder ?? [];
+      if (Array.isArray(ladder) && ladder.length > 0 && String(j?.date) === todayStr()) {
+        pgFallback = true;
+        summary = {
+          limitUpCount: ladder.length, limitDownCount: 0, blastedCount: 0, blastedRate: 0,
+          boardCounts: {}, totalBoardStocks: 0, rawZTPool: ladder.map((x: any) => ({
+            c: x.code, n: x.name, lbc: x.lbc ?? 1, hybk: x.hybk ?? "", fund: x.fund ?? 0,
+            zbc: 0, amount: 0, fbt: 0, lbt: 0, zdp: 0, p: (x.price ?? 0) * 1000, zttj: { days: 0, ct: 0 },
+          })), rawZBPool: [], rawDTPool: [], qdate: j?.date ?? d, totalCount: ladder.length,
+          isTradingDay: true, degraded: true,
+        } as Awaited<ReturnType<typeof fetchLimitPoolSummary>>;
+      }
+    } catch { /* PG 也失败 → 保持空，走回退昨日 */ }
+  }
   const mapZT = (s: any): ZTStock => ({
     code: String(s.c), name: String(s.n),
     price: (s.p ?? 0) / 1000, pct: s.zdp ?? 0,
@@ -150,10 +173,11 @@ async function fetchPools(date?: string): Promise<{
     openCount: s.oc ?? 0, days: s.days ?? 0,
   });
   return {
-    zt: (summary.rawZTPool ?? []).map(mapZT),
-    zb: (summary.rawZBPool ?? []).map(mapZB),
-    dt: (summary.rawDTPool ?? []).map(mapDT),
-    qdate: summary.qdate,
+    zt: (summary?.rawZTPool ?? []).map(mapZT),
+    zb: (summary?.rawZBPool ?? []).map(mapZB),
+    dt: (summary?.rawDTPool ?? []).map(mapDT),
+    qdate: summary?.qdate ?? null,
+    pgFallback,
   };
 }
 
@@ -315,6 +339,8 @@ export default function LimitBoard() {
   const [loading, setLoading] = useState(true);
   const [dateStr, setDateStr] = useState("");
   const [qdate, setQdate] = useState<string | null>(null);
+  // v9.109.3（Q-1）：push2ex 断源时 PG 快照兜底标注
+  const [pgFallback, setPgFallback] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -322,6 +348,7 @@ export default function LimitBoard() {
     setDateStr(d);
     const pools = await fetchPools(d);
     setQdate(pools.qdate);
+    setPgFallback(pools.pgFallback);
     // 如果今天没数据（非交易日/盘前），尝试前一天
     if (pools.zt.length === 0 && pools.zb.length === 0 && pools.dt.length === 0) {
       const yesterday = new Date();
@@ -330,6 +357,7 @@ export default function LimitBoard() {
       setDateStr(yd);
       const pools2 = await fetchPools(yd);
       setQdate(pools2.qdate);
+      setPgFallback(pools2.pgFallback);
       setZtStocks(pools2.zt); setZbStocks(pools2.zb); setDtStocks(pools2.dt);
     } else {
       setZtStocks(pools.zt); setZbStocks(pools.zb); setDtStocks(pools.dt);
@@ -374,6 +402,11 @@ export default function LimitBoard() {
     <section className="space-y-4">
       <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 px-4 py-2 text-xs text-amber-300/90">
         涨停板复盘（{dateStr}） — 数据来源：东方财富涨停池/炸板池/跌停池真实接口（push2ex） · 所有数据均为真实数据
+        {pgFallback && (
+          <span className="ml-2 rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">
+            ⚡ 实时源断流，已切 PG 快照（cron 落库，分钟级新鲜）
+          </span>
+        )}
       </div>
 
       {/* 核心统计 */}
