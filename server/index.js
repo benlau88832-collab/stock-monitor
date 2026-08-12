@@ -115,6 +115,9 @@ require("./routes/db")(app);
 // ---------- v9.115.0（S1-1）：单一 AI 认知层路由 ----------
 require("./routes/cognition")(app);
 
+// ---------- v9.116.0（S2-2）：决策直达路由（五支柱纯函数，秒级不依赖 LLM） ----------
+require("./routes/decisions")(app);
+
 // ---------- 东财代理路由 ----------
 require("./routes/proxy")(app);
 

@@ -38,6 +38,9 @@
 // v9.115.0（S1-1 单一 AI 认知层）：server/lib/cognition.js buildCognition 纯函数（情绪周期6阶段/资金信号/
 //   风险闸门/龙头接力，每字段带 Provenance 溯源）+ verifyCognition hash 校验 + rawFromBrainContext 适配
 //   （PG buildBrainContext 输出 → 认知 raw，只换数据源下游零改动）+ GET /api/cognition 全站唯一认知端点
+// v9.116.0（S2 决策直达层）：composeDecision 五支柱（准入/仓位/离场/风控/诱多，纯函数 <1ms 永不降级）+
+//   DecisionCard 升级一键裁决面板（候选龙头自动亮 + 9:25/13:00 决策窗口 P0 高亮）+ /api/decisions 路由
+//   （服务端 decisionLayer.js CJS 双端同构）
 // ============================================================
-export const APP_VERSION = "v9.115.0";
+export const APP_VERSION = "v9.116.0";
 export const BUILD_DATE = "2026-08-12";

@@ -1,0 +1,58 @@
+// v9.116.0（S2-1）：决策直达五支柱单测 —— 闸门关→回避 / 诱多→回避 / 确定性 / latency<1ms
+import { describe, it, expect } from "vitest";
+import { composeDecisionCore, detectTrap } from "../decisionCore";
+
+// 认知层 stub（闸门放开/风险低/发酵）
+function cogStub(over = {}) {
+  return {
+    version: 2,
+    risk: { value: { level: "低", traps: [], gateOpen: true } },
+    sentiment: { value: { stage: "发酵", score: 75 } },
+    mainline: { value: { primaryTheme: "半导体", strength: 92, ladder: { tier1: ["A"], tier2: ["B"], tier3: ["C"] } } },
+    leader: { value: { name: "龙头A", height: 3, relayOk: true } },
+    ...over,
+  };
+}
+
+describe("v9.116.0 决策直达 composeDecisionCore（S2-1）", () => {
+  it("① 闸门关闭 → decision=回避", () => {
+    const cog = cogStub({ risk: { value: { level: "中", traps: ["炸板率偏高"], gateOpen: false } } });
+    const v = composeDecisionCore(null, cog, { riskAppetite: "短线" });
+    expect(v.decision).toBe("回避");
+    expect(v.blocks).toContain("情绪闸门关闭");
+  });
+
+  it("② 诱多命中 → 回避（一票否决）", () => {
+    const stock = { code: "600001", name: "诱多股", pct: 8, mainNet: -5e7, turnoverRate: 3, limitUp: false, relay: 0 };
+    const v = composeDecisionCore(stock, cogStub(), { riskAppetite: "短线" });
+    expect(v.decision).toBe("回避");
+    expect(v.pillars.trap.pass).toBe(false);
+    expect(v.blocks.join("")).toContain("诱多");
+  });
+
+  it("③ 同输入 score 确定性（纯函数）", () => {
+    const stock = { code: "600519", name: "贵州茅台", pct: 1.2, mainNet: 8e7, turnoverRate: 1.5, relay: 0 };
+    const a = composeDecisionCore(stock, cogStub(), { riskAppetite: "短线" });
+    const b = composeDecisionCore(stock, cogStub(), { riskAppetite: "短线" });
+    expect(a.score).toBe(b.score);
+    expect(a.decision).toBe(b.decision);
+  });
+
+  it("④ 纯函数核心 latencyMs < 1ms（无 IO 编排）", () => {
+    const stock = { code: "600519", name: "贵州茅台", pct: 1.2, mainNet: 8e7, turnoverRate: 1.5, relay: 0 };
+    const v = composeDecisionCore(stock, cogStub(), { riskAppetite: "短线" });
+    expect(v.latencyMs).toBeLessThan(1);
+  });
+
+  it("⑤ 健康场景：闸门开+无诱多 → 可上车/观望（非回避）", () => {
+    const stock = { code: "600001", name: "健康股", pct: 2.1, mainNet: 3e7, turnoverRate: 8, relay: 2 };
+    const v = composeDecisionCore(stock, cogStub(), { riskAppetite: "短线" });
+    expect(["可上车", "观望"]).toContain(v.decision);
+    expect(v.decision).not.toBe("回避");
+  });
+
+  it("detectTrap：主力净流出 → 命中；无信号 → pass", () => {
+    expect(detectTrap({ mainNet: -1e7 }, cogStub()).pass).toBe(false);
+    expect(detectTrap({ mainNet: 1e7, pct: 2, turnoverRate: 8, relay: 1 }, cogStub()).pass).toBe(true);
+  });
+});
