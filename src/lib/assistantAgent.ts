@@ -186,6 +186,10 @@ export interface AssistantReply {
 export function isSimpleQuestion(q: string): boolean {
   const t = q.trim();
   if (!t || t.length > 80) return false;
+  // v9.108.0（T-2 P1-4）：个股类（6位代码 或 2-4字中文+问股动词）→ MUST 走 ReAct（需 getStockFundDetail 实时数据）
+  // 原实现"XX 怎么样"（XX=个股）命中"怎么样"被判简单问答 → 流式无个股数据 → 个股问答质量塌陷
+  if (/\d{6}/.test(t)) return false;
+  if (/([\u4e00-\u9fa5]{2,4})(怎么样|能不能买|能不能上|还能买|为什么涨停|分析|走势|怎么样买|为什么)/.test(t)) return false;
   if (/个股深度调研|能不能上车|可不可以买|值得买|要不要买|帮我分析|分析一下|怎么看|怎么样买|买不买|调研|推荐个股/.test(t)) return false;
   // 消息/资讯类 → ReAct（getLocalNews 本地快讯 + getExternalNews 外部搜索兜底）
   if (/消息|新闻|快讯|公告|事件|海内外|国内外|政策|隔夜|周末|休市|假期|资讯/.test(t)) return false;
@@ -440,18 +444,20 @@ export async function runAssistantAgent(
   // 不再用正则判定问题类型短路；所有问题统一：全站快照 → LLM（简单问答/ReAct 由调用方意图粗分）
   if (opts?.signal?.aborted) throw new Error("request aborted"); // v9.85.2（P2-9）：已取消则不进入任何分支
 
+  // v9.108.0（T-3 P1-1）：工具调用总预算 —— 声明提到循环外（原在 for 体内每轮重置，"全程 ≤12 次"从未生效，
+  // 最坏 5×4=20 次/深度调研 12×4=48 次）；每轮 ≤4 个、全程 ≤12 次（防 LLM 循环烧工具/超时）
+  const MAX_CALLS_PER_ROUND = 4;
+  const MAX_TOTAL_CALLS = 12;
+  let totalCalls = 0;
+  const takeBudget = (): boolean => {
+    if (totalCalls >= MAX_TOTAL_CALLS) return false;
+    totalCalls++;
+    return true;
+  };
+
   for (let round = 0; round < maxRounds; round++) {
     // v9.85.2（P2-9）：外部取消（关闭对话框/组件卸载）→ 立即中止 ReAct，不再消耗 LLM 配额
     if (opts?.signal?.aborted) throw new Error("request aborted");
-    // v9.85.1（P1-12）：工具调用总预算 —— 每轮 ≤4 个、全程 ≤12 次（防 LLM 循环烧工具/超时）
-    const MAX_CALLS_PER_ROUND = 4;
-    const MAX_TOTAL_CALLS = 12;
-    let totalCalls = 0;
-    const takeBudget = (): boolean => {
-      if (totalCalls >= MAX_TOTAL_CALLS) return false;
-      totalCalls++;
-      return true;
-    };
     const user = round === 0 ? userCtx : (roundHistory.join("\n") + "\n\n（继续，或直接给最终答复）：");
     let r: AgentChatResult | null;
     try { r = await callAgentChat(system, user, toolDefs, { temperature: 0.2, history: opts?.history }); } catch { r = null; }

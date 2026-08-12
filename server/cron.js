@@ -1583,13 +1583,14 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] 盘中情报失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
 
-  // v9.102.0（第二批 A，T-A1）：盘中精灵秒级轮询 —— push2ex 四池 2-5s 串行巡检
+  // v9.102.0（第二批 A，T-A1）：盘中精灵轮询 —— push2ex 四池串行巡检
+  // v9.108.0（T-4A P1-3 名实对齐）：cron `*/2` 在分钟位 = 每 2 分钟，非秒级（原注释"*/2s"误导）
   // 通达信"盘中精灵"效果：涨停潮/炸板突变/封单异动第一时间提醒
   // 东财风控：内部串行 QPS≤2 + 每池 1.5-3s 抖动；busy 跳过 + PG lock（与盘中大脑共享 LOCK_INTRADAY）
   cron.schedule("*/2 * 9-15 * * 1-5", async () => {
     try {
       if (!isTradingDayCN()) return;
-      if (sprintBusy) return; // 防重叠（一轮 8-15s，*/2s 触发会被跳过大部分）
+      if (sprintBusy) return; // 防重叠（一轮 8-15s，*/2 分钟间隔内通常已跑完）
       sprintBusy = true;
       try {
         const gotLock = await withPgLock(pool, LOCK_INTRADAY, async () => {

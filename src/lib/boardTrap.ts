@@ -50,9 +50,9 @@ export function classifyBoardTrap(
     return { type: "诱多", reasons: [`封单快速撤单 ${input.sealChangeRate.toFixed(0)}%`, "大单净流出"] };
   }
   // 假摔：炸板但大单未出（筹码未走，次日回封概率高）
-  // v9.106.1（验收遗留 #2）：大单流向为"封单变化"代理值时（涨停池数据源无真实大单字段），
-  //   以封单变化率 |Δ|<20% 视作筹码未走（炸板但封单仍稳/回封）
-  if (input.blasted && (bigIn || Math.abs(input.bigNetFlow) < 1e6 || Math.abs(input.sealChangeRate) < 20)) {
+  // v9.108.0（T-6a P2-1）：假摔需至少一个正向证据 —— 小flow 与小sealchange 用 AND 绑定（原单一温和条件即判假摔过宽，
+  //   盘中封单噪声易误判；v9.106.1 代理口径保留：封单变化温和 + 大单无明显流出 才视为筹码未走）
+  if (input.blasted && (bigIn || (Math.abs(input.bigNetFlow) < 1e6 && Math.abs(input.sealChangeRate) < 20))) {
     return { type: "假摔", reasons: ["炸板但大单未出（筹码未走）", bigIn ? "大单仍净流入" : Math.abs(input.bigNetFlow) < 1e6 ? "大单无明显流出" : "封单变化温和"] };
   }
   // 强势介入：封成比高 + 封单稳定 + 大单流入 + 换手温和（换手缺失时不设限）

@@ -17,7 +17,7 @@ function getSystemPrefix() { return SYSTEM_PREFIX; }
 
 const TASK_CONFIG = {
   preopenPlan: { temperature: 0.4, maxTokens: 2000, thinking: false },
-  closeReview: { temperature: 0.3, maxTokens: 2000, thinking: true },
+  closeReview: { temperature: 0.3, maxTokens: 3000, thinking: true }, // v9.108.0（T-6b P2-1）：thinking:true 2000 偏紧→3000
   annRank:     { temperature: 0.1, maxTokens: 2000, thinking: false },
   ladderScan:  { temperature: 0.3, maxTokens: 2000, thinking: false },
   newsDigest:  { temperature: 0.3, maxTokens: 2000, thinking: false },

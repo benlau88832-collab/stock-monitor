@@ -17,7 +17,8 @@ describe("v9.94.2 ReAct 自主决策路由", () => {
   });
 
   it("纯情绪/解释类简单问答 → 真流式（isSimpleQuestion=true）", () => {
-    expect(isSimpleQuestion("市场情绪怎么样")).toBe(true);
+    // v9.108.0（T-2 P1-4）：个股探测优先 —— "市场情绪怎么样"命中 2-4字+怎么样 个股正则 → 走 ReAct（指令明确可接受）
+    expect(isSimpleQuestion("情绪现在多少分")).toBe(true);
     expect(isSimpleQuestion("涨停是什么意思")).toBe(true);
     expect(isSimpleQuestion("主力资金流向如何")).toBe(true);
   });

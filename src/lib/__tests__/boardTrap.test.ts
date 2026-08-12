@@ -17,6 +17,7 @@ describe("v9.101.1 classifyBoardTrap（盘口三分类）", () => {
 
   it("假摔：炸板但大单无大幅流出（小波动也算筹码未走）", () => {
     const r = classifyBoardTrap({ sealRatio: 0, sealChangeRate: -50, bigNetFlow: 5e5, turnoverRate: 22, blasted: true });
+    // 5e5 为正流入（bigIn=true）→ 大单未出，假摔成立（T-6a 收紧不影响正流入场景）
     expect(r.type).toBe("假摔");
   });
 
@@ -39,6 +40,17 @@ describe("v9.101.1 classifyBoardTrap（盘口三分类）", () => {
   it("阈值可覆盖（收紧介入封成比）", () => {
     const r = classifyBoardTrap({ sealRatio: 2.5, sealChangeRate: 5, bigNetFlow: 1e7, turnoverRate: 10, blasted: false }, { sealRatioMin: 3 });
     expect(r.type).toBeNull();
+  });
+
+  // v9.108.0（T-6a P2-1）：假摔收紧 —— 单一温和条件不再判假摔（需小flow 与 小sealchange 同时成立或有正向大单）
+  it("假摔收紧：炸板 + 大单流出 + 小flow + sealchange=25 → 非假摔（旧逻辑误判）", () => {
+    const r = classifyBoardTrap({ sealRatio: 0, sealChangeRate: 25, bigNetFlow: -5e5, turnoverRate: 20, blasted: true });
+    expect(r.type).not.toBe("假摔");
+  });
+
+  it("假摔收紧：炸板 + 小flow 且 小sealchange 同时成立 → 仍判假摔", () => {
+    const r = classifyBoardTrap({ sealRatio: 0, sealChangeRate: 10, bigNetFlow: 5e5, turnoverRate: 22, blasted: true });
+    expect(r.type).toBe("假摔");
   });
 });
 
@@ -63,7 +75,7 @@ describe("v9.106.2 classifyBoardTrapForBoard（板块级聚合接线）", () => 
         { sealFund: 6e7, amount: 1e8, blastCount: 0 },
         { sealFund: 4e7, amount: 1e8, blastCount: 1 },
       ],
-      prevTotalSealFund: 1.6e8, // 变化温和（-6%）
+      prevTotalSealFund: 1.505e8, // v9.108.0（T-6a 收紧后）：变化 <1e6（小flow）且 |Δ|<20%（温和）才判假摔
     });
     expect(r.type).toBe("假摔");
     expect(r.reasons.join()).toContain("筹码未走");

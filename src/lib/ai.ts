@@ -316,6 +316,12 @@ export async function streamChat(
       }
     }
     // v9.85.0（P1-6）：必须收到 [DONE] 才算完整成功（Abort/断流 → ok:false）
+    // v9.108.0（T-1b）：服务端已注入兜底（T-1），此处再做前端防线 —— 完整成功但正文仍为空 → 显式兜底文本
+    if (sawDone && full.length === 0) {
+      const fbText = "（AI 本轮未返回内容，已切换本地摘要兜底）盘面数据请以页面卡片为准；如需深入分析请再问一次。";
+      full = fbText;
+      try { onDelta(fbText); } catch { /* 渲染回调失败静默 */ }
+    }
     return { text: full, ok: sawDone, error: sawDone ? undefined : "stream interrupted" };
   } catch {
     return null;

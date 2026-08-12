@@ -276,6 +276,9 @@ module.exports = function aiRoutes(app) {
       });
       let buf = "";
       const MAX_BUF = 1024 * 1024; // 1MB 缓冲上限（防异常长行内存压力）
+      // v9.108.0（T-1 P0-1）：累计 content 字节（只计 choice.content，不计 reasoning_content）——
+      // 上游 empty content（reasoning-only）时注入规则版兜底，杜绝空白答复（ReAct 有 fallbackAnswer，流式此前裸奔）
+      let contentLen = 0;
       const safeWrite = (chunk) => {
         try {
           if (res.writableEnded) return false;
@@ -306,6 +309,7 @@ module.exports = function aiRoutes(app) {
             // v9.84.2（3.4）：DeepSeek 推理模型流式返回 reasoning_content（思考过程）——
             // 不转发给前端（只渲染 content 增量）
             const delta = choice.content ?? "";
+            if (delta) contentLen += delta.length; // v9.108.0（T-1）：累计真实正文
             if (delta && !safeWrite(`data: ${JSON.stringify({ delta })}\n\n`)) {
               // 背压：客户端消费慢 → pause 上游，等 drain 再恢复
               r.pause();
@@ -315,6 +319,12 @@ module.exports = function aiRoutes(app) {
         }
       });
       r.on("end", () => {
+        // v9.108.0（T-1 P0-1）：正文为空（reasoning-only/empty content）→ 注入中性兜底文案
+        // （服务端拿不到完整 brainContext 避免再查库，带数据兜底由前端 T-1b 做）
+        if (contentLen === 0) {
+          console.warn("[ai] stream empty content 兜底注入（task=" + streamTask + "）");
+          safeWrite(`data: ${JSON.stringify({ delta: "（AI 本轮未返回内容，以下为本地盘面摘要兜底）盘面数据请以页面卡片为准；如需深入分析请再问一次。" })}\n\n`);
+        }
         safeWrite(`data: [DONE]\n\n`);
         try { res.end(); } catch { /* 静默 */ }
       });

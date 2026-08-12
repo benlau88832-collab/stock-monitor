@@ -5,7 +5,7 @@
 // v9.99.1：CACHE v2→v3 —— ①fetch 显式 { cache: "no-store" }：服务端 ETag + max-age=0 时
 //   SW 的 fetch() 会拿到 304 回退 HTTP 磁盘缓存的旧 body（network-first 形同虚设，发新版页面旧版 JS 的坑）；
 //   ②v3 强制旧 SW 退役（activate 清 v2 缓存）
-const CACHE = "stock-monitor-v15";
+const CACHE = "stock-monitor-v16";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {

@@ -1,6 +1,7 @@
 // ============================================================
-// server/lib/intradaySprint.js —— 盘中精灵秒级轮询器（T-A1/T-A4，v9.102.0）
-// 通达信"盘中精灵"效果：push2ex 四池 2-5s 串行轮询 + 事件对比 + 分级推送
+// server/lib/intradaySprint.js —— 盘中精灵每 2 分钟轮询器（T-A1/T-A4，v9.102.0）
+// v9.108.0（T-4A P1-3 名实对齐）：node-cron `*/2` 在分钟位 = 每 2 分钟，原"秒级"文案误导（真秒级需 setInterval，待产品确认）
+// 通达信"盘中精灵"效果：push2ex 四池每 2 分钟一轮串行轮询（每池内 1.5-3s 抖动）+ 事件对比 + 分级推送
 // 东财风控铁律：串行 QPS≤2 + 每池 1.5-3s 随机抖动（>5次/s/并发10/1分钟200 封 IP）
 // 事件链路：evaluatePoolDiff（intradayRules.js）→ 30 分钟冷却去重 →
 //   kv anomaly:日期 落库（前端精灵浮层轮询展示）+ sendPushIfConfigured 分级推送（T-A4：
