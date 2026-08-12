@@ -25,6 +25,13 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("sw.js").catch(() => { /* 注册失败静默 */ });
   });
+  // v9.114.0（T5-3）：SW 激活（新版本上线）→ 强制刷新当前页面，消除"需硬刷新"约定
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.type === "FORCE_RELOAD" && !sessionStorage.getItem("sw_reloading")) {
+      sessionStorage.setItem("sw_reloading", "1"); // 防死循环：reload 后新 SW 不再激活，但双保险
+      window.location.reload();
+    }
+  });
 }
 
 createRoot(document.getElementById("root")!).render(

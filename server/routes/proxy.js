@@ -245,7 +245,11 @@ function forward(req, res, target, bodyBuf) {
   upstream.end();
 }
 
-module.exports = function proxyRoutes(app) {
+module.exports = proxyRoutes;
+// v9.114.0（T5-2 D-10）：导出数据源健康快照，供 /api/health 统一聚合端点复用
+module.exports.getSourceHealth = getSourceHealth;
+
+function proxyRoutes(app) {
   app.get("/api/proxy", async (req, res) => {
     // v9.85.0（P0-1）：async 鉴权必须 await
     if (!(await checkAuth(req, res))) return;

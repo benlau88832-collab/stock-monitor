@@ -20,7 +20,11 @@ export default function OpsPanel() {
   const [queue, setQueue] = useState({ inflight: 0, queueLength: 0 });
   const [factor, setFactor] = useState<FactorInfo | null>(null);
   // v9.99.0（批次 4）：服务端数据源冷却状态（/api/proxy/health）
+  // v9.114.0（T5-2 D-10）：统一 /api/health —— 数据源 + AI 端点 + PG 连通 + SW 版本（单次请求全链路 SLA）
   const [srcHealth, setSrcHealth] = useState<Array<{ host: string; state: string; cooldownRemainSec: number; failCount: number; successRate: number | null; calls60s: number }>>([]);
+  const [pgHealth, setPgHealth] = useState<{ ok: boolean; latencyMs?: number } | null>(null);
+  const [swCache, setSwCache] = useState<string | null>(null);
+  const [aiHealth, setAiHealth] = useState<{ degraded: boolean; endpoints?: Array<{ base: string; ok: boolean; emptyRate: number }> } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -29,12 +33,18 @@ export default function OpsPanel() {
       try { setAiStats(getAIStats()); } catch { /* 静默 */ }
       try { setQueue(getJsonpQueueState()); } catch { /* 静默 */ }
       // v9.99.0：服务端分级冷却观测（失败进入冷却的源 + 成功率）
+      // v9.114.0（T5-2）：统一 /api/health 聚合
       try {
         const { getLocalToken } = await import("../lib/cloudStore");
         const token = await getLocalToken();
-        const r = await fetch("/api/proxy/health", { headers: token ? { "x-local-token": token } : {} });
+        const r = await fetch("/api/health", { headers: token ? { "x-local-token": token } : {} });
         const j = await r.json();
-        if (j?.sources && alive) setSrcHealth(j.sources);
+        if (alive) {
+          if (Array.isArray(j?.sources)) setSrcHealth(j.sources);
+          if (j?.pg) setPgHealth(j.pg);
+          if (j?.sw?.cache) setSwCache(j.sw.cache);
+          if (j?.ai) setAiHealth(j.ai);
+        }
       } catch { /* 本地无服务端时静默 */ }
       try {
         const { evaluateFactorHealth } = await import("../lib/agentTools");
@@ -102,6 +112,17 @@ export default function OpsPanel() {
           {srcHealth.filter(h => h.state !== "ok" || (h.successRate != null && h.successRate < 100)).length === 0 && (
             <div className="text-[10px] text-emerald-300/60">全部源正常（近 60s）</div>
           )}
+          {/* v9.114.0（T5-2）：统一 SLA —— PG 连通 + SW 缓存版本 */}
+          <div className="flex items-center justify-between text-[10px] border-t border-white/5 pt-1">
+            <span className="text-slate-500">PG 连通</span>
+            {pgHealth == null ? <span className="text-slate-600">—</span> :
+              pgHealth.ok ? <span className="font-bold text-emerald-300">✓ {pgHealth.latencyMs}ms</span>
+                : <span className="font-bold text-rose-300">✗ 不可达</span>}
+          </div>
+          <div className="flex items-center justify-between text-[10px]">
+            <span className="text-slate-500">SW 缓存版本</span>
+            <span className="font-bold text-sky-300">{swCache ? `v${swCache.replace("stock-monitor-", "")}` : "—"}</span>
+          </div>
         </div>
 
         {/* AI 配额 */}
@@ -109,6 +130,15 @@ export default function OpsPanel() {
           <div className="text-[10px] text-slate-500">AI 今日调用</div>
           <div className="text-lg font-bold text-violet-300">{aiStats?.calls ?? "—"}</div>
           <div className="text-[10px] text-slate-500">失败 {aiStats?.failures ?? 0} · 平均 {(aiStats?.avgLatency ?? 0) / 1000}s</div>
+          {/* v9.114.0（T5-2）：AI 端点健康（熔断/empty 率） */}
+          {aiHealth && (
+            <div className={`text-[10px] font-bold ${aiHealth.degraded ? "text-rose-300" : "text-emerald-300"}`}>
+              {aiHealth.degraded ? "⚠ 端点降级中" : "✓ 端点正常"}
+              {aiHealth.endpoints?.slice(0, 1).map((ep, i) => (
+                <span key={i} className="text-slate-500 font-normal"> · empty {(ep.emptyRate * 100).toFixed(0)}%</span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 请求队列 */}

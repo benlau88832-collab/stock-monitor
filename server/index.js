@@ -41,11 +41,8 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // ---------- 健康检查 ----------
-app.get("/api/health", async (req, res) => {
-  let db = "down";
-  try { await pool.query("SELECT 1"); db = "up"; } catch {}
-  res.json({ ok: true, db, version: "v9.99.0-local", time: new Date().toISOString() });
-});
+// v9.114.0（T5-2 D-10）：旧单点 db 探活端点删除 —— 统一聚合端点 /api/health 在 routes/health.js
+// （数据源 + AI 端点 + PG 连通 + SW 版本，终审 D-10 统一 SLA 视图）；PG 探活能力已并入 out.pg
 
 // ---------- 静态托管（前端单文件产物） ----------
 const DOCS_DIR = path.join(__dirname, "..", "docs");
@@ -117,6 +114,9 @@ require("./routes/db")(app);
 
 // ---------- 东财代理路由 ----------
 require("./routes/proxy")(app);
+
+// ---------- v9.114.0（T5-2 D-10）：统一健康聚合路由 ----------
+require("./routes/health")(app);
 
 // ---------- AI 中转路由（v9.26 F-03：模型 Key 只存服务端 .env） ----------
 require("./routes/ai")(app);

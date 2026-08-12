@@ -31,6 +31,10 @@
 // v9.113.0：终审交付层重构（T0 dataLayer PG 优先 / T2 intentRouter 五档路由 / T3 LLM 收尾 / T4 decisionDirect 决策直达 / T1-2 横幅三态）
 // v9.113.1（T1-1 D-01 收尾）：主面板数据管道 PG-first —— refreshAll 第 9 路并行拉 PG 快照，
 //   涨停池三优先（实时 push2 直连 > PG 派生池 > push2delay 兜底）+ 情绪/溢价/晋级率 PG 兜底 + MarketOverview PG 角标
+// v9.114.0（T5/T6 可靠性收敛 + 面板精简）：T5-1 boardTrap 文案核对（grep=0 不接线，板块级宿主维持 v9.106.2 定调）/
+//   T5-2 统一 /api/health（数据源+AI 端点+PG 连通+SW 版本聚合，OpsPanel 统一 SLA）/
+//   T5-3 SW 版本强制更新（activate 通知页面强制 reload，消除"需硬刷新"约定）/
+//   T6 面板收敛（主线/资金面/盘前准备三分区语义对齐，主 Tab 5 个保持收敛）
 // ============================================================
-export const APP_VERSION = "v9.113.1";
+export const APP_VERSION = "v9.114.0";
 export const BUILD_DATE = "2026-08-12";

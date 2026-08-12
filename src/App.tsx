@@ -1586,15 +1586,16 @@ export default function App() {
         )}
 
         {/* ====== 资金主线（v9.49 F1 分组：强度榜首屏 → 资金结构组 → 外围组） ====== */}
+        {/* v9.114.0（T6 D-09 面板收敛）：分区语义对齐 —— 主线（首屏）/ 资金面（默认展开）/ 盘前准备（默认折叠） */}
         {active === "fundline" && (
           <>
             {/* 首屏独占：主线强度榜（PRD B1）+ 题材梯队（v9.49 R1：主线数据归主线 Tab） */}
             <MainlineRanking battlePlan={battlePlan} loading={loading} />
             <ThemeLadder rawZTPool={overview?.limitPool?.rawZTPool ?? null} />
-            {/* 资金结构组（默认展开，可折叠） */}
+            {/* 资金面组（默认展开，可折叠）—— DarkPool+FundStructure 收敛于此（D-09） */}
             <details className="rounded-xl border border-white/10 bg-white/5" open>
               <summary className="cursor-pointer select-none px-4 py-2 text-sm font-bold text-slate-200 hover:text-slate-100">
-                💧 资金结构（行业流向 · 明暗盘 · 涨停盘）
+                💧 资金面（资金结构 · 明暗盘 · 涨停盘）
               </summary>
               <div className="space-y-3 px-4 pb-4">
                 {/* v9.26.20：行业资金流向走势图（全部有数据的行业，组件按实际数量动态展示） */}
@@ -1621,10 +1622,10 @@ export default function App() {
                 </Suspense>
               </div>
             </details>
-            {/* 外围组（默认折叠） */}
+            {/* 盘前准备组（默认折叠）—— GlobalSignals/CommodityChain 收敛于此（D-09），盘中决策非核心不占主屏 */}
             <details className="rounded-xl border border-white/10 bg-white/5">
               <summary className="cursor-pointer select-none px-4 py-2 text-sm font-bold text-slate-200 hover:text-slate-100">
-                🌐 外围信号（全球 · 两融 · 产业链）
+                ⏰ 盘前准备（全球 · 两融 · 产业链）
               </summary>
               <div className="space-y-3 px-4 pb-4">
                 <GlobalSignals data={globalData} loading={loading} />
