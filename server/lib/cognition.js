@@ -41,9 +41,10 @@ function deriveSentimentStage(score, premium, brokenRate) {
 }
 
 function buildMainline(raw) {
-  // v9.130.0（终审 N1）：与 brainContext mainlines.top 同排序键（heat 降序）+ name tie-breaker 保证确定性
-  //   —— 同一 theme_analysis 输入下，认知层 primaryTheme 必须与大脑快照 top1 完全一致
-  const sorted = [...(raw.mainlines ?? [])].sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0) || String(a.name ?? "").localeCompare(String(b.name ?? "")));
+  // v9.136.0（主线单源）：与 brainContext mainlines.top / cron runThemeAnalysis 同排序键
+  //   （strength 降序 + heat tie-breaker + name）—— 同一 theme_analysis 输入下，
+  //   认知层 primaryTheme 必须与大脑快照 top1 / 前端实战引擎第一候选完全一致
+  const sorted = [...(raw.mainlines ?? [])].sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0) || (b.heat ?? 0) - (a.heat ?? 0) || String(a.name ?? "").localeCompare(String(b.name ?? "")));
   const top = sorted[0];
   if (!top) {
     return {
@@ -213,7 +214,8 @@ function rawFromBrainContext(ctx) {
     },
     mainlines: (ctx.mainlines?.top ?? []).map((t) => ({
       name: t.theme ?? "",
-      strength: t.heat ?? 0,
+      // v9.136.0（主线单源）：strength 优先（cron 强度分排序键），旧数据无 strength → heat 兜底
+      strength: t.strength ?? t.heat ?? 0,
       fundNet: 0,
       leaders: (t.picks ?? []).slice(0, 3).map((p) => p.name ?? "").filter(Boolean),
       followers: (t.picks ?? []).slice(3, 6).map((p) => p.name ?? "").filter(Boolean),

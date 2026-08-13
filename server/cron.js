@@ -1850,6 +1850,8 @@ async function runThemeAnalysis({ pool, label = "手动" }) {
   // v9.84（分类统一）：主题词表与前端共享同一份（src/shared/concept-groups.js）——
   // 原内联 20 组与前端 24 组词根漂移（低空经济/数据要素/核能核电等分类不一致），同一新闻两种口径
   const { CONCEPT_GROUPS: GROUP_ROOTS } = require("../src/shared/concept-groups.js");
+  // v9.136.0（主线单源）：主题强度分服务端同构实现（与前端 calcMainlineStrength 逐公式一致）
+  const { calcMainlineStrength, rankThemesByStrength } = require("./lib/mainlineStrength");
   const conceptGroupOf = (t) => {
     if (!t) return null;
     let best = null;
@@ -1882,7 +1884,8 @@ async function runThemeAnalysis({ pool, label = "手动" }) {
     }
     const themes = [...tally.entries()]
       .map(([name, v]) => ({ name, heat: Math.min(100, v.count * 15), evidence: v.items }))
-      .sort((a, b) => b.heat - a.heat)
+      // v9.136.0（主线单源）：不再此处按 heat 排序——Step3b 涨停数据齐后按 strength 重排
+      //   （heat 保留为 tie-breaker 与催化参考）
       .slice(0, 10);
     if (themes.length === 0) { console.log("[cron] themeAnalysis: 近2h无新闻主题，跳过"); return null; }
 
@@ -1994,43 +1997,79 @@ ${JSON.stringify(themes.map(t => ({
         )),
       }));
 
-    const themePicks = new Map(); // theme → picks
-    const themeEtfs = new Map();  // theme → etfs
-    // v9.89.0：zt 池提升到 try 外 —— 原 const arr 在 try 块内（块级作用域），
-    //   Step4 的 `(Array.isArray(arr) ? arr : [])` 在 try 外引用 → ReferenceError: arr is not defined
-    //   （v9.75 遗留，被 concept-groups module 错误掩盖至今）
-    let arr = [];
-    try {
-      // v9.75（正确性修复）：zt_snapshot.date 实际存储为带横杠 dateStr（fetchZTPool cron.js 返回）
-      // 原用无横杠 date 等值查询永不命中 → ztPool 恒空 → Step4 LLM 选股研判从未真正跑过（死代码）
-      const ztR = await pool.query(`SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1`, [dateStr]);
-      // zt_snapshot.data 为 jsonb（pg 可能返回字符串或对象）→ 兼容两种
-      const raw = ztR.rows[0]?.data;
-      const ztPool = typeof raw === "string" ? JSON.parse(raw) : (raw ?? []);
-      arr = Array.isArray(ztPool) ? ztPool : (ztPool.pool ?? []);
+      const themePicks = new Map(); // theme → picks
+      const themeEtfs = new Map();  // theme → etfs
+      // v9.136.0（主线单源）：主题涨停信息（ztCount/height/mainNet5d）→ Step3b 后算强度分
+      const ztInfo = new Map();     // theme → { ztCount, height, mainNet5d }
+      // v9.89.0：zt 池提升到 try 外 —— 原 const arr 在 try 块内（块级作用域），
+      //   Step4 的 `(Array.isArray(arr) ? arr : [])` 在 try 外引用 → ReferenceError: arr is not defined
+      //   （v9.75 遗留，被 concept-groups module 错误掩盖至今）
+      let arr = [];
+      try {
+        // v9.75（正确性修复）：zt_snapshot.date 实际存储为带横杠 dateStr（fetchZTPool cron.js 返回）
+        // 原用无横杠 date 等值查询永不命中 → ztPool 恒空 → Step4 LLM 选股研判从未真正跑过（死代码）
+        const ztR = await pool.query(`SELECT data FROM zt_snapshot WHERE date = $1 LIMIT 1`, [dateStr]);
+        // zt_snapshot.data 为 jsonb（pg 可能返回字符串或对象）→ 兼容两种
+        const raw = ztR.rows[0]?.data;
+        const ztPool = typeof raw === "string" ? JSON.parse(raw) : (raw ?? []);
+        arr = Array.isArray(ztPool) ? ztPool : (ztPool.pool ?? []);
+        for (const th of themes) {
+          // 3a. 主题归属过滤（内联 conceptGroupOf 判断：hybk/名称折叠到主题大类）
+          const themeStocks = arr.filter(s => {
+            const g = conceptGroupOf(String(s.hybk ?? ""));
+            // v9.93.3-fix：zt_snapshot 落库字段是 code/name（fetchZTPool 已 map），
+            // 原用接口原始 s.c/s.n → 恒空 → 龙头标的 code/name 空壳
+            const name = String(s.name ?? s.n ?? "");
+            return g === th.name || name.includes(th.name) || String(s.hybk ?? "").includes(th.name);
+          });
+          // v9.136.0（主线单源）：收集主题涨停信息（强度分输入；mainNet5d 取资金匹配值）
+          const thFund = fundMatchForTheme(th.name);
+          ztInfo.set(th.name, {
+            ztCount: themeStocks.length,
+            height: themeStocks.reduce((m, s) => Math.max(m, Number(s.lbc ?? s.lbc ?? 1) || 1), 1),
+            mainNet5d: thFund?.mainNet5d ?? 0,
+          });
+          // 3b. 排序选股（封单 > 连板 > 涨幅，取 2-3 只）
+          const picks = themeStocks
+            .sort((a, b) => (b.fund ?? 0) - (a.fund ?? 0) || (b.lbc ?? 1) - (a.lbc ?? 1) || (b.zdp ?? 0) - (a.zdp ?? 0))
+            .slice(0, 3)
+            .map((s, i) => ({
+              code: String(s.code ?? s.c ?? ""), name: String(s.name ?? s.n ?? ""),
+              role: i === 0 ? "首选" : i === 1 ? "接力" : "低吸",
+              correlation: 0, buyTrigger: `竞价/回踩企稳再考虑（主题热度${th.heat}）`, stopLoss: "跌破前低-5%", risk: "追高回落",
+            }));
+          themePicks.set(th.name, picks);
+          // 3c. ETF 匹配（主题→ETF 映射表；真实评分 = 热度 + 涨停联动）
+          themeEtfs.set(th.name, matchMiniETF(th.name, th.heat, themeStocks.length));
+        }
+      } catch { /* 无涨停池快照 → picks 空 */ }
+
+      // v9.136.0（主线单源）：主题强度分（与前端 calcMainlineStrength 同口径）→ strength 降序重排
+      //   —— 服务端 primaryTheme 与前端实战引擎 candidates[0] 判定口径一致（排序键统一）
+      //   催化剂：与前端同 0/1 判定（有新闻 evidence → 60，无 → 50）
+      const totalZt = arr.length;
+      const totalMaxHeight = arr.reduce((m, s) => Math.max(m, Number(s.lbc ?? 1) || 1), 1);
       for (const th of themes) {
-        // 3a. 主题归属过滤（内联 conceptGroupOf 判断：hybk/名称折叠到主题大类）
-        const themeStocks = arr.filter(s => {
-          const g = conceptGroupOf(String(s.hybk ?? ""));
-          // v9.93.3-fix：zt_snapshot 落库字段是 code/name（fetchZTPool 已 map），
-          // 原用接口原始 s.c/s.n → 恒空 → 龙头标的 code/name 空壳
-          const name = String(s.name ?? s.n ?? "");
-          return g === th.name || name.includes(th.name) || String(s.hybk ?? "").includes(th.name);
+        const zi = ztInfo.get(th.name) ?? { ztCount: 0, height: 1, mainNet5d: 0 };
+        const r = calcMainlineStrength({
+          ztCount: zi.ztCount,
+          totalZtCount: totalZt,
+          height: zi.height,
+          totalMaxHeight,
+          promotionRate: null, // 晋级率暂无逐主线数据，中性（与前端一致）
+          mainNet5d: zi.mainNet5d,
+          mainNet10d: null,
+          boardPct: 0,
+          turnoverRate: null,
+          catalystStrength: (th.evidence?.length ?? 0) > 0 ? 60 : 50, // 有新闻催化 → 略加分（与前端 newsTitles 判定一致）
         });
-        // 3b. 排序选股（封单 > 连板 > 涨幅，取 2-3 只）
-        const picks = themeStocks
-          .sort((a, b) => (b.fund ?? 0) - (a.fund ?? 0) || (b.lbc ?? 1) - (a.lbc ?? 1) || (b.zdp ?? 0) - (a.zdp ?? 0))
-          .slice(0, 3)
-          .map((s, i) => ({
-            code: String(s.code ?? s.c ?? ""), name: String(s.name ?? s.n ?? ""),
-            role: i === 0 ? "首选" : i === 1 ? "接力" : "低吸",
-            correlation: 0, buyTrigger: `竞价/回踩企稳再考虑（主题热度${th.heat}）`, stopLoss: "跌破前低-5%", risk: "追高回落",
-          }));
-        themePicks.set(th.name, picks);
-        // 3c. ETF 匹配（主题→ETF 映射表；真实评分 = 热度 + 涨停联动）
-        themeEtfs.set(th.name, matchMiniETF(th.name, th.heat, themeStocks.length));
+        th.ztCount = zi.ztCount;
+        th.height = zi.height;
+        th.mainNet5d = zi.mainNet5d;
+        th.strength = r.score;
+        th.strengthFactors = r.factors;
       }
-    } catch { /* 无涨停池快照 → picks 空 */ }
+      themes.splice(0, themes.length, ...rankThemesByStrength(themes));
 
     // ===== V13-5（P0）Step 4：LLM 批量研判 + 关联度验证（correlation<0.5 → 回避并过滤） =====
     // v9.75（深化）：Step4 已激活（日期修复后 ztPool 非空），给 LLM 喂真实行情证据
@@ -2085,6 +2124,9 @@ correlation 必须基于行业归属（industry）与主题关联度判断，不
         return {
           theme: t.name, heat: t.heat, trend: a.verdict === "风险警示" ? "down" : "up",
           verdict: a.verdict ?? "观察", fundAnalysis: a.fundAnalysis ?? "资金数据不足", action: a.action ?? "跟踪观察",
+          // v9.136.0（主线单源）：主题强度分（与前端 calcMainlineStrength 同口径，排序键）
+          ztCount: t.ztCount ?? 0, height: t.height ?? 0,
+          strength: t.strength ?? 0, strengthFactors: t.strengthFactors ?? null,
           // V13-5：evidence 带 url（新闻可点击）；picks 过滤关联度<0.5（蹭概念不展示）；etfs
           evidence: t.evidence ?? [],
           picks: rawPicks.filter(p => (p.correlation ?? 0) >= 0.5),

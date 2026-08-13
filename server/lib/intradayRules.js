@@ -9,7 +9,10 @@
 //   R5 竞价映射（昨日涨停今日集体低开/高开）—— 本批预留接口，竞价通道后续批次接入
 // 分级：S=涨停潮/炸板突变（critical 推送）A=板块突变（warning）B=封单异动（info）
 // 纯函数无副作用（冷却去重在调用方 intradaySprint.js 做 30 分钟去重）
+// v9.136.0（任务3 收口）：R3 阈值引 server/lib/thresholds.js BLAST_SURGE_FROM/TO
+//   （突变语义域，独立常量防与 IC 健康度/情绪分歧档单边牵连）
 // ============================================================
+const { BLAST_SURGE_FROM, BLAST_SURGE_TO } = require("./thresholds");
 
 /**
  * 对比上轮/本轮涨停池，产出事件
@@ -49,11 +52,11 @@ function evaluatePoolDiff(prev, cur) {
       severity: "critical" });
   }
 
-  // R3 炸板率突变（上轮 <20% → 本轮 ≥35%）
+  // R3 炸板率突变（上轮 <BLAST_SURGE_FROM → 本轮 ≥BLAST_SURGE_TO，封板转弱）
   const rate = (zb, zt) => (zb.length + zt.length > 0 ? zb.length / (zb.length + zt.length) * 100 : 0);
   const prevRate = rate(prevZb, prevZt);
   const curRate = rate(curZb, curZt);
-  if (prevRate < 20 && curRate >= 35) {
+  if (prevRate < BLAST_SURGE_FROM && curRate >= BLAST_SURGE_TO) {
     events.push({ level: "S", type: "炸板率突变", board: null, code: null, name: null,
       reason: `炸板率 ${prevRate.toFixed(0)}%→${curRate.toFixed(0)}%（封板转弱，注意分歧）`,
       severity: "critical" });

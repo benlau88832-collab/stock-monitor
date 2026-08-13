@@ -42,6 +42,8 @@ import { rankMainlinesWithLLM } from "./lib/mainlineLLM";
 import { classifyStocksToMainlines, type MainlineGroup } from "./lib/stockToMainline";
 import { buildMainlineCatalysts } from "./lib/mainlineCatalyst";
 import { calcMainlineStrength } from "./lib/mainlineScore";
+// v9.136.0（主线单源）：认知锚定（第一主线=认知层 primaryTheme，前端引擎降级实时增量）
+import { anchorCognitionMainline } from "./lib/cognitionMainline";
 import { checkExitSignal } from "./lib/exitSignal";
 import { stageOfFunds } from "./lib/stageModel";
 import { getAllSince } from "./lib/dataStore";
@@ -276,6 +278,9 @@ export default function App() {
   const [nextGatePredict, setNextGatePredict] = useState<{ nextGate: string; reason: string; watchPoints: string[] } | null>(null);
   const [leaderPredict, setLeaderPredict] = useState<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null>(null);
   const [cognMainline, setCognMainline] = useState<string | undefined>(undefined); // v9.135.0（阶段三）：认知层主线（作战卡徽标）
+  // v9.136.0（主线单源）：ref 持有最新认知主线 —— refreshAll 为空依赖 useCallback（闭包捕获首帧值），
+  //   renderBattlePlan 锚定必须读 ref 而非 state，否则锚定永不生效
+  const cognMainlineRef = useRef<string | undefined>(undefined);
   const [riskRadarText, setRiskRadarText] = useState<string | null>(null);
   // v9.99.2（B3）：盘后四任务 LLM 降级标记 —— 三剧本/闸门/风险雷达/龙一预判原本不检查 r.degraded，
   //   规则版 fallback 经 parseLLMJSON 剥前缀后以 AI 面目渲染（伪装）；此标记驱动 Dashboard 角标
@@ -446,6 +451,7 @@ export default function App() {
         const cogSnap = cogSnapRes.status === "fulfilled" ? cogSnapRes.value : null;
         const cogScore = typeof cogSnap?.score === "number" ? cogSnap.score : null;
         setCognMainline(cogSnap?.primaryTheme || undefined); // v9.135.0（阶段三）
+        cognMainlineRef.current = cogSnap?.primaryTheme || undefined; // v9.136.0（主线单源）
         const labelOf = (v: number) => (v >= 80 ? "极度贪婪" : v >= 65 ? "贪婪" : v >= 45 ? "中性" : v >= 25 ? "恐慌" : "极度恐慌");
         if (typeof cogScore === "number" && Number.isFinite(cogScore)) {
           sentiment = Math.max(0, Math.min(100, Math.round(cogScore)));
@@ -919,6 +925,18 @@ export default function App() {
             return (b.strengthScore ?? 0) - (a.strengthScore ?? 0);
           });
         } catch { /* 强度分计算失败不影响主流程 */ }
+
+        // ---- v9.136.0（主线单源）：认知锚定（第一主线 = 认知层 primaryTheme） ----
+        // 服务端 theme_analysis 30min 快照权威（排序键与 calcMainlineStrength 同口径）；
+        // 前端实时引擎降级为增量候选：同名组置顶；无同名组 → theme_analysis 补位。
+        // 读 ref（refreshAll 空依赖闭包拿不到最新 state）；失败静默保持前端引擎排序
+        if (cognMainlineRef.current) {
+          try {
+            const ta = await kvGet("theme_analysis:latest") as { themes?: Array<Record<string, unknown>> } | null;
+            const anchored = anchorCognitionMainline(candidates, cognMainlineRef.current, ta);
+            candidates.splice(0, candidates.length, ...anchored.list);
+          } catch { /* 服务端不可用 → 保持前端引擎排序 */ }
+        }
 
         // ---- ①.5 人气榜对照（v9.17-fix）：给各主线龙头打人气排名 ----
         // 用户要求对照人气榜单 + 资金进攻强度（如蓝色光标人气第一）

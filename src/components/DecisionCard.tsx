@@ -54,7 +54,25 @@ export default function DecisionCard({ mainlines }: DecisionCardProps = {}) {
     if (!code && !mainline) { setErr("请输入标的代码（6位）或主线名"); return; }
     setBusy(true); setErr("");
     try {
-      const r = await composeDecision({ code: code || undefined, mainline });
+      // v9.136.0（任务4 契约定案）：服务端权威端点优先 —— /api/decisions POST 带现价装配
+      //   （stockSnapshot 实时价/换手/资金 + PG 认知权威 getFreshCognition），战术三件真实数据；
+      //   请求失败/形状不符 → 降级本地 kernel.composeDecision（纯函数秒级，永不空白）
+      let r: DecisionVerdict | null = null;
+      try {
+        const { apiFetch } = await import("../lib/cloudStore");
+        const resp = await apiFetch("/api/decisions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: code || undefined, mainline: code ? undefined : mainline }),
+        });
+        if (resp.ok) {
+          const j = await resp.json();
+          if (j && j.pillars && Array.isArray(j.reasons) && typeof j.latencyMs === "number") {
+            r = j as DecisionVerdict;
+          }
+        }
+      } catch { /* 服务端不可用 → 本地 kernel 兜底 */ }
+      if (!r) r = await composeDecision({ code: code || undefined, mainline });
       setResult(r);
     } catch (e) {
       setErr("决策失败：" + String(e));

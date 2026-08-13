@@ -23,6 +23,10 @@ export const BLAST_RATE_FUSE = 40;
 export const BLAST_RATE_PENALTY_START = 40;
 /** v9.135.0（阈值收口）：低吸环境允许的炸板率上限（lowAbsorb） */
 export const BLAST_RATE_LOW_ABSORB_MAX = 30;
+/** v9.136.0（任务3 收口）：炸板率突变警戒（intradayRules R3 用；语义=封板转弱突变，
+ *  数值与 BLAST_RATE_LOW/HIGH 一致但独立命名——语义域不同（突变 vs 健康度），防单边调整牵连） */
+export const BLAST_SURGE_FROM = 20; // 上轮炸板率低于此视为封板健康
+export const BLAST_SURGE_TO = 35;   // 本轮炸板率达到此视为突变（封板转弱）
 
 // ---------- 情绪分（0-100） ----------
 /** 情绪 ≥ 此值 = 极度贪婪 */

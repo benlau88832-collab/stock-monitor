@@ -1,21 +1,14 @@
 // ============================================================
 // server/routes/decisions.js —— 决策直达 API（v9.116.0，S2-2）
-// GET /api/decisions —— 批量预生成（认知层主线 top3 龙头标的，首屏秒级呈现决策卡）
-// POST /api/decisions {code} —— 单标的五支柱裁决（纯函数，不依赖 LLM，秒级）
+// v9.136.0（任务4 契约定案）：GET 批量端点已删除——前端零消费者
+//   （决策卡走 POST 单标的；主线/龙头权威源=/api/cognition，不再经决策端点包一层）；
+//   POST 契约定案 = 单标的五支柱裁决裸对象（DecisionVerdict，与前端 kernel 同构 golden 锁定），
+//   现价装配（stockSnapshot）+ PG 认知权威（getFreshCognition）。
+// POST /api/decisions {code, mainline?} —— 单标的五支柱裁决（纯函数，不依赖 LLM，秒级）
 // ============================================================
 const { composeDecision } = require("../lib/decisionLayer");
 
 module.exports = function decisionsRoutes(app) {
-  // GET 批量：默认裁决主线龙头（无 code 入参）
-  app.get("/api/decisions", async (req, res) => {
-    try {
-      const v = await composeDecision({});
-      res.json({ verdicts: [v] });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
   // POST 单标的
   app.post("/api/decisions", async (req, res) => {
     try {

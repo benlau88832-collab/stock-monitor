@@ -24,4 +24,10 @@ describe("v9.135.0 阈值双端 golden（阶段四）", () => {
     expect(FE.BLAST_RATE_PENALTY_START).toBe(40);
     expect(FE.BLAST_RATE_LOW_ABSORB_MAX).toBe(30);
   });
+  it("v9.136.0（任务3 收口）炸板率突变警戒双端一致（intradayRules R3 语义域）", () => {
+    expect(BE.BLAST_SURGE_FROM).toBe(FE.BLAST_SURGE_FROM); // 20
+    expect(BE.BLAST_SURGE_TO).toBe(FE.BLAST_SURGE_TO);     // 35
+    expect(FE.BLAST_SURGE_FROM).toBe(FE.BLAST_RATE_LOW);   // 与健康分档同值（独立命名防单边牵连）
+    expect(FE.BLAST_SURGE_TO).toBe(FE.BLAST_RATE_HIGH);
+  });
 });

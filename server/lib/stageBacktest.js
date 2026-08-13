@@ -2,6 +2,8 @@
 // server/lib/stageBacktest.js —— 情绪周期回测引擎（v9.126.0，蓝图 L4 批次 C 前置）
 // 蓝图要求：情绪周期阶段判定必须回测验证——各阶段次日溢价/赚钱效应分布（IC 思路），
 //   阈值对照蓝图表（试错<30涨停/发酵炸板<10%/震荡10-25%/退潮>25%）校准，而非拍脑袋。
+//   v9.136.0（任务3 收口）：上述 10/25 为蓝图回测校准对照值（仅注释参考），非运行期阈值——
+//   运行期阶段判定走 deriveSentimentStage（thresholds.BLAST_DIVERGE_PCT=15），校准档位不注入代码。
 // 设计（纯函数 0 token，PG-first）：
 //   - 历史阶段重建：不依赖 cognition_snapshots 历史（目前仅 1 行）——用 market_daily 逐日
 //     重建：sentiment 分 + premiumAvg + blastedRate → deriveSentimentStage（与认知层同一判定函数，

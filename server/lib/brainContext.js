@@ -129,12 +129,16 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
   let mainlines = { asOf: null, top: [], all: [] };
   if (themeMeta.status === "fulfilled" && themeMeta.value?.value?.themes) {
     const themes = themeMeta.value.value.themes;
-    // v9.130.0（终审 N1）：heat 降序 + name tie-breaker——与认知层 buildMainline 同排序键，
-    //   保证同一 theme_analysis 输入下 mainlines.top[0] 与认知层 primaryTheme 完全一致
-    const sorted = [...themes].sort((a, b) => (num(b.heat) ?? 0) - (num(a.heat) ?? 0) || String(a.theme ?? "").localeCompare(String(b.theme ?? "")));
+    // v9.136.0（主线单源）：strength 降序 + heat tie-breaker + name —— 与认知层 buildMainline /
+    //   cron.js runThemeAnalysis 生成排序同键，保证同一 theme_analysis 输入下三处 top1 完全一致
+    //   （v9.130.0 原 heat 排序键已被强度分取代——主题排序统一为前端 calcMainlineStrength 口径）
+    const sorted = [...themes].sort((a, b) => (num(b.strength ?? b.heat) ?? 0) - (num(a.strength ?? a.heat) ?? 0)
+      || (num(b.heat) ?? 0) - (num(a.heat) ?? 0)
+      || String(a.theme ?? "").localeCompare(String(b.theme ?? "")));
     const slim = (t) => ({
       theme: t.theme, heat: t.heat, trend: t.trend, verdict: t.verdict,
       action: t.action, fundAnalysis: t.fundAnalysis,
+      strength: num(t.strength) ?? null, ztCount: num(t.ztCount) ?? null, height: num(t.height) ?? null,
       picks: (t.picks ?? []).slice(0, 5).map(p => ({ code: p.code, name: p.name, correlation: p.correlation, aiVerdict: p.aiVerdict })),
       etfs: (t.etfs ?? []).slice(0, 5),
     });
@@ -193,10 +197,16 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
       }))
     : [];
 
-  // ---------- 次日闸门（从 market_daily 推导，与前端 gateMode 同语义） ----------
+  // ---------- 次日闸门（从 market_daily 推导，快照口径） ----------
+  // v9.136.0（N2 收敛·产品定调）：盘中实时闸门权威 = 前端 regimeGate.computeGate
+  //   （实时炸板率/溢价熔断式 ×0.5，作战卡/五问条/决策链消费）；
+  //   本 gate 为 PG market_daily 快照口径（线性计分式），仅供助手快照/决策 Agent 的 LLM 上下文引用，
+  //   "次日闸门"= 盘后对明日的预判口径，与盘中实时闸门不同语义（两处消费方不同，注释声明不合并）。
   const gate = (() => {
     const m = market;
     if (m.ztCount == null) return { mode: "empty", factor: 0.5, label: "数据未就绪" };
+    // v9.136.0（任务3 收口）：炸板率 1:1 线性扣分（快照计分式）——与前端熔断式（>40% ×0.5）语义域不同，
+    //   此处分母为百分数值（blastedRate 0-100），每 1pp 扣 1 分；注释声明防误读为同一阈值体系
     const pos = (m.sentiment ?? 50) + (m.promotionRate ?? 0.5) * 30 + (m.premiumAvg ?? 0) * 4 - (m.blastedRate ?? 0);
     const mode = pos >= 80 ? "full" : pos >= 60 ? "normal" : pos >= 40 ? "watch" : "shut";
     return { mode, factor: Math.max(0.2, Math.min(1, pos / 100)), label: `${mode}（情绪${m.sentiment ?? "?"}·炸板${m.blastedRate ?? "?"}%·最高${m.maxBoardHeight ?? "?"}板）` };

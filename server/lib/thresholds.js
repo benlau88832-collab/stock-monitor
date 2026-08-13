@@ -14,5 +14,9 @@ const BLAST_RISK_PCT = 20;
 // 因子 IC 健康度：炸板率高/低分档（factorIc 用；对应前端 thresholds.BLAST_RATE_HIGH/LOW）
 const BLAST_HIGH_IC = 35;
 const BLAST_LOW_IC = 20;
+// v9.136.0（任务3 收口）：炸板率突变警戒（intradayRules R3 用；语义=封板转弱突变，
+//   数值与 IC 分档一致但独立命名——语义域不同（突变 vs 健康度），防单边调整牵连）
+const BLAST_SURGE_FROM = 20; // 上轮炸板率低于此视为封板健康
+const BLAST_SURGE_TO = 35;   // 本轮炸板率达到此视为突变（封板转弱）
 
-module.exports = { BLAST_DIVERGE_PCT, BLAST_RISK_PCT, BLAST_HIGH_IC, BLAST_LOW_IC };
+module.exports = { BLAST_DIVERGE_PCT, BLAST_RISK_PCT, BLAST_HIGH_IC, BLAST_LOW_IC, BLAST_SURGE_FROM, BLAST_SURGE_TO };

@@ -1,6 +1,9 @@
 // 市场闸门：根据情绪分+熔断条件输出仓位系数 + 推荐模式
 // 纯函数，不碰 DOM/localStorage/网络
 // v9.15：3 模式（full/cautious/low/empty）—— 机构纪律+游资选股 融合
+// v9.136.0（N2 收敛·产品定调）：盘中实时闸门权威实现（作战卡/五问条/决策链消费）；
+//   服务端 brainContext.js gate 为 PG 快照口径（次日闸门，助手快照/决策 Agent 上下文用），
+//   两者语义域不同（实时熔断式 vs 快照线性计分式），注释声明不合并、互不覆盖
 
 import type { OverviewData } from "../App";
 import { BLAST_RATE_FUSE } from "./thresholds";

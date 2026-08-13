@@ -131,5 +131,20 @@
 //   阶段五 竞价补强：竞价台"普涨日"提示（上涨占比>85% 板块效应参考性弱）+ 决策卡 9:25 多候选
 //     （认知龙头 + 主线 Top1-2×3 只候选按钮）
 // ============================================================
-export const APP_VERSION = "v9.135.0";
+// v9.136.0（交接 0813 五任务批次）：
+//   任务1 主线彻底单源（架构项）：服务端 runThemeAnalysis 主题打分对齐前端 calcMainlineStrength
+//     （server/lib/mainlineStrength.js CJS 同构 + golden 锁定；themes 落库 ztCount/height/strength +
+//      strength 降序重排；brainContext/cognition 排序键同步）——前端实战引擎降级实时增量：
+//     渲染锚定认知主线（cognitionMainline.ts 同名置顶/theme_analysis 补位 + BattlePlan llmRanked 层锚定），
+//     作战卡徽标改"🏛 认知锚定"（原"🧠 认知主线"不一致提示语义废止）
+//   任务2 N2 闸门收敛：产品定调=盘中实时权威（regimeGate 熔断式），服务端 brainContext gate 标注
+//     快照口径（PG 线性计分式，助手快照/决策 Agent 上下文用），注释声明不合并
+//   任务3 炸板率阈值收口：intradayRules R3 引 BLAST_SURGE_FROM/TO（双端 golden）；
+//     reasoning.js LLM 文案插值 BLAST_RISK_PCT；stageBacktest 校准档位注释声明
+//   任务4 /api/decisions 契约定案：决策卡优先 POST 服务端（现价装配），失败降级本地 kernel；
+//     删 GET 批量端点（零消费者），POST=裸 DecisionVerdict 契约
+//   任务5 trade_ledger 闭环：纪律面板 sell/stop 自动匹配持仓成本（体检持仓 avgCost 优先）+ computePnl
+//     真实盈亏落 pnl_pct；体检持仓一键"卖"联动带出代码/名称/数量
+// ============================================================
+export const APP_VERSION = "v9.136.0";
 export const BUILD_DATE = "2026-08-13";

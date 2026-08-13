@@ -16,6 +16,8 @@ import MainlineDiagnosisCard from "./MainlineDiagnosisCard";
 import type { MainlineLLMResult } from "../lib/mainlineLLM";
 import type { ETFScoreResult } from "../lib/etfScore";
 import type { MainlineGroup } from "../lib/stockToMainline";
+// v9.136.0（主线单源）：渲染层锚定（llmRanked 显示时第一主线也以认知主线为准）
+import { anchorDisplay } from "../lib/cognitionMainline";
 // v9.27（P1-6）：仓位定量化 + 阶段模型 + 纪律
 import { computePositionAdvice, type PositionAdvice } from "../lib/positionSizing";
 import { stageOfStrength } from "../lib/stageModel";
@@ -324,7 +326,7 @@ export default function BattlePlan({ data, agentResults, cognMainline }: {
     : 0;
 
   // LLM 精排结果 vs 规则机候选 合并展示
-  const display: Array<{
+  let display: Array<{
     board: string; ztCount: number; height: number; mainNet: number;
     fundMissing?: boolean; // v9.56（V8-6）
     dataMissing?: boolean; // v9.60（V9-D1）：板块资金字段缺失
@@ -391,15 +393,23 @@ export default function BattlePlan({ data, agentResults, cognMainline }: {
     }
   }
 
+  // v9.136.0（主线单源）：渲染层锚定 —— llmRanked 显示时第一主线也以认知主线为准
+  //   （App 已锚定 candidates；llmRanked 为 LLM 独立排序可能不同名 → 此处统一 display[0]）
+  if (cognMainline) {
+    display = anchorDisplay(display, cognMainline, candidates);
+  }
+
   return (
     <div className="rounded-xl border border-amber-500/20 bg-amber-950/10 p-4 space-y-3">
       {/* 头部：闸门 + 风格 + 模式 */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold text-amber-200">⚔️ 今日主线作战卡</span>
-          {cognMainline && data?.candidates?.[0]?.mainline && cognMainline !== data.candidates[0].mainline && (
-            <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-bold text-sky-300" title="认知层主线（市场理解口径）与实战候选（涨停池归类口径）并存，两口径已标注">
-              🧠 认知主线：{cognMainline}
+          {cognMainline && data?.candidates?.[0]?.mainline && (
+            // v9.136.0（主线单源）：徽标语义从"不一致提示"改为"认知锚定"——
+            //   第一主线恒=认知层 primaryTheme（服务端 theme_analysis 权威），前端实时引擎为增量候选
+            <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-bold text-sky-300" title="第一主线=认知层 primaryTheme（服务端 theme_analysis 权威，30min 快照）；前端实时引擎为增量候选">
+              🏛 认知锚定：{cognMainline}
             </span>
           )}
           <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${

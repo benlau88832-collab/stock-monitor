@@ -8,7 +8,10 @@
 //   ⑤ narrative 一句话市场理解（助手注入，不再各自重建）
 // 全部纯函数、0 LLM token、可回测、永不降级；输入 cog = buildCognition 产物。
 // 上游：③ S1-1（cognition.js）；下游：/api/reasoning + 助手注入 + 主动调度预判。
+// v9.136.0（任务3 收口）："炸板率>20%"为 LLM 参考文案（conditions.iff 文本），
+//   插值 BLAST_RISK_PCT 保持与认知层 trap 阈值同值（LLM 提示语与规则阈值同源不漂移）。
 // ============================================================
+const { BLAST_RISK_PCT } = require("./thresholds");
 
 const BULLISH_STAGES = ["启动", "发酵", "高潮"];
 
@@ -87,7 +90,7 @@ function makeForecast(cog, coh) {
       nextWindow: "下一窗口(午后开盘/尾盘)：关注进攻延续性",
       watch: [`${l.name ?? "龙头"}能否封板 / 接力梯队是否扩散(tier2→tier1)`, "两市成交额是否放大", "炸板率是否抬头"],
       conditions: [
-        { iff: "炸板率>20% 或 昨涨停今溢价转负", then: "高低切：减高位接力，低吸新主线首板" },
+        { iff: `炸板率>${BLAST_RISK_PCT}% 或 昨涨停今溢价转负`, then: "高低切：减高位接力，低吸新主线首板" },
         { iff: "龙头放量烂板/尾盘炸板", then: "接力梯队瓦解预警，清跟风" },
       ],
     };
@@ -106,7 +109,7 @@ function makeForecast(cog, coh) {
       nextWindow: "下一窗口：进攻试错，打首板/低吸梯队",
       watch: ["新主线首板是否放量", "晋级率是否回升", "跌停数是否收敛"],
       conditions: [
-        { iff: "炸板率>20% 或 接力溢价转负", then: "试错失败：撤出追高，管住手" },
+        { iff: `炸板率>${BLAST_RISK_PCT}% 或 接力溢价转负`, then: "试错失败：撤出追高，管住手" },
         { iff: "首板晋级2板+板块扩散", then: "加仓核心梯队，迎接发酵" },
       ],
     };

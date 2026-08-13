@@ -18,7 +18,8 @@
 // v9.132.0（终审复核 D2 修正）：CACHE v44→v45 —— 竞价上车机会候选池修复
 // v9.133.0（游资改造·阶段一）：CACHE v45→v46 —— 三时段作战台布局收敛
 // v9.135.0（游资改造·阶段二~五）：CACHE v46→v47 —— 交易闭环/主线徽标/阈值收口/竞价补强
-const CACHE = "stock-monitor-v47";
+// v9.136.0（交接 0813 五任务批次）：主线单源/闸门收敛/decisions 契约/台账闭环 发版
+const CACHE = "stock-monitor-v48";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {

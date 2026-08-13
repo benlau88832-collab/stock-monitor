@@ -21,13 +21,27 @@ export default function DisciplinePanel({ overview }: { overview?: OverviewData 
     const price = parseFloat(tradeForm.price);
     const quantity = parseFloat(tradeForm.quantity);
     if (!tradeForm.code || !isFinite(price) || price <= 0) return;
-    const { saveTrade } = await import("../lib/tradeLedger");
+    const { saveTrade, computePnl } = await import("../lib/tradeLedger");
     const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    // v9.136.0（任务5 闭环）：sell/stop 对称录入 —— 自动匹配持仓成本（/api/positions 体检持仓优先，
+    //   其次本地纪律持仓），pnlPct=computePnl 真实盈亏；成本缺失 → null（诚实标注，不编造 0%）
+    let cost: number | null = null;
+    if (tradeForm.action === "buy") {
+      cost = price;
+    } else {
+      const hp = positions.find(x => x.code === tradeForm.code.trim());
+      const lp = state.positions.find(x => x.code === tradeForm.code.trim());
+      const c = hp?.avgCost ?? lp?.cost ?? null;
+      cost = typeof c === "number" && c > 0 ? c : null;
+    }
     await saveTrade({
       date: today, ts: Date.now(), decisionPostRef: null,
       code: tradeForm.code.trim(), name: tradeForm.name.trim() || tradeForm.code.trim(),
       action: tradeForm.action, price, quantity: isFinite(quantity) && quantity > 0 ? quantity : 100,
-      cost: tradeForm.action === "buy" ? price : null,
+      cost,
+      pnlPct: tradeForm.action === "sell" || tradeForm.action === "stop"
+        ? (cost != null ? computePnl(price, cost) : null)
+        : null,
       notes: "纪律面板手工录入",
     });
     setTradeForm({ code: "", name: "", action: "buy", price: "", quantity: "" });
@@ -255,8 +269,14 @@ export default function DisciplinePanel({ overview }: { overview?: OverviewData 
           {positions.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {positions.map((p) => (
-                <span key={p.code} className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300">
+                <span key={p.code} className="flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300">
                   {p.name || p.code} · {p.netQty > 0 ? `${p.netQty}手` : ""}{p.avgCost != null ? ` 均价${p.avgCost}` : ""}
+                  {/* v9.136.0（任务5 闭环）：卖出/止损对称联动 —— 一键带出代码/名称/数量，
+                      成本由 submitTrade 自动匹配（体检持仓 avgCost），记入 pnl_pct */}
+                  <button
+                    onClick={() => setTradeForm({ code: p.code, name: p.name || p.code, action: "sell", price: "", quantity: String(p.netQty || "") })}
+                    className="rounded bg-rose-500/15 px-1 text-[9px] text-rose-300 hover:bg-rose-500/30"
+                    title="一键卖出联动（成本自动匹配）">卖</button>
                 </span>
               ))}
             </div>
