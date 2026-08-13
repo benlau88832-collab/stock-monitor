@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 import { createRequire } from "module";
 import {
+  resolveDecisionStage,
   composeDecisionCore as kernelCore,
   relayEnvScore as kRelay,
   stageActionOf as kStage,
@@ -58,5 +59,12 @@ describe("v9.123.0 双端决策核 golden（P2-1）", () => {
     expect(kBuy(null, cog, "竞价")).toBe(dc.buyPointOf(null, cog, "竞价"));
     expect(kLadder({ code: "600519" }, cog)).toBe(dc.ladderPosOf({ code: "600519" }, cog));
     expect(kLadder({ code: "x", name: "龙头甲科技" }, cog)).toBe(dc.ladderPosOf({ code: "x", name: "龙头甲科技" }, cog));
+  });
+
+  // v9.128.0（一致性审查 P0-2）：阶段口径——认知 stage 优先，trend(down/up) 仅兜底
+  it("resolveDecisionStage：认知 stage 优先于主题趋势字段", () => {
+    expect(resolveDecisionStage("down", "冰点")).toBe("冰点");
+    expect(resolveDecisionStage("up", undefined)).toBe("up");
+    expect(resolveDecisionStage(undefined, undefined)).toBe("观察中");
   });
 });

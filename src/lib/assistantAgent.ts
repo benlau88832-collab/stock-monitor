@@ -350,14 +350,12 @@ export async function fallbackAnswer(snapshot: string, question: string, reason?
       try {
         const r = await fetch(`/api/db/stock/${target}`, { signal: AbortSignal.timeout(6000) });
         const j = await r.json();
-        const quote = j?.quote ?? null;
-        const fund = j?.fund ?? null;
+        // v9.128.0（一致性审查 P1-2）：/api/db/stock 无 quote/fund/anns 键（实际键名 announcements）——
+        //   原读取恒 undefined，AI 断供时个股规则兜底缺报价/主力/公告；删除死读，用真实键
         const newsN = Array.isArray(j?.news) ? j.news.length : 0;
-        const annsN = Array.isArray(j?.anns) ? j.anns.length : 0;
+        const annsN = Array.isArray(j?.announcements) ? j.announcements.length : 0;
         const seatsN = Array.isArray(j?.seats) ? j.seats.length : 0;
         const parts: string[] = [];
-        if (quote?.pct != null) parts.push(`涨幅${Number(quote.pct).toFixed(2)}%`);
-        if (fund?.mainNet != null) parts.push(`主力净流入${fmtMoney(Number(fund.mainNet))}`);
         if (annsN > 0) parts.push(`公告${annsN}条`);
         if (seatsN > 0) parts.push(`龙虎榜席位${seatsN}条`);
         if (newsN > 0) parts.push(`相关快讯${newsN}条`);

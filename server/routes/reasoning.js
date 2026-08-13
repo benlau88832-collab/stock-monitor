@@ -5,7 +5,7 @@
 //   轻量变体只补 prevCog（环比）+ 利好快讯（催化），与 /api/reasoning 同口径。
 // ============================================================
 const { pool } = require("../db");
-const { latestCognition, prevCognition } = require("../lib/cognition");
+const { getFreshCognition, prevCognition } = require("../lib/cognition");
 const { enrichCognition } = require("../lib/reasoning");
 
 // v9.123.0（卓越审查 P1-6）：60s 缓存（同 buildBrainContext 快照缓存模式；失败不缓存）
@@ -19,24 +19,15 @@ async function fetchBullNews() {
   } catch { return []; }
 }
 
-/** 推理层数据源：认知（表最新）+ raw（利好快讯）+ prevCog（历史版）；60s 缓存 */
+/** 推理层数据源：认知（新鲜读取）+ raw（利好快讯）+ prevCog（历史版）；60s 缓存 */
 async function buildReasoning() {
   if (Date.now() - _cache.at < 60_000 && _cache.value) return _cache.value;
-  const { buildBrainContext } = require("../lib/brainContext");
-  const [cog, ctx, prev] = await Promise.all([
-    latestCognition(pool),
-    buildBrainContext(pool),
+  // v9.128.0（一致性审查 P0-3）：getFreshCognition 保证非空（陈旧即时重建）
+  const [cog, prev] = await Promise.all([
+    getFreshCognition(pool),
     prevCognition(pool),
   ]);
-  let out;
-  if (!cog) {
-    const { buildCognition, rawFromBrainContext } = require("../lib/cognition");
-    const { currentSession } = require("../lib/proactiveSession");
-    // v9.123.0（卓越审查 P1-1）：真实时段注入
-    out = enrichCognition(buildCognition(rawFromBrainContext(ctx), 1, currentSession()), rawFromBrainContext(ctx), null);
-  } else {
-    out = enrichCognition(cog, { news: await fetchBullNews() }, prev);
-  }
+  const out = enrichCognition(cog, { news: await fetchBullNews() }, prev);
   _cache = { at: Date.now(), value: out };
   return out;
 }

@@ -2,23 +2,15 @@
 // server/routes/cognition.js —— GET /api/cognition（v9.115.0，S1-1/S1-2）
 // 全站唯一认知端点：优先读 cognition_snapshots 表最新行（cron 驱动刷新的权威版本，
 //   version 单调递增、hash 随内容变化 —— 双端同构 golden 校验源）；
-// 表空（cron 尚未跑）→ 即时构建并落库（version = 表 max+1，与 cron 共用序列）。
+// v9.128.0（一致性审查 P0-3）：统一走 getFreshCognition —— 盘中陈旧 >30min 即时重建落库
+//   （cron 认知链与精灵共享锁被 skip 时不再把昨夜数据喂给全站）。
 // ============================================================
 const { pool } = require("../db");
-const { buildCognition, rawFromBrainContext, nextVersion, persistCognition, latestCognition } = require("../lib/cognition");
-// v9.123.0（卓越审查 P1-1）：兜底构建时注入真实时段（此前硬编码"盘中"）
-const { currentSession } = require("../lib/proactiveSession");
+const { getFreshCognition } = require("../lib/cognition");
 
-/** 全站唯一认知（表最新优先；无行则构建+落库） */
+/** 全站唯一认知（新鲜优先：盘中陈旧 >30min → 重建+落库） */
 async function getCognition() {
-  const latest = await latestCognition(pool);
-  if (latest) return latest;
-  const { buildBrainContext } = require("../lib/brainContext");
-  const ctx = await buildBrainContext(pool);
-  const ver = await nextVersion(pool);
-  const cog = buildCognition(rawFromBrainContext(ctx), ver, currentSession());
-  await persistCognition(pool, cog);
-  return cog;
+  return getFreshCognition(pool);
 }
 
 module.exports = function cognitionRoutes(app) {

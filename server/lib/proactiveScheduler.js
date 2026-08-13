@@ -4,7 +4,8 @@
 // 仅盘后复盘/明日剧本/盘前政策简报标记可选 LLM（受时段预算约束，本实现只标记不实际调用，
 // llmUsed=true 表示"该条由 LLM 润色"——实际润色由上层按预算决定）。
 // 与决策直达的关系：本层"主动提示"，决策直达"一键裁决"，二者读同一份认知。
-// 前端等价：src/lib/proactive/scheduler.ts。
+// v9.128.0（一致性审查 P1-9）：原"前端等价 src/lib/proactive/scheduler.ts"指向不存在文件——
+//   前端 ProactiveFeed 仅消费 /api/proactive（服务端单源，无前端副本）。
 // ============================================================
 const { ruleCapitalSignal, ruleLeaderHealth, ruleRiskGate, ruleSentimentFlip } = require("./proactiveRules");
 

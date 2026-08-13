@@ -10,6 +10,7 @@
 import { detectTrap } from "./trapDetector";
 import { computePositionAdvice } from "./positionSizing";
 import { detectLeaderContend } from "./leaderContend";
+import { stockLimitPct } from "./api"; // v9.128.0（一致性审查 P1-4）：20cm/30cm 涨停阈值
 // v9.77（P0-4）：阶段判定统一到 stageModel.stageOfStrength（删除本地高度法 stageOf，消除与作战卡双口径打架）
 import { stageOfStrength } from "./stageModel";
 import type { DisciplineSettings } from "./discipline";
@@ -130,6 +131,7 @@ export function pickStocks(
       code: s.code, name: s.name, pct: s.pct,
       sealFund: s.sealFund, amount: s.amount, blastCount: s.blastCount,
       isMainline: true,
+      limitPct: stockLimitPct(s.code), // v9.128.0（一致性审查 P1-4）：20cm/30cm 阈值
     });
     if (trap.isTrap) {
       return { pick: undefined as unknown as StockPick, trap: `${trap.type}（置信${trap.confidence}）` };

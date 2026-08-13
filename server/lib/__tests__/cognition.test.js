@@ -119,6 +119,12 @@ describe("v9.115.0 认知层 buildCognition（S1-1）", () => {
   });
 
   // v9.123.0（卓越审查 P1-1）：session 由调用方注入；缺省保持"盘中"（纯函数兼容旧调用）
+  // v9.128.0（一致性审查 P0-1 连带）：PG 注入超界分 clamp 0-100（前端交叉污染 140 分实测）
+  it("PG 注入 sentiment=140 → score clamp 到 100", () => {
+    const raw = { ...mockRaw(), _pg: { sentiment: 140, blastedRate: 12.4 } };
+    expect(buildCognition(raw, 1).sentiment.value.score).toBe(100);
+  });
+
   it("注入 session → 竞价 9:25 decisionWindow=true；缺省'盘中'", () => {
     const sess = { phase: "竞价", window: "09:20-09:25 不可撤单", decisionWindow: true, note: "" };
     expect(buildCognition(mockRaw(), 1, sess).session.phase).toBe("竞价");

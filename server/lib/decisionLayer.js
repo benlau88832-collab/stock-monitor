@@ -9,8 +9,7 @@
 // 不经过 LLM → 秒级、永不降级（决策窗口 9:25/13:00 刚需）。
 // 前端等价：src/lib/decisions/kernel.ts（同规则双端同构）。
 // ============================================================
-const { buildCognition, rawFromBrainContext, latestCognition, nextVersion, persistCognition } = require("./cognition");
-const { buildBrainContext } = require("./brainContext");
+const { getFreshCognition } = require("./cognition");
 const { pool } = require("../db");
 const { composeDecisionCore, cognSubset } = require("./decisionCore");
 const { fetchStockSnapshotServer } = require("./stockSnapshot");
@@ -22,18 +21,9 @@ const { fetchStockSnapshotServer } = require("./stockSnapshot");
 async function composeDecision(input = {}, dbPool = null) {
   const t0 = Date.now();
   const p = dbPool || pool; // v9.123.0（卓越审查 P0-2 测试性）：pool 可注入
-  // v9.123.0（卓越审查 P0-2）：认知表最新优先；表空才重建+落库（version 用表真实序列，废弃 0 硬编码）
-  let cog = await latestCognition(p);
-  let date = null;
-  if (!cog) {
-    const ctx = await buildBrainContext(p);
-    const { currentSession } = require("./proactiveSession");
-    cog = buildCognition(rawFromBrainContext(ctx), await nextVersion(p), currentSession());
-    await persistCognition(p, cog).catch(() => {});
-    date = ctx.date;
-  } else {
-    date = typeof cog.asOf === "string" ? cog.asOf.slice(0, 10) : null;
-  }
+  // v9.128.0（一致性审查 P0-3）：getFreshCognition —— 盘中陈旧 >30min 即时重建（不重建 brainContext 双份聚合）
+  const cog = await getFreshCognition(p);
+  const date = typeof cog.asOf === "string" ? cog.asOf.slice(0, 10) : null;
   // v9.123.0（卓越审查 P0-1）：个股数据真实装配（装配失败 → 保留 {code} 降级，永不崩）
   let stock = null;
   if (input.code) {

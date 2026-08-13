@@ -258,6 +258,13 @@ function parsePct(detail: string, idx: number): number | null {
   return Math.abs(parseInt(m[idx], 10));
 }
 
+/** v9.128.0（一致性审查 P0-2）：阶段口径——认知层 stage 优先；topMainline.trend 值域是 down/up
+ * （主题趋势字段）不是情绪阶段枚举，仅作兜底。此前 trend 优先 → 前端阶段分支永不命中、仓位恒权重 1.0
+ * （与认知层同标的实测 15% vs 21% 分叉，golden 只锁纯函数不锁装配故未拦截）。 */
+export function resolveDecisionStage(topTrend: string | undefined, cogStage: string | undefined): string {
+  return cogStage ?? topTrend ?? "观察中";
+}
+
 /**
  * 决策直达入口（异步 wrapper）：输入 {code?, mainline?} → 五支柱裁决。
  * 拉取：认知层（/api/cognition）+ PG 快照 + 个股实时；全部失败仍有认知近似裁决（永不空白）。
@@ -298,7 +305,7 @@ export async function composeDecision(input: { code?: string; mainline?: string 
   const ctx: ToolContext = {
     mainline: mainlineName,
     strengthScore: topMainline.heat ?? cog?.mainline?.value?.strength ?? null,
-    stage: topMainline.trend ?? cog?.sentiment?.value?.stage ?? "观察中",
+    stage: resolveDecisionStage(topMainline.trend, cog?.sentiment?.value?.stage),
     gateMode: gate.mode ?? "empty",
     marketFactor: gate.factor ?? 0.5,
     ztCount: m.ztCount ?? 0,

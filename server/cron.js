@@ -482,7 +482,7 @@ async function runProactiveStore(pool, ds, cogArg) {
   await pool.query(
     `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
      ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
-    [`proactive:latest`, JSON.stringify({ ts: Date.now(), date: ds, session, insights: refined.insights.slice(0, 8), budget: refined.budget })],
+    [`proactive:latest`, JSON.stringify({ ts: Date.now(), date: ds, session, insights: refined.insights.slice(0, 8), budget: refined.budget, cognitionVersion: cog?.version ?? null })],
   );
   const llmN = refined.insights.filter((i) => i.llmUsed).length;
   console.log(`[cron] 📡 主动流 ${session.phase}(${session.window}): ${refined.insights.length} 条洞察 · LLM润色${llmN}条 · 预算${refined.budget.llmUsedTokens}/${refined.budget.llmBudgetTokens}`);
@@ -1653,7 +1653,8 @@ function startCron({ pool }) {
 
   console.log("[cron] scheduled: 15:40 快照+分析+复盘 · 每20分钟抓快讯/公告/政策 · 盘中每5分钟盯价 · Asia/Shanghai");
 
-  // v9.66：个股盯价监控 —— 盘中每 5 分钟（9:05-15:05 交易日），active 清单拉价算偏离
+  // v9.66：个股盯价监控 —— 盘中每 5 分钟（`*/5 9-15` 实际 9:00-15:55；v9.128.0 一致性审查 P2 注释对齐，
+  //   无内部时段守卫属已知宽松，盘后空转待后续收紧）
   cron.schedule("*/5 9-15 * * 1-5", async () => {
     try {
       if (!isTradingDayCN()) return;
@@ -1692,7 +1693,8 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] 盘中大脑快照失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
 
-  // v9.104.0（第四批 C，T-C1）：盘中情报 30min 自动（9:30-14:30）—— analyzeDaily 复用
+  // v9.104.0（第四批 C，T-C1）：盘中情报调度 —— 五段式 `30 9-14` = 每小时 :30 共 6 轮（9:30-14:30），
+  // v9.128.0（一致性审查 P1-8）：注释名实对齐（原"30min 自动"误导——真 30 分钟需 `*/30 9-14`，同文件 themeAnalysis 用）
   // 关页不断链：盘中每 30 分钟 LLM 生成当日分析（llm_analysis:日期，失败规则版兜底已有）
   // + kv intel_intraday:日期:HHMM 轮次标记（前端 IntelligenceDashboard 可展示"盘中自动轮次"）
   let intradayIntelBusy = false;

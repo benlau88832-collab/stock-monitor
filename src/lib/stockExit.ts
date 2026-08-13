@@ -37,6 +37,8 @@ export interface StockExitInput {
   isLeader?: boolean;
   /** 所在主线名 */
   mainline?: string | null;
+  /** v9.128.0（一致性审查 P1-4）：涨停阈值 %——缺省 9.5（主板口径）；20cm/30cm 调用方传 stockLimitPct(code) */
+  limitPct?: number;
 }
 
 export interface StockExitVerdict {
@@ -70,8 +72,8 @@ export function checkStockExit(input: StockExitInput): StockExitVerdict {
     reasons.push(`所在主线「${mainline ?? "未知"}」龙头熄火，跟风票失去锚定，立即离场`);
     cutPct = 100;
   }
-  // 3) 封单消失：近涨停但封单/成交 <2%（封板被砸穿）
-  if (level === "none" && pct >= 9.5 && amount > 0 && sealFund / amount < 0.02) {
+  // 3) 封单消失：近涨停但封单/成交 <2%（封板被砸穿）—— v9.128.0 阈值参数化（默认主板口径）
+  if (level === "none" && pct >= (input.limitPct ?? 9.5) && amount > 0 && sealFund / amount < 0.02) {
     level = "red";
     reasons.push(`近涨停但封单仅${(sealFund / amount * 100).toFixed(1)}%成交额，封板即将/已被砸穿`);
     cutPct = 100;

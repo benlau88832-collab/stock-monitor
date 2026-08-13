@@ -247,6 +247,7 @@ export function getAgentTools(): AgentTool[] {
           return { dataMissing: true as const, missing, note: "主线级决策未注入个股数据，跳过离场检查" };
         }
         const { checkStockExit } = await import("./stockExit");
+        const { stockLimitPct } = await import("./api"); // v9.128.0（一致性审查 P1-4）：20cm/30cm 阈值
         const r = checkStockExit({
           code: ctx.code ?? "?", name: "标的",
           cost: null, // 无持仓成本信息 → 不触发成本止损规则（诚实的 null，而非假成本）
@@ -255,6 +256,7 @@ export function getAgentTools(): AgentTool[] {
           mainNet: ctx.mainNet ?? 0, mainNet5d: ctx.mainNet5d ?? 0, mainNet10d: ctx.mainNet10d ?? 0,
           sealFund: ctx.sealFund ?? 0, amount: ctx.amount ?? 0,
           leaderAlive: true, isLeader: false, mainline: ctx.mainline ?? "",
+          limitPct: ctx.code ? stockLimitPct(String(ctx.code)) : undefined,
         });
         return { level: r.level, reasons: r.reasons };
       },
@@ -560,10 +562,12 @@ export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
       normalize: (r) => r && r.isTrap ? { verdict: "禁止", confidence: Math.round((r.confidence ?? 50) + 20), reason: `诱多特征(${r.type})` } : null,
       execute: async () => {
         const { detectTrap } = await import("./trapDetector");
+        const { stockLimitPct } = await import("./api"); // v9.128.0（一致性审查 P1-4）：20cm/30cm 阈值
         const r = detectTrap({
           code: stock.code, name: stock.name, pct: stock.pct,
           sealFund: stock.sealFund, amount: stock.amount, blastCount: stock.blastCount,
           isMainline: true,
+          limitPct: stockLimitPct(stock.code),
         });
         return { isTrap: r.isTrap, type: r.type, confidence: r.confidence };
       },
@@ -592,6 +596,7 @@ export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
           return { dataMissing: true as const, missing: ["关键资金字段"], note: "东财资金字段缺失，跳过离场检查" };
         }
         const { checkStockExit } = await import("./stockExit");
+        const { stockLimitPct } = await import("./api"); // v9.128.0（一致性审查 P1-4）：20cm/30cm 阈值
         const r = checkStockExit({
           code: stock.code, name: stock.name,
           cost: null, // 无持仓成本 → 不触发成本止损（诚实 null，非假成本 10）
@@ -601,6 +606,7 @@ export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
           sealFund: stock.sealFund, amount: stock.amount,
           leaderAlive: true, isLeader: stock.boardCount >= 2,
           mainline: stock.mainline,
+          limitPct: stockLimitPct(stock.code),
         });
         return { level: r.level, reasons: r.reasons };
       },

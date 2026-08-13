@@ -50,3 +50,16 @@ describe("detectMainlineTrap 主线诱多占比", () => {
     expect(r.flagged).toBe(false);
   });
 });
+
+// v9.128.0（一致性审查 P1-4）：涨停阈值参数化——20cm 股涨 9.8% 不近涨停
+describe("detectTrap limitPct（v9.128.0）", () => {
+  it("limitPct=20（创业板）：pct 9.8 不判近涨停 → 非假封板", () => {
+    const r = detectTrap({ code: "300750", name: "A", pct: 9.8, limitPct: 20, sealFund: 3e6, amount: 1e8, blastCount: 3 });
+    expect(r.isTrap).toBe(false);
+  });
+  it("缺省 9.5（主板口径）：同输入判假封板", () => {
+    const r = detectTrap({ code: "600000", name: "A", pct: 9.8, sealFund: 3e6, amount: 1e8, blastCount: 3 });
+    expect(r.isTrap).toBe(true);
+    expect(r.type).toBe("假封板");
+  });
+});

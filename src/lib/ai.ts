@@ -718,8 +718,10 @@ export async function callAgentChat(
   const token = await getLocalToken();
   // v9.83.2：35s→50s（服务端 45s 兜底，DeepSeek 推理模型长思考）
   // v9.92.3-fix：50s→95s（服务端放宽到 90s，前端 95s 兜底防截断）
+  // v9.128.0（一致性审查 P1-7）：95s→300s —— 服务端空答重试链最坏 ≈3×90s+退避 ≈275s，
+  //   95s 时客户端必先断、服务端变孤儿继续烧 token；300s 覆盖最坏重试链
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 95_000);
+  const timer = setTimeout(() => ctrl.abort(), 300_000);
   try {
     const resp = await fetch("/api/ai/call", {
       method: "POST",

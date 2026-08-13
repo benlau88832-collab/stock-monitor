@@ -9,11 +9,13 @@
 import { useState, useEffect } from "react";
 import { composeDecision, type DecisionVerdict } from "../lib/decisions/kernel";
 
-/** v9.116.0（S2-3）：决策窗口判定（9:25 / 13:00）—— 与 v9.117.0 S3-1 resolveSession 同语义的轻量版（导出供单测） */
+/** v9.116.0（S2-3）：决策窗口判定（9:25 / 13:00）—— 与 v9.117.0 S3-1 resolveSession 同语义的轻量版（导出供单测）
+ * v9.128.0（一致性审查 P1-3）：边界与服务端左闭右开对齐——9:30:00-9:30:59 服务端已入早盘，
+ *   前端不再误亮竞价 P0 窗口；13:05 同理 */
 export function resolveDecisionWindow(now = new Date()): boolean {
   const bj = new Date(now.getTime() + (now.getTimezoneOffset() + 8 * 60) * 60000);
   const h = bj.getHours(), m = bj.getMinutes();
-  return (h === 9 && m >= 20 && m <= 30) || (h === 13 && m <= 5);
+  return (h === 9 && m >= 20 && m < 30) || (h === 13 && m < 5);
 }
 
 export default function DecisionCard() {

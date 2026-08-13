@@ -5,18 +5,14 @@
 // 规则前置过滤：绝大多数洞察 0 token；LLM 仅标记（预算内可选润色）。
 // ============================================================
 const { pool } = require("../db");
-const { buildCognition, rawFromBrainContext, latestCognition } = require("../lib/cognition");
+const { getFreshCognition } = require("../lib/cognition");
 const { buildBrainContext } = require("../lib/brainContext");
 const { resolveSession, currentSession, PHASE_TIME } = require("../lib/proactiveSession");
 const { runProactiveTick } = require("../lib/proactiveScheduler");
 
-/** 认知层（表最新优先，cron 驱动）；表空则构建 */
+/** 认知层（新鲜优先：盘中陈旧 >30min 即时重建，v9.128.0 一致性审查 P0-3） */
 async function getCog() {
-  const latest = await latestCognition(pool);
-  if (latest) return latest;
-  const ctx = await buildBrainContext(pool);
-  // v9.123.0（卓越审查 P1-1）：真实时段注入
-  return buildCognition(rawFromBrainContext(ctx), 1, currentSession());
+  return getFreshCognition(pool);
 }
 
 module.exports = function proactiveRoutes(app) {

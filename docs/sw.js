@@ -11,7 +11,8 @@
 // v9.122.0（卓越 S3-2b）：CACHE v37→v38 —— 前瞻预判接入发版
 // v9.123.0（卓越审查修复）：CACHE v38→v39 —— 决策卡游资战术/认知时段/资金明暗盘前端口径发版
 // v9.125.0（蓝图批次 B）：CACHE v39→v40 —— 个股雷达资讯聚合区发版（v9.124 纯服务端未 +1）
-const CACHE = "stock-monitor-v40";
+// v9.128.0（一致性审查修复）：CACHE v40→v41 —— 决策卡阶段口径/决策窗口边界/颜色惯例前端发版
+const CACHE = "stock-monitor-v41";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {

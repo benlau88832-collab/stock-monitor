@@ -113,6 +113,7 @@ export function classifyAnomaly(s: AnomalyInput, mainlines: string[] = []): Anom
     sealFund: s.sealFund, amount: s.amount, blastCount: s.blastCount,
     mainNetPct: s.mainNetPct, retailNetPct: s.retailNetPct,
     isMainline: hit,
+    limitPct: s.limitPct ?? 10, // v9.128.0（一致性审查 P1-4）：20cm/30cm 阈值传入（原调用从不换算）
   });
 
   if (pct >= nearLimit) {

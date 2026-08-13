@@ -7,16 +7,22 @@
 import { emit } from "./alertBus";
 import { isLocalServer, kvGet } from "./cloudStore";
 
+// v9.128.0（一致性审查 P1-1）：anomaly:日期 双写兼容——cron 形状（集体涨停/资金脉冲）
+//   与 sprint 形状（盘中精灵 {level,type:涨停潮/炸板率突变/封单异动,reason}）混写同一键，
+//   类型收窄扩展为联合可选字段
 export interface IntradayAnomaly {
-  type: "集体涨停" | "资金脉冲";
-  board: string;
+  type: "集体涨停" | "资金脉冲" | string;
+  board?: string | null;
   count?: number;
   lbc?: number;
   stocks?: string;
   pct?: number;
   mainNet?: number;
   ts: number;
-  severity: "critical" | "warning";
+  severity?: "critical" | "warning" | "info";
+  // sprint 形状（盘中精灵事件）
+  level?: string;
+  reason?: string;
 }
 
 const SEEN_KEY = "anomaly_seen_ids";
@@ -59,10 +65,15 @@ export function startAnomalyPolling(): () => void {
           // 最多 3 条（critical 优先），避免页面打开瞬间刷屏
           const top = fresh.sort((a, b) => (a.severity === "critical" ? 0 : 1) - (b.severity === "critical" ? 0 : 1)).slice(0, 3);
           for (const a of top) {
-            const msg = a.type === "集体涨停"
-              ? `⚡ 板块集体涨停：${a.board} ${a.count}只（最高${a.lbc}板）${a.stocks ? " · " + a.stocks : ""}`
-              : `💥 资金脉冲：${a.board} 涨${a.pct}% · 主力净流入${(Number(a.mainNet ?? 0) / 1e8).toFixed(1)}亿`;
-            emit({ id: `anomaly:${a.board}`, severity: a.severity, message: msg });
+            // v9.128.0（一致性审查 P1-1）：anomaly:日期 双写兼容——cron（type:集体涨停/资金脉冲 形状）
+            //   与 sprint（{level,type:涨停潮/炸板率突变/封单异动,reason} 形状）混写同一键；
+            //   此前 sprint 事件被当"资金脉冲"渲染成"涨undefined%·NaN亿"
+            const msg = (a.level && a.reason)
+              ? `⚡ 盘中精灵[${a.level}] ${a.type}${a.board ? "·" + a.board : ""}：${a.reason}`
+              : a.type === "集体涨停"
+                ? `⚡ 板块集体涨停：${a.board} ${a.count}只（最高${a.lbc}板）${a.stocks ? " · " + a.stocks : ""}`
+                : `💥 资金脉冲：${a.board} 涨${a.pct}% · 主力净流入${(Number(a.mainNet ?? 0) / 1e8).toFixed(1)}亿`;
+            emit({ id: `anomaly:${a.board ?? a.type}`, severity: a.severity ?? "info", message: msg });
           }
         }
       }

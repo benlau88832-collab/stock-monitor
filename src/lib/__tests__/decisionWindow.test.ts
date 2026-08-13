@@ -14,9 +14,10 @@ describe("v9.116.0 决策窗口 resolveDecisionWindow（S2-3）", () => {
   it("9:25 → decisionWindow=true（竞价决策窗口）", () => {
     expect(resolveDecisionWindow(bjTime(9, 25))).toBe(true);
   });
-  it("9:20 / 9:30 边界 → true", () => {
+  // v9.128.0（一致性审查 P1-3）：左闭右开——9:20 起亮、9:30 起灭（服务端已入早盘）
+  it("9:20 → true；9:30 → false（边界左闭右开）", () => {
     expect(resolveDecisionWindow(bjTime(9, 20))).toBe(true);
-    expect(resolveDecisionWindow(bjTime(9, 30))).toBe(true);
+    expect(resolveDecisionWindow(bjTime(9, 30))).toBe(false);
   });
   it("13:00 → true（午后决策窗口）", () => {
     expect(resolveDecisionWindow(bjTime(13, 0))).toBe(true);
@@ -29,5 +30,15 @@ describe("v9.116.0 决策窗口 resolveDecisionWindow（S2-3）", () => {
   it("9:15 / 13:10 → false（窗口外）", () => {
     expect(resolveDecisionWindow(bjTime(9, 15))).toBe(false);
     expect(resolveDecisionWindow(bjTime(13, 10))).toBe(false);
+  });
+
+  // v9.128.0（一致性审查 P1-3）：边界与服务端 resolveSession 左闭右开对齐
+  it("9:30:00 / 13:05:00 → false（服务端已入早盘/午后，不再误亮竞价窗口）", () => {
+    expect(resolveDecisionWindow(bjTime(9, 30))).toBe(false);
+    expect(resolveDecisionWindow(bjTime(13, 5))).toBe(false);
+  });
+  it("9:29:59 / 13:04:59 → true（窗口内）", () => {
+    expect(resolveDecisionWindow(bjTime(9, 29))).toBe(true);
+    expect(resolveDecisionWindow(bjTime(13, 4))).toBe(true);
   });
 });

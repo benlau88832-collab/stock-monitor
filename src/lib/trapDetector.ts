@@ -14,6 +14,9 @@ export interface TrapInput {
   name: string;
   /** 涨幅 %（10 代表涨停） */
   pct: number;
+  /** v9.128.0（一致性审查 P1-4）：涨停阈值 %——缺省 9.5（主板口径）；20cm/30cm 板调用方传 stockLimitPct(code)。
+   *   原注释声称"20cm 股由调用方换算 pct 后再入"但调用方从不换算（名实不符）→ 显式参数化 */
+  limitPct?: number;
   /** 封单金额（元）；无封单=0 */
   sealFund?: number;
   /** 成交额（元） */
@@ -45,7 +48,7 @@ export interface TrapVerdict {
 // ============================================================
 export function detectTrap(input: TrapInput): TrapVerdict {
   const { pct, sealFund = 0, amount = 0, blastCount = 0, mainNetPct = 0, retailNetPct = 0, isMainline = false, last30minPct, sealFundDropPct } = input;
-  const nearLimit = pct >= 9.5; // 近涨停（主板口径；20cm 股由调用方换算 pct 后再入）
+  const nearLimit = pct >= (input.limitPct ?? 9.5); // 近涨停（v9.128.0：阈值参数化，默认主板口径）
   const noTrap = (type: TrapType, reason: string): TrapVerdict => ({ isTrap: false, type, confidence: 0, reason });
 
   // ---- 假封板：近涨停但封单薄（<成交额5%）且反复开板（炸板≥2） ----

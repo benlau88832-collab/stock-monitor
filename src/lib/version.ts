@@ -78,6 +78,17 @@
 //   （v9.123.0 实测）→ 主源腾讯批量（parseTencentQuotesBatch GBK 纯函数）+ 错位值 |v|<30 护栏兜底；
 //   ②战法命中率 /api/backtest/strategy（decision_post T+5 PnL × 拍板动作 × 置信度桶，N<20 标注）；
 //   ③持仓体检 /api/positions（trade_ledger 净额汇总+均价+集中度，现价未注入盈亏诚实 null）
+// v9.128.0（一致性审查修复批次 P0×3+P1×7）：五路子代理全站审计（数值口径/双端同构/kv契约/端点契约/名实）
+//   → P0-1 情绪多套公式词表同屏互斥（报告列架构决策待定调，本批不动公式）/
+//   P0-2 决策卡 stage 口径修复（resolveDecisionStage：认知 stage 优先，trend down/up 仅兜底——此前
+//   前端阶段分支永不命中、仓位双端分叉 15% vs 21%）/P0-3 getFreshCognition 全站新鲜认知
+//   （盘中陈旧>30min 即时重建落库，治精灵锁竞争导致的 11.5h 陈旧认知；cognition/proactive/
+//   reasoning/decisions 四消费点统一接入）/
+//   P1-1 anomaly 双写形状兼容（精灵事件不再渲染"涨undefined%·NaN亿"）/P1-2 assistantAgent 死键
+//   quote/fund/anns→announcements/P1-3 决策窗口左闭右开双端对齐/P1-4 涨停阈值参数化 limitPct
+//   （trapDetector/stockExit 三调用点传 stockLimitPct，20cm 板近涨停判定失真修复）/P1-5 盈亏颜色
+//   红盈绿亏对齐全站惯例/P1-6 proactive kv 补 cognitionVersion/P1-7 前端 AI 超时 95s→300s
+//   （覆盖服务端空答重试链 275s，杜绝孤儿烧 token）/P1-8/P1-9 cron 调度注释与"前端等价"失效引用名实对齐
 // ============================================================
-export const APP_VERSION = "v9.127.0";
+export const APP_VERSION = "v9.128.0";
 export const BUILD_DATE = "2026-08-13";

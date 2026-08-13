@@ -268,7 +268,9 @@ export default function DecisionAuditPanel() {
                             </div>
                             {p.notes && <div className="mt-1 text-[10px] text-slate-400">📝 {p.notes}</div>}
                             {p.executed && (
-                              <div className={`mt-1 text-[10px] font-bold ${(p.pnl ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                              // v9.128.0（一致性审查 P1-5）：盈利=红/亏损=绿，与全站红涨绿跌惯例一致
+                              //   （原实现反色，与同屏 DisciplinePanel 矛盾）
+                              <div className={`mt-1 text-[10px] font-bold ${(p.pnl ?? 0) >= 0 ? "text-rose-400" : "text-emerald-400"}`}>
                                 📈 T+5 实际盈亏：{(p.pnl ?? 0) > 0 ? "+" : ""}{(p.pnl ?? 0)}%
                               </div>
                             )}

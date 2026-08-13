@@ -5,8 +5,9 @@
 // 设计原则：① 不可变快照；② 每字段带溯源(Provenance: source/asOf/stale/
 //   confidence/sampleSize/caliber)；③ 单调版本号 + 内容哈希保证一致性。
 // 纯函数：无 I/O、无 LLM、秒级、可回测 —— 输入相同输出相同（双端同构 golden）。
-// 移植说明：源 = 参考实现 src/lib/cognition/builder.ts（TS→CJS 三步：去类型/
-//   import→require/module.exports）；raw 数据源 = server/lib/brainContext.js 的
+// v9.128.0（一致性审查 P1-9）：原"源=参考实现 src/lib/cognition/builder.ts"指向不存在文件——
+//   认知层为服务端单源（前端消费 /api/cognition），无 TS 参考实现。
+//   raw 数据源 = server/lib/brainContext.js 的
 //   buildBrainContext() PG 聚合输出（只换数据源，下游零改动）。
 // 口径说明：情绪温度计复用真实口径 upRatio*40+limitScore*1.3+avgPct*0.8+20；
 //   PG 无涨跌家数/平均涨幅 → 真实场景以 PG 落库 sentiment 为准（适配层注入 _pg.sentiment）
@@ -65,7 +66,8 @@ function buildSentiment(raw) {
   // v9.115.0（S1-1 口径适配）：PG 落库情绪分（brainContext market.sentiment）为准 ——
   //   PG 无涨跌家数/平均涨幅，upRatio/avgPct 公式在真实场景不可用；演示/测试入参不带 _pg 时走公式口径
   const score = raw._pg?.sentiment != null
-    ? Math.round(raw._pg.sentiment)
+    ? Math.max(0, Math.min(100, Math.round(raw._pg.sentiment))) // v9.128.0（一致性审查 P0-1 连带）：clamp 0-100——
+      // 实测前端上传的 sentiment:键 曾注入 140 分（前端公式与认知层公式不同源的交叉污染实锤）
     : Math.round((s.upRatio ?? 0) * 40 + (s.limitScore ?? 0) * 1.3 + (s.avgPct ?? 0) * 0.8 + 20);
   const brokenRate = raw._pg?.blastedRate != null
     ? raw._pg.blastedRate / 100
@@ -289,7 +291,31 @@ async function prevCognition(pool) {
   try { return JSON.parse(r.rows[0].payload); } catch { return null; }
 }
 
+/**
+ * v9.128.0（一致性审查 P0-3）：新鲜认知读取 —— 全站认知消费点统一入口。
+ * 盘中时段（竞价/早盘/盘中/午后/尾盘）表内行 asOf 陈旧 >staleMs（cron 认知链与盘中精灵
+ *   共享 LOCK_INTRADAY 被持续 skip，实测陈旧 11.5h）→ 即时重建并落库；非盘中/新鲜 → 返回表行。
+ * 重建节流：asOf 是"数据时间"（盘后数据恒昨日），不能作重建判据 → 模块级 5min 节流
+ *   （否则每次请求都重建、version 无限膨胀）。
+ */
+let _lastRebuildAt = 0;
+async function getFreshCognition(pool, staleMs = 30 * 60 * 1000) {
+  const latest = await latestCognition(pool);
+  const asOfMs = latest?.asOf ? new Date(latest.asOf).getTime() : 0;
+  const { currentSession } = require("./proactiveSession"); // 惰性 require，保持模块纯函数性
+  const inSession = ["竞价", "早盘", "盘中", "午后", "尾盘"].includes(currentSession().phase);
+  const fresh = Number.isFinite(asOfMs) && Date.now() - asOfMs <= staleMs;
+  if (latest && (!inSession || fresh)) return latest;
+  if (Date.now() - _lastRebuildAt < 5 * 60 * 1000) return latest; // 5min 节流：数据时间旧≠行旧
+  _lastRebuildAt = Date.now();
+  const { buildBrainContext } = require("./brainContext");
+  const ctx = await buildBrainContext(pool);
+  const cog = buildCognition(rawFromBrainContext(ctx), await nextVersion(pool), currentSession());
+  await persistCognition(pool, cog).catch(() => {});
+  return cog;
+}
+
 module.exports = {
   buildCognition, verifyCognition, rawFromBrainContext, hashString, deriveSentimentStage,
-  nextVersion, persistCognition, latestCognition, prevCognition,
+  nextVersion, persistCognition, latestCognition, prevCognition, getFreshCognition,
 };
