@@ -89,6 +89,14 @@
 //   （trapDetector/stockExit 三调用点传 stockLimitPct，20cm 板近涨停判定失真修复）/P1-5 盈亏颜色
 //   红盈绿亏对齐全站惯例/P1-6 proactive kv 补 cognitionVersion/P1-7 前端 AI 超时 95s→300s
 //   （覆盖服务端空答重试链 275s，杜绝孤儿烧 token）/P1-8/P1-9 cron 调度注释与"前端等价"失效引用名实对齐
+// v9.129.0（一致性收敛重构·用户授权合并）：情绪体系单源化——①新建 src/lib/emotionStage.ts
+//   （deriveStage 六词唯一判定 + 唯一词表 {冰点,退潮,启动,发酵,高潮,分歧}，与 server/lib/cognition.js
+//   deriveSentimentStage 双端同构，golden 测试全输入空间锁定）；②emotionCycle 五档判定废弃（涨停/高度/晋级
+//   仅作证据展示）；③emotionAnalysis 5 档组合词废弃（委托认知层判定）；④stageModel.emotionToStage 词表映射
+//   删除（主线阶段=题材维度与情绪周期=市场维度概念边界声明）；⑤前端情绪分总分公式（upRatio×40+…+15）删除，
+//   单一来源=PG sentiment_snapshot（顶部/认知横幅/情绪雷达/状态机四面板同分同阶段）
+//   ——v9.129.1 收口：服务端删 sentiment:键 前端上传兜底（污染源，曾 90vs16 漂移）；顶部直接消费
+//   /api/cognition（第 10 路并行拉取），浏览器实测六面板同分同阶段（90/发酵/极度贪婪）
 // ============================================================
-export const APP_VERSION = "v9.128.0";
+export const APP_VERSION = "v9.129.0";
 export const BUILD_DATE = "2026-08-13";

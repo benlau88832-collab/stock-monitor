@@ -8,21 +8,23 @@
 const { callModelText } = require("./httpProxy");
 const { buildPrompt } = require("./aiPrompts");
 
-// ---------- 1. 周期规则引擎（VibeAlpha market_cycle.py B.2 对照） ----------
-/** 5 档周期：冰点/退潮、强分歧/炸板潮、高潮/主升、发酵/启动、震荡/轮动 */
+// ---------- 1. 周期判定（v9.129.0 一致性收敛） ----------
+// 唯一判定 = 认知层 deriveSentimentStage（六词，全站情绪周期唯一词表）——
+//   原 5 档组合词（冰点/退潮、强分歧/炸板潮、高潮/主升…）与认知层词表互斥，已废弃。
+// sealRate/涨停/高度/跌停 仅作辅助证据，不参与阶段判定。
 function determineCyclePhaseVibeAlpha(metrics) {
+  const { deriveSentimentStage } = require("./cognition");
   const ztCount = metrics.ztCount ?? 0;
-  const zbCount = metrics.zbCount != null ? metrics.zbCount : null; // 缺失不按 0 推断封板率
-  const dtCount = metrics.dtCount ?? 0;
-  const maxHeight = metrics.maxBoardHeight ?? 0;
+  const zbCount = metrics.zbCount != null ? metrics.zbCount : null;
   const sealRate = metrics.sealRate != null ? metrics.sealRate
     : (zbCount != null && ztCount + zbCount > 0 ? ztCount / (ztCount + zbCount) * 100 : null);
-
-  if (dtCount > 20 && ztCount < 30) return { phase: "冰点/退潮", sealRate, rule: "跌停>20 且 涨停<30" };
-  if (sealRate != null && sealRate < 60 && (zbCount ?? 0) > 20) return { phase: "强分歧/炸板潮", sealRate, rule: "封板率<60 且 炸板>20" };
-  if (sealRate != null && sealRate > 75 && ztCount > 50) return { phase: "高潮/主升", sealRate, rule: "封板率>75 且 涨停>50" };
-  if (ztCount > 40 && maxHeight >= 3) return { phase: "发酵/启动", sealRate, rule: "涨停>40 且 高度≥3" };
-  return { phase: "震荡/轮动", sealRate, rule: "默认（不满足以上）" };
+  const score = typeof metrics.sentiment === "number" && Number.isFinite(metrics.sentiment)
+    ? Math.max(0, Math.min(100, metrics.sentiment)) : 50;
+  const premium = typeof metrics.premiumAvg === "number" && Number.isFinite(metrics.premiumAvg) ? metrics.premiumAvg : 0;
+  const blastedPct = typeof metrics.blastedRate === "number" && Number.isFinite(metrics.blastedRate)
+    ? metrics.blastedRate : (zbCount != null && ztCount + zbCount > 0 ? zbCount / (ztCount + zbCount) * 100 : 0);
+  const phase = deriveSentimentStage(score, premium, blastedPct / 100);
+  return { phase, sealRate, rule: `认知层判定：情绪${score}分/溢价${premium}/炸板率${blastedPct.toFixed(0)}%` };
 }
 
 // ---------- 2. 个股情绪分加权合成（VibeAlpha sentiment.py 对照） ----------

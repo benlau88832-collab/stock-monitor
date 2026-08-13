@@ -12,7 +12,8 @@
 // v9.123.0（卓越审查修复）：CACHE v38→v39 —— 决策卡游资战术/认知时段/资金明暗盘前端口径发版
 // v9.125.0（蓝图批次 B）：CACHE v39→v40 —— 个股雷达资讯聚合区发版（v9.124 纯服务端未 +1）
 // v9.128.0（一致性审查修复）：CACHE v40→v41 —— 决策卡阶段口径/决策窗口边界/颜色惯例前端发版
-const CACHE = "stock-monitor-v41";
+// v9.129.0（一致性收敛重构）：CACHE v41→v42 —— 情绪体系单源化（情绪分/阶段词表四面板同口径）
+const CACHE = "stock-monitor-v42";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {

@@ -1,9 +1,9 @@
 // 情绪周期雷达卡片（v9.18-F5）
-// 把温度计升级为"五档周期判断 + 证据链"——避免黑箱评分
-// v9.27：显示层词表对齐 stageModel（情绪五档 → 权威词表），避免"启动 vs 启动期"混用
+// 把温度计升级为"周期判断 + 证据链"——避免黑箱评分
+// v9.129.0（一致性收敛）：词表=emotionStage 六词（与认知层同构），删除 emotionToStage 映射
+//   （原"冰点→退潮期"词表混用，与认知横幅互斥）
 // v9.32.1（缺口1）：溢价分布 4 档柱图 —— 游资看第一眼是分布不是均值（焖面多=亏钱效应）
 import { computeEmotionCycle, PHASE_META, type EmotionCycleInput, type EmotionCycleResult } from "../lib/emotionCycle";
-import { emotionToStage } from "../lib/stageModel";
 import DisclaimerTag from "./DisclaimerTag";
 
 interface Props {
@@ -15,7 +15,7 @@ interface Props {
 export default function EmotionCycleCard({ input, premiumDist = null }: Props) {
   const result: EmotionCycleResult = computeEmotionCycle(input);
   const meta = PHASE_META[result.phase];
-  const stageLabel = emotionToStage(result.phase);
+  const stageLabel = result.phase; // v9.129.0：六词直显（与认知层同词表，不再映射主线词表）
 
   // v9.32.1：溢价分布 → 赚钱/亏钱效应定性
   const distTotal = premiumDist ? premiumDist.ltNeg5 + premiumDist.neg5to0 + premiumDist.zeroTo3 + premiumDist.gt3 : 0;

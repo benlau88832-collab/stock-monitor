@@ -1,41 +1,38 @@
-// v9.96.0（批次 1）：情绪分析引擎 —— 周期规则 5 档边界 + 个股情绪分加权（VibeAlpha 移植）
+// v9.129.0（一致性收敛）：情绪分析周期判定单源化——determineCyclePhaseVibeAlpha
+//   改为消费认知层 deriveSentimentStage（六词唯一词表），原 5 档组合词判定废弃。
+//   个股情绪分加权合成（computeStockSentimentScore）不变（不同概念：个股维度）。
 import { describe, it, expect } from "vitest";
 // 服务端 CJS 模块（与 buildPromptConsistency 同模式引用）
 // @ts-ignore
 import { determineCyclePhaseVibeAlpha, computeStockSentimentScore } from "../../../server/lib/emotionAnalysis.js";
 
-describe("v9.96.0 determineCyclePhaseVibeAlpha 5 档规则引擎", () => {
-  it("跌停>20 且 涨停<30 → 冰点/退潮", () => {
-    const r = determineCyclePhaseVibeAlpha({ ztCount: 25, zbCount: 10, dtCount: 25, maxBoardHeight: 2 });
-    expect(r.phase).toBe("冰点/退潮");
+describe("v9.129.0 determineCyclePhaseVibeAlpha（认知层六词单源）", () => {
+  it("情绪 16 分 → 冰点（与认知层同判定）", () => {
+    const r = determineCyclePhaseVibeAlpha({ ztCount: 92, zbCount: 13, dtCount: 0, maxBoardHeight: 7, sentiment: 16, blastedRate: 12.4, premiumAvg: 1.2 });
+    expect(r.phase).toBe("冰点");
+    expect(r.rule).toContain("认知层判定");
   });
-  it("封板率<60 且 炸板>20 → 强分歧/炸板潮", () => {
-    const r = determineCyclePhaseVibeAlpha({ ztCount: 40, zbCount: 30, dtCount: 5, maxBoardHeight: 4 });
-    expect(r.phase).toBe("强分歧/炸板潮");
-    expect(r.sealRate).toBeCloseTo(57.14, 1); // 40/(40+30)
+  it("情绪 75 分 + 溢价 2.4 → 发酵", () => {
+    const r = determineCyclePhaseVibeAlpha({ ztCount: 88, zbCount: 8, dtCount: 0, maxBoardHeight: 6, sentiment: 75, blastedRate: 8, premiumAvg: 2.4 });
+    expect(r.phase).toBe("发酵");
   });
-  it("封板率>75 且 涨停>50 → 高潮/主升", () => {
-    const r = determineCyclePhaseVibeAlpha({ ztCount: 60, zbCount: 10, dtCount: 2, maxBoardHeight: 5 });
-    expect(r.phase).toBe("高潮/主升");
-    expect(r.sealRate).toBeCloseTo(85.71, 1);
+  it("情绪 88 + 溢价 -1.8 + 炸板 30% → 退潮/分歧（负溢价压制，高分不得掩盖亏钱效应）", () => {
+    const r = determineCyclePhaseVibeAlpha({ ztCount: 90, zbCount: 30, dtCount: 0, maxBoardHeight: 5, sentiment: 88, blastedRate: 30, premiumAvg: -1.8 });
+    expect(["退潮", "分歧"]).toContain(r.phase);
   });
-  it("涨停>40 且 高度≥3 → 发酵/启动", () => {
-    const r = determineCyclePhaseVibeAlpha({ ztCount: 45, zbCount: 20, dtCount: 3, maxBoardHeight: 3 });
-    expect(r.phase).toBe("发酵/启动");
+  it("情绪缺失 → 中性 50 → 启动", () => {
+    const r = determineCyclePhaseVibeAlpha({ ztCount: 30, zbCount: 10, dtCount: 0, maxBoardHeight: 3 });
+    expect(r.phase).toBe("启动");
   });
-  it("不满足以上 → 震荡/轮动", () => {
-    const r = determineCyclePhaseVibeAlpha({ ztCount: 30, zbCount: 15, dtCount: 5, maxBoardHeight: 2 });
-    expect(r.phase).toBe("震荡/轮动");
-  });
-  it("炸板数缺失时封板率按提供值或 null", () => {
-    const r = determineCyclePhaseVibeAlpha({ ztCount: 30, zbCount: null, dtCount: 5, maxBoardHeight: 2, sealRate: 80 });
+  it("炸板数缺失时封板率按提供值或 null（证据字段行为保留）", () => {
+    const r = determineCyclePhaseVibeAlpha({ ztCount: 30, zbCount: null, dtCount: 5, maxBoardHeight: 2, sealRate: 80, sentiment: 50, blastedRate: 10 });
     expect(r.sealRate).toBe(80);
-    const r2 = determineCyclePhaseVibeAlpha({ ztCount: 30, zbCount: null, dtCount: 5, maxBoardHeight: 2 });
+    const r2 = determineCyclePhaseVibeAlpha({ ztCount: 30, zbCount: null, dtCount: 5, maxBoardHeight: 2, sentiment: 50, blastedRate: 10 });
     expect(r2.sealRate).toBe(null);
   });
 });
 
-describe("v9.96.0 computeStockSentimentScore 加权合成", () => {
+describe("v9.96.0 computeStockSentimentScore 加权合成（个股维度，保留）", () => {
   it("全缺 → 默认中性 50", () => {
     const r = computeStockSentimentScore({});
     expect(r.score).toBe(50);

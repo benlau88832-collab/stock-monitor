@@ -304,7 +304,8 @@ export default function App() {
     try {
       // Parallel fetches
       // v9.113.1（T1-1 D-01 收尾）：第 9 路并行拉 PG 结构化快照（情绪/涨停梯队/溢价/晋级率，cron 落库）
-      const [indices, breadth, fundMain, globals, turnover, fundHistory, limitPoolRes, turnoverHistRes, pgSnapRes] = await Promise.allSettled([
+      // v9.129.1（一致性收口）：第 10 路拉认知层 —— 情绪分单一来源（顶部/雷达/状态机与认知横幅同源同值）
+      const [indices, breadth, fundMain, globals, turnover, fundHistory, limitPoolRes, turnoverHistRes, pgSnapRes, cogSnapRes] = await Promise.allSettled([
         fetchIndexOverview(),
         fetchMarketBreadth(),
         fetchMarketMainFund(),
@@ -314,6 +315,15 @@ export default function App() {
         fetchLimitPoolSummary(),
         fetchTurnoverHistory(10),
         fetchMarketSnapshot(),
+        (async () => {
+          try {
+            const r = await fetch("/api/cognition", { signal: AbortSignal.timeout(6000) });
+            if (!r.ok) return null;
+            const j = await r.json();
+            const v = j?.sentiment?.value;
+            return typeof v?.score === "number" ? Number(v.score) : null;
+          } catch { return null; }
+        })(),
       ]);
 
       // === Overview ===
@@ -335,9 +345,8 @@ export default function App() {
       const pgPool = buildPgLimitPool(pgSnap);
       const displayPool = realtimePoolOk ? limitPool : (pgPool ?? limitPool);
       const poolFromPg = !realtimePoolOk && pgPool !== null;
-      // PG 情绪兜底判定：sentiment:今日 键独立落库（盘中每 5min），不依赖 market_daily（盘中未落库回退昨日）
-      const sentAsOf = pgSnap?.data?.sources?.sentiment ?? null;
-      const sentFresh = sentAsOf != null && Date.now() - sentAsOf < 25 * 60 * 1000;
+      // v9.129.1（一致性收口）：情绪分单一来源 = 认知层 /api/cognition（cogSnapRes），
+      //   sentiment:键 前端上传值已从服务端兜底链删除——此处不再有独立新鲜度判定
       // PG market 字段（涨停/溢价/晋级率）今日判定：market_daily 未回退最近交易日且快照新鲜（盘后收盘链落库后可用）
       const mktFresh = pgSnap != null && !pgSnap.data.fallbackDate && !pgSnap.meta.stale;
       const pgMeta: OverviewData["pgMeta"] = pgSnap ? {
@@ -422,38 +431,22 @@ export default function App() {
           }
 
           sentimentFactors = { upDownScore, limitScore, avgPctScore, indexScore, limitUpBonus, blastedPenalty, fundFlowScore, premiumScore, promotionScore };
-          sentiment = Math.round(upDownScore + limitScore + avgPctScore + indexScore + limitUpBonus - blastedPenalty + fundFlowScore + premiumScore + promotionScore + 15);
-          sentiment = Math.max(0, Math.min(100, sentiment));
-
-          if (sentiment >= 80) sentimentLabel = "极度贪婪";
-          else if (sentiment >= 65) sentimentLabel = "贪婪";
-          else if (sentiment >= 45) sentimentLabel = "中性";
-          else if (sentiment >= 25) sentimentLabel = "恐慌";
-          else sentimentLabel = "极度恐慌";
+          // v9.129.0（一致性收敛）：情绪分总分不再由前端公式合成——单一来源 = PG sentiment_snapshot
+          //   （与认知层/情绪雷达同源同值；原 upRatio×40+…+15 公式曾造成顶部 76 vs 认知 16 同屏互斥）。
+          //   sentimentFactors 仅作分解展示参考（实时涨跌家数/涨停池等原始因子），不参与总分。
+          sentiment = null; // 由下方 PG 单一源分支赋值
         }
-        // 若当前情绪为 null（数据缺失）：v9.113.1（T1-1）PG 情绪兜底（sentiment:今日 盘中 5min 落库，实时源断时仍新鲜）→ 昨日 → null
-        if (sentiment == null) {
-          if (sentFresh && pgMkt && typeof pgMkt.sentiment === "number") {
-            const pgSent = pgMkt.sentiment;
-            sentiment = pgSent;
-            if (pgSent >= 80) sentimentLabel = "极度贪婪";
-            else if (pgSent >= 65) sentimentLabel = "贪婪";
-            else if (pgSent >= 45) sentimentLabel = "中性";
-            else if (pgSent >= 25) sentimentLabel = "恐慌";
-            else sentimentLabel = "极度恐慌";
-          } else {
-            sentiment = prevSentiment; // 可能为 null（首日无数据）
-            if (sentiment != null) {
-              // 从存储恢复的昨日情绪，需要反推 sentimentLabel
-              if (sentiment >= 80) sentimentLabel = "极度贪婪";
-              else if (sentiment >= 65) sentimentLabel = "贪婪";
-              else if (sentiment >= 45) sentimentLabel = "中性";
-              else if (sentiment >= 25) sentimentLabel = "恐慌";
-              else sentimentLabel = "极度恐慌";
-            } else {
-              sentimentLabel = "数据不足";
-            }
-          }
+        // 情绪分主值：v9.129.1（一致性收口）单一来源 = 认知层 /api/cognition（与横幅/雷达/状态机同源同值）；
+        //   认知不可用 → 昨日存储值兜底（诚实标注），不再读 sentiment:键 前端上传值（污染源已切断）
+        const cogScore = cogSnapRes.status === "fulfilled" ? cogSnapRes.value : null;
+        const labelOf = (v: number) => (v >= 80 ? "极度贪婪" : v >= 65 ? "贪婪" : v >= 45 ? "中性" : v >= 25 ? "恐慌" : "极度恐慌");
+        if (typeof cogScore === "number" && Number.isFinite(cogScore)) {
+          sentiment = Math.max(0, Math.min(100, Math.round(cogScore)));
+          sentimentLabel = labelOf(sentiment);
+        } else {
+          sentiment = prevSentiment; // 可能为 null（首日无数据）
+          if (sentiment != null) sentimentLabel = labelOf(sentiment);
+          else sentimentLabel = "数据待刷新";
         }
         return { sentiment, sentimentLabel, sentimentFactors };
       };

@@ -54,11 +54,9 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
       if (cand && cand.value != null) { mdMeta = cand; usedDate = d; fallbackDate = d; break; }
     }
   }
-  const [sentMeta, snapMeta, intraR, themeMeta, bsR, evR, fundMeta, lhbR, ztR, annR] = await Promise.allSettled([
-    kvReadMeta(pool, `sentiment:${usedDate}`),
-    // v9.115.0（S1-4 情绪源优先级修正）：sentiment_snapshot（服务端权威盘中每 5min 采样）——
-    //   原只读 sentiment:键（前端 localStorage 经 cloudStore 同步的局部值，可能残留旧会话），
-    //   盘中链正常时 snapshot 优先；snapshot 缺失（盘中链断/盘后未跑）回退 sentiment:键
+  // v9.129.1（一致性收口）：删除 sentiment:键 读取（前端上传污染源）——情绪值单源 = sentiment_snapshot
+  const [snapMeta, intraR, themeMeta, bsR, evR, fundMeta, lhbR, ztR, annR] = await Promise.allSettled([
+    // v9.115.0（S1-4 情绪源优先级修正）：sentiment_snapshot（服务端权威盘中每 5min 采样）
     kvReadMeta(pool, `sentiment_snapshot:${usedDate}`),
     kvRead(pool, `market_intraday:${usedDate}`),
     kvReadMeta(pool, "theme_analysis:latest"),
@@ -76,16 +74,13 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
 
   // ---------- 市场情绪/指标 ----------
   const mdValue = mdMeta?.value ?? null;
-  // v9.115.0（S1-4）：情绪值两优先 —— sentiment_snapshot（服务端盘中每 5min 采样，权威）> sentiment（前端同步）> null
+  // v9.115.0（S1-4）：情绪值单一来源 = sentiment_snapshot（服务端权威，盘中每 5min cron 落库）。
+  // v9.129.1（一致性收口）：删除 sentiment:键（前端 localStorage 经 cloudStore 上传）兜底——
+  //   前端上传值曾与权威值漂移（90 vs 16），认知层/顶部同屏互斥的污染源；snapshot 缺失 → 诚实 null。
   const sentVal = (() => {
     if (snapMeta.status === "fulfilled" && snapMeta.value?.ts) {
       const sv = Number(snapMeta.value.value?.sentiment);
       if (Number.isFinite(sv)) return { score: sv, ts: snapMeta.value.ts };
-    }
-    if (sentMeta.status === "fulfilled" && sentMeta.value?.ts) {
-      const snap = sentMeta.value.value;
-      const sv = snap && typeof snap === "object" ? Number(snap.sentiment) : Number(snap);
-      if (Number.isFinite(sv)) return { score: sv, ts: sentMeta.value.ts };
     }
     return null;
   })();
