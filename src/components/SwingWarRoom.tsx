@@ -167,6 +167,8 @@ function LogicLedgerPanel({ entries, onAdd, onRemove }: {
               {a.severity === "critical" ? "🚨" : a.severity === "warning" ? "⚠️" : "ℹ️"} {a.message}
             </div>
           ))}
+          {/* v9.141.0（#11 推送分层）：服务端 20min/盘后自动推手机（引擎同源 shared，按天去重） */}
+          <div className="text-[10px] text-slate-600">📱 服务端每 20 分钟检查一次，同一提醒每天最多推一次手机（Server酱/企微/Bark）</div>
         </div>
       )}
 

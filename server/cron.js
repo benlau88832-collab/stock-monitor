@@ -487,6 +487,19 @@ function startCron({ pool }) {
   cron.schedule("20 9 * * 1-5", runCommodityPriceTask);
   cron.schedule("10 15 * * 1-5", runCommodityPriceTask);
 
+  // v9.140.0（#11 推送分层·持仓优先）：持仓逻辑提醒推手机 —— 盘中每 20 分钟 + 盘后 15:50 各一次
+  // 引擎与前端同源（shared/logic-ledger.js），按天去重（ledger_push_log:日期），
+  // 持仓台账数据由前端 saveEntry 同步到 PG kv（logic_ledger:日期）
+  const runLedgerPushTask = async (label) => {
+    try {
+      if (!isTradingDayCN()) return;
+      const { runLedgerPush } = require("./cron/ledger");
+      await runLedgerPush(pool);
+    } catch (e) { console.warn(`[cron] ledger_push(${label}) 失败:`, e.message); }
+  };
+  cron.schedule("*/20 9-15 * * 1-5", () => runLedgerPushTask("盘中"));
+  cron.schedule("50 15 * * 1-5", () => runLedgerPushTask("盘后"));
+
   // v9.66：个股盯价监控 —— 盘中每 5 分钟（`*/5 9-15` 实际 9:00-15:55；v9.128.0 一致性审查 P2 注释对齐，
   //   无内部时段守卫属已知宽松，盘后空转待后续收紧）
   cron.schedule("*/5 9-15 * * 1-5", async () => {

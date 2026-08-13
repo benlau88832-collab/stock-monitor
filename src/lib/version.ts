@@ -185,5 +185,15 @@
 //      复用方向榜已抓 K线/资金数据零新增请求）
 //   #11 刷新降噪：18s 快刷→30s（Q7 30-60s 口径），注释同步
 // ============================================================
-export const APP_VERSION = "v9.140.0";
+// v9.141.0（#11 推送分层·持仓优先 + 引擎单源化）：
+//   · 提醒引擎单源：logicLedger 纯函数迁至 src/shared/logic-ledger.js（+ .d.ts）——
+//     前端渲染与服务端 cron 推送共用同一份判定（消灭双端逻辑漂移，同 concept-groups 机制）
+//   · 持仓提醒推手机：server/cron/ledger.js 新增 runLedgerPush —— 读 PG kv logic_ledger:日期
+//     （前端 saveEntry 已同步）→ shared 引擎判定四类提醒 → 腾讯批量行情装配现价（破位检测真实化，
+//     原 price=null 时 break_line 永不触发 = 死路径）→ kv ledger_push_log:日期 按天去重 →
+//     sendPushIfConfigured（Server酱/企微/Bark/飞书/Qmsg）；cron */20 9-15 盘中 + 15:50 盘后；
+//     dryRun 模式供验收（不打扰用户）；分层：critical（破位/证伪）优先
+//   · UI：持仓逻辑台账提醒区标注"服务端每20分钟检查，同提醒每天最多推一次手机"
+// ============================================================
+export const APP_VERSION = "v9.141.0";
 export const BUILD_DATE = "2026-08-14";

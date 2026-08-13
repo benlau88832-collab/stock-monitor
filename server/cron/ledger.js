@@ -221,5 +221,108 @@ async function runUserStyleProfile(pool) {
   } catch { /* 落库失败不阻塞 */ }
   return { ok: true, styleKey };
 }
-module.exports = { runTradeBackfill, backfillOnePost, runPostSummary, runUserStyleProfile };
+// ============== v9.140.0（#11 推送分层·持仓优先）：持仓逻辑提醒推手机 ==============
+// 前端 logicLedger.saveEntry 已把台账同步到 PG kv logic_ledger:日期（同 decision_post 模式）；
+// 本任务读取最近台账 → 用 shared/logic-ledger.js（与前端同一份引擎）判定四类提醒 →
+// 按天去重（kv ledger_push_log:日期）→ sendPushIfConfigured 推送（Server酱/企微/Bark/飞书/Qmsg）。
+// 分层：持仓提醒 = 最高优先级（critical 破位/证伪必推；warning 催化到期/板块退潮随通道配置）；
+//       市场级推送保持原路径不变（互不干扰）。
+const { checkLedgerAlerts, activeEntries } = require("../../src/shared/logic-ledger.js");
+
+/** 读取最近台账（今日优先，回看 4 天） */
+async function loadRecentLedger(pool, today) {
+  for (let back = 0; back < 4; back++) {
+    const ds = bjDateStr(-back);
+    try {
+      const r = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`logic_ledger:${ds}`]);
+      const v = r.rows[0]?.value;
+      const arr = typeof v === "string" ? JSON.parse(v) : v;
+      if (Array.isArray(arr) && arr.length > 0) return { entries: arr, date: ds };
+    } catch { /* 单日读取失败继续回看 */ }
+  }
+  return null;
+}
+
+/** 今日已推送 key 集合（kv ledger_push_log:日期 → ["600001:break_line", ...]） */
+async function loadPushedLog(pool, today) {
+  try {
+    const r = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`ledger_push_log:${today}`]);
+    const v = r.rows[0]?.value;
+    const arr = typeof v === "string" ? JSON.parse(v) : v;
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch { return new Set(); }
+}
+
+async function savePushedLog(pool, today, pushedKeys) {
+  await pool.query(
+    `INSERT INTO kv_store(key,value,updated_at) VALUES($1,$2,now())
+     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+    [`ledger_push_log:${today}`, JSON.stringify([...pushedKeys].slice(-200))],
+  );
+}
+
+/**
+ * 持仓提醒推送（cron 调度 / 手动触发）
+ * 现价装配：有破位线的持仓经腾讯批量行情（qt.gtimg.cn，GBK rawBuffer）取实时价 ——
+ *   否则 break_line 提醒因 price=null 永不触发（名实核对：null 输入 = 死路径）；
+ *   腾讯失败 → 该持仓破位检测降级跳过（其余提醒不受影响）
+ * @param {object} pool
+ * @param {object} [opts] { dryRun?: boolean } dryRun 只统计不真发（验收用，避免打扰用户）
+ * @returns {Promise<{ok:boolean; entriesDate?:string; candidates:number; pushed:number; reasons?:string}>}
+ */
+async function runLedgerPush(pool, opts = {}) {
+  const today = bjDateStr();
+  const src = await loadRecentLedger(pool, today);
+  if (!src) return { ok: false, reason: "no ledger data" };
+  const alreadyPushed = await loadPushedLog(pool, today);
+  // 现价装配：需要破位线检测的持仓（活跃 + breakLine 非空）
+  const needPrice = src.entries.filter(e => e.status !== "已离场" && e.breakLine != null && e.breakLine > 0);
+  const priceMap = new Map();
+  if (needPrice.length > 0) {
+    try {
+      const codes = [...new Set(needPrice.map(e => String(e.code)))];
+      const q = codes.map(c => (c.startsWith("6") ? "sh" : c.startsWith("4") || c.startsWith("8") ? "bj" : "sz") + c).join(",");
+      const { requestRaw } = require("../lib/outbound");
+      const { parseTencentQuotesBatch } = require("../lib/stockSnapshot");
+      const { body } = await requestRaw(`https://qt.gtimg.cn/q=${q}`, { timeout: 5000, rawBuffer: true }); // GBK → rawBuffer
+      for (const [code, price] of parseTencentQuotesBatch(body)) {
+        if (price != null && Number.isFinite(price)) priceMap.set(code, price);
+      }
+    } catch (e) { console.warn("[cron] ledger_push 现价装配失败（破位检测本轮回退）:", e.message); }
+  }
+  const input = { price: null, boardHealthy: null, today };
+  // 候选选择：逐条注入真实现价（无价持仓仅剩催化/证伪/退潮类提醒；破位无价跳过）
+  const candidates = [];
+  for (const e of activeEntries(src.entries)) {
+    const price = priceMap.get(String(e.code)) ?? null;
+    for (const a of checkLedgerAlerts(e, { ...input, price })) {
+      const key = `${a.code}:${a.type}`;
+      if (alreadyPushed.has(key)) continue;
+      if (a.type === "break_line" && price == null) continue;
+      candidates.push({ alert: a, key });
+    }
+  }
+  // 分层：critical（破位/证伪）优先
+  candidates.sort((x, y) => (x.alert.severity === "critical" ? 0 : 1) - (y.alert.severity === "critical" ? 0 : 1));
+  let pushed = 0;
+  for (const { alert, key } of candidates) {
+    alreadyPushed.add(key); // 先记账再发送（发送失败当轮不重推，下轮重试窗口自然覆盖）
+    if (opts.dryRun) { pushed++; continue; }
+    try {
+      const { sendPushIfConfigured } = require("../routes/push");
+      const r = await sendPushIfConfigured({
+        title: `📌 持仓提醒：${alert.name}（${alert.code}）`,
+        body: alert.message,
+        severity: alert.severity,
+      });
+      if (r && r.ok) pushed++;
+      else console.warn(`[cron] ledger_push ${key} 发送未成功（${r?.reason ?? "unknown"}），下轮重试窗口覆盖`);
+    } catch (e) { console.warn(`[cron] ledger_push ${key} 异常:`, e.message); }
+  }
+  await savePushedLog(pool, today, alreadyPushed);
+  console.log(`[cron] ledger_push ${today}: 候选 ${candidates.length} 条（去重后新增），实推 ${pushed} 条${opts.dryRun ? "（dryRun）" : ""}`);
+  return { ok: true, entriesDate: src.date, candidates: candidates.length, pushed };
+}
+
+module.exports = { runTradeBackfill, backfillOnePost, runPostSummary, runUserStyleProfile, runLedgerPush, loadRecentLedger, loadPushedLog, savePushedLog };
 

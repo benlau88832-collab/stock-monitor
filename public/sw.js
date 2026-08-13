@@ -23,7 +23,8 @@
 // v9.138.0（波段重构·阶段一）：CACHE v49→v50 —— 波段作战室（方向榜/持仓逻辑/波段决策/业绩日历）+ 超短件降噪
 // v9.139.0（阶段二：拆 God Component）：CACHE v50→v51 —— 页面容器+数据hook分层 / 契约单源 / lsMigrate
 // v9.140.0（阶段三：景气度深化）：CACHE v51→v52 —— 景气卡+传导链+大宗商品价格条 / 刷新降噪30s
-const CACHE = "stock-monitor-v52";
+// v9.141.0（#11 推送分层）：CACHE v52→v53 —— 持仓提醒推手机 / 提醒引擎单源化
+const CACHE = "stock-monitor-v53";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {
