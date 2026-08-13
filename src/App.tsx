@@ -24,9 +24,7 @@ import Dashboard, { type WatchStockBrief } from "./components/Dashboard";
 import ThemeLadder from "./components/ThemeLadder";
 import CommodityChain from "./components/CommodityChain";
 import MarginPanel from "./components/MarginPanel";
-// v9.130.0（终审 D1）：竞价作战区上移驾驶舱顶部
-import AuctionBoard from "./components/AuctionBoard";
-import AuctionStrengthPanel from "./components/AuctionStrengthPanel";
+// v9.138.0（波段重构·阶段一，Q5 降噪）：竞价台/强度榜组件不再挂载（超短件移除，代码保留）
 // v11-5（P1）：EventClassifyPanel 已移回驾驶舱（Dashboard 内渲染），App 不再直接引用
 import { type BattlePlanData } from "./components/BattlePlan";
 import { detectHighLowSwitch, type ZTPoolItem } from "./lib/themeLadder";
@@ -61,8 +59,7 @@ import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 // v9.50（G2）：StatusBar 已并入 TopNav 顶部通栏，App 不再独立渲染
 import { auditLocalStorageQuota } from "./lib/storageQuota";
 import AlertBanner, { type AlertItem } from "./components/AlertBanner";
-// v9.102.0（第二批 A，T-A3）：盘中精灵浮层（右下角迷你条 + S 级弹窗，所有 Tab 可见）
-import SpriteOverlay from "./components/SpriteOverlay";
+// v9.138.0（波段重构·阶段一，Q5 降噪）：SpriteOverlay 不再挂载（超短件移除）
 // v9.58（V8-8）：全局 AI 助手（右下角悬浮，所有 Tab 可见）
 import AIConsole from "./components/AIConsole";
 // v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解可视化）
@@ -70,9 +67,11 @@ import CognitionBanner from "./components/CognitionBanner";
 // v9.120.0（卓越 S1-1c）：认知推理面板（共振/因果/变化率/预判，认知横幅下方）
 import ReasoningPanel from "./components/ReasoningPanel";
 // v9.117.0（S3-3）：主动智能流（时段洞察 + LLM 预算，盘前准备区）
-import ProactiveFeed from "./components/ProactiveFeed";
+// v9.138.0（波段重构·阶段一，Q5 降噪）：ProactiveFeed 不再挂载（随竞价作战区移除）
 // v9.118.0（S4-2）：操作习惯场景融合（竞价/异动/尾盘/情绪周期四场景）
 import ScenarioPanel from "./components/ScenarioPanel";
+// v9.138.0（波段重构·阶段一）：波段作战室（波段游资主屏：方向榜/持仓逻辑/波段决策/业绩日历）
+import SwingWarRoom from "./components/SwingWarRoom";
 import DecisionCard from "./components/DecisionCard"; // v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI）
 // v9.32：系统性风险预警（沪深300大跌/跌停数/炸板率/极端情绪）
 import { checkSysRisk } from "./lib/sysRiskGuard";
@@ -276,7 +275,7 @@ export default function App() {
   const [nextScenarios, setNextScenarios] = useState<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null>(null);
   // v9.75（阶段二）：次日闸门预测（LLM 结合隔夜外围/政策预判，盘后生成）
   const [nextGatePredict, setNextGatePredict] = useState<{ nextGate: string; reason: string; watchPoints: string[] } | null>(null);
-  const [leaderPredict, setLeaderPredict] = useState<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null>(null);
+  // v9.138.0（波段重构·阶段一，Q5 降噪）：leaderPredict 状态移除（竞价 AI 预判龙一不再使用）
   const [cognMainline, setCognMainline] = useState<string | undefined>(undefined); // v9.135.0（阶段三）：认知层主线（作战卡徽标）
   // v9.136.0（主线单源）：ref 持有最新认知主线 —— refreshAll 为空依赖 useCallback（闭包捕获首帧值），
   //   renderBattlePlan 锚定必须读 ref 而非 state，否则锚定永不生效
@@ -1294,34 +1293,8 @@ export default function App() {
         } catch { /* 静默 */ }
       }).catch(() => {});
     }
-    // 竞价段（9:15-9:25）：龙头预判
-    if (want === "auction") {
-      llmBriefSeq.current = 2;
-      const yesterday = loadPrevZTSnapshot(ov.limitPool?.qdate ?? null) ?? [];
-      const yt = yesterday.slice(0, 15).map(s => `${s.n ?? s.c}(${s.lbc ?? 1}板)`).join("，");
-      const zt = (ov.limitPool?.rawZTPool ?? []).slice(0, 15).map((s: any) => `${s.n}(首封${String(s.fbt ?? 0)})`).join("，");
-      callAI("leaderPredict", { prompt: `昨日涨停：${yt || "无"}\n今日已涨停：${zt || "无（竞价未出）"}` }).then((r) => {
-        if (cancelled) return;
-        try {
-          const j = parseLLMJSON<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string }>(r.text, schemaForTask("leaderPredict"));
-          if (j) {
-            // v9.75（防幻觉）：预测的龙头必须存在于今日/昨日涨停池白名单，否则丢弃（原信任 LLM 编造的 code）
-            const poolCodes = new Set([
-              ...(ov.limitPool?.rawZTPool ?? []).map((s: any) => String(s.c)),
-              ...(yesterday ?? []).map((s: any) => String(s.c ?? "")),
-            ].filter(Boolean));
-            const pj = j.predictLeader && poolCodes.has(String(j.predictLeader.code)) ? j.predictLeader : null;
-            setLeaderPredict({
-              predictLeader: pj,
-              confidence: Math.max(0, Math.min(100, Number(j.confidence) || 0)), // v9.75：置信钳制 0-100
-              reason: String(j.reason ?? ""),
-              watch: String(j.watch ?? ""),
-            });
-            setLlmBriefDegraded(p => ({ ...p, leaderPredict: !!r.degraded })); // v9.99.2（B3）：降级 → Dashboard 显示"AI 不可用"占位而非整卡消失
-          }
-        } catch { /* 静默 */ }
-      }).catch(() => {});
-    }
+    // v9.138.0（波段重构·阶段一，Q5 降噪）：竞价段 AI 龙头预判（leaderPredict）移除 ——
+    //   竞价台/强度榜/预判龙一均为超短打板件，波段客不消费；不再调用 leaderPredict LLM 任务（省配额）
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPhase, battlePlan, overview]);
@@ -1616,50 +1589,18 @@ export default function App() {
       {/* 三级警报横幅 */}
       <AlertBanner alerts={alerts} />
 
-      {/* v9.102.0（T-A3）：盘中精灵浮层（右下角常驻，S 级弹窗全局可见） */}
-      <SpriteOverlay />
+      {/* v9.138.0（波段重构·阶段一，Q5 降噪）：盘中精灵浮层移除（超短件；服务端精灵 cron 已停用） */}
 
       {/* v9.79（韧性）：ErrorBoundary 包裹主内容 —— 单个数据模块抛错时显示兜底而非整树白屏，
           TopNav/AIConsole/footer 保持存活，用户仍可切换 Tab/刷新 */}
       <ErrorBoundary>
         <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-4">
-        {/* ====== 驾驶舱 ====== */}
+        {/* ====== 驾驶舱（v9.138.0 波段重构：波段作战室置顶，替代竞价作战区） ====== */}
         {active === "dashboard" && (
           <>
-          {/* v9.130.0（终审 D1）：竞价作战区（盘前/竞价相位）—— 竞价台+竞价强度榜+AI 预判龙一
-              收敛驾驶舱顶部（原散落 Dashboard 左栏底部；ProactiveFeed 竞价时段洞察保留在盘前准备区） */}
-          {(currentPhase === "pre" || currentPhase === "auction") && (
-            <div className="rounded-xl border border-amber-500/25 bg-amber-950/10 p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-bold text-amber-300">🌅 竞价作战区（盘前/竞价）</span>
-                <span className="text-[10px] text-slate-500">竞价台/强度榜规则 0 token · AI 预判龙一 LLM ≤2000 tok</span>
-              </div>
-              {(leaderPredict && (leaderPredict.predictLeader || llmBriefDegraded.leaderPredict)) && (
-                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2">
-                  {leaderPredict.predictLeader ? (
-                    <div className="text-xs font-bold text-amber-200">
-                      🤖 AI 预判龙一：<span className="text-base">{leaderPredict.predictLeader.name}</span>
-                      <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
-                    </div>
-                  ) : (
-                    <div className="text-xs font-bold text-amber-300">🤖 AI 预判龙一：AI 暂不可用（规则版无预判）</div>
-                  )}
-                  {leaderPredict.reason && <div className="mt-1 text-[11px] text-slate-300">理由：{leaderPredict.reason}</div>}
-                  {leaderPredict.watch && <div className="text-[11px] text-rose-300/80">⚠ 盯防：{leaderPredict.watch}</div>}
-                </div>
-              )}
-              <AuctionBoard
-                upRatio={overview?.breadth && overview.breadth.total > 0 ? overview.breadth.up / overview.breadth.total : null}
-                yesterdayZt={yesterdayZtBrief}
-                todayZt={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number; hybk?: string }> ?? undefined}
-                autoRefresh={false}
-              />
-              <AuctionStrengthPanel yesterdayZt={yesterdayZtBrief} todayZt={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined} />
-              {/* v9.133.0（游资改造·阶段一）：主动智能流并入竞价作战区（原在资金主线"盘前准备"折叠区，
-                  盘前必须同屏看到 竞价+隔夜+时段洞察） */}
-              <ProactiveFeed />
-            </div>
-          )}
+          {/* v9.138.0（波段重构·阶段一，Q5 降噪）：竞价作战区移除 —— 波段游资主屏换为波段作战室
+             （方向榜/持仓逻辑台账/波段决策卡/业绩日历）；竞价台/强度榜/AI预判龙一 不再渲染（保留代码不挂载） */}
+          <SwingWarRoom />
           {/* v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解，5 维 + version/hash/asOf 溯源）——
               不增面板：横幅形态置于驾驶舱顶部，作战卡/决策卡/精灵/问答均消费同一认知 */}
           <CognitionBanner />

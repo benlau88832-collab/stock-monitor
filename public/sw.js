@@ -1,4 +1,4 @@
-﻿// P3-3锛歅WA Service Worker 鈥斺€?绂荤嚎缂撳瓨 + 鍙畨瑁?
+// P3-3锛歅WA Service Worker 鈥斺€?绂荤嚎缂撳瓨 + 鍙畨瑁?
 // 娉ㄦ剰锛氭湰椤圭洰鏄?vite-plugin-singlefile 鍗曟枃浠朵骇鐗╋紙docs/index.html 鍐呰仈鍏ㄩ儴 JS/CSS锛夛紝
 // SW 鍙渶缂撳瓨 index.html 鏈綋鍗冲彲瀹炵幇"绂荤嚎鎵撳紑鏈€杩戜竴娆＄増鏈?銆?
 // v9.83.1锛欳ACHE v1鈫抳2 鈥斺€?瑙﹀彂 SW 鏇存柊骞舵竻鎺夋棫缂撳瓨锛坅ctivate 鍒犻櫎闈炲綋鍓?CACHE锛?
@@ -20,7 +20,8 @@
 // v9.135.0锛堟父璧勬敼閫犅烽樁娈典簩~浜旓級锛欳ACHE v46鈫抳47 鈥斺€?浜ゆ槗闂幆/涓荤嚎寰芥爣/闃堝€兼敹鍙?绔炰环琛ュ己
 // v9.136.0锛堜氦鎺?0813 浜斾换鍔℃壒娆★級锛氫富绾垮崟婧?闂搁棬鏀舵暃/decisions 濂戠害/鍙拌处闂幆 鍙戠増
 // v9.137.0（审查全量修复发布）：CACHE v48→v49 —— AI 大脑审查修复（精灵频率/15:40链/PG工具/反馈闭环/待拍板条/画像卡）
-const CACHE = "stock-monitor-v49";
+// v9.138.0（波段重构·阶段一）：CACHE v49→v50 —— 波段作战室（方向榜/持仓逻辑/波段决策/业绩日历）+ 超短件降噪
+const CACHE = "stock-monitor-v50";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {

@@ -1738,22 +1738,25 @@ function startCron({ pool }) {
   //   （秒 分 时 日 月 周），*/2 落在秒位 = 每 2 秒触发（9:00-15:59 每分钟 30 次，交易日约 12600 次），
   //   且每 2 秒抢 LOCK_INTRADAY 导致 5 分钟盘中大脑被锁饿死（sentiment_snapshot 断更、认知陈旧）；
   //   改 5 字段 "*/2 9-15 * * 1-5" = 每 2 分钟（与 v9.102.0 原注释意图一致）。
-  // 通达信"盘中精灵"效果：涨停潮/炸板突变/封单异动第一时间提醒
+  // v9.138.0（波段重构·阶段一，Q5 降噪）：精灵调度停用 —— 炸板/封单异动推送属超短打板件，
+  //   波段客（3天-1个月）不需要分钟级封单提醒；代码保留（runIntradaySprint 可手动/后续按需启用），
+  //   盘中大脑（runIntradayBrain，*/5）仍负责情绪快照/板块异动，不受影响。
+  // 通达信"盘中精灵"效果：涨停潮/炸板突变/封单异动第一时间提醒（已停用）
   // 东财风控：内部串行 QPS≤2 + 每池 1.5-3s 抖动；busy 跳过 + PG lock（与盘中大脑共享 LOCK_INTRADAY）
-  cron.schedule("*/2 9-15 * * 1-5", async () => {
-    try {
-      if (!isTradingDayCN()) return;
-      if (sprintBusy) return; // 防重叠（一轮 8-15s，*/2 分钟间隔内通常已跑完）
-      sprintBusy = true;
-      try {
-        const gotLock = await withPgLock(pool, LOCK_INTRADAY, async () => {
-          const { runIntradaySprint } = require("./lib/intradaySprint");
-          await runIntradaySprint(pool);
-        });
-        if (!gotLock) console.log("[cron] sprint PG lock busy, skip");
-      } finally { sprintBusy = false; }
-    } catch (e) { console.error("[cron] 盘中精灵失败:", e.message); }
-  }, { timezone: "Asia/Shanghai" });
+  // cron.schedule("*/2 9-15 * * 1-5", async () => {
+  //   try {
+  //     if (!isTradingDayCN()) return;
+  //     if (sprintBusy) return; // 防重叠（一轮 8-15s，*/2 分钟间隔内通常已跑完）
+  //     sprintBusy = true;
+  //     try {
+  //       const gotLock = await withPgLock(pool, LOCK_INTRADAY, async () => {
+  //         const { runIntradaySprint } = require("./lib/intradaySprint");
+  //         await runIntradaySprint(pool);
+  //       });
+  //       if (!gotLock) console.log("[cron] sprint PG lock busy, skip");
+  //     } finally { sprintBusy = false; }
+  //   } catch (e) { console.error("[cron] 盘中精灵失败:", e.message); }
+  // }, { timezone: "Asia/Shanghai" });
 
   // v9.103.0（第三批 D，T-D2）：隔夜映射巡检 —— 9:05 盘前 + 15:05 盘后
   // 外盘异动（|涨跌幅|≥2%）→ shared/overseas-map.js 映射匹配 → kv overseas_map_hint:日期 + info 推送

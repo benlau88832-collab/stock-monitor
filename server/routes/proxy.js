@@ -268,6 +268,59 @@ function proxyRoutes(app) {
     res.json({ sources: getSourceHealth(), at: new Date().toISOString() });
   });
 
+  // v9.138.0（波段重构·阶段一）：行业板块指数日K（90.BKxxxx，波段主线引擎数据源）
+  // GET /api/proxy/board-kline?secid=90.BK0478&days=60 → { klines: ["date,open,close,high,low,...", ...] }
+  // v9.138.0 实测修正：push2his 仅 https 对 node TLS ban（socket hang up），http 直连稳定；
+  // 腾讯 fqkline/kline 不支持 bk 前缀（param error）—— 故主源 = push2his http，无腾讯兜底。
+  app.get("/api/proxy/board-kline", async (req, res) => {
+    if (!(await checkAuth(req, res))) return;
+    const secid = String(req.query.secid ?? "");
+    const days = Math.min(120, Number(req.query.days) || 60);
+    if (!/^90\.BK\d{4}$/.test(secid)) return res.status(400).json({ error: "invalid secid (90.BKxxxx)" });
+    try {
+      const { getJson } = require("../lib/outbound");
+      const url = `http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=0&lmt=${days}&end=20500101&ut=7eea3edcaed734bea9cbfc24409ed989`;
+      const r = await getJson(url, { timeout: 8000, source: "push2his" });
+      const klines = r.data?.data?.klines ?? [];
+      if (!Array.isArray(klines) || klines.length === 0) throw new Error("push2his empty");
+      res.json({ secid, klines });
+    } catch {
+      res.status(502).json({ error: "板块K线获取失败" });
+    }
+  });
+
+  // v9.138.0（波段重构·阶段一）：个股日K（波段决策卡数据源，60-70 根）
+  // GET /api/proxy/stock-kline?code=600001&days=70 → { klines: [...] }
+  // v9.138.0 实测修正：主源 = push2his http（https 对 node TLS ban）；腾讯 fqkline 兜底（仅个股支持，板块不支持）。
+  app.get("/api/proxy/stock-kline", async (req, res) => {
+    if (!(await checkAuth(req, res))) return;
+    const code = String(req.query.code ?? "");
+    const days = Math.min(120, Number(req.query.days) || 70);
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
+    const secid = /^(60|68|5)/.test(code) ? `1.${code}` : `0.${code}`;
+    try {
+      const { getJson } = require("../lib/outbound");
+      const url = `http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${days}&end=20500101&ut=7eea3edcaed734bea9cbfc24409ed989`;
+      const r = await getJson(url, { timeout: 8000, source: "push2his" });
+      const klines = r.data?.data?.klines ?? [];
+      if (!Array.isArray(klines) || klines.length === 0) throw new Error("push2his empty");
+      res.json({ code, secid, klines });
+    } catch {
+      // 腾讯 fqkline 兜底（个股可用；push2his 双失败才到这里）
+      try {
+        const { getJson } = require("../lib/outbound");
+        const q = /^(60|68|5)/.test(code) ? `sh${code}` : `sz${code}`;
+        const txUrl = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${q},day,,,${days},qfq`;
+        const tj = await getJson(txUrl, { timeout: 8000, source: "tencent" });
+        const rows = tj.data?.data?.[q]?.qfqday ?? tj.data?.data?.[q]?.day ?? [];
+        const klines = Array.isArray(rows) ? rows.map((r) => (Array.isArray(r) ? r.join(",") : String(r))) : [];
+        res.json({ code, secid: q, klines: klines.length ? klines : [] });
+      } catch {
+        res.status(502).json({ error: "个股K线获取失败" });
+      }
+    }
+  });
+
   // v9.27：POST 转发（人气榜 emappdata POST 接口 CORS 失效，本地部署经此绕行）
   app.post("/api/proxy", async (req, res) => {
     // v9.85.0（P0-1）：async 鉴权必须 await
