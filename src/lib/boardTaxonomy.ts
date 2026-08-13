@@ -6,6 +6,8 @@ export type BoardKind = "industry" | "theme" | "style" | "region";
 
 // ============== 白名单（可维护：命中即判 "theme"） ==============
 // 如想炒次新行情可填"次新股"，临时加入后重新构建即可
+// v9.137.0（审查 P3-18）：空数组为设计状态（白名单未启用，:53 的 includes 恒 false 属预期），
+// 非缺陷；注释补明确 —— 需要强制题材归类时在此追加
 export const BOARD_WHITELIST: string[] = [];
 
 // ============== 风格/标签黑名单（判 "style"） ==============

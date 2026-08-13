@@ -80,8 +80,12 @@ app.get("/api/auth/local-token", async (req, res) => {
 //   localhost 任意网页可覆盖 PG 数据、读推送凭据、触发付费 LLM/推送。
 // 策略：POST/PUT/DELETE 必须携带 x-local-token（前端 cloudStore.apiFetch 自动带）；
 //   GET 读端点维持 localhost-only（与现状一致，全量收敛列入 backlog）。
-// 白名单：/api/ai/call|stream 自带鉴权（P0-1 已修复）；/api/brain/pg 是工具名白名单只读查询。
-const WRITE_AUTH_WHITELIST = new Set(["/api/ai/call", "/api/ai/stream", "/api/brain/pg"]);
+// v9.137.0（审查 P1-01 修复）：白名单条目改为相对挂载路径 —— 中间件挂载于 app.use("/api",...)，
+//   其内部 req.path 为相对 /api 的路径（"/ai/call" 而非 "/api/ai/call"）。
+//   原绝对路径条目永不命中（存在≠生效）：/api/ai/call|stream 被双重鉴权（无害但冗余）、
+//   /api/brain/pg 被强制要求 token 而前端 pgTool 裸 fetch 不带 → PG 工具组恒 401。
+//   恢复设计意图：白名单内端点自带鉴权（ai 路由 checkAuth / brain/pg 工具名白名单只读查询）。
+const WRITE_AUTH_WHITELIST = new Set(["/ai/call", "/ai/stream", "/brain/pg"]);
 let writeTokenCache = { t: null, ts: 0 };
 let writeTokenInitialized = false; // v9.85.2（P1-1）：fail-closed —— 已初始化后读取失败拒绝写操作
 async function effectiveWriteToken() {

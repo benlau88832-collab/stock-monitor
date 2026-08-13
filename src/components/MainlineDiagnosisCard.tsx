@@ -115,9 +115,28 @@ export default function MainlineDiagnosisCard({ mainline, onClose }: Props) {
         console.warn("[MainlineDiagnosis] JSON 解析失败，降级规则引擎:", result.text.slice(0, 200));
       }
       // 降级：规则引擎（强度分 + 离场信号）
+      // v9.137.0（审查 P3-09）：全市场涨停数真实化 —— 原固定 "ztCount*3 近似"（非真实值，
+      //   ztRatio 因子恒 33 分失真）；现优先取认知层/PG 快照的真实涨停总数，取不到才用近似。
+      let realTotalZt: number | null = null;
+      try {
+        const r = await fetch("/api/cognition", { signal: AbortSignal.timeout(4000) });
+        if (r.ok) {
+          const j = await r.json();
+          const n = Number(j?.sentiment?.value?.limitScore);
+          if (Number.isFinite(n) && n > 0) realTotalZt = n;
+        }
+      } catch { /* 认知层不可用 */ }
+      if (realTotalZt == null) {
+        try {
+          const { fetchMarketSnapshot } = await import("../lib/dataLayer");
+          const snap = await fetchMarketSnapshot();
+          const n = Number(snap?.data?.market?.ztCount);
+          if (Number.isFinite(n) && n > 0) realTotalZt = n;
+        } catch { /* PG 快照不可用 */ }
+      }
       const strength = calcMainlineStrength({
         ztCount: mainline.ztCount,
-        totalZtCount: Math.max(mainline.ztCount * 3, 30), // v9.100.0（P2-02）：全市场涨停数估算（3×近似，非真实值——规则引擎兜底口径，LLM 成功路径不受影响）
+        totalZtCount: realTotalZt ?? Math.max(mainline.ztCount * 3, 30), // 真实值优先；取不到才 3× 近似（诚实标注见 evidence）
         height: mainline.height,
         totalMaxHeight: Math.max(mainline.height, 2),
         promotionRate: null,

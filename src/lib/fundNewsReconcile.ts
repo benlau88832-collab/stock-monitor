@@ -61,8 +61,4 @@ export function reconcileFundNews(check: NewsBoardCheck): ReconcileResult {
   }
   return { board, status: "未兑现", conclusion: "消息面无亮点且资金未进，无交易价值", action: "观望", evidence };
 }
-
-/** 批量对账（供决策总线/展示用） */
-export function reconcileBatch(checks: NewsBoardCheck[]): ReconcileResult[] {
-  return checks.map(reconcileFundNews);
-}
+// v9.137.0（审查 P3-16）：删除死导出 reconcileBatch —— 全项目零调用（reconcileFundNews 为活入口）

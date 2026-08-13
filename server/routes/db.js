@@ -435,7 +435,7 @@ module.exports = function dbRoutes(app) {
       // 各块并行且互不阻塞（某一源挂不影响其余）
       // v9.108.1（T-6c P2-5）：移除冗余死桩 —— 快讯已由 v9.97.0-fix 的 nameLike 真实匹配（:469-473）提供，
       //   原 newsR 占位（恒空桩）结果从未使用（返回组装用 newsRowsR，见 :524）
-      const [conceptsR, nameR, annsR, reportsR, watchR, watchLogR, seatsR, ztR, policyR, sentimentR, indicatorsR, newsAllR] = await Promise.allSettled([
+      const [conceptsR, nameR, annsR, reportsR, watchR, watchLogR, seatsR, ztR, policyR, indicatorsR] = await Promise.allSettled([
         getConcepts(pool, [code]),
         // v9.97.0-fix：news 表 code 是东财文章 ID 而非股票代码 → 快讯按"股票名/代码"标题匹配（zt_snapshot 取名称）
         (async () => {
@@ -455,13 +455,11 @@ module.exports = function dbRoutes(app) {
         pool.query(`SELECT title,time FROM news
           WHERE (title ILIKE '%国务院%' OR title ILIKE '%央行%' OR title ILIKE '%证监会%' OR title ILIKE '%发改委%' OR title ILIKE '%财政部%' OR title ILIKE '%国常会%' OR title ILIKE '%降准%' OR title ILIKE '%降息%' OR title ILIKE '%资本市场%')
           AND time >= $1 ORDER BY time DESC LIMIT 5`, [new Date(Date.now() + 8 * 3600 * 1000 - 3 * 24 * 3600 * 1000).toISOString().slice(0, 10)]),
-        pool.query("SELECT 1", []),
         // v9.97.0（批次 2）：技术指标快照 + 日K（服务端腾讯 fqkline）+ 舆情窗口统计（词典打分 7/30 日）
         (async () => {
           const { computeIndicatorsFor } = require("../lib/indicators");
           return await computeIndicatorsFor(code);
         })(),
-        pool.query("SELECT 1", []),
       ]);
 
       // v9.97.0-fix：股票名（zt_snapshot）→ 快讯按名称匹配（news.code 是文章 ID 非股票代码）

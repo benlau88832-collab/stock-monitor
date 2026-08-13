@@ -60,14 +60,6 @@ export function shouldPush(s: PushSettings, severity: PushSeverity): boolean {
   const order: PushSeverity[] = ["info", "warning", "critical"];
   return order.indexOf(severity) >= order.indexOf(s.minSeverity);
 }
+// v9.137.0（审查 P3-16）：删除死导出 configuredChannels —— 全项目零调用
+//（服务端 routes/push.js 自行实现渠道判定；本函数从未接线）
 
-/** v9.84.2（4.4）：从设置推导"已配置渠道"列表（channel 单选 + 多 key 并存 → 服务端并发推全部） */
-export function configuredChannels(s: PushSettings): PushChannel[] {
-  const out: PushChannel[] = [];
-  if (s.serverchanSctKey) out.push("serverchan");
-  if (s.wechatbotKey) out.push("wechatbot");
-  if (s.barkKey) out.push("bark");
-  if (s.feishuWebhook) out.push("feishu");
-  if (s.qmsgKey) out.push("qq");
-  return out;
-}

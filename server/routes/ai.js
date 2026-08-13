@@ -24,8 +24,9 @@ const TASK_ALLOW = new Set([
   "criticReview", "factorAttribution", "nextGatePredict",
   // v9.99.2（全栈体检 B1）：补齐服务端模式仍活跃的 task —— marginSentiment/stockAggregate 此前不在白名单，
   //   服务端部署形态（浏览器无 Key、走 /api/ai/call）恒 403 "task not allowed" → 两大功能 LLM 从未生效、永远规则版；
-  //   emotionReport/userStyleProfile/newsAnalysis 前端无调用者，一并放行防未来 403
-  "marginSentiment", "stockAggregate", "emotionReport", "userStyleProfile", "newsAnalysis",
+  //   emotionReport/newsAnalysis 前端有调用者，一并放行防未来 403
+  // v9.137.0：userStyleProfile 移除（死任务，前端 aiPrompts.ts 与服务端 aiPrompts.js 模板已同步删除）
+  "marginSentiment", "stockAggregate", "emotionReport", "newsAnalysis",
   // v9.104.0（第四批 C，T-C3）：盘中 LLM 快评（重要新闻四段式）
   "intradayQuickComment",
   // v9.105.0（第五批 E）：政策首写裁决 / 政策解读报告
@@ -75,7 +76,14 @@ module.exports = function aiRoutes(app) {
 
   // v9.110.0（MOD-3 诊断）：用真实部署配置打最小请求，对比"带/不带 chat_template_kwargs"两次，
   // 定位 empty content 真因（chat_template_kwargs 残留？relay 不稳？非标字段？length 截断？）
+  // v9.137.0（审查 P3-05）：加令牌桶 —— 每次 GET 发起 3 次真实上游请求（含 90s reactProbe 烧配额），
+  //   原无任何限流，本地任意页面可反复触发烧钱。1 次/分钟。
+  let diagTokens = 1, diagLastRefill = Date.now();
   app.get("/api/ai/diag", async (req, res) => {
+    const now = Date.now();
+    if (now - diagLastRefill >= 60000) { diagTokens = 1; diagLastRefill = now; }
+    if (diagTokens <= 0) return res.status(429).json({ error: "diag rate limited (1/min)" });
+    diagTokens -= 1;
     if (!(await checkAuth(req, res))) return;
     const baseUrl = process.env.AI_BASE_URL || "https://opencode.ai/zen/go/v1/chat/completions" // v9.110.0（MOD-1 默认值清理）：agnes 已剔除，默认指向 DeepSeek(OpenCode Go);
     const model = process.env.AI_MODEL || "deepseek-v4-flash" // v9.110.0（MOD-1 默认值清理）：agnes 已剔除;
@@ -420,8 +428,10 @@ module.exports = function aiRoutes(app) {
     upstream.on("error", () => {
       try { res.status(502).json({ error: "upstream error" }); } catch { /* 客户端已断开 */ }
     });
-    // v9.83.2：SSE 上游超时 25s→45s（DeepSeek 推理模型长思考场景）
-    upstream.setTimeout(45000, () => { try { upstream.destroy(); } catch { /* 静默 */ } });
+    // v9.137.0（审查 P2-01 修复）：SSE 上游超时 45s → 90s —— 与 /api/ai/call 的 chatComplete
+    //   90s/attempt（llmCore.js）及项目宣称"服务端超时 90s"对齐；长思考（DeepSeek 推理）场景
+    //   45s 截断会静默断流（contentLen>0 时不触发空内容兜底，用户只拿到半截答复）。
+    upstream.setTimeout(90000, () => { try { upstream.destroy(); } catch { /* 静默 */ } });
     upstream.write(payload);
     upstream.end();
     // 客户端断开 → 终止上游

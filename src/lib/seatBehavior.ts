@@ -53,8 +53,10 @@ const BEHAVIOR_HINT: Record<BehaviorTag, string> = {
 };
 
 /**
- * 根据 SeatProfile（含 T+1/T+5 均收益、胜率、频次）判断行为模式
+ * 根据 SeatProfile（含 T+1 均收益、胜率、频次）判断行为模式
  * 优先级：砸盘派 > 格局派 > 波段派 > 接力派 > 一日游 > 数据不足 > 新面孔
+ * v9.137.0（审查 P3-17）：名实对齐 —— 原注释宣称"T+1/T+5 均收益"但 T+5 从未参与判定
+ *   （SeatProfile.winRateT5 恒 null，见 :132），判定实际只用 T+1 维度；注释改为真实口径
  */
 export function detectSeatBehavior(p: SeatProfile): SeatBehavior {
   const reasons: string[] = [];

@@ -82,34 +82,8 @@ export function buildThemeLadder(pool: ZTPoolItem[]): ThemeGroup[] {
 }
 
 // ============== v9.26.15 方案A：概念级聚类 ==============
-/**
- * 按"概念归属"聚类（一对多展开：一只涨停股可属多个概念）
- * 与开盘啦/同花顺口径一致 —— 解决 hybk 行业粒度太细、无法识别"通信/AI应用/算力"等概念的问题
- * @param pool    涨停池原始数据
- * @param conceptOf  code → 折叠后的概念大类列表（来自 datacenter RPT_F10_CORETHEME_BOARDTYPE + conceptGroups 折叠）
- * @param fallback   无概念数据时的回退分组键（默认 hybk）
- */
-export function buildThemeLadderByConcept(
-  pool: ZTPoolItem[],
-  conceptOf: (code: string) => string[] | null,
-  fallback: (item: ZTPoolItem) => string = (item) => item.hybk || "其他",
-): ThemeGroup[] {
-  if (!pool || pool.length === 0) return [];
-
-  const groupMap = new Map<string, ZTPoolItem[]>();
-  for (const item of pool) {
-    const concepts = conceptOf(String(item.c ?? ""));
-    const keys = concepts && concepts.length > 0 ? concepts : [fallback(item)];
-    for (const key of keys) {
-      const arr = groupMap.get(key) ?? [];
-      arr.push(item);
-      groupMap.set(key, arr);
-    }
-  }
-
-  return buildGroupsFromMap(groupMap);
-}
-
+// v9.137.0（审查 P3-16）：删除死导出 buildThemeLadderByConcept —— 全项目零调用
+//（概念聚类入口实际是 buildThemeLadder；本函数为历史规划残留，buildGroupsFromMap 仍被活路径使用）
 /** 从"分组名 → 涨停股[]"构建 ThemeGroup[]（公共逻辑：高度/先锋/中军/梯队/断档/排序） */
 function buildGroupsFromMap(groupMap: Map<string, ZTPoolItem[]>): ThemeGroup[] {
   const groups: ThemeGroup[] = [];

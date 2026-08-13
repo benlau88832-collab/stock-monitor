@@ -93,6 +93,13 @@ export async function savePost(post: DecisionPost): Promise<void> {
       description: `AI裁决 ${post.mainline ?? ""} → 人类拍 ${post.humanAction}`,
     });
   } catch { /* 失败不影响主链 */ }
+  // v9.137.0（审查 P1-02 修复）：拍板后即时刷新用户画像 —— 原 updateUserProfile 全 src 零生产调用
+  //   （"每次拍板后更新"注释承诺从未兑现），AI prompt 注入的"画像参考"恒为空画像，记忆修正层断线。
+  //   此处 fire-and-forget：画像刷新失败不影响拍板落库。
+  try {
+    const { updateUserProfile } = await import("./userProfile");
+    updateUserProfile();
+  } catch { /* 静默 */ }
 }
 
 /** 构造拍板对象（提供给按钮 handler 用） */

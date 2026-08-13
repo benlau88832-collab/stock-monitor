@@ -49,6 +49,15 @@ export default function AskAI({ context, code, name, placeholder, compact = fals
     if (!q || busy) return;
     setBusy(true);
     setResult(null);
+    // v9.137.0（审查 P2-11 修复）：模块级问 AI 时登记当前个股到全局 UI 上下文 ——
+    //   原 setCurrentStock 仅 StockWatchlist 一处写入，龙虎榜/消息面等模块的 AI 上下文
+    //   感知缺个股视角（注释宣称的"龙头点击/龙虎榜行点击"登记从未实现）
+    try {
+      if (code) {
+        const { setCurrentStock } = await import("../lib/uiContext");
+        setCurrentStock(code, name ?? code);
+      }
+    } catch { /* 上下文登记失败不影响提问 */ }
     try {
       // v9.92.0：上下文 = 全局登记（页面/个股）+ 模块现场注入
       const ui = getUiContext();

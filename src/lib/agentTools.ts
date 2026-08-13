@@ -36,6 +36,15 @@ export interface ToolContext {
   sealRed?: number;
   sealYellow?: number;
   trapFlagged?: boolean;
+  /** v9.137.0（审查 P1-05）：准入/组合风险真实结果透传（getDecisionEvidence 用；
+   *  缺失时工具内部读纪律台账真值或诚实缺省，不再伪造"已检查"） */
+  admissionAction?: "可上车" | "观望" | "禁止";
+  admissionConfidence?: number;
+  admissionReason?: string;
+  riskOverLimit?: boolean;
+  riskLossStreak?: number;
+  riskMaxPct?: number;
+  trapRate?: number;
   lhbBoost?: boolean;
   fundStreakInflow?: boolean;
   premiumAvg?: number | null;
@@ -432,18 +441,37 @@ export function getAgentTools(): AgentTool[] {
       kind: "data",
       execute: async (ctx: ToolContext) => {
         const { collectEvidence } = await import("./decisionCollector");
+        // v9.137.0（审查 P1-05 修复）：去掉硬编码半假参数 —— 原实现 admissionAction 恒为
+        //   "可上车"/"禁止"（与真实准入闸输出无关）、admissionConfidence:70、riskOverLimit:false、
+        //   riskLossStreak:0、riskMaxPct:70，LLM 调用本工具会引用非真实证据。
+        //   修复策略：① 组合风险字段从纪律台账读真实值（lossStreak/maxTotalPct/超限判定）；
+        //   ② 准入结论缺失时诚实缺省"观望"并注明未注入（引导 LLM 先调 getAdmissionVerdict），
+        //   不再伪造"准入已通过/已拒绝"。
+        let riskOverLimit = ctx.riskOverLimit ?? false;
+        let riskLossStreak = ctx.riskLossStreak ?? 0;
+        let riskMaxPct = ctx.riskMaxPct ?? 70;
+        try {
+          const { loadDisciplineState, computeDisciplineViolations } = await import("./discipline");
+          const ds = loadDisciplineState();
+          riskLossStreak = ctx.riskLossStreak ?? ds.lossStreak ?? 0;
+          riskMaxPct = ctx.riskMaxPct ?? ds.settings?.maxTotalPct ?? 70;
+          riskOverLimit = ctx.riskOverLimit ?? computeDisciplineViolations(ds).some(v => v.level === "critical" && v.text.includes("总仓位"));
+        } catch { /* 纪律台账不可用 → 用缺省 */ }
+        const admissionProvided = ctx.admissionAction != null;
         return collectEvidence({
           mainline: ctx.mainline ?? "—",
-          admissionAction: (ctx.trapFlagged ? "禁止" : "可上车") as never,
-          admissionConfidence: 70,
-          admissionReason: "Agent 调用",
+          admissionAction: ctx.admissionAction ?? "观望",
+          admissionConfidence: ctx.admissionConfidence ?? 50,
+          admissionReason: admissionProvided
+            ? (ctx.admissionReason ?? "Agent 调用")
+            : "准入结果未注入（调用方未运行 getAdmissionVerdict），按观望处理",
           marketState: ctx.marketState ?? "分歧震荡",
           marketFactor: ctx.marketFactor ?? 0.5,
-          riskOverLimit: false,
-          riskLossStreak: 0,
-          riskMaxPct: 70,
+          riskOverLimit,
+          riskLossStreak,
+          riskMaxPct,
           trapFlagged: ctx.trapFlagged ?? false,
-          trapRate: ctx.trapFlagged ? 0.5 : 0,
+          trapRate: ctx.trapRate ?? 0,
           sealRedCount: ctx.sealRed ?? 0,
           sealYellowCount: ctx.sealYellow ?? 0,
           sysRiskLevel: ctx.riskLevel ?? "none",
@@ -597,6 +625,22 @@ export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
         }
         const { checkStockExit } = await import("./stockExit");
         const { stockLimitPct } = await import("./api"); // v9.128.0（一致性审查 P1-4）：20cm/30cm 阈值
+        // v9.137.0（审查 P2-09 修复）：leaderAlive 真实化 —— 原硬编码 true，"龙头熄火"离场规则
+        //   （stockExit.ts:70）生产永不可达。现拉今日涨停池（模块级 60s 缓存），判定同主线最高板
+        //   龙头是否仍在池中；池拉取失败/主线未知 → 诚实缺省 true（不误报离场，与"数据缺失不误报"纪律一致）。
+        let leaderAlive = true;
+        try {
+          const { fetchLimitPoolSummary } = await import("./api");
+          const pool = await fetchLimitPoolSummary();
+          const rows: Array<{ c?: string; n?: string; hybk?: string; lbc?: number }> = pool?.rawZTPool ?? [];
+          const ml = String(stock.mainline ?? "");
+          if (ml && rows.length > 0) {
+            const inMl = rows.filter(r => (String(r.hybk ?? "").includes(ml)) || (String(r.n ?? "").includes(ml)));
+            const leader = inMl.sort((a, b) => (b.lbc ?? 1) - (a.lbc ?? 1))[0];
+            // 龙头 = 同主线最高板；若龙头就是本股自身，不触发"跟风离场"
+            leaderAlive = !leader || String(leader.c ?? "") === stock.code;
+          }
+        } catch { /* 池拉取失败 → 缺省 true */ }
         const r = checkStockExit({
           code: stock.code, name: stock.name,
           cost: null, // 无持仓成本 → 不触发成本止损（诚实 null，非假成本 10）
@@ -604,11 +648,11 @@ export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
           mainNetPct: real.mainNetPct ?? 0, retailNetPct: 0,
           mainNet: real.mainNet ?? 0, mainNet5d: real.mainNet5d ?? 0, mainNet10d: real.mainNet10d ?? 0,
           sealFund: stock.sealFund, amount: stock.amount,
-          leaderAlive: true, isLeader: stock.boardCount >= 2,
+          leaderAlive, isLeader: stock.boardCount >= 2,
           mainline: stock.mainline,
           limitPct: stockLimitPct(stock.code),
         });
-        return { level: r.level, reasons: r.reasons };
+        return { level: r.level, reasons: r.reasons, leaderAlive };
       },
     },
   ];

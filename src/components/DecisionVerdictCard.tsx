@@ -90,8 +90,17 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
     setStockVerdicts(out);
     setStockRunning(false);
   };
-  // P0-1：记录最后一次 decision_log 的 ts（供 PostButtons 幂等用）
   const aiLogTsRef = useRef<string | null>(null);
+  // v9.137.0（审查 P3-05）：刷新持久化 —— 原 ref 初始恒 null，页面刷新后 aiLogTs=null → 拍板
+  //   decisionLogRef=null → computePostHitrate 无配对落入"规则投票"桶，归因失真。
+  //   现从当日 decision_log 最后一条初始化（同一裁决刷新后仍能正确配对拍板）。
+  if (aiLogTsRef.current === null) {
+    try {
+      const key = `decision_log:${localDateStr()}`;
+      const arr = JSON.parse(localStorage.getItem(key) ?? "[]") as Array<{ ts?: string }>;
+      aiLogTsRef.current = arr.length > 0 ? (arr[arr.length - 1].ts ?? null) : null;
+    } catch { aiLogTsRef.current = null; }
+  }
   const verdict: DecisionVerdict | null = useMemo(() => {
     if (sources.length === 0) return null;
     return runConsensus(sources, { signalGates, factorStats });

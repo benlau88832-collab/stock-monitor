@@ -146,5 +146,23 @@
 //   任务5 trade_ledger 闭环：纪律面板 sell/stop 自动匹配持仓成本（体检持仓 avgCost 优先）+ computePnl
 //     真实盈亏落 pnl_pct；体检持仓一键"卖"联动带出代码/名称/数量
 // ============================================================
-export const APP_VERSION = "v9.136.0";
+// v9.137.0（审查报告《AI大脑_展示vs协同》全量修复发布）：
+//   P0：① 盘中精灵 cron 6 字段→5 字段（*/2 秒位误触发修复，锁饿死盘中大脑/情绪快照断更根因）；
+//       ② 15:40 主链 dateStr 块级作用域 ReferenceError 修复（盘后链/checkpoint/重复计费根因）；
+//   P1：③ /api/brain/pg 白名单失效修复（pgTool 走 apiFetch，PG 工具组复活）；
+//       ④ 用户画像 updateUserProfile 接线（savePost 后）——记忆修正层复活；
+//       ⑤ 连亏熔断 recordTradeResult 接线（tradeLedger sell/stop）——纪律层复活；
+//       ⑥ getDecisionEvidence 硬编码半假参数修复（真实纪律数据 + 诚实缺省）；
+//       ⑦ factorLib series 样本口径统一（n<5 不判失效）；
+//       ⑧ 死代码清理：stockScore 五维引擎 / decisionDirect / themeAnalysis 前端模块 /
+//          userStyleProfile 任务 / 10+ 死导出；
+//       ⑨ stream 超时 45s→90s 对齐；⑩ 拍板快速反馈 chips（否决/观望结构化理由 → 画像反哺）；
+//   P2：⑪ 待你拍板任务条（PendingVerdictBar）；⑫ 我的画像卡（UserProfileCard）；
+//       ⑬ 选股清单动作按钮（加入自选/加盯价）；⑭ T+5 批量回填接线；⑮ anomalyTier 涨停池数据注入；
+//       ⑯ stockExit leaderAlive 真实化；⑰ intentRouter 调研正则对齐；⑱ uiContext 个股登记补全；
+//   P3：⑲ 休市日历单源化（src/shared/trade-holidays.js，双端共用）；⑳ 死桩/注释名实/ut 统一/
+//       diag 限流/consoleDigest 分桶/信号账本类型收口等批量修复；
+//   附：AGENTS.md 错误教训（*/2 秒位）纠正。
+// ============================================================
+export const APP_VERSION = "v9.137.0";
 export const BUILD_DATE = "2026-08-13";

@@ -28,22 +28,5 @@ export const ANN_CATEGORY_META: Record<AnnCategory, { color: string; short: stri
   其他:     { color: "bg-slate-500/20 text-slate-400", short: "其他" },
 };
 
-export interface AnnDensityResult {
-  /** 该股 24h 内公告条数 */
-  density: number;
-  /** 是否密集（≥3 条 = 可能有大事） */
-  alert: boolean;
-}
-
-export function detectAnnDensity(
-  code: string,
-  anns: Array<{ stockCode: string; time?: string }>,
-): AnnDensityResult {
-  const now = Date.now();
-  const recent = anns.filter(a => {
-    if (String(a.stockCode) !== String(code)) return false;
-    const t = a.time ? new Date(a.time.replace(" ", "T")).getTime() : NaN;
-    return !Number.isNaN(t) && t > now - 24 * 3600 * 1000;
-  });
-  return { density: recent.length, alert: recent.length >= 3 };
-}
+// v9.137.0（审查 P3-16）：删除死导出 detectAnnDensity/AnnDensityResult —— 全项目零调用
+//（grep 仅定义处；"公告密集度提醒"规划未落地，保留会误导后续维护者以为已接线）

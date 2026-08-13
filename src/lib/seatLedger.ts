@@ -252,25 +252,8 @@ export interface SeatHistoryRow {
   backfilled: boolean;
 }
 
-/** 查某席位近 N 天所有上榜记录（按日期倒序） */
-export function buildSeatHistoryByDept(deptName: string, maxDays = 60): SeatHistoryRow[] {
-  const dates = getAllSeatDates().slice(0, maxDays);
-  const out: SeatHistoryRow[] = [];
-  for (const date of dates) {
-    const records = loadDayRecords(date);
-    for (const r of records) {
-      if (r.deptName !== deptName) continue;
-      out.push({
-        date, stockCode: r.stockCode, stockName: r.stockName,
-        direction: r.direction, net: r.net, pctT1: r.pctT1, pctT5: r.pctT5,
-        backfilled: r.backfilled,
-      });
-    }
-  }
-  out.sort((a, b) => b.date.localeCompare(a.date));
-  return out;
-}
-
+// v9.137.0（审查 P3-16）：删除死导出 buildSeatHistoryByDept/SeatHistoryRow —— 全项目零调用
+//（席位历史实际由 DragonTiger 的 SeatTable 按 date 分片直接读 loadDayRecords，本函数从未接线）
 // ============== v9.14：按股票聚合（席位画像/连续动作 + 展开） ==============
 // 单只股票层面的聚合：每只股票上榜 N 次、累计净买入、最近一次 T+1
 export interface SeatStockAgg {

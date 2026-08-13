@@ -1,25 +1,26 @@
-// P3-3：PWA Service Worker —— 离线缓存 + 可安装
-// 注意：本项目是 vite-plugin-singlefile 单文件产物（docs/index.html 内联全部 JS/CSS），
-// SW 只需缓存 index.html 本体即可实现"离线打开最近一次版本"。
-// v9.83.1：CACHE v1→v2 —— 触发 SW 更新并清掉旧缓存（activate 删除非当前 CACHE）
-// v9.99.1：CACHE v2→v3 —— ①fetch 显式 { cache: "no-store" }：服务端 ETag + max-age=0 时
-//   SW 的 fetch() 会拿到 304 回退 HTTP 磁盘缓存的旧 body（network-first 形同虚设，发新版页面旧版 JS 的坑）；
-//   ②v3 强制旧 SW 退役（activate 清 v2 缓存）
-// v9.113.1（T1-1）：CACHE v28→v29 —— 主面板 PG-first 改造发版
-// v9.114.0（T5-3）：SW 版本强制更新 —— CACHE 名 +1 同时，activate 通知所有打开页面强制 reload，
-//   消除"需硬刷新"约定（浏览器可能持旧 SW/旧页面；skipWaiting 已保证新 SW 立即接管）
-// v9.122.0（卓越 S3-2b）：CACHE v37→v38 —— 前瞻预判接入发版
-// v9.123.0（卓越审查修复）：CACHE v38→v39 —— 决策卡游资战术/认知时段/资金明暗盘前端口径发版
-// v9.125.0（蓝图批次 B）：CACHE v39→v40 —— 个股雷达资讯聚合区发版（v9.124 纯服务端未 +1）
-// v9.128.0（一致性审查修复）：CACHE v40→v41 —— 决策卡阶段口径/决策窗口边界/颜色惯例前端发版
-// v9.129.0（一致性收敛重构）：CACHE v41→v42 —— 情绪体系单源化（情绪分/阶段词表四面板同口径）
-// v9.130.0（终审修复批次）：CACHE v42→v43 —— 竞价五步流水/竞价作战区上移/个股监控资讯聚合
-// v9.131.0（终审修复批次二）：CACHE v43→v44 —— 场景真实数据/纪律教练接线/推送去重
-// v9.132.0（终审复核 D2 修正）：CACHE v44→v45 —— 竞价上车机会候选池修复
-// v9.133.0（游资改造·阶段一）：CACHE v45→v46 —— 三时段作战台布局收敛
-// v9.135.0（游资改造·阶段二~五）：CACHE v46→v47 —— 交易闭环/主线徽标/阈值收口/竞价补强
-// v9.136.0（交接 0813 五任务批次）：主线单源/闸门收敛/decisions 契约/台账闭环 发版
-const CACHE = "stock-monitor-v48";
+﻿// P3-3锛歅WA Service Worker 鈥斺€?绂荤嚎缂撳瓨 + 鍙畨瑁?
+// 娉ㄦ剰锛氭湰椤圭洰鏄?vite-plugin-singlefile 鍗曟枃浠朵骇鐗╋紙docs/index.html 鍐呰仈鍏ㄩ儴 JS/CSS锛夛紝
+// SW 鍙渶缂撳瓨 index.html 鏈綋鍗冲彲瀹炵幇"绂荤嚎鎵撳紑鏈€杩戜竴娆＄増鏈?銆?
+// v9.83.1锛欳ACHE v1鈫抳2 鈥斺€?瑙﹀彂 SW 鏇存柊骞舵竻鎺夋棫缂撳瓨锛坅ctivate 鍒犻櫎闈炲綋鍓?CACHE锛?
+// v9.99.1锛欳ACHE v2鈫抳3 鈥斺€?鈶爁etch 鏄惧紡 { cache: "no-store" }锛氭湇鍔＄ ETag + max-age=0 鏃?
+//   SW 鐨?fetch() 浼氭嬁鍒?304 鍥為€€ HTTP 纾佺洏缂撳瓨鐨勬棫 body锛坣etwork-first 褰㈠悓铏氳锛屽彂鏂扮増椤甸潰鏃х増 JS 鐨勫潙锛夛紱
+//   鈶3 寮哄埗鏃?SW 閫€褰癸紙activate 娓?v2 缂撳瓨锛?
+// v9.113.1锛圱1-1锛夛細CACHE v28鈫抳29 鈥斺€?涓婚潰鏉?PG-first 鏀归€犲彂鐗?
+// v9.114.0锛圱5-3锛夛細SW 鐗堟湰寮哄埗鏇存柊 鈥斺€?CACHE 鍚?+1 鍚屾椂锛宎ctivate 閫氱煡鎵€鏈夋墦寮€椤甸潰寮哄埗 reload锛?
+//   娑堥櫎"闇€纭埛鏂?绾﹀畾锛堟祻瑙堝櫒鍙兘鎸佹棫 SW/鏃ч〉闈紱skipWaiting 宸蹭繚璇佹柊 SW 绔嬪嵆鎺ョ锛?
+// v9.122.0锛堝崜瓒?S3-2b锛夛細CACHE v37鈫抳38 鈥斺€?鍓嶇灮棰勫垽鎺ュ叆鍙戠増
+// v9.123.0锛堝崜瓒婂鏌ヤ慨澶嶏級锛欳ACHE v38鈫抳39 鈥斺€?鍐崇瓥鍗℃父璧勬垬鏈?璁ょ煡鏃舵/璧勯噾鏄庢殫鐩樺墠绔彛寰勫彂鐗?
+// v9.125.0锛堣摑鍥炬壒娆?B锛夛細CACHE v39鈫抳40 鈥斺€?涓偂闆疯揪璧勮鑱氬悎鍖哄彂鐗堬紙v9.124 绾湇鍔＄鏈?+1锛?
+// v9.128.0锛堜竴鑷存€у鏌ヤ慨澶嶏級锛欳ACHE v40鈫抳41 鈥斺€?鍐崇瓥鍗￠樁娈靛彛寰?鍐崇瓥绐楀彛杈圭晫/棰滆壊鎯緥鍓嶇鍙戠増
+// v9.129.0锛堜竴鑷存€ф敹鏁涢噸鏋勶級锛欳ACHE v41鈫抳42 鈥斺€?鎯呯华浣撶郴鍗曟簮鍖栵紙鎯呯华鍒?闃舵璇嶈〃鍥涢潰鏉垮悓鍙ｅ緞锛?
+// v9.130.0锛堢粓瀹′慨澶嶆壒娆★級锛欳ACHE v42鈫抳43 鈥斺€?绔炰环浜旀娴佹按/绔炰环浣滄垬鍖轰笂绉?涓偂鐩戞帶璧勮鑱氬悎
+// v9.131.0锛堢粓瀹′慨澶嶆壒娆′簩锛夛細CACHE v43鈫抳44 鈥斺€?鍦烘櫙鐪熷疄鏁版嵁/绾緥鏁欑粌鎺ョ嚎/鎺ㄩ€佸幓閲?
+// v9.132.0锛堢粓瀹″鏍?D2 淇锛夛細CACHE v44鈫抳45 鈥斺€?绔炰环涓婅溅鏈轰細鍊欓€夋睜淇
+// v9.133.0锛堟父璧勬敼閫犅烽樁娈典竴锛夛細CACHE v45鈫抳46 鈥斺€?涓夋椂娈典綔鎴樺彴甯冨眬鏀舵暃
+// v9.135.0锛堟父璧勬敼閫犅烽樁娈典簩~浜旓級锛欳ACHE v46鈫抳47 鈥斺€?浜ゆ槗闂幆/涓荤嚎寰芥爣/闃堝€兼敹鍙?绔炰环琛ュ己
+// v9.136.0锛堜氦鎺?0813 浜斾换鍔℃壒娆★級锛氫富绾垮崟婧?闂搁棬鏀舵暃/decisions 濂戠害/鍙拌处闂幆 鍙戠増
+// v9.137.0（审查全量修复发布）：CACHE v48→v49 —— AI 大脑审查修复（精灵频率/15:40链/PG工具/反馈闭环/待拍板条/画像卡）
+const CACHE = "stock-monitor-v49";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {
@@ -32,11 +33,11 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     (async () => {
-      // 清理旧缓存（CACHE 名每次 +1，旧缓存一律删除）
+      // 娓呯悊鏃х紦瀛橈紙CACHE 鍚嶆瘡娆?+1锛屾棫缂撳瓨涓€寰嬪垹闄わ級
       const keys = await caches.keys();
       await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
       await self.clients.claim();
-      // v9.114.0（T5-3）：新 SW 激活 = 新版本上线 → 通知所有窗口强制刷新（无硬刷新即生效）
+      // v9.114.0锛圱5-3锛夛細鏂?SW 婵€娲?= 鏂扮増鏈笂绾?鈫?閫氱煡鎵€鏈夌獥鍙ｅ己鍒跺埛鏂帮紙鏃犵‖鍒锋柊鍗崇敓鏁堬級
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       wins.forEach((c) => c.postMessage({ type: "FORCE_RELOAD" }));
     })()
@@ -45,13 +46,13 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   const req = e.request;
-  // 仅缓存同源文档/静态资源；API 请求不缓存（实时数据）
+  // 浠呯紦瀛樺悓婧愭枃妗?闈欐€佽祫婧愶紱API 璇锋眰涓嶇紦瀛橈紙瀹炴椂鏁版嵁锛?
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
   if (url.pathname.startsWith("/api/")) return;
-  // 网络优先，失败回退缓存（离线可看最近一次版本）
-  // v9.99.1：cache: "no-store" —— 绕过 HTTP 磁盘缓存（ETag/max-age=0 场景下 304 会回退旧 body）
+  // 缃戠粶浼樺厛锛屽け璐ュ洖閫€缂撳瓨锛堢绾垮彲鐪嬫渶杩戜竴娆＄増鏈級
+  // v9.99.1锛歝ache: "no-store" 鈥斺€?缁曡繃 HTTP 纾佺洏缂撳瓨锛圗Tag/max-age=0 鍦烘櫙涓?304 浼氬洖閫€鏃?body锛?
   e.respondWith(
     fetch(req, { cache: "no-store" })
       .then((resp) => {

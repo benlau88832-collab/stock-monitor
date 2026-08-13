@@ -37,7 +37,9 @@ function valueRank(key: string): number {
   if (key.startsWith("push_settings_v1") || key.startsWith("push_cooldown_v1")) return 1;
   if (key.startsWith("signal_ledger") || key.startsWith("review_diary")) return 1; // 账本：保留
   if (key.startsWith("ai:")) return 2;
-  return 1; // 其余（设置/自选股等）最低优先级淘汰
+  // v9.137.0（审查 P3-19）：注释名实对齐 —— 原"最低优先级淘汰"与 rank 语义相反
+  //（rank 越小越后淘汰 = 高价值保留）；其余（设置/自选股等）默认 rank1 = 最后才淘汰
+  return 1;
 }
 
 /** 优先淘汰"低价值 key"直到低于警戒线；返回清理条数 */

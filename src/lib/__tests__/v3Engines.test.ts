@@ -106,7 +106,7 @@ describe("factorLib 滚动 IC 序列", () => {
     expect(last.reversed).toBe(true);   // 而是"方向反转"（需人工复核）
   });
 
-  it("样本不足（<5）→ 直接判失效（与 decisionBus 门控一致）", () => {
+  it("样本不足（<5）→ 不判失效（v9.137.0 口径：与 computeFactorIC 的 v9.77 修复对齐，积累期不误杀）", () => {
     const f = FACTORS.find(x => x.id === "nuclear")!;
     const rows = markNextWin(Array.from({ length: 4 }, (_, i) => ({
       date: `d${i}`,
@@ -117,7 +117,7 @@ describe("factorLib 滚动 IC 序列", () => {
     const series = computeFactorIcSeries(f, rows, 10);
     const last = series[series.length - 1];
     expect(last.samples).toBeLessThan(5);
-    expect(last.decayed).toBe(true);
+    expect(last.decayed).toBe(false);   // 样本不足 ≠ 失效（由 samples 字段诚实展示）
   });
 
   it("evaluateFactorIcSeries 覆盖全部注册因子（补全字段后有序列）", () => {
@@ -136,7 +136,8 @@ describe("factorLib 自动处置", () => {
       date: `d${i}`,
       ic,
       samples,
-      decayed: samples < 5 || Math.abs(ic) < 0.05,
+      // v9.137.0 口径对齐：仅样本≥5 且 |IC|<0.05 判失效
+      decayed: samples >= 5 && Math.abs(ic) < 0.05,
       reversed: rev ?? false,
     }));
 

@@ -53,8 +53,7 @@ const TASK_CONFIG = {
   factorAttribution: { temperature: 0.2, maxTokens: 2000, thinking: false },
   // v9.75（阶段二）：次日闸门预测 —— 小输出结构化
   nextGatePredict: { temperature: 0.3, maxTokens: 2000, thinking: false },
-  // P3-4：用户风格学习 —— 周度低频，中等输出
-  userStyleProfile: { temperature: 0.4, maxTokens: 2000, thinking: false },
+  // v9.137.0：userStyleProfile 死任务删除（前端 aiPrompts.ts 同步删除，服务端 runUserStyleProfile 自建 prompt 不经此表）
   newsAnalysis: { temperature: 0.4, maxTokens: 2000, thinking: false }, // v9.104.0：700→2000（推理模型铁律）
   // v9.95.2：两融情绪研判 —— 小输出结构化
   marginSentiment: { temperature: 0.2, maxTokens: 2000, thinking: false },
@@ -246,8 +245,6 @@ catalystScore 按影响力度：国常会级 85-100 / 部委级 65-84 / 行业�
   factorAttribution: (p) => ({ system: `你是A股量化因子研究员，擅长解释因子失效的市场原因。只输出JSON。`, user: p.prompt }),
   // v9.75（阶段二）：次日闸门预测 —— 结合今日盘面+隔夜外围+政策，预判明日闸门状态
   nextGatePredict: (p) => ({ system: `你是A股市场情绪预判师。基于今日盘面与隔夜信息，预判明日开盘市场闸门状态（全开/谨慎/低仓/未知）。只输出JSON。`, user: p.prompt }),
-  // P3-4：用户风格学习 —— 从历史拍板/盈亏推断交易风格与心理偏差
-  userStyleProfile: (p) => ({ system: `你是A股行为金融分析师。基于用户历史交易数据，推断其交易风格与心理偏差。只输出JSON。`, user: p.prompt }),
   newsAnalysis: (p) => ({ system: `你是A股盘前/盘后资讯分析师，擅长从海量快讯中提炼关键信息并回答具体问题。
 要求：
 1. 先说结论再列要点，≤250字，直接输出正文（不要标题装饰）

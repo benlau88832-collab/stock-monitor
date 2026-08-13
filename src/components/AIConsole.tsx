@@ -161,6 +161,37 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
         } catch { /* data 档失败 → 落入流式/ReAct 兜底 */ }
       }
 
+      // v9.137.0（审查 P1-08 修复）：decision 档 → 决策直达（kernel.composeDecision 纯函数，秒级、
+      //   不烧 LLM、永不降级）—— 原 intentRouter 声明"decision(决策直达)"但 AIConsole 未接，
+      //   decision 意图实际落入 ReAct（弱模型多轮 + 工具循环，慢且可能降级）。
+      //   失败/无代码 → 静默落入 ReAct 完整链路。
+      if (intent === "decision") {
+        try {
+          const codeMatch = q.match(/\d{6}/);
+          const code = codeMatch ? codeMatch[0] : null;
+          if (code) {
+            const { composeDecision } = await import("../lib/decisions/kernel");
+            const v = await composeDecision({ code });
+            if (v && v.pillars) {
+              const lines = [
+                `🎯 决策直达（五支柱规则引擎，秒级非 LLM）`,
+                `裁决：${v.decision}（综合 ${v.score} 分）`,
+                v.suggestedPositionPct != null ? `建议仓位 ${v.suggestedPositionPct}%` : "",
+                v.stopLossPct != null ? `止损 ${v.stopLossPct}%` : "",
+                v.targetPct != null ? `止盈 +${v.targetPct}%` : "",
+                v.tactics?.buyPoint ? `买点：${v.tactics.buyPoint}` : "",
+                v.tactics?.stageAction ? `情绪买卖点：${v.tactics.stageAction}` : "",
+                ...(v.blocks.length ? [`✗ ${v.blocks.join("；")}`] : []),
+                ...(v.reasons.length ? [`✓ ${v.reasons.join("；")}`] : []),
+              ].filter(Boolean);
+              setMsgs(m2 => [...m2, { role: "ai", text: lines.join("\n"), source: "rule" }]);
+              setBusy(false);
+              return;
+            }
+          }
+        } catch { /* decision 档失败 → ReAct 兜底 */ }
+      }
+
       // v9.84.2（AI大脑层 · 3.4）：简单问答 → 真 SSE 流式（逐字渲染，无工具轮）；
       // 失败（非本地/上游异常）→ 静默回退 ReAct 完整链路
       if (intent === "summary" || isSimpleQuestion(q)) {
@@ -170,7 +201,7 @@ export default function AIConsole({ siteContext }: { siteContext: AssistantSiteC
           // v9.111.1（S-4）：思考过程区（先流式渲染 reasoning；正文开始后自动收起）
           setReasoning("");
           setShowReasoningAuto(false);
-          const t = setTimeout(() => ctrl.abort(), 60000); // 前端兜底：上游 45s + 缓冲（ctrl 来自 ask 顶部）
+          const t = setTimeout(() => ctrl.abort(), 95000); // v9.137.0（审查 P2-01）：前端兜底 60s→95s（上游已放宽至 90s，60s 会在长思考时先断）
           const streamed = await streamChat(
             { system, user: q, maxTokens: 4000 }, // v9.107.0（全站助手）：简单问答流式 max_tokens 提档
             (delta) => {

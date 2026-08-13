@@ -732,7 +732,7 @@ export default function DragonTiger() {
                   const itemSignals = seatSignals.filter(s => s.stockCode === item.code);
                   return (
                     <Fragment key={key}>
-                      <tr className="border-t border-white/5 hover:bg-white/5 cursor-pointer" onClick={() => toggleExpand(item)}>
+                      <tr className="border-t border-white/5 hover:bg-white/5 cursor-pointer" onClick={() => { toggleExpand(item); try { import("../lib/uiContext").then(m => m.setCurrentStock(String(item.code), String(item.name ?? ""))); } catch { /* 上下文登记失败不影响展开 */ } }}>
                         <td className="px-3 py-2">
                           <span className="flex h-5 w-5 items-center justify-center rounded bg-white/10 text-xs text-slate-300">
                             {isExp ? "−" : "+"}

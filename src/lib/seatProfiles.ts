@@ -135,9 +135,5 @@ export function isHotMoneySeat(deptName: string): boolean {
   const tag = matchSeatTag(deptName);
   return tag?.category === "hotmoney";
 }
-
-/** 判断是否为顶级游资（用于高亮显示） */
-export function isTopHotMoney(deptName: string): boolean {
-  const tag = matchSeatTag(deptName);
-  return tag?.color === C.top;
-}
+// v9.137.0（审查 P3-16）：删除死导出 isTopHotMoney —— 全项目零调用
+//（顶级游资高亮由 matchSeatTag().color 直接判定，本函数从未接线）

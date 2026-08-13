@@ -30,6 +30,9 @@ export interface UserProfile {
   mainlineStats: Record<string, MainlineStat>;
   /** 风险偏好：>0 = 用户比 AI 激进（拍板 confirm 时 AI 置信偏低仍拍） */
   riskTendency: number;
+  /** v9.137.0（审查 P1-11）：对 AI 裁决的否决/观望快速反馈计数（key → 次数），
+   *  反哺 prompt："用户认为 AI 过于乐观/数据不符"等修正信号不再丢失 */
+  feedbackStats: Record<string, number>;
 }
 
 const KEY = "user_profile_v1";
@@ -45,6 +48,7 @@ const EMPTY: UserProfile = {
   lossStreak: 0,
   mainlineStats: {},
   riskTendency: 0,
+  feedbackStats: {},
 };
 
 export function loadUserProfile(): UserProfile | null {
@@ -129,6 +133,16 @@ export function updateUserProfile(): UserProfile {
     p.riskTendency = Math.round((avg - 80) * 10) / 10;  // 负 = 比 AI 激进（低置信也拍）
   }
 
+  // 7. v9.137.0（审查 P1-11）：否决/观望快速反馈聚合 —— 从 notes 的 `[反馈:key]` 前缀统计
+  //    （PostButtons 快速反馈 chips 写入），供 prompt 引用"用户认为 AI 哪里不对"
+  const fbCounts: Record<string, number> = {};
+  for (const post of posts) {
+    if (post.humanAction === "confirm" || !post.notes) continue;
+    const m = post.notes.match(/\[反馈:([a-z_]+)\]/);
+    if (m && m[1]) fbCounts[m[1]] = (fbCounts[m[1]] ?? 0) + 1;
+  }
+  p.feedbackStats = fbCounts;
+
   saveProfile(p);
   return p;
 }
@@ -148,6 +162,14 @@ export function profileToPrompt(p: UserProfile | null): string {
   ];
   if (p.avgPnlT5 != null) parts.push(`平均 T+5 盈亏 ${p.avgPnlT5 > 0 ? "+" : ""}${p.avgPnlT5}%`);
   if (p.lossStreak >= 2) parts.push(`⚠ 已连亏 ${p.lossStreak} 次，建议保守`);
+  // v9.137.0（审查 P1-11）：反馈修正信号注入 —— 用户曾对 AI 裁决明确表达过的不满
+  const fbLabels: Record<string, string> = {
+    overconfident: "置信虚高", data_mismatch: "数据与盘面不符", risk_uncovered: "风险未覆盖", timing: "时机不对",
+  };
+  const fbParts = Object.entries(p.feedbackStats)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${fbLabels[k] ?? k}×${n}`);
+  if (fbParts.length > 0) parts.push(`用户反馈：${fbParts.join("、")}（对 AI 裁决的否决理由，相关方向请谨慎并降低置信）`);
   const worst = Object.entries(p.mainlineStats).filter(([, s]) => s.winRate != null && s.winRate < 40).slice(0, 3).map(([ml]) => ml);
   if (worst.length > 0) parts.push(`历史低胜率题材：${worst.join("、")}`);
   return parts.join("；");

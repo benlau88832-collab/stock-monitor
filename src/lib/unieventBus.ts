@@ -3,6 +3,9 @@
 // 与 alertBus 关系：alertBus 负责"前端通知"（声音/系统通知/标题闪烁/推送）；
 // unieventBus 负责"事件留痕"（本地 + PG kv:unievent_log:日期）
 // 接入方式：各触发源调 emitEvent 即可（alertBus 可同时 emit 做通知）
+// v9.137.0（审查 P2-04）：名实对齐 —— emitEvent 由 alertBus（生产）调用，事件确实落库留痕；
+//   但 listEvents/statsByType 当前仅测试引用（事件中心 UI 未接），本层现阶段定位 = 纯审计日志，
+//   查询侧待事件中心 UI 落地后再接入（删除会丢审计数据，故保留查询 API 并明示现状）。
 // ============================================================
 import { localDateStr } from "./format";
 import { apiFetch } from "./cloudStore";

@@ -5,7 +5,6 @@
 // ============================================================
 import { callAI, type AIResult } from "./ai";
 import type { MarginHistoryRow } from "./margin";
-import { setAIResult } from "./aiConclusionStore";
 
 export interface MarginSentimentLLMResult {
   verdict: "偏多" | "中性" | "偏空";
@@ -75,7 +74,6 @@ export async function judgeMarginSentiment(rows: MarginHistoryRow[]): Promise<Ma
     const confidence = Number(parsed.confidence);
     const points = Array.isArray(parsed.points) ? parsed.points.slice(0, 3).map(String) : [];
     const out: MarginSentimentLLMResult = { verdict, confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(100, confidence)) : 50, points, fromLLM: true };
-    try { setAIResult("marginSentiment", "market", { verdict: out.verdict, confidence: out.confidence, points: out.points, ts: Date.now() }, "auto"); } catch { /* 静默 */ }
     return out;
   } catch {
     return ruleFallback(rows);

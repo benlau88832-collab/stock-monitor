@@ -184,40 +184,6 @@ export function getHitRateForPrompt(): string {
 // 维度说明：theme 用板块名匹配（板块推荐历史上被推过的命中率），
 //           stock 用个股代码匹配。样本<3 视为无历史（不显示徽标）。
 
-export interface RecHitBadge {
-  label: string;
-  hitRate: number | null; // null = 样本不足
-  color: "good" | "mid" | "bad" | "none";
-}
+// v9.137.0（审查 P3-16/P2-07）：删除死导出 getBoardHitBadge/getStockHitBadge/RecHitBadge ——
+// 全项目零调用（"给推荐标历史表现"规划未落地，命中率数据仍由 recTracker 主体记录，未来接 UI 时再恢复）
 
-/** 查询某板块历史推荐命中率（近30天，最多取20条样本） */
-export function getBoardHitBadge(board: string): RecHitBadge {
-  const all = loadRecords();
-  const rows = all
-    .filter(r => r.type === "theme" && r.board === board && r.pctT1 != null)
-    .slice(0, 20);
-  if (rows.length < 3) return { label: `${board}`, hitRate: null, color: "none" };
-  const hits = rows.filter(r => (r.pctT1 ?? 0) > 0).length;
-  const rate = Math.round(hits / rows.length * 100);
-  return {
-    label: `历史${rows.length}推${hits}中`,
-    hitRate: rate,
-    color: rate >= 60 ? "good" : rate >= 40 ? "mid" : "bad",
-  };
-}
-
-/** 查询某个股历史推荐命中率（近30天） */
-export function getStockHitBadge(code: string): RecHitBadge {
-  const all = loadRecords();
-  const rows = all
-    .filter(r => r.type === "stock" && r.code === code && r.pctT1 != null)
-    .slice(0, 20);
-  if (rows.length < 3) return { label: code, hitRate: null, color: "none" };
-  const hits = rows.filter(r => (r.pctT1 ?? 0) > 0).length;
-  const rate = Math.round(hits / rows.length * 100);
-  return {
-    label: `历史${rows.length}推${hits}中`,
-    hitRate: rate,
-    color: rate >= 60 ? "good" : rate >= 40 ? "mid" : "bad",
-  };
-}

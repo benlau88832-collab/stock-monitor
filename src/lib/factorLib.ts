@@ -175,7 +175,7 @@ export interface FactorIcPoint {
   ic: number;
   /** 窗口内有效样本数 */
   samples: number;
-  /** 疑似失效（样本<5 或 |IC|<0.05） */
+  /** 疑似失效（仅样本≥5 且 |IC|<0.05；样本不足由 samples 字段展示，不标失效）—— v9.137.0 口径对齐 */
   decayed: boolean;
   /** v9.42：方向反转（样本≥5 且 IC≤-0.05）—— 因子有预测力但方向反了，需人工复核/反向使用 */
   reversed?: boolean;
@@ -217,7 +217,11 @@ export function computeFactorIcSeries(factor: FactorDef, rows: FactorDayRow[], w
       const raw = spearman(pairs.map(p => p.x), pairs.map(p => p.y));
       ic = factor.expectedDir * raw;
     }
-    const decayed = (n >= 5 && Math.abs(ic) < 0.05) || n < 5;
+    // v9.137.0（审查 P1-04 修复）：样本不足(n<5) ≠ 失效 —— 原 `|| n < 5` 与 computeFactorIC 的
+    //   v9.77 修复（:128-130）口径矛盾：数据积累期 series 分支把因子全标"疑似失效"，
+    //   导致 FactorHealthPanel/AI 上下文（evaluateFactorHealth → agentTools）错误降权。
+    //   现与主函数同口径：仅 n≥5 且 |IC|<0.05 才算真失效；样本不足由 samples 字段诚实展示。
+    const decayed = n >= 5 && Math.abs(ic) < 0.05;
     const reversed = n >= 5 && ic <= -0.05; // v9.42：方向反转（持续负 IC）
     out.push({ date: rows[i].date, ic: Math.round(ic * 1000) / 1000, samples: n, decayed, reversed });
   }

@@ -105,7 +105,9 @@ export async function computeDecisionHitrate(days = 30): Promise<HitrateResult> 
     const win = nxt >= cur ? 1 : 0;
     // v9.75（阶段三）：降级样本分桶 —— path=rule_fallback（LLM 不可用/轮次耗尽）或 rateLimited（配额受限）
     // 不算 AI 也不污染 rule（AI 故障与规则水平是两回事）
-    const isDegraded = l.path === "rule_fallback" || l.rateLimited === true || l.gatedDowngrade != null;
+    // v9.137.0（审查 P3-13）：AI-对话 来源（consoleDigest 正则回写，置信硬编码 65/50，非真实裁决）
+    // 原落入 rule 桶污染规则胜率 —— 并入 degraded 桶（"非正式裁决"语义）
+    const isDegraded = l.path === "rule_fallback" || l.rateLimited === true || l.gatedDowngrade != null || l.source === "AI-对话";
     const bucket = isDegraded ? res.degraded : (l.source === "AI-Agent" ? res.ai : res.rule);
     bucket.total++;
     bucket.hits += win;
@@ -157,7 +159,8 @@ export async function computePostHitrate(days = 30): Promise<PostHitrateResult> 
   for (const post of posts) {
     const log = logByTs.get(post.decisionLogRef!) ?? logByTs.get(String(post.decisionLogRef));
     const source = log?.source ?? "规则投票";  // 无配对按规则保守处理
-    const isDegraded = log ? (log.path === "rule_fallback" || log.rateLimited === true || log.gatedDowngrade != null) : false;
+    // v9.137.0（审查 P3-13）：AI-对话 来源并入 degraded（同 computeDecisionHitrate 口径）
+    const isDegraded = log ? (log.path === "rule_fallback" || log.rateLimited === true || log.gatedDowngrade != null || log.source === "AI-对话") : false;
     const bucketKey = isDegraded ? "degraded" : source === "AI-Agent" ? "ai" : "rule";
 
     // 真实 T+5 盈亏回填（本地无则尝试现算；失败静默）

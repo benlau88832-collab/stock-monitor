@@ -2,6 +2,41 @@
 
 本文件记录 `stock-monitor` 项目各版本的提交哈希和内容摘要，方便追溯与回滚。
 
+## v9.137.0 — AI 大脑审查全量修复（2026-08-13）
+
+> 依据《审查报告_AI大脑_展示vs协同_2026-08-13.md》对 v9.136.0 全量审查后的修复发布：P0×2 + P1×8 + P2×8 + P3 批量，全部问题修复不跳过，交付"产品级"。
+
+### 🔴 P0（数据链/调度致命）
+- **盘中精灵 cron 6 字段→5 字段**（`cron.js:1743`）：原 `*/2 * 9-15 * * 1-5` 为 6 字段（秒 分 时 日 月 周），node-cron v3 下 `*/2` 在**秒位**=每 2 秒触发（每交易日约 12600 次），且每 2 秒抢 LOCK_INTRADAY 饿死 5 分钟盘中大脑 → sentiment_snapshot 断更 4 个交易日；改 5 字段 = 每 2 分钟（同步纠正 AGENTS.md 错误教训与 intradaySprint.js 注释）
+- **15:40 主链 dateStr 作用域崩溃**（`cron.js:1304-1315`）：`const dateStr` 声明在 try 块内（块级作用域），块外 8 处 `markCronStep(dateStr,...)` 引用抛 ReferenceError → 盘后链（analyze/review/marketDaily/factorIc/eventClassify/fundStreak/blockTrade/lhb 首抓）从未执行、checkpoint 零写入、重启重复计费；已提升作用域并实测验证
+
+### 🟠 P1（决策闭环/可靠性）
+- `/api/brain/pg` 白名单失效修复：WRITE_AUTH_WHITELIST 改相对挂载路径 + pgTool 改走 apiFetch（PG 工具组 6 个复活）
+- 用户画像 updateUserProfile 接线（savePost 后）——记忆修正层复活（原零生产调用，AI 参考空画像）
+- 连亏熔断 recordTradeResult 接线（tradeLedger sell/stop）——纪律层复活（lossStreak 恒 0 修复）
+- getDecisionEvidence 硬编码半假参数修复（真实纪律数据 + 诚实缺省）
+- factorLib series 样本口径统一（n<5 不判失效，与 v9.77 主函数对齐）
+- 拍板快速反馈 chips（否决/观望结构化理由 → userProfile.feedbackStats → AI prompt 反哺）
+- stream 超时 45s→90s 对齐（+ AIConsole 前端 95s）
+- 死代码清理：stockScore 五维引擎 / decisionDirect / themeAnalysis 前端模块 / userStyleProfile 任务 / 10+ 死导出
+
+### 🟡 P2（协同体验/半接线）
+- 🎬 待你拍板任务条（PendingVerdictBar：AI 裁决未拍板聚合入口）
+- 🧠 我的画像卡（UserProfileCard：本地画像 + 周度风格推断可见）
+- 选股清单动作按钮（加入自选/加盯价）
+- T+5 批量回填接线（backfillAllPendingPosts 并入 30min 定时）
+- anomalyTier 涨停池真实封单/炸板数据注入（诱多分支复活）
+- stockExit leaderAlive 真实化（拉涨停池判龙头存活）
+- intentRouter 调研正则对齐 / uiContext 个股登记补全（龙虎榜行/AskAI）
+
+### 🟢 P3（名实/死代码批量）
+- 休市日历单源化（src/shared/trade-holidays.js，前端+服务端共用）
+- /api/db/stock 死桩清理 / /api/ai/diag 限流 / watch ut 统一
+- consoleDigest 对话裁决分桶（不再污染规则胜率）
+- 信号账本类型收口 / aiConclusionStore prune 接线 / marginAI 写而不读清理
+- 10+ 死导出删除 / 注释名实对齐（market_intraday、*/30、exitSignal、seatBehavior、storageQuota 等）
+- SW v48→v49 强制刷新
+
 ## v9.81 — 卡顿整改（性能发布）：模块加载并行化 + 渲染/存储瘦身 + 服务端加固（2026-08-09）
 
 > 针对"很多模块加载还是很卡"。审查结论：东财断源仍在（v9.80 熔断已兜底），卡顿三层根因——① refreshAll 串行模块链（Σ 串行等待，任一模块慢全链等）；② 18s 快刷整树重渲染 + 渲染路径同步重活；③ cloudStore 每 5 分钟全量序列化 localStorage + 龙虎榜 161 请求风暴。本版三层全修。

@@ -1,31 +1,15 @@
 // ============================================================
 // v9.54（V7-15）：A股交易日历 —— 节假日休市判定
 // 前端 tradingSession 与 server cron 共用：非交易日停刷/停抓，UI 标"节假日休市"
-// 数据：内置 2026 年法定节假日休市区间（含周末调休；补班日 A 股仍开市但本表按"肯定休市"保守处理）
+// v9.137.0（审查 P3-07）：休市区间单源化 —— 数据移到 src/shared/trade-holidays.js
+//   （与 server cron.js isTradingDayCN 共用，消灭双源 2026 硬编码漂移；2027+ 只改 shared 一处）
 // 注：权威交易日历未来可接东财 push2his qt 字段动态刷新
 // ============================================================
 import { getBJDate, getBJDateStr, getBJWeekday } from "./format";
+import { buildHolidaySet, HOLIDAY_NAMES } from "../shared/trade-holidays";
 
-/** 2026 年 A 股休市区间（含区间两端；YY-MM-DD）—— 元旦/春节/清明/劳动/端午/中秋/国庆 */
-export const HOLIDAY_RANGES_2026: Array<[string, string]> = [
-  ["2026-01-01", "2026-01-02"], // 元旦
-  ["2026-02-16", "2026-02-22"], // 春节（除夕 2/16 → 初六 2/22）
-  ["2026-04-04", "2026-04-06"], // 清明
-  ["2026-05-01", "2026-05-05"], // 劳动节
-  ["2026-06-19", "2026-06-21"], // 端午
-  ["2026-09-25", "2026-09-27"], // 中秋
-  ["2026-10-01", "2026-10-07"], // 国庆
-];
-
-/** 全部休市日集合（YYYY-MM-DD） */
-const HOLIDAY_SET: Set<string> = new Set();
-for (const [a, b] of HOLIDAY_RANGES_2026) {
-  const start = new Date(a + "T00:00:00+08:00");
-  const end = new Date(b + "T00:00:00+08:00");
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    HOLIDAY_SET.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
-  }
-}
+/** 全部休市日集合（YYYY-MM-DD）—— 由 shared 表构建 */
+const HOLIDAY_SET: Set<string> = buildHolidaySet();
 
 /** 日期 → YYYY-MM-DD（按北京时间） */
 export function bjDateStr(d: Date): string {
@@ -69,17 +53,8 @@ export function marketHolidayLabel(d: Date): string | null {
   if (getBJWeekday(bj) === 0 || getBJWeekday(bj) === 6) return "周末休市";
   const ds = bjDateStr(d);
   if (!HOLIDAY_SET.has(ds)) return null;
-  const names: Array<[string, string, string]> = [
-    ["2026-01-01", "2026-01-02", "元旦"],
-    ["2026-02-16", "2026-02-22", "春节"],
-    ["2026-04-04", "2026-04-06", "清明节"],
-    ["2026-05-01", "2026-05-05", "劳动节"],
-    ["2026-06-19", "2026-06-21", "端午节"],
-    ["2026-09-25", "2026-09-27", "中秋节"],
-    ["2026-10-01", "2026-10-07", "国庆节"],
-  ];
-  for (const [a, b, name] of names) {
-    if (ds >= a && ds <= b) return `${name}休市`;
+  for (const { start, end, name } of HOLIDAY_NAMES) {
+    if (ds >= start && ds <= end) return `${name}休市`;
   }
   return "节假日休市";
 }

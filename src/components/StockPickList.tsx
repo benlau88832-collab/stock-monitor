@@ -202,6 +202,59 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
   // v9.77（A2-P1-7 修复）：'closed' 非合法 GateMode（合法 full/cautious/low/empty）；闸门数据不足(empty)也应标降级
   const downgraded = (candidate?.strengthScore ?? 0) < 60 || gate?.mode === "low" || gate?.mode === "cautious" || gate?.mode === "empty";
 
+  // v9.137.0（审查 P2-04 修复）：AI 结论执行动作 —— 加入自选（localStorage stock_watchlist，
+  //   与 StockWatchlist 同键）+ 加盯价（POST /api/watch/add，复用拍板联动同款端点）。
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const addToWatchlist = (code: string, name: string) => {
+    try {
+      const raw = localStorage.getItem("stock_watchlist");
+      const arr: string[] = raw ? JSON.parse(raw) : [];
+      if (!arr.includes(code)) {
+        arr.push(code);
+        localStorage.setItem("stock_watchlist", JSON.stringify(arr));
+      }
+      setActionMsg(`已加入自选：${name}`);
+      setTimeout(() => setActionMsg(null), 2500);
+    } catch { /* 容量满静默 */ }
+  };
+  const addToWatch = async (code: string, name: string, suggestedPct: number, stopLoss: number) => {
+    try {
+      // 盯价区间：从涨停池原始数据取现价（p 单位=千分之一元）；买入区=现价±2%，止损=现价×(1-stopLoss%)
+      // （与拍板联动 hookDecisionPost 的区间口径一致；涨停池无数据时用 null 由服务端按 trigger_pct 工作）
+      const raw = rawPool.find(s => String(s.c ?? "") === code);
+      const price = raw && Number(raw.p) > 0 ? Number(raw.p) / 1000 : null;
+      if (price == null) {
+        setActionMsg("盯价失败：涨停池无该股价格（稍后重试）");
+        setTimeout(() => setActionMsg(null), 2500);
+        return;
+      }
+      const stopPct = stopLoss || 5;
+      const r = await apiFetch("/api/watch/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code, name,
+          buy_low: price ? Math.round((price * 0.98) * 100) / 100 : null,
+          buy_high: price ? Math.round((price * 1.02) * 100) / 100 : null,
+          stop_loss: price ? Math.round((price * (1 - stopPct / 100)) * 100) / 100 : null,
+          trigger_pct: stopPct,
+          status: "active",
+          note: `选股清单·${pick?.mainline ?? ""} 建议仓位${suggestedPct}%`,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) {
+        setActionMsg(`已加盯价：${name}（触发±${stopPct}%）`);
+        setWatchMap(prev => new Map(prev).set(code, 0));
+      } else {
+        setActionMsg(`盯价失败：${j?.error ?? "未知"}`);
+      }
+    } catch {
+      setActionMsg("盯价失败（服务端不可用）");
+    }
+    setTimeout(() => setActionMsg(null), 2500);
+  };
+
   return (
     <div className="rounded-xl border border-rose-500/25 bg-rose-950/10 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -227,6 +280,12 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
       {aiRateLimited && (
         <div className="mb-2 rounded border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-xs font-bold text-rose-200">
           ⏸ AI 配额受限，标的研判为规则降级（非 AI 主导）
+        </div>
+      )}
+      {/* v9.137.0（审查 P2-04）：动作反馈提示 */}
+      {actionMsg && (
+        <div className="mb-2 rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs font-bold text-emerald-300">
+          ✅ {actionMsg}
         </div>
       )}
       {/* v9.77（A2-P1-7 修复）：闸门数据不足 → 明确"非正式推荐"，原 empty 无降级标识、5% 保底仓被当正式建议 */}
@@ -298,6 +357,19 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
             <div className="shrink-0 text-right">
               <span className="rounded-lg bg-emerald-500/20 px-2.5 py-1 text-lg font-black text-emerald-300">{p.suggestedPct}%</span>
               <div className="mt-0.5 text-sm text-slate-500">止损 {p.stopLoss}%</div>
+              {/* v9.137.0（审查 P2-04 修复）：AI 结论动作按钮 —— 原选股清单有仓位/止损/买入逻辑
+                  但无任何执行动作（"加入自选/加盯价"断层），AI 结论只能看不能变成监控任务 */}
+              <div className="mt-1 flex flex-col gap-0.5">
+                <button
+                  onClick={() => addToWatchlist(p.code, p.name)}
+                  className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-bold text-sky-300 hover:bg-sky-500/25"
+                >＋ 自选</button>
+                <button
+                  onClick={() => addToWatch(p.code, p.name, p.suggestedPct, p.stopLoss)}
+                  disabled={watchMap.has(p.code)}
+                  className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-40"
+                >{watchMap.has(p.code) ? "📡 已盯价" : "📡 加盯价"}</button>
+              </div>
             </div>
           </div>
         ))}

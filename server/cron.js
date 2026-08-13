@@ -1275,22 +1275,25 @@ let intradayBusy = false;
 // v9.102.0（第二批 A，T-A1）：盘中精灵每 2 分钟轮询防重叠（内部串行四池 8-15s/轮，*/2 分钟位检查 + busy 跳过）
 // v9.108.3（复验缺口②）：文案对齐 —— 原残留"高频率轮询…*/2s 检查"表述与 T-4A 修正矛盾
 let sprintBusy = false;
-// v9.54（V7-15）：A股交易日历 —— 节假日休市判定（2026 年法定休市区间；与前端 tradeCalendar.ts 口径一致）
-const HOLIDAY_RANGES_2026 = [
-  ["2026-01-01", "2026-01-02"], ["2026-02-16", "2026-02-22"], ["2026-04-04", "2026-04-06"],
-  ["2026-05-01", "2026-05-05"], ["2026-06-19", "2026-06-21"], ["2026-09-25", "2026-09-27"],
-  ["2026-10-01", "2026-10-07"],
-];
+// v9.54（V7-15）：A股交易日历 —— 节假日休市判定（与前端 tradeCalendar.ts 口径一致）
+// v9.137.0（审查 P3-07）：休市区间单源化 —— 改用 src/shared/trade-holidays.js（ESM，Node 22+ require 互操作，
+//   与 concept-groups.js 同机制），删除本文件内联 2026 硬编码表（曾与前端双源漂移；2027+ 只改 shared 一处）
+const TRADE_HOLIDAYS = (() => {
+  try {
+    const mod = require("../src/shared/trade-holidays.js");
+    return { set: mod.buildHolidaySet(), ranges: mod.TRADE_HOLIDAY_RANGES };
+  } catch (e) {
+    console.warn("[cron] trade-holidays 加载失败（回退空表，仅周末判定）:", e.message);
+    return { set: new Set(), ranges: {} };
+  }
+})();
 function isTradingDayCN(d = new Date()) {
   const day = d.getDay();
   if (day === 0 || day === 6) return false;
   // 北京时间日期串
   const bj = new Date(d.getTime() + d.getTimezoneOffset() * 60000 + 8 * 3600000);
   const ds = `${bj.getUTCFullYear()}-${String(bj.getUTCMonth() + 1).padStart(2, "0")}-${String(bj.getUTCDate()).padStart(2, "0")}`;
-  for (const [a, b] of HOLIDAY_RANGES_2026) {
-    if (ds >= a && ds <= b) return false;
-  }
-  return true;
+  return !TRADE_HOLIDAYS.set.has(ds);
 }
 function startCron({ pool }) {
   // 交易日（周一至周五且非节假日）15:40 收盘快照 + 分析
@@ -1302,9 +1305,14 @@ function startCron({ pool }) {
     // v9.89.0（P2-4）：PG advisory lock 跨进程互斥（cronBusy 保留为进程内双保险）
     let gotLock = false;
     try { gotLock = await withPgLock(pool, LOCK_CRON_MAIN, async () => {
+    // v9.137.0（审查 P0-2 修复）：dateStr 提升到内层 try 之外 —— 原 const 声明在 try 块内
+    //   （块级作用域），块外 8 处 markCronStep(dateStr,...) 引用抛 ReferenceError: dateStr is not defined，
+    //   导致 15:40 主链在 zt 落库后即崩，盘后链（analyze/marketDaily/factorIc/review/eventClassify/
+    //   watchClose/fundStreak/blockTrade）从未执行、checkpoint 零写入、每次重启启动补跑重复计费。
+    let dateStr = bjDateStr(); // 兜底：snap 抓取失败时仍可用今日日期标记 checkpoint
     try {
       const snap = await fetchZTPool();
-      const dateStr = snap.date;
+      dateStr = snap.date;
       await pool.query(
         `INSERT INTO zt_snapshot(date,data) VALUES($1,$2)
          ON CONFLICT(date) DO UPDATE SET data=$2, created_at=now()`,
@@ -1385,8 +1393,8 @@ function startCron({ pool }) {
         console.log(`[cron] lhb ${lDateStr}: ${lhb.length} 只`);
       }
     } catch (e) { console.error("[cron] lhb failed:", e.message); }
-    // v9.91.0-fix：dateStr 是上方 try 块内块级作用域（v9.89 PG 锁改造遗留 ReferenceError → 改用 bjDateStr()）
-    await markCronStep(bjDateStr(), "lhb");
+    // v9.137.0（审查 P0-2）：dateStr 已在回调顶部声明（原块级作用域 ReferenceError 修复），此处统一引用
+    await markCronStep(dateStr, "lhb");
     }); } catch (e) { console.error("[cron] PG lock error:", e.message); }
     if (!gotLock) { console.log("[cron] PG lock busy, skip 15:40"); }
     cronBusy = false;
@@ -1411,8 +1419,9 @@ function startCron({ pool }) {
   cron.schedule("30 17 * * 1-5", async () => { await saveLhbToday(); }, { timezone: "Asia/Shanghai" });
   cron.schedule("30 18 * * 1-5", async () => { await saveLhbToday(); }, { timezone: "Asia/Shanghai" });
 
-  // 快讯+公告自动落库：每天 8:00-20:00 每 20 分钟（v9.84.6：原仅工作日 9-16 ——
+  // 快讯+公告自动落库：每天 8:00-20:40 每 20 分钟（v9.84.6：原仅工作日 9-16 ——
   // 周末不抓导致周六日问"周末有什么消息"本地库无新数据；周末海外快讯/公告对周一开盘有价值，放行周末）
+  // v9.137.0（审查 P3-03）：注释窗口对齐 —— */20 在 8-20 时位实际覆盖 8:00-20:40（尾端 20:20/20:40 也触发）
   // 节假日（isTradingDayCN false 且非周末）仍跳过
   cron.schedule("*/20 8-20 * * *", async () => {
     if (!isTradingDayCN()) {
@@ -1508,7 +1517,8 @@ function startCron({ pool }) {
       } catch (e) { console.error("[cron] 盯价股公告告警失败:", e.message); }
     } catch (e) { console.error("[cron] fetch failed:", e.message); }
 
-    // v9.38（V3-11）：盘中市场快照（每小时一次，加速回测样本）
+    // v9.38（V3-11）：盘中市场快照（随 20min 链执行，加速回测样本）
+    // v9.137.0（审查 P3-01）：注释名实对齐 —— 原注释"每小时一次"实为挂在 */20 任务内每 20 分钟一次
     try {
       const md = await fetchMarketIntraday();
       const iDate = bjDate();
@@ -1724,10 +1734,13 @@ function startCron({ pool }) {
   }, { timezone: "Asia/Shanghai" });
 
   // v9.102.0（第二批 A，T-A1）：盘中精灵轮询 —— push2ex 四池串行巡检
-  // v9.108.0（T-4A P1-3 名实对齐）：cron `*/2` 在分钟位 = 每 2 分钟，非高频率（原注释"*/2s"误导）
+  // v9.137.0（审查 P0-1 修复）：表达式 6 字段→5 字段 —— 原 "*/2 * 9-15 * * 1-5" 为 6 字段
+  //   （秒 分 时 日 月 周），*/2 落在秒位 = 每 2 秒触发（9:00-15:59 每分钟 30 次，交易日约 12600 次），
+  //   且每 2 秒抢 LOCK_INTRADAY 导致 5 分钟盘中大脑被锁饿死（sentiment_snapshot 断更、认知陈旧）；
+  //   改 5 字段 "*/2 9-15 * * 1-5" = 每 2 分钟（与 v9.102.0 原注释意图一致）。
   // 通达信"盘中精灵"效果：涨停潮/炸板突变/封单异动第一时间提醒
   // 东财风控：内部串行 QPS≤2 + 每池 1.5-3s 抖动；busy 跳过 + PG lock（与盘中大脑共享 LOCK_INTRADAY）
-  cron.schedule("*/2 * 9-15 * * 1-5", async () => {
+  cron.schedule("*/2 9-15 * * 1-5", async () => {
     try {
       if (!isTradingDayCN()) return;
       if (sprintBusy) return; // 防重叠（一轮 8-15s，*/2 分钟间隔内通常已跑完）
@@ -1819,7 +1832,7 @@ function startCron({ pool }) {
   }, { timezone: "Asia/Shanghai" });
 
   // ---------- V13-1（P0）：新闻驱动作战管线 ----------
-  // 频率（V13-4 深度推理）：盘前 9:15 检查隔夜 → 盘中每 30 分钟（9:30-14:30）→ 盘后 15:05 完整版
+  // 频率（V13-4 深度推理）：盘前 9:15 检查隔夜 → 盘中每 30 分钟（9:00-14:30 含整点共 12 轮，v9.137.0 注释对齐）→ 盘后 15:05 完整版
   const scheduleThemeAnalysis = (expr, label) => cron.schedule(expr, async () => {
     try {
       if (!isTradingDayCN() && expr !== "5 15 * * 1-5") return; // 盘后允许非交易日补跑

@@ -211,7 +211,12 @@ const PG_TOOL_NAMES = ["newsByKeyword", "annsByStock", "ztHistory", "seatsByStoc
 
 async function pgTool(tool: string, args: Record<string, unknown>): Promise<unknown> {
   try {
-    const resp = await fetch("/api/brain/pg", {
+    // v9.137.0（审查 P1-01 修复）：改走 apiFetch（自动携带 x-local-token）——
+    // 原裸 fetch 不带 token，而 /api/brain/pg 受写鉴权中间件保护（白名单因 Express 挂载
+    // 路径语义失效恒 401），导致 ReAct 的 6 个 PG 工具（快讯检索/公告/涨停历史/席位/调研/市场日序列）
+    // 在生产从未生效。8s 超时保留（apiFetch 默认 15s，用 signal 收紧）。
+    const { apiFetch } = await import("./cloudStore");
+    const resp = await apiFetch("/api/brain/pg", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tool, args }),

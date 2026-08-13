@@ -45,6 +45,19 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
     );
   }
 
+  // v9.137.0（审查 P1-11 修复）：否决/观望快速反馈 —— 原 watch/reject "仅留痕"（注释 :5），
+  //   不产生任何对 AI/规则的修正信号 → 反馈闭环断裂。现提供结构化快速理由 chips，
+  //   选择后写入 decision_post.notes（`[反馈:...]` 前缀），userProfile 聚合为画像维度，
+  //   AI prompt 可引用"用户认为我 N 次过于乐观/数据不符"。
+  const FEEDBACK_OPTIONS = [
+    { key: "overconfident", label: "AI 置信虚高", hint: "AI 说得很确定，但我认为没那么稳" },
+    { key: "data_mismatch", label: "数据与盘面不符", hint: "结论引用的数据/价位与我看到的不一致" },
+    { key: "risk_uncovered", label: "风险未覆盖", hint: "有它没考虑到的风险（黑天鹅/减持/流动性）" },
+    { key: "timing", label: "时机不对", hint: "方向可能对，但当前不是介入/离场时机" },
+  ];
+  const [fbKey, setFbKey] = useState<string | null>(null);
+  const toggleFb = (k: string) => setFbKey(prev => prev === k ? null : k);
+
   const handlePost = async (action: HumanAction) => {
     if (aiLogTs && hasPosted(aiLogTs)) {
       emitAlert({ id: `post_double_warn_${aiLogTs.slice(-6)}`, severity: "warning", message: "已对本次裁决拍过板，请到决策审计查看" });
@@ -65,13 +78,17 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
         }
       } catch { /* 纪律数据不可用不拦截（不影响拍板） */ }
     }
+    // 快速反馈并入 notes（结构化前缀，供画像/归因消费）
+    const fbNote = action !== "confirm" && fbKey
+      ? `[反馈:${fbKey}]${FEEDBACK_OPTIONS.find(o => o.key === fbKey)?.label ?? fbKey}${note ? "；" + note : ""}`
+      : note;
     const post = buildPost({
       mainline: mainline === "—" ? null : mainline,
       code,
       humanAction: action,
       confidenceAtPost: agentVerdict?.confidence ?? null,
       priceAtPost,
-      notes: note,
+      notes: fbNote,
       decisionLogRef: aiLogTs,
     });
     lastTicketId.current = post.ticketId;
@@ -120,12 +137,27 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
           🚫 否决回避
         </button>
       </div>
+      {/* v9.137.0（审查 P1-11）：快速反馈 chips —— 否决/观望时点选理由，反哺 AI 置信校准 */}
+      <div className="flex flex-wrap gap-1">
+        {FEEDBACK_OPTIONS.map(o => (
+          <button
+            key={o.key}
+            onClick={() => toggleFb(o.key)}
+            title={o.hint}
+            className={`rounded px-1.5 py-0.5 text-[10px] transition ${
+              fbKey === o.key ? "bg-rose-500/30 text-rose-200 ring-1 ring-rose-400/50" : "bg-white/5 text-slate-400 hover:bg-white/10"
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
       <input value={note} onChange={(e) => setNote(e.target.value)}
         placeholder="一句话理由（可选，≤40 字）"
         className="w-full px-2 py-1 text-xs rounded bg-slate-950/60 border border-slate-700 text-slate-200 focus:outline-none focus:border-sky-500"
         maxLength={40} />
       <div className="text-[10px] text-slate-500">
-        拍板写入"决策闭环台账"用于归因（确认上车会自动入纪律+盯价）。AI 推荐不构成投资建议，请独立判断。
+        拍板写入"决策闭环台账"用于归因（确认上车会自动入纪律+盯价）；否决/观望的快速反馈会进入用户画像，反哺 AI 置信校准。AI 推荐不构成投资建议，请独立判断。
       </div>
     </div>
   );

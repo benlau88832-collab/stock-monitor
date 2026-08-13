@@ -219,6 +219,10 @@ export default function ReviewPanel() {
 
   const filtered = searchReviews(reviews, keyword);
   const stats = statByMainline(reviews.slice(0, 30));
+  // v9.137.0（审查 P1-02 边界说明）：复盘自评连亏（computeLossStreak）仅用于本面板展示；
+  //   纪律面板的连亏熔断（discipline.lossStreak）已由 tradeLedger.saveTrade 的 sell/stop
+  //   真实成交路径驱动（v9.137.0 接线 recordTradeResult），两套数据刻意不互写——复盘是主观自评，
+  //   成交台账是客观记录，混写会双重计数。
   const lossStreak = computeLossStreak(reviews);
 
   return (

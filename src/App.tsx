@@ -792,7 +792,23 @@ export default function App() {
         // v9.16 修复：newsItems 原来写死空数组 → 接 dataStore 真实新闻（近2日）
         const { news: storeNews } = getAllSince(localDateStrOffset(2));
         const newsItems: ThemeNewsItem[] = storeNews.map(n => ({ title: n.title, stars: n.stars ?? 0 }));
-        const hlPulseNew: string[] = [];
+        // v9.137.0（审查 P1-07 修复）：高低切脉冲真实接入 —— 原 hlPulseNew 恒为 []，
+        //   computeThemeScores 的"高低切脉冲+10"分支（themeScore.ts:162）生产永不可达。
+        //   现与渲染侧 hlSwitch（App.tsx:1446-1467）同输入同算法，把真实 pulseNew 喂进主题评分；
+        //   涨停池 degraded（静默回退昨日）时与 hlSwitch 一致返回 null → 空数组（不误报脉冲）。
+        let hlPulseNew: string[] = [];
+        try {
+          if (!displayPool?.degraded && displayPool?.rawZTPool?.length && mainlineBoards?.length) {
+            const hl = detectHighLowSwitch(
+              mainlineBoards
+                .filter(b => { const k = classifyBoard(b.name); return k === "theme" || k === "industry"; })
+                .map(b => ({ name: b.name, pct: b.pct, mainNet5d: b.mainNet5d })),
+              displayPool.rawZTPool as ZTPoolItem[],
+              loadPrevZTSnapshot(displayPool.qdate ?? null),
+            );
+            if (hl) hlPulseNew = hl.pulseNew ?? [];
+          }
+        } catch { /* 高低切检测失败 → 空数组（不阻塞主链） */ }
 
         // 行业频道新增一次拉取（v9.30.1：all=true 拉全量含流出行业，资金走势图红绿双榜才完整）
         let industryBoards: typeof mlBoards = [];
@@ -1415,6 +1431,19 @@ export default function App() {
       }
       // 推荐归因回填（T+1/T+3）
       runAttribution(localDateStr()).catch(() => { /* 回填失败不阻塞 */ });
+      // v9.137.0（审查 P2-12 修复）：拍板 T+5 批量回填 —— 原 backfillAllPendingPosts 无生产调用，
+      //   "拍板后约 7 个交易日自动回填"（DecisionAuditPanel 文案）实际只靠打开审计面板时惰性回填兜底；
+      //   现并入 30 分钟定时（幂等：executed 标记防重复）
+      try {
+        const { backfillAllPendingPosts } = await import("./lib/tradeLedger");
+        await backfillAllPendingPosts(30);
+      } catch { /* 回填失败静默，下轮重试 */ }
+      // v9.137.0（审查 P2-12）：AI 结论 store 定期清理 —— pruneAIResults 原无调用方，
+      //   模块 AI 结果内存 Map 永不清除（陈旧结论长期可读）
+      try {
+        const { pruneAIResults } = await import("./lib/aiConclusionStore");
+        pruneAIResults(24 * 3600 * 1000);
+      } catch { /* 清理失败静默 */ }
     };
     tryBackfill();
     const t = setInterval(tryBackfill, 30 * 60 * 1000);

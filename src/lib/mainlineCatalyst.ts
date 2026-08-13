@@ -93,15 +93,4 @@ export function buildMainlineCatalysts(
 
   return out;
 }
-
-/** 把 catalysts map 简化为每条主线的强催化摘要字符串数组（用于 LLM payload） */
-export function summarizeCatalysts(map: Map<string, string[]>): string[] {
-  const out: string[] = [];
-  for (const [mainline, items] of map.entries()) {
-    const strong = items.filter(s => s.startsWith("【业绩") || s.startsWith("【快讯"));
-    if (strong.length > 0) {
-      out.push(`${mainline}: ${strong.slice(0, 3).join("；")}`);
-    }
-  }
-  return out;
-}
+// v9.137.0（审查 P3-16）：删除死导出 summarizeCatalysts —— 全项目零调用

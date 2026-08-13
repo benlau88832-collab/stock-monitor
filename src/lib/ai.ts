@@ -180,6 +180,16 @@ const AI_MAX_CONCURRENT = 3;
 let aiInFlight = 0;
 const aiWaiters: Array<() => void> = [];
 
+// v9.137.0（审查 P1-10 修复）：导出内部限速函数供单测直测生产实现 ——
+// 原 aiRateLimit.test.ts 用同构最小复刻（makeReserveSlot）验证算法，测复刻副本不测生产，
+// 生产 reserveSlot 回归时测试仍全绿。__internals 仅测试引用，非公共 API。
+export const __internals = {
+  reserveSlot,
+  releaseSlot,
+  recentCallsLen: () => recentCalls.length,
+  AI_RATE_PER_MIN,
+};
+
 async function acquireAISlot(): Promise<void> {
   if (aiInFlight < AI_MAX_CONCURRENT) { aiInFlight++; return; }
   await new Promise<void>((resolve) => aiWaiters.push(resolve));

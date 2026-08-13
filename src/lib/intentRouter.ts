@@ -10,8 +10,9 @@ export type Intent = "summary" | "data" | "decision" | "react" | "research";
 export function classifyIntent(q: string): Intent {
   const t = q.trim();
   if (!t) return "summary";
-  // 深度调研（保留妙想工具）
-  if (/个股深度调研/.test(t)) return "research";
+  // 深度调研（保留妙想工具）—— v9.137.0（审查 P2-10 修复）：正则与 researchTools.isNewResearchRequest
+  //   对齐（原只匹配"个股深度调研"，"深度分析 600519"等建了 researchCtx 却走 summary 档，不注入五段式调研）
+  if (/深度调研|深度分析|个股深度|深度研究/.test(t)) return "research";
   // 决策类（需准入/仓位/离场工具）
   if (/能不能上车|可不可以买|能不能买|仓位|止损|加仓|减仓|能不能上|要不要买|买不买|值得买/.test(t) || /\d{6}(怎么样|能不能|分析)/.test(t)) return "decision";
   // 纯数据类（直读 PG，不烧 LLM）

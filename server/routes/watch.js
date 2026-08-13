@@ -12,12 +12,16 @@
 const { pool } = require("../db");
 const { getJson, requestRaw } = require("../lib/outbound");
 
+// v9.137.0（审查 P3-06）：ut 与 cron.js EM_UT 统一 —— 原此处用 bd1d9d...（异于 cron 的 7eea3e...），
+// 同一东财接口两套 ut 常量属历史遗留；统一到 cron 已验证的 EM_UT（涨停池/行情主链路同源）。
+const EM_UT = "7eea3edcaed734bea9cbfc24409ed989";
+
 /** 批量拉现价（东财 ulist 单请求多 code；v9.84.5：push2 断源 → push2delay 延迟行情，盯价 5 分钟轮询足够）
  *  v9.86.0（P2-7）：走统一出站客户端 —— 东财失败自动降级腾讯 qt.gtimg.cn（"~"分隔文本，取 [3]现价），
  *  主源 source 标记 push2delay / 兜底 tencentQuote（消除"盯价静默失效"盲区）。 */
 async function fetchPrices(codes) {
   const secids = codes.map(c => (c.startsWith("6") ? "1." : "0.") + c).join(",");
-  const url = `https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f2,f12&secids=${secids}`;
+  const url = `https://push2delay.eastmoney.com/api/qt/ulist.np/get?ut=${EM_UT}&fltt=2&fields=f2,f12&secids=${secids}`;
   const txSecids = codes.map(c => (c.startsWith("6") ? "sh" : "sz") + c).join(",");
   const txUrl = `https://qt.gtimg.cn/q=${txSecids}`;
   try {

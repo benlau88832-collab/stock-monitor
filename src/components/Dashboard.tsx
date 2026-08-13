@@ -22,6 +22,10 @@ import OpsPanel from "./OpsPanel";
 // v9.44（②/④）：决策审计时间线 + 信号净值曲线
 import DecisionAuditPanel from "./DecisionAuditPanel";
 import SignalEquityPanel from "./SignalEquityPanel";
+// v9.137.0（审查 P2-05）：待你拍板任务条
+import PendingVerdictBar from "./PendingVerdictBar";
+// v9.137.0（审查 P2-06）：我的画像卡
+import UserProfileCard from "./UserProfileCard";
 // v9.36（A2）：竞价强度榜
 // v9.36（A3）：龙虎榜×涨停池交叉
 import LhbCrossPanel from "./LhbCrossPanel";
@@ -231,7 +235,7 @@ function minsAgo(ts: number): string {
   return `${m}分钟前`;
 }
 
-function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; mainlines?: string[] }) {
+function AnomalyStrip({ stocks, mainlines = [], ztPool = [] }: { stocks: WatchStockBrief[]; mainlines?: string[]; ztPool?: Array<{ c?: string; n?: string; p?: number; zdp?: number; fund?: number; amount?: number; zbc?: number }> }) {
   const [events, setEvents] = useState<AnomalyEvent[]>(() => getAnomalies());
   const tickRef = useRef(0);
   // 订阅事件流（S 级提醒触发时刷新）
@@ -248,13 +252,35 @@ function AnomalyStrip({ stocks, mainlines = [] }: { stocks: WatchStockBrief[]; m
 
   // 实时计算每只自选股的分级（S/A/B），S/A 级 emit 到事件流（冷却去重防刷屏）
   // v9.81（性能）：useMemo —— 原每次渲染对每只自选股重跑 classifyAnomaly
+  // v9.137.0（审查 P2-08 修复）：注入涨停池真实封单/炸板数据 —— 原调用只传 6 字段，
+  //   detectTrap 所需 sealFund/amount/blastCount 全走缺省 0 → "近涨停+假封板"诱多分支
+  //   （anomalyTier.ts:120-127）生产恒不可达；现命中涨停池的自选股带上 fund/amount/zbc 真实值
   const verdicts = useMemo(() => {
     if (stocks.length === 0) return [];
-    return stocks.map(s => ({
-      stock: s,
-      verdict: classifyAnomaly({ code: s.code, name: s.name, pct: s.pct, volumeRatio: s.volumeRatio ?? null, turnoverRate: s.turnoverRate, limitPct: s.limitPct ?? 10 }, mainlines),
-    })).filter((x): x is { stock: WatchStockBrief; verdict: NonNullable<ReturnType<typeof classifyAnomaly>> } => x.verdict != null);
-  }, [stocks, mainlines]);
+    const poolByCode = new Map<string, { sealFund?: number; amount?: number; blastCount?: number }>();
+    for (const s of ztPool) {
+      const code = String(s.c ?? "");
+      if (!code) continue;
+      poolByCode.set(code, {
+        sealFund: typeof s.fund === "number" ? s.fund : undefined,
+        amount: typeof s.amount === "number" ? s.amount : undefined,
+        blastCount: typeof s.zbc === "number" ? s.zbc : undefined,
+      });
+    }
+    return stocks.map(s => {
+      const poolRow = poolByCode.get(s.code);
+      return {
+        stock: s,
+        verdict: classifyAnomaly({
+          code: s.code, name: s.name, pct: s.pct,
+          volumeRatio: s.volumeRatio ?? null,
+          turnoverRate: s.turnoverRate,
+          limitPct: s.limitPct ?? 10,
+          ...(poolRow ? { sealFund: poolRow.sealFund, amount: poolRow.amount, blastCount: poolRow.blastCount } : {}),
+        }, mainlines),
+      };
+    }).filter((x): x is { stock: WatchStockBrief; verdict: NonNullable<ReturnType<typeof classifyAnomaly>> } => x.verdict != null);
+  }, [stocks, mainlines, ztPool]);
 
   useEffect(() => {
     for (const { stock, verdict } of verdicts) {
@@ -1039,6 +1065,9 @@ export default function Dashboard({
       {/* 指数光带（极薄通栏） */}
       <IndexStrip overview={overview} />
 
+      {/* v9.137.0（审查 P2-05）：待你拍板任务条 —— AI 主动找用户确认的聚合入口（无待办时自隐） */}
+      <PendingVerdictBar />
+
       {/* ============== 共用顶部决策区（v9.46：全阶段可见，决策靠前） ============== */}
       {/* 驾驶舱 + 今日作战卡 + Agent 重审 + Top 摘要 —— 任何阶段（盘前/盘中/盘后/午休）都置顶 */}
       <div className="space-y-2">
@@ -1164,7 +1193,7 @@ export default function Dashboard({
           {/* v10-4（P1）：作战卡内嵌 AI 裁决徽章（每条主线显示 LLM 结论） */}
           <BattlePlan data={battlePlan ?? null} agentResults={agentResults} cognMainline={cognMainline} />
           {/* v10-3：StockPickList 已上移至裁决区（见上），此处不再重复渲染 */}
-          <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
+          <AnomalyStrip stocks={watchStocks} mainlines={mainlines} ztPool={overview?.limitPool?.rawZTPool ?? []} />
           <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />
           <MarketOverview data={overview} loading={loading} />
           <PopularityRadar />
@@ -1296,6 +1325,8 @@ export default function Dashboard({
       <OpsPanel />
       {/* v9.44（②）：决策审计时间线（decision_log） */}
       {showAudit && <DecisionAuditPanel />}
+      {/* v9.137.0（审查 P2-06）：我的画像卡 —— 常驻研究台（有数据才显示） */}
+      <UserProfileCard />
       {/* v9.44（④）：信号净值曲线（signalLedger 等权复利） */}
       {showEquity && <SignalEquityPanel />}
       {showSignal && <SignalPanel />}

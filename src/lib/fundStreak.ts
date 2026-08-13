@@ -4,7 +4,10 @@
 // 输出：每行业连续流入/流出天数、今日主力净额、昨日流入今日流出切换标记
 // ============================================================
 import { isLocalServer, apiFetch } from "./cloudStore";
-import { getBJDate, getBJWeekday } from "./format";
+import { getBJDate } from "./format";
+// v9.137.0（审查 P3-08）：交易日判定单源 —— 原 recentTradeDates 只跳周末不跳法定节假日，
+//   节假日被当"缺失日"→ buildFundStreaks 任一关键日缺失即返回 null → 节后资金连续性证据/工具全断
+import { isTradingDay } from "./tradeCalendar";
 
 export interface FundStreak {
   board: string;              // 行业名
@@ -38,16 +41,16 @@ async function loadDayFund(dateStr: string): Promise<Array<{ code: string; name:
   } catch { return null; }
 }
 
-/** 最近 N 个交易日字符串（跳过周末；缺数据日自动容忍） */
+/** 最近 N 个交易日字符串（跳过周末+法定节假日；缺数据日自动容忍） */
 function recentTradeDates(n: number): string[] {
   const out: string[] = [];
   // v9.60（V9-D3）：基于北京时间（getBJDate），替代本机 new Date() 时区偏移
   const d = getBJDate();
   d.setDate(d.getDate() - 1); // 从昨日开始（当日数据可能未落库）
   while (out.length < n) {
-    // v9.63-fix（V9-D3 补丁）：显式 getBJWeekday（d 已北京化，幂等）
-    const dow = getBJWeekday(d);
-    if (dow !== 0 && dow !== 6) {
+    // v9.137.0（审查 P3-08）：改用 tradeCalendar.isTradingDay（跳周末+节假日），
+    //   原实现仅 getBJWeekday 跳周末 —— 节假日窗口（春节/国庆等）会把休市日当缺失日
+    if (isTradingDay(d)) {
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, "0");
       const dd = String(d.getDate()).padStart(2, "0");

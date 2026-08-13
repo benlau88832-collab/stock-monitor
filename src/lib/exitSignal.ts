@@ -58,8 +58,9 @@ export function checkExitSignal(input: ExitSignalInput): ExitSignalResult {
     hits.push(`涨停${input.ztCountToday}家（环比-${Math.round((1 - input.ztCountToday / input.ztCountYesterday) * 100)}%）`);
   }
 
-  // 规则3：最高板下降 ≥1 档且连续 2 日（本函数只判今日下降，连续性由调用方传昨日已下降标记）
-  // 简化：今日高度 < 昨日高度即触发（连续 2 日的部分依赖历史快照，调用方补充）
+  // 规则3：最高板下降 ≥1 档（本实现为单日判定：今日高度 < 昨日高度即触发；
+  // v9.137.0（审查 P3-06）：注释名实对齐 —— 原注释"连续 2 日"与实际单日判定不符，
+  // 无历史快照连续性输入，删去误导性表述）
   if (
     input.heightYesterday != null &&
     input.heightToday < input.heightYesterday

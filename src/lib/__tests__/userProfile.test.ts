@@ -56,6 +56,7 @@ describe("P1-1 userProfile 用户画像", () => {
     const p: UserProfile = {
       updatedAt: 1, style: "scalper", totalPosts: 10, confirmRate: 0.6, avgConfidence: 75,
       avgPnlT5: -3, recentMaxDrawdown: -8, lossStreak: 2, mainlineStats: {}, riskTendency: -5,
+      feedbackStats: {},
     };
     const txt = profileToPrompt(p);
     expect(txt).toContain("风格");
@@ -69,9 +70,28 @@ describe("P1-1 userProfile 用户画像", () => {
       avgPnlT5: 2, recentMaxDrawdown: -5, lossStreak: 0,
       mainlineStats: { "AI": { count: 5, avgPnl: -2, winRate: 20 } },
       riskTendency: 0,
+      feedbackStats: {},
     };
     const txt = profileToPrompt(p);
     expect(txt).toContain("历史低胜率题材");
     expect(txt).toContain("AI");
+  });
+
+  // v9.137.0（审查 P1-11）：快速反馈聚合测试 —— reject 拍板带 [反馈:overconfident] notes → 画像统计
+  it("否决反馈聚合：notes 的 [反馈:key] 计入 feedbackStats 并在 prompt 展示", () => {
+    const today = new Date();
+    const ds = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const posts = [
+      { ticketId: "f1", date: ds, ts: Date.now(), mainline: "AI", code: null, humanAction: "reject", confidenceAtPost: 85, priceAtPost: null, notes: "[反馈:overconfident]AI置信虚高", decisionLogRef: null, executed: false, pnl: null },
+      { ticketId: "f2", date: ds, ts: Date.now() - 1000, mainline: "机器人", code: null, humanAction: "watch", confidenceAtPost: 70, priceAtPost: null, notes: "[反馈:data_mismatch]；换手数据不对", decisionLogRef: null, executed: false, pnl: null },
+      { ticketId: "f3", date: ds, ts: Date.now() - 2000, mainline: "AI", code: null, humanAction: "confirm", confidenceAtPost: 80, priceAtPost: null, notes: "", decisionLogRef: null, executed: false, pnl: null },
+    ];
+    localStorage.setItem(`decision_post:${ds}`, JSON.stringify(posts));
+    const p = updateUserProfile();
+    expect(p.feedbackStats.overconfident).toBe(1);
+    expect(p.feedbackStats.data_mismatch).toBe(1);
+    const txt = profileToPrompt(p);
+    expect(txt).toContain("用户反馈");
+    expect(txt).toContain("置信虚高×1");
   });
 });

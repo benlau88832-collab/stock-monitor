@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { buildEquitySeries, computeEquityStats, type SignalEntry } from "../signalLedger";
 
 const mk = (over: Partial<SignalEntry>): SignalEntry => ({
-  id: "x", date: "2026-08-01", type: "quadrant", typeLabel: "象限信号", code: "600000", name: "测试",
+  id: "x", date: "2026-08-01", type: "sentiment_cross", typeLabel: "情绪信号", code: "600000", name: "测试",
   priceAtSignal: 10, description: "", priceT1: null, priceT5: null, returnT1: null, returnT5: null, backfilled: false,
   ...over,
 });

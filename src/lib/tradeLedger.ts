@@ -49,6 +49,16 @@ export async function saveTrade(t: TradeEntry): Promise<void> {
       });
     } catch { /* 服务端不可用：5 分钟同步兜底 */ }
   }
+  // v9.137.0（审查 P1-02 修复）：平仓/止损成交 → 更新纪律连亏计数 —— 原 recordTradeResult 全 src
+  //   零生产调用，连亏熔断纪律（computeDisciplineViolations 的"冷静期 critical"）恒不触发。
+  //   此处 fire-and-forget：纪律更新失败不影响成交落库。
+  if ((t.action === "sell" || t.action === "stop") && t.pnlPct != null && isFinite(t.pnlPct)) {
+    try {
+      const { loadDisciplineState, saveDisciplineState, recordTradeResult } = await import("./discipline");
+      const st = loadDisciplineState();
+      saveDisciplineState(recordTradeResult(st, t.code, t.pnlPct));
+    } catch { /* 静默 */ }
+  }
 }
 
 /** 计算平仓盈亏% (sell/stop) — 仅简单 (price-cost)/cost，不加仓位权重 */
