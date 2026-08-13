@@ -52,25 +52,23 @@ describe("v9.130.0 findAuctionOpportunities（终审 D2 五步流水）", () => 
     expect(out2[0].excludedOneWord).toContain("封板A");
   });
 
-  it("④ 未涨停+套利空间：同板块、竞价 0.5%~7%、竞价额≥0.3 亿", () => {
+  it("④ 未涨停+套利空间：候选不在今日涨停池，板块映射来自 prevHybk（昨日快照）——生产形状", () => {
+    const pool = [
+      { c: "600001", n: "龙", fbt: 93000, lbc: 2, hybk: "算力" },
+      { c: "600002", n: "跟", fbt: 93500, lbc: 1, hybk: "算力" },
+    ];
+    // 生产真实形状：昨日涨停股今日未涨停 → 不在今日池；板块归属靠昨日快照 hybk
     const quotes = [
-      mkQuote({ code: "600101", name: "低吸候选", auctionPct: 2.5, openAmountYi: 0.8 }),   // 同板块（hybk 由 pool 映射？无）
+      mkQuote({ code: "600101", name: "低吸候选", auctionPct: 2.5, openAmountYi: 0.8 }),   // 昨日涨停·今未涨停·同板块
       mkQuote({ code: "600102", name: "竞价过高", auctionPct: 8.5, openAmountYi: 1.2 }),    // >7% 排除
       mkQuote({ code: "600103", name: "竞价太低", auctionPct: 0.2, openAmountYi: 0.5 }),    // <0.5% 排除
       mkQuote({ code: "600104", name: "量能不足", auctionPct: 3, openAmountYi: 0.1 }),      // 竞价额<0.3 排除
+      mkQuote({ code: "600105", name: "异板块", auctionPct: 3, openAmountYi: 1 }),          // 板块不符排除
     ];
-    // 板块映射仅覆盖 pool 内股票——候选需在 pool 中以同 hybk 存在（未涨停股不在涨停池）。
-    // 语义：candidates 来自 quotes 中"同板块"判定依赖 pool 映射；对未在 pool 的股票按 hybkOf 未命中 → 不入选。
-    // 因此本用例把候选股票也放进 pool（涨停下沿外的股票出现在池中属测试构造）。
-    const pool2 = [
-      { c: "600001", n: "龙", fbt: 93000, lbc: 2, hybk: "算力" },
-      { c: "600002", n: "跟", fbt: 93500, lbc: 1, hybk: "算力" },
-      { c: "600101", n: "低吸候选", fbt: 0, lbc: 0, hybk: "算力" },
-      { c: "600102", n: "竞价过高", fbt: 0, lbc: 0, hybk: "算力" },
-      { c: "600103", n: "竞价太低", fbt: 0, lbc: 0, hybk: "算力" },
-      { c: "600104", n: "量能不足", fbt: 0, lbc: 0, hybk: "算力" },
-    ];
-    const out = findAuctionOpportunities(pool2, quotes);
+    const prevHybk = new Map([
+      ["600101", "算力"], ["600102", "算力"], ["600103", "算力"], ["600104", "算力"], ["600105", "医药"],
+    ]);
+    const out = findAuctionOpportunities(pool, quotes, {}, prevHybk);
     expect(out[0].candidates).toHaveLength(1);
     expect(out[0].candidates[0].name).toBe("低吸候选");
   });

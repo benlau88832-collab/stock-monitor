@@ -10,8 +10,8 @@ import FreshnessTag from "./FreshnessTag";
 import { emit as alertEmit } from "../lib/alertBus";
 
 interface Props {
-  /** 昨日涨停股（code,name,hybk） */
-  yesterdayZt?: Array<{ code: string; name: string }>;
+  /** 昨日涨停股（code,name,hybk —— hybk 供五步流水"未涨停套利"候选板块映射） */
+  yesterdayZt?: Array<{ code: string; name: string; hybk?: string }>;
   /** 今日涨停池（首封时间/连板/板块） */
   todayZt?: Array<{ c: string; n: string; fbt: number; lbc: number; hybk?: string }>;
   autoRefresh?: boolean;
@@ -35,7 +35,11 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
       const result = await fetchAuctionBoard(codes, todayZt);
       setItems(result);
       // v9.130.0（终审 D2）：五步流水——板块扫描→独立行情过滤→龙头/跟风→未涨停套利→排除一字板（0 token 规则）
-      setOpps(findAuctionOpportunities(todayZt ?? [], result));
+      // v9.132.0（终审复核 D2 修正）：prevHybk=昨日快照板块映射（未涨停股不在今日池，候选板块归属靠它）
+      const prevHybk = new Map<string, string>(
+        (yesterdayZt ?? []).map((z) => [String(z.code), String(z.hybk ?? "")] as [string, string]).filter(([, h]) => h),
+      );
+      setOpps(findAuctionOpportunities(todayZt ?? [], result, {}, prevHybk));
     } catch {
       setError("竞价数据获取失败");
     } finally {

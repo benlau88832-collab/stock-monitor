@@ -1414,7 +1414,9 @@ export default function App() {
   );
   // v9.26.10：useMemo 缓存数组引用，避免每次渲染新数组 → AuctionBoard effect 每秒重建 → 每秒请求
   const yesterdayZtBrief = useMemo(
-    () => yesterdayZTPool?.map(z => ({ code: String(z.c), name: String(z.n) })) ?? [],
+    // v9.132.0（终审复核 D2 修正）：带 hybk —— 竞价五步流水"未涨停+套利空间"候选的板块映射
+    //   （未涨停股不在今日涨停池，板块归属必须来自昨日快照）
+    () => yesterdayZTPool?.map(z => ({ code: String(z.c), name: String(z.n), hybk: String(z.hybk ?? "") })) ?? [],
     [yesterdayZTPool],
   );
 

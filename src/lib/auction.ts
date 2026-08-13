@@ -222,12 +222,14 @@ export interface AuctionOpportunity {
 /**
  * 竞价五步流水（纯函数）
  * @param ztPool 今日涨停池（含 hybk 板块字段）
- * @param quotes fetchAuctionBoard 输出的竞价快照
+ * @param quotes fetchAuctionBoard 输出的竞价快照（=昨日涨停股，含今日未涨停者）
+ * @param prevHybk 昨日涨停快照 code→hybk 映射（未涨停股不在今日池，板块归属必须来自昨日快照）
  */
 export function findAuctionOpportunities(
   ztPool: Array<{ c: string; n?: string; fbt?: number; lbc?: number; hybk?: string }>,
   quotes: AuctionItem[],
   opts: { minBoardZt?: number; candidatePctMin?: number; candidatePctMax?: number; minOpenAmountYi?: number } = {},
+  prevHybk?: Map<string, string>,
 ): AuctionOpportunity[] {
   const minBoardZt = opts.minBoardZt ?? 2;       // ② 板块涨停≥2 才有效（<2 = 单股独立行情剔除）
   const pctMin = opts.candidatePctMin ?? 0.5;    // ④ 套利空间下沿（≥0.5% 有资金关注）
@@ -262,11 +264,14 @@ export function findAuctionOpportunities(
     const leader = sorted[0] ? { code: sorted[0].code, name: sorted[0].name, lbc: sorted[0].lbc } : null;
     const followers = sorted.slice(1).map((s) => ({ code: s.code, name: s.name, lbc: s.lbc }));
 
-    // ④ 未涨停 + 套利空间：同板块、未涨停、竞价涨幅 0.5%~7%、竞价额≥0.3 亿
+    // ④ 未涨停 + 套利空间：昨日涨停今日未涨停、同板块、竞价涨幅 0.5%~7%、竞价额≥0.3 亿
+    // v9.132.0（终审复核 D2 修正）：板块映射优先 prevHybk（昨日快照）——未涨停股不在今日涨停池，
+    //   原实现 hybkOf 仅覆盖今日池 → 生产环境 candidates 恒空（结构性死步）
     const hybkOf = new Map(pool.map((p) => [String(p.c), String(p.hybk ?? "未分类")]));
+    const boardOf = (code: string) => (prevHybk && prevHybk.has(code) ? prevHybk.get(code) : hybkOf.get(code));
     const candidates = (Array.isArray(quotes) ? quotes : [])
       .filter((q) => {
-        if (hybkOf.get(q.code) !== board) return false;
+        if (boardOf(q.code) !== board) return false;
         if (q.auctionLimitUp || (q.boardCount ?? 0) >= 1) return false; // ⑤ 排除涨停/一字板
         if (q.auctionPct < pctMin || q.auctionPct > pctMax) return false; // 套利空间
         if (q.openAmountYi < minAmt) return false;                       // 活跃度
