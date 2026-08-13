@@ -8,7 +8,6 @@ import EmotionReportPanel from "./EmotionReportPanel";
 import type { EmotionCycleInput } from "../lib/emotionCycle";
 import DisciplinePanel from "./DisciplinePanel";
 import ReviewPanel from "./ReviewPanel";
-import AuctionBoard from "./AuctionBoard";
 import FiveQBar from "./FiveQBar";
 import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
@@ -24,7 +23,6 @@ import OpsPanel from "./OpsPanel";
 import DecisionAuditPanel from "./DecisionAuditPanel";
 import SignalEquityPanel from "./SignalEquityPanel";
 // v9.36（A2）：竞价强度榜
-import AuctionStrengthPanel from "./AuctionStrengthPanel";
 // v9.36（A3）：龙虎榜×涨停池交叉
 import LhbCrossPanel from "./LhbCrossPanel";
 // P1-3：极简盯盘皮肤（盘中 3 秒扫一眼）
@@ -570,12 +568,10 @@ interface DashboardProps {
   mainlines?: string[];
   onSwitchTab?: (tab: string) => void;
   /** v9.19-F2：今日涨停池（竞价台用） */
-  ztPool?: Array<{ c: string; n: string; fbt: number; lbc: number }>;
   /** v9.19-F2：昨日涨停股（竞价台用） */
   yesterdayZt?: Array<{ code: string; name: string }>;
   /** v9.33（缺口3）：LLM 盘后三剧本 / 竞价龙头预判 / 风险雷达 */
   nextScenarios?: Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null;
-  leaderPredict?: { predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null;
   riskRadarText?: string | null;
   /** v9.75（阶段二）：次日闸门预测 */
   nextGatePredict?: { nextGate: string; reason: string; watchPoints: string[] } | null;
@@ -587,8 +583,8 @@ interface DashboardProps {
 
 export default function Dashboard({
   overview, fund, globalData, mainline, battlePlan, loading,
-  phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, ztPool, yesterdayZt,
-  nextScenarios = null, leaderPredict = null, riskRadarText = null, sealAlerts = null, nextGatePredict = null,
+  phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, yesterdayZt,
+  nextScenarios = null, riskRadarText = null, sealAlerts = null, nextGatePredict = null,
   llmBriefDegraded = {},
 }: DashboardProps) {
   // v9.19-fix：默认值字面量导致类型收窄，显式拓宽回联合类型
@@ -656,7 +652,6 @@ export default function Dashboard({
   }, [phase]);
 
   // v9.48（D5）：单一布局收敛 —— 不再需要 isTrading/isPost 独立布局（相位只做强调点）
-  const isPre = phase === "pre" || phase === "auction";
   const gate = battlePlan?.gate ?? null;
 
   // v9.38（V3-2/3）：Agent 深审 —— v9.39 起自动主导（5 分钟节流）+ 保留手动按钮
@@ -1132,30 +1127,8 @@ export default function Dashboard({
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_300px]">
         {/* 左 2/3：决策证据 + 数据详情 */}
         <div className="space-y-2">
-          {/* 相位强调点：盘前/竞价台（仅 pre/auction 出现） */}
-          {isPre && (
-            <>
-              {/* v9.19-F2：竞价台（盘前/竞价场景核心） */}
-              {/* v9.99.2（B3）：LLM 降级时显示"AI 不可用"占位 —— 原 predictLeader 为 null 整卡静默消失 */}
-              {(leaderPredict && (leaderPredict.predictLeader || llmBriefDegraded.leaderPredict)) && (
-                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
-                  {leaderPredict.predictLeader ? (
-                  <div className="text-xs font-bold text-amber-200">
-                    🤖 AI 预判龙一：<span className="text-base">{leaderPredict.predictLeader.name}</span>
-                    <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
-                  </div>
-                  ) : (
-                  <div className="text-xs font-bold text-amber-300">🤖 AI 预判龙一：AI 暂不可用（规则版无预判）</div>
-                  )}
-                  {leaderPredict.reason && <div className="mt-1 text-[11px] text-slate-300">理由：{leaderPredict.reason}</div>}
-                  {leaderPredict.watch && <div className="text-[11px] text-rose-300/80">⚠ 盯防：{leaderPredict.watch}</div>}
-                </div>
-              )}
-              <AuctionBoard yesterdayZt={yesterdayZt} todayZt={ztPool} autoRefresh={false} />
-              {/* v9.36（A2）：竞价强度榜（昨日涨停池竞价涨幅 top12） */}
-              <AuctionStrengthPanel yesterdayZt={yesterdayZt} todayZt={ztPool} />
-            </>
-          )}
+          {/* v9.130.0（终审 D1）：竞价作战区已上移至驾驶舱顶部（App.tsx dashboard 分支）——
+              竞价台/竞价强度榜/AI 预判龙一 收敛为「竞价作战区」，不再散落本组件左栏底部 */}
           {/* v9.48 D4：核心温度条提到决策区下方（盘中核心进阶指标，D2 已去 EmotionCycle 冗余） */}
           <LimitTempBar overview={overview} />
           {/* v9.95.1（第五段 P2）：情绪周期雷达卡重新接线 —— 五档周期（启动/主升/分歧/退潮/冰点）+证据链+退潮预警；

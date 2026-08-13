@@ -24,6 +24,9 @@ import Dashboard, { type WatchStockBrief } from "./components/Dashboard";
 import ThemeLadder from "./components/ThemeLadder";
 import CommodityChain from "./components/CommodityChain";
 import MarginPanel from "./components/MarginPanel";
+// v9.130.0（终审 D1）：竞价作战区上移驾驶舱顶部
+import AuctionBoard from "./components/AuctionBoard";
+import AuctionStrengthPanel from "./components/AuctionStrengthPanel";
 // v11-5（P1）：EventClassifyPanel 已移回驾驶舱（Dashboard 内渲染），App 不再直接引用
 import { type BattlePlanData } from "./components/BattlePlan";
 import { detectHighLowSwitch, type ZTPoolItem } from "./lib/themeLadder";
@@ -729,12 +732,13 @@ export default function App() {
       const commodities: GlobalIndex[] = globalRes.status === "fulfilled" ? globalRes.value.commodities : [];
 
       // ==== 情绪终值（premium 就绪后重算）+ overview 合并（premium 补位）====
-      // v9.113.1（T1-1）：premium 实时计算空（昨日涨停股现价拉取失败/断源）→ PG market.premiumAvg/promotionRate 兜底
-      //   （要求 market 今日数据 mktFresh：盘中 market_daily 未落库回退昨日 → 不兜底避免把昨日值当今日）
+      // v9.130.0（终审 N3）：溢价/晋级率单源 = PG market_daily（服务端腾讯批量口径，与认知层同源同值）；
+      //   前端逐股 quote 实时计算（prevZtStats）仅作 PG 缺失时兜底（原优先级相反——两算法并存曾造成
+      //   顶部与认知层溢价不一致）。premiumDist（4 档分布）仍用实时（PG 无分布字段）。
       let prem = premiumRes.status === "fulfilled" ? premiumRes.value : { premiumAvg: null, premiumDist: null, promotionRate: null };
       if (mktFresh && pgMkt) {
-        if (prem.premiumAvg == null && typeof pgMkt.premiumAvg === "number") prem = { ...prem, premiumAvg: pgMkt.premiumAvg };
-        if (prem.promotionRate == null && typeof pgMkt.promotionRate === "number") prem = { ...prem, promotionRate: pgMkt.promotionRate };
+        if (typeof pgMkt.premiumAvg === "number") prem = { ...prem, premiumAvg: pgMkt.premiumAvg };
+        if (typeof pgMkt.promotionRate === "number") prem = { ...prem, promotionRate: pgMkt.promotionRate };
       }
       const finalSentiment = computeSentimentNow(prem.premiumAvg, prem.promotionRate);
       // 情绪分落盘/轨迹采样/信号账本 —— 只执行一次（premium 补齐后）
@@ -1569,6 +1573,36 @@ export default function App() {
         {/* ====== 驾驶舱 ====== */}
         {active === "dashboard" && (
           <>
+          {/* v9.130.0（终审 D1）：竞价作战区（盘前/竞价相位）—— 竞价台+竞价强度榜+AI 预判龙一
+              收敛驾驶舱顶部（原散落 Dashboard 左栏底部；ProactiveFeed 竞价时段洞察保留在盘前准备区） */}
+          {(currentPhase === "pre" || currentPhase === "auction") && (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-950/10 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-amber-300">🌅 竞价作战区（盘前/竞价）</span>
+                <span className="text-[10px] text-slate-500">竞价台/强度榜规则 0 token · AI 预判龙一 LLM ≤2000 tok</span>
+              </div>
+              {(leaderPredict && (leaderPredict.predictLeader || llmBriefDegraded.leaderPredict)) && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2">
+                  {leaderPredict.predictLeader ? (
+                    <div className="text-xs font-bold text-amber-200">
+                      🤖 AI 预判龙一：<span className="text-base">{leaderPredict.predictLeader.name}</span>
+                      <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-black text-amber-300">置信 {leaderPredict.confidence}%</span>
+                    </div>
+                  ) : (
+                    <div className="text-xs font-bold text-amber-300">🤖 AI 预判龙一：AI 暂不可用（规则版无预判）</div>
+                  )}
+                  {leaderPredict.reason && <div className="mt-1 text-[11px] text-slate-300">理由：{leaderPredict.reason}</div>}
+                  {leaderPredict.watch && <div className="text-[11px] text-rose-300/80">⚠ 盯防：{leaderPredict.watch}</div>}
+                </div>
+              )}
+              <AuctionBoard
+                yesterdayZt={yesterdayZtBrief}
+                todayZt={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number; hybk?: string }> ?? undefined}
+                autoRefresh={false}
+              />
+              <AuctionStrengthPanel yesterdayZt={yesterdayZtBrief} todayZt={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined} />
+            </div>
+          )}
           {/* v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解，5 维 + version/hash/asOf 溯源）——
               不增面板：横幅形态置于驾驶舱顶部，作战卡/决策卡/精灵/问答均消费同一认知 */}
           <CognitionBanner />
@@ -1582,10 +1616,8 @@ export default function App() {
             battlePlan={battlePlan} loading={loading} phase={currentPhase} watchStocks={watchStocks}
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
             onSwitchTab={(tab) => { setActive(tab as TabKey); try { import('./lib/uiContext').then(m => m.setActiveTab(tab)); } catch { /* 静默 */ } }}
-            ztPool={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined}
             yesterdayZt={yesterdayZtBrief}
             nextScenarios={nextScenarios}
-            leaderPredict={leaderPredict}
             riskRadarText={riskRadarText}
             nextGatePredict={nextGatePredict}
             llmBriefDegraded={llmBriefDegraded} // v9.99.2（B3）：盘后四任务 LLM 降级标记

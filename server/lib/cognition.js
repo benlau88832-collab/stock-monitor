@@ -40,7 +40,9 @@ function deriveSentimentStage(score, premium, brokenRate) {
 }
 
 function buildMainline(raw) {
-  const sorted = [...(raw.mainlines ?? [])].sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0));
+  // v9.130.0（终审 N1）：与 brainContext mainlines.top 同排序键（heat 降序）+ name tie-breaker 保证确定性
+  //   —— 同一 theme_analysis 输入下，认知层 primaryTheme 必须与大脑快照 top1 完全一致
+  const sorted = [...(raw.mainlines ?? [])].sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0) || String(a.name ?? "").localeCompare(String(b.name ?? "")));
   const top = sorted[0];
   if (!top) {
     return {

@@ -3,7 +3,7 @@
 // 高亮：竞价即封板（red）/ 竞价大幅低开（green）
 // 数据近似说明：东财无竞价量字段，用 今开涨幅 + 首封时间 近似早盘强度
 import { useState, useEffect, useCallback, useRef } from "react";
-import { fetchAuctionBoard, type AuctionItem } from "../lib/auction";
+import { fetchAuctionBoard, findAuctionOpportunities, type AuctionItem, type AuctionOpportunity } from "../lib/auction";
 import { stockRealUrl } from "../lib/realLinks";
 import FreshnessTag from "./FreshnessTag";
 // P1-5：竞价极端事件 → alertBus（critical 自动外推）
@@ -12,13 +12,14 @@ import { emit as alertEmit } from "../lib/alertBus";
 interface Props {
   /** 昨日涨停股（code,name,hybk） */
   yesterdayZt?: Array<{ code: string; name: string }>;
-  /** 今日涨停池（首封时间/连板） */
-  todayZt?: Array<{ c: string; n: string; fbt: number; lbc: number }>;
+  /** 今日涨停池（首封时间/连板/板块） */
+  todayZt?: Array<{ c: string; n: string; fbt: number; lbc: number; hybk?: string }>;
   autoRefresh?: boolean;
 }
 
 export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Props) {
   const [items, setItems] = useState<AuctionItem[]>([]);
+  const [opps, setOpps] = useState<AuctionOpportunity[]>([]); // v9.130.0（终审 D2）：五步流水机会
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,6 +34,8 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
       const codes = yesterdayZt.slice(0, 40).map(z => z.code);
       const result = await fetchAuctionBoard(codes, todayZt);
       setItems(result);
+      // v9.130.0（终审 D2）：五步流水——板块扫描→独立行情过滤→龙头/跟风→未涨停套利→排除一字板（0 token 规则）
+      setOpps(findAuctionOpportunities(todayZt ?? [], result));
     } catch {
       setError("竞价数据获取失败");
     } finally {
@@ -157,6 +160,42 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
         </div>
       ) : !error && (
         <div className="text-[10px] text-slate-500">{loading ? "加载中…" : "暂无竞价数据"}</div>
+      )}
+
+      {/* v9.130.0（终审 D2）：板块异动·上车机会——五步流水（板块扫描→独立行情过滤→龙头/跟风→未涨停套利→排除一字板），0 token 规则 */}
+      {opps.length > 0 && (
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-950/10 p-2 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-emerald-300">🎯 板块异动 · 上车机会（挖早盘算力等板块异动）</span>
+            <span className="text-[9px] text-slate-500">五步规则流水 0 token · 排除一字板 · LLM 预判另计</span>
+          </div>
+          {opps.slice(0, 3).map(o => (
+            <div key={o.board} className="rounded bg-black/25 px-2 py-1">
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="font-bold text-slate-200">📦 {o.board}</span>
+                <span className="text-slate-500">涨停 {o.ztCount} 只</span>
+                {o.leader && (
+                  <span className="text-amber-300">龙头 {o.leader.name}（{o.leader.lbc}板）</span>
+                )}
+                <span className="text-slate-500">跟风 {o.followers.length} 只</span>
+                {o.excludedOneWord.length > 0 && (
+                  <span className="text-slate-600">已排一字：{o.excludedOneWord.join("/")}</span>
+                )}
+              </div>
+              {o.candidates.length > 0 && (
+                <div className="mt-0.5 flex flex-wrap gap-1">
+                  <span className="text-[10px] text-emerald-400">上车机会（未涨停+套利空间）：</span>
+                  {o.candidates.map(c => (
+                    <a key={c.code} href={stockRealUrl(c.code)} target="_blank" rel="noopener noreferrer"
+                      className="rounded bg-emerald-500/10 px-1 text-[10px] text-emerald-200 hover:bg-emerald-500/20">
+                      {c.name} 竞价{c.auctionPct >= 0 ? "+" : ""}{c.auctionPct.toFixed(1)}%·{c.openAmountYi.toFixed(1)}亿
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       <div className="text-xs text-slate-600">仅用于早盘强度观察，非交易依据 · 竞价数据为开盘首笔近似</div>

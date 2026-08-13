@@ -198,3 +198,86 @@ function fmtFbt(t: number): string {
   const s = String(t).padStart(6, "0");
   return `${s.slice(0, 2)}:${s.slice(2, 4)}:${s.slice(4, 6)}`;
 }
+
+// ============================================================
+// v9.130.0（终审 D2 修复）：竞价五步流水 —— 板块批量涨停扫描 → 过滤非独立行情
+//   → 识别龙头/跟风 → 找未涨停+套利空间上车机会 → 排除一字板。
+// 纯函数 0 token；目的：挖早盘板块异动，在板块内找【未涨停+有套利空间】的上车机会。
+// ============================================================
+export interface AuctionOpportunity {
+  /** 有效板块名（hybk） */
+  board: string;
+  /** 板块涨停家数 */
+  ztCount: number;
+  /** 龙头 = 板块内最高板（同板取首封最早） */
+  leader: { code: string; name: string; lbc: number } | null;
+  /** 跟风 = 板块内其余涨停（已排除一字板） */
+  followers: { code: string; name: string; lbc: number }[];
+  /** 未涨停 + 套利空间候选（竞价涨幅 0.5%~7% 且竞价额≥0.3 亿） */
+  candidates: { code: string; name: string; auctionPct: number; openAmountYi: number }[];
+  /** 被排除的一字板/竞价封板 */
+  excludedOneWord: string[];
+}
+
+/**
+ * 竞价五步流水（纯函数）
+ * @param ztPool 今日涨停池（含 hybk 板块字段）
+ * @param quotes fetchAuctionBoard 输出的竞价快照
+ */
+export function findAuctionOpportunities(
+  ztPool: Array<{ c: string; n?: string; fbt?: number; lbc?: number; hybk?: string }>,
+  quotes: AuctionItem[],
+  opts: { minBoardZt?: number; candidatePctMin?: number; candidatePctMax?: number; minOpenAmountYi?: number } = {},
+): AuctionOpportunity[] {
+  const minBoardZt = opts.minBoardZt ?? 2;       // ② 板块涨停≥2 才有效（<2 = 单股独立行情剔除）
+  const pctMin = opts.candidatePctMin ?? 0.5;    // ④ 套利空间下沿（≥0.5% 有资金关注）
+  const pctMax = opts.candidatePctMax ?? 7;      // ④ 上沿（<7% 未涨停；20cm 板按调用方 limitPct 调整）
+  const minAmt = opts.minOpenAmountYi ?? 0.3;    // ④ 竞价额≥0.3 亿（活跃度过滤）
+  const pool = Array.isArray(ztPool) ? ztPool : [];
+  const qMap = new Map((Array.isArray(quotes) ? quotes : []).map((q) => [q.code, q]));
+
+  // ① 板块批量涨停扫描（hybk 分组）
+  const boardMap = new Map<string, { code: string; name: string; lbc: number; fbt: number }[]>();
+  for (const s of pool) {
+    const code = String(s.c ?? "");
+    if (!code) continue;
+    const board = String(s.hybk ?? "未分类");
+    const arr = boardMap.get(board) ?? [];
+    arr.push({ code, name: String(s.n ?? ""), lbc: Number(s.lbc) || 1, fbt: Number(s.fbt) || 0 });
+    boardMap.set(board, arr);
+  }
+
+  const out: AuctionOpportunity[] = [];
+  for (const [board, members] of boardMap) {
+    if (members.length < minBoardZt) continue; // ② 过滤非独立行情
+
+    // ⑤ 排除一字板：首封≤09:25:00（fbt>0 且 ≤92500）或竞价即封板
+    const isOneWord = (m: { code: string; lbc: number; fbt: number }) =>
+      (m.fbt > 0 && m.fbt <= 92500) || (qMap.get(m.code)?.auctionLimitUp === true);
+    const active = members.filter((m) => !isOneWord(m));
+    const excludedOneWord = members.filter((m) => isOneWord(m)).map((m) => m.name || m.code);
+
+    // ③ 龙头 = 最高板（同板取首封最早）；跟风 = 其余
+    const sorted = [...active].sort((a, b) => (b.lbc - a.lbc) || (a.fbt - b.fbt));
+    const leader = sorted[0] ? { code: sorted[0].code, name: sorted[0].name, lbc: sorted[0].lbc } : null;
+    const followers = sorted.slice(1).map((s) => ({ code: s.code, name: s.name, lbc: s.lbc }));
+
+    // ④ 未涨停 + 套利空间：同板块、未涨停、竞价涨幅 0.5%~7%、竞价额≥0.3 亿
+    const hybkOf = new Map(pool.map((p) => [String(p.c), String(p.hybk ?? "未分类")]));
+    const candidates = (Array.isArray(quotes) ? quotes : [])
+      .filter((q) => {
+        if (hybkOf.get(q.code) !== board) return false;
+        if (q.auctionLimitUp || (q.boardCount ?? 0) >= 1) return false; // ⑤ 排除涨停/一字板
+        if (q.auctionPct < pctMin || q.auctionPct > pctMax) return false; // 套利空间
+        if (q.openAmountYi < minAmt) return false;                       // 活跃度
+        return true;
+      })
+      .map((q) => ({ code: q.code, name: q.name, auctionPct: q.auctionPct, openAmountYi: q.openAmountYi }));
+
+    if (leader || candidates.length > 0) {
+      out.push({ board, ztCount: members.length, leader, followers, candidates, excludedOneWord });
+    }
+  }
+  out.sort((a, b) => b.ztCount - a.ztCount);
+  return out;
+}

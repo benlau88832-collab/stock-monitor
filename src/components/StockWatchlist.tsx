@@ -26,6 +26,56 @@ import StockDecisionCard from "./StockDecisionCard";
 // v9.77（P0-8 修复）：个股离场信号接入告警/推送 —— 破成本/诱多出货/龙头熄火 red 级推手机
 import { emit as emitAlert } from "../lib/alertBus";
 
+// ============== v9.130.0（终审 D3）：个股监控公告栏资讯聚合（公告+新闻+快讯滚动；研报后续批次接入） ==============
+interface StockNewsAggItem { type: string; source: string; title: string; time: string; impact: string | null; url?: string; }
+function StockNewsAgg({ code, name }: { code: string; name: string }) {
+  const [items, setItems] = useState<StockNewsAggItem[]>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/news?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(6000) });
+        if (!r.ok) { if (alive) setItems([]); return; }
+        const j = await r.json();
+        if (alive && Array.isArray(j.items)) setItems(j.items.slice(0, 8));
+      } catch { if (alive) setItems([]); }
+    })();
+    return () => { alive = false; };
+  }, [code, name]);
+  return (
+    <div className="text-[10px]">
+      <div className="text-slate-500">📰 资讯聚合（公告 · 新闻 · 快讯跨源滚动，研报批次后续接入）</div>
+      {items.length === 0 ? (
+        <div className="mt-1 text-slate-600">暂无聚合资讯（快讯按名称匹配兜底；抓取源恢复后自动补全）</div>
+      ) : (
+        <div className="mt-1 max-h-40 space-y-1 overflow-y-auto">
+          {items.map((n, i) => {
+            const isPos = n.impact === "positive" || n.impact === "利好";
+            const isNeg = n.impact === "negative" || n.impact === "利空";
+            return (
+              <div key={i} className="flex items-start justify-between gap-2 rounded bg-white/5 px-1.5 py-0.5">
+                {n.url ? (
+                  <a href={n.url} target="_blank" rel="noreferrer" className="truncate text-slate-200 hover:text-amber-200">{n.title}</a>
+                ) : (
+                  <span className="truncate text-slate-200">{n.title}</span>
+                )}
+                <span className="flex shrink-0 items-center gap-1">
+                  {n.impact && (
+                    <span className={`rounded px-1 text-[9px] font-bold ${isPos ? "bg-rose-500/15 text-rose-300" : isNeg ? "bg-emerald-500/15 text-emerald-300" : "bg-white/10 text-slate-400"}`}>
+                      {isPos ? "利好" : isNeg ? "利空" : n.impact}
+                    </span>
+                  )}
+                  <span className="text-[9px] text-slate-500">{n.source} · {String(n.time ?? "").slice(5, 16)}</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============== 数据结构 ==============
 interface WatchStock {
   code: string; name: string; price: number; pct: number;
@@ -998,6 +1048,10 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                       <div>席位 {aggData.seats?.length ?? 0} · 涨停 {aggData.ztHistory?.length ?? 0} 次</div>
                       <div>日K {aggData.kline?.length ?? 0} 根 · 指标 {aggData.indicators?.signals?.length ?? 0} 信号</div>
                     </div>
+                  </div>
+                  {/* v9.130.0（终审 D3）：个股监控公告栏资讯聚合（公告+新闻+快讯滚动） */}
+                  <div className="lg:col-span-12 rounded-lg border border-white/10 bg-black/20 p-2">
+                    <StockNewsAgg code={selected ?? ""} name={stocks[selected ?? ""]?.name ?? selected ?? ""} />
                   </div>
                   {/* v9.98.0（批次 3）：基本面体检（investool，独立端点拉取） */}
                   <div className="lg:col-span-12">

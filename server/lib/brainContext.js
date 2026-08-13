@@ -129,7 +129,9 @@ async function buildBrainContext(pool, dateStr = bjDateStr()) {
   let mainlines = { asOf: null, top: [], all: [] };
   if (themeMeta.status === "fulfilled" && themeMeta.value?.value?.themes) {
     const themes = themeMeta.value.value.themes;
-    const sorted = [...themes].sort((a, b) => (num(b.heat) ?? 0) - (num(a.heat) ?? 0));
+    // v9.130.0（终审 N1）：heat 降序 + name tie-breaker——与认知层 buildMainline 同排序键，
+    //   保证同一 theme_analysis 输入下 mainlines.top[0] 与认知层 primaryTheme 完全一致
+    const sorted = [...themes].sort((a, b) => (num(b.heat) ?? 0) - (num(a.heat) ?? 0) || String(a.theme ?? "").localeCompare(String(b.theme ?? "")));
     const slim = (t) => ({
       theme: t.theme, heat: t.heat, trend: t.trend, verdict: t.verdict,
       action: t.action, fundAnalysis: t.fundAnalysis,
