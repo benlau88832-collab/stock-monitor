@@ -275,6 +275,7 @@ export default function App() {
   // v9.75（阶段二）：次日闸门预测（LLM 结合隔夜外围/政策预判，盘后生成）
   const [nextGatePredict, setNextGatePredict] = useState<{ nextGate: string; reason: string; watchPoints: string[] } | null>(null);
   const [leaderPredict, setLeaderPredict] = useState<{ predictLeader: { code: string; name: string } | null; confidence: number; reason: string; watch: string } | null>(null);
+  const [cognMainline, setCognMainline] = useState<string | undefined>(undefined); // v9.135.0（阶段三）：认知层主线（作战卡徽标）
   const [riskRadarText, setRiskRadarText] = useState<string | null>(null);
   // v9.99.2（B3）：盘后四任务 LLM 降级标记 —— 三剧本/闸门/风险雷达/龙一预判原本不检查 r.degraded，
   //   规则版 fallback 经 parseLLMJSON 剥前缀后以 AI 面目渲染（伪装）；此标记驱动 Dashboard 角标
@@ -324,7 +325,8 @@ export default function App() {
             if (!r.ok) return null;
             const j = await r.json();
             const v = j?.sentiment?.value;
-            return typeof v?.score === "number" ? Number(v.score) : null;
+            // v9.135.0（阶段三）：同时取主线（作战卡一致性徽标用）
+            return { score: typeof v?.score === "number" ? Number(v.score) : null, primaryTheme: String(j?.mainline?.value?.primaryTheme ?? "") };
           } catch { return null; }
         })(),
       ]);
@@ -441,7 +443,9 @@ export default function App() {
         }
         // 情绪分主值：v9.129.1（一致性收口）单一来源 = 认知层 /api/cognition（与横幅/雷达/状态机同源同值）；
         //   认知不可用 → 昨日存储值兜底（诚实标注），不再读 sentiment:键 前端上传值（污染源已切断）
-        const cogScore = cogSnapRes.status === "fulfilled" ? cogSnapRes.value : null;
+        const cogSnap = cogSnapRes.status === "fulfilled" ? cogSnapRes.value : null;
+        const cogScore = typeof cogSnap?.score === "number" ? cogSnap.score : null;
+        setCognMainline(cogSnap?.primaryTheme || undefined); // v9.135.0（阶段三）
         const labelOf = (v: number) => (v >= 80 ? "极度贪婪" : v >= 65 ? "贪婪" : v >= 45 ? "中性" : v >= 25 ? "恐慌" : "极度恐慌");
         if (typeof cogScore === "number" && Number.isFinite(cogScore)) {
           sentiment = Math.max(0, Math.min(100, Math.round(cogScore)));
@@ -1598,6 +1602,7 @@ export default function App() {
                 </div>
               )}
               <AuctionBoard
+                upRatio={overview?.breadth && overview.breadth.total > 0 ? overview.breadth.up / overview.breadth.total : null}
                 yesterdayZt={yesterdayZtBrief}
                 todayZt={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number; hybk?: string }> ?? undefined}
                 autoRefresh={false}
@@ -1621,7 +1626,10 @@ export default function App() {
             </div>
           </details>
           {/* v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI，秒级） */}
-          <DecisionCard />
+          <DecisionCard mainlines={(battlePlan?.candidates ?? []).slice(0, 2).map((c: any) => ({
+            mainline: c.mainline ?? "",
+            leaders: (c.leaders ?? []).map((l: any) => ({ code: l.code ?? "", name: l.name ?? "" })),
+          }))} />
           {/* v9.118.0（S4-2）：操作习惯场景融合 —— v9.133.0（游资改造）默认折叠（决策区一行化） */}
           <details className="rounded-xl border border-violet-500/20 bg-violet-500/5">
             <summary className="cursor-pointer select-none px-4 py-1.5 text-xs font-bold text-violet-300 hover:text-violet-200">
@@ -1632,6 +1640,7 @@ export default function App() {
             </div>
           </details>
       <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
+            cognMainline={cognMainline}
             battlePlan={battlePlan} loading={loading} phase={currentPhase} watchStocks={watchStocks}
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
             onSwitchTab={(tab) => { setActive(tab as TabKey); try { import('./lib/uiContext').then(m => m.setActiveTab(tab)); } catch { /* 静默 */ } }}

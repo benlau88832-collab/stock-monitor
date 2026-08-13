@@ -1,4 +1,5 @@
 // ============================================================
+const { BLAST_HIGH_IC, BLAST_LOW_IC } = require("./thresholds"); // v9.135.0（阈值收口）
 // v9.42：因子 IC 服务端评估（与 src/lib/factorLib.ts 同构）
 // 幻方"因子会失效"在线监测的权威落库端：
 //   cron 15:40 读最近 N 个交易日 kv（market_daily + sentiment）
@@ -9,8 +10,8 @@
 
 // ---------- 因子注册表（与前端 factorLib.ts 保持同构，改动需同步） ----------
 const FACTORS = [
-  { id: "blast_high", name: "炸板率偏高", desc: "炸板率≥35% 情绪分歧", expectedDir: -1, extract: r => (r.blastedRate != null && r.blastedRate >= 35) ? 1 : 0 },
-  { id: "blast_low", name: "炸板率偏低", desc: "炸板率<20% 封板健康", expectedDir: 1, extract: r => (r.blastedRate != null && r.blastedRate < 20) ? 1 : 0 },
+  { id: "blast_high", name: "炸板率偏高", desc: "炸板率≥35% 情绪分歧", expectedDir: -1, extract: r => (r.blastedRate != null && r.blastedRate >= BLAST_HIGH_IC) ? 1 : 0 },
+  { id: "blast_low", name: "炸板率偏低", desc: "炸板率<20% 封板健康", expectedDir: 1, extract: r => (r.blastedRate != null && r.blastedRate < BLAST_LOW_IC) ? 1 : 0 },
   { id: "zt_many", name: "涨停家数多", desc: "涨停≥50 普涨", expectedDir: 1, extract: r => (r.ztCount != null ? r.ztCount : null) },
   { id: "height_high", name: "连板高度强", desc: "最高板≥5", expectedDir: 1, extract: r => (r.maxBoardHeight != null ? r.maxBoardHeight : null) },
   { id: "premium_pos", name: "溢价为正", desc: "昨日涨停今日平均溢价>0", expectedDir: 1, extract: r => (r.premiumAvg != null ? r.premiumAvg : null) },

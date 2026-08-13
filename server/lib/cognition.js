@@ -12,6 +12,7 @@
 // 口径说明：情绪温度计复用真实口径 upRatio*40+limitScore*1.3+avgPct*0.8+20；
 //   PG 无涨跌家数/平均涨幅 → 真实场景以 PG 落库 sentiment 为准（适配层注入 _pg.sentiment）
 // ============================================================
+const { BLAST_DIVERGE_PCT, BLAST_RISK_PCT } = require("./thresholds"); // v9.135.0（阈值收口）
 
 /** 轻量确定性哈希（非密码学，仅用于一致性校验）—— 与前端同构实现保持一致 */
 function hashString(s) {
@@ -33,8 +34,8 @@ function deriveSentimentStage(score, premium, brokenRate) {
   //   高温度分不得掩盖亏钱效应（审查官验收口径：premium<0 时 stage 必须落入 退潮/分歧）
   if (score < 30) return "冰点";
   if (score < 45) return "退潮";
-  if (premium < 0) return brokenRate > 0.15 ? "分歧" : "退潮";
-  if (score > 82 && premium > 3) return brokenRate > 0.15 ? "分歧" : "高潮";
+  if (premium < 0) return brokenRate > BLAST_DIVERGE_PCT / 100 ? "分歧" : "退潮";
+  if (score > 82 && premium > 3) return brokenRate > BLAST_DIVERGE_PCT / 100 ? "分歧" : "高潮";
   if (score > 65) return "发酵";
   return "启动";
 }
@@ -111,7 +112,7 @@ function buildRisk(raw) {
   const brokenRate = raw._pg?.blastedRate != null
     ? raw._pg.blastedRate / 100
     : (raw.limit?.broken?.length ?? 0) / Math.max(1, (raw.limit?.up?.length ?? 0) + (raw.limit?.broken?.length ?? 0));
-  if (brokenRate > 0.2) traps.push("炸板率偏高");
+  if (brokenRate > BLAST_RISK_PCT / 100) traps.push("炸板率偏高");
   if ((raw.sentimentRaw?.premium ?? 0) < 0) traps.push("昨日涨停今日负溢价(接力亏钱)");
   if ((raw.boardFund ?? []).some((b) => b.signal === "出货")) traps.push("部分板块主力出货");
   const level = traps.length >= 3 ? "极高" : traps.length === 2 ? "高" : traps.length === 1 ? "中" : "低";

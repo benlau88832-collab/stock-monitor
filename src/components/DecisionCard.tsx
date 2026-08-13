@@ -18,7 +18,12 @@ export function resolveDecisionWindow(now = new Date()): boolean {
   return (h === 9 && m >= 20 && m < 30) || (h === 13 && m < 5);
 }
 
-export default function DecisionCard() {
+interface DecisionCardProps {
+  /** v9.135.0（阶段五）：主线 Top1-2 候选（battlePlan candidates，9:25/13:00 决策窗口多候选） */
+  mainlines?: Array<{ mainline: string; leaders?: Array<{ code?: string; name?: string }> }>;
+}
+
+export default function DecisionCard({ mainlines }: DecisionCardProps = {}) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<DecisionVerdict | null>(null);
@@ -72,16 +77,30 @@ export default function DecisionCard() {
         <span className="text-[10px] text-slate-500">五支柱纯函数 · 不依赖 LLM · 永不降级</span>
       </div>
 
-      {/* S2-3：候选龙头自动亮（决策窗口时高亮） */}
-      {leader?.name && (
+      {/* S2-3：候选龙头自动亮（决策窗口时高亮）；v9.135.0（阶段五）主线 Top1-2 多候选 */}
+      {(leader?.name || (mainlines?.length ?? 0) > 0) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] text-slate-500">候选（认知层龙头）：</span>
-          <button
-            onClick={() => run(leader.code)}
-            className={`rounded px-2 py-0.5 text-[11px] ${decisionWindow ? "bg-rose-500/20 text-rose-200 ring-1 ring-rose-400/40" : "bg-white/5 text-slate-300 hover:bg-white/10"}`}
-          >
-            ⚡ {leader.name}（{leader.code}）
-          </button>
+          <span className="text-[10px] text-slate-500">候选：</span>
+          {leader?.name && (
+            <button
+              onClick={() => run(leader.code)}
+              className={`rounded px-2 py-0.5 text-[11px] ${decisionWindow ? "bg-rose-500/20 text-rose-200 ring-1 ring-rose-400/40" : "bg-white/5 text-slate-300 hover:bg-white/10"}`}
+            >
+              ⚡ {leader.name}（{leader.code}）
+            </button>
+          )}
+          {(mainlines ?? []).slice(0, 2).flatMap((m, mi) =>
+            (m.leaders ?? []).slice(0, 3).map((l, li) => (
+              <button
+                key={`${mi}-${li}`}
+                onClick={() => l.code ? run(l.code) : run(undefined)}
+                className="rounded bg-white/5 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-white/10"
+                title={`主线「${m.mainline}」候选`}
+              >
+                {li === 0 ? `🏆` : "跟"} {l.name ?? ""}{l.code ? `（${l.code}）` : ""}
+              </button>
+            ))
+          )}
         </div>
       )}
 

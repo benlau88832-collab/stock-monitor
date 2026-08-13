@@ -14,6 +14,7 @@ export interface PostHookResult {
   addedToWatch: boolean;
   positionAdvice: { suggestedPct: number; tranches: number[]; stopLoss: number } | null;
   pushed: boolean;
+  addedToTrade: boolean; // v9.134.0（游资改造·阶段二）：拍板写成交台账
   error: string | null;
 }
 
@@ -27,7 +28,7 @@ export interface PostHookCtx {
 }
 
 export async function runPostHook(post: DecisionPost, ctx?: PostHookCtx): Promise<PostHookResult> {
-  const result: PostHookResult = { addedToDiscipline: false, addedToWatch: false, positionAdvice: null, pushed: false, error: null };
+  const result: PostHookResult = { addedToDiscipline: false, addedToWatch: false, positionAdvice: null, pushed: false, addedToTrade: false, error: null };
   if (post.humanAction !== "confirm") return result;
   if (!post.code && !post.mainline) { result.error = "无代码无主线，跳过联动"; return result; }
 
@@ -104,6 +105,29 @@ export async function runPostHook(post: DecisionPost, ctx?: PostHookCtx): Promis
     });
     result.pushed = ok;
   } catch { /* P0-4 未就绪时静默 */ }
+
+  // ⑤ v9.134.0（游资改造·阶段二）：写成交台账 trade_ledger —— 交易闭环补齐
+  //   （此前 saveTrade 生产零调用 → 纪律教练/持仓体检恒空；confirm 拍板即视为买入成交，
+  //   quantity 默认 100 手可后续在纪律面板调整；sell/stop 由成交录入表单补记）
+  if (post.code && typeof post.priceAtPost === "number" && post.priceAtPost > 0) {
+    try {
+      const { saveTrade } = await import("./tradeLedger");
+      const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      saveTrade({
+        date: today,
+        ts: Date.now(),
+        decisionPostRef: (post as { ticketId?: string }).ticketId ?? null,
+        code: post.code,
+        name: post.mainline ?? post.code,
+        action: "buy",
+        price: post.priceAtPost,
+        quantity: 100,
+        cost: post.priceAtPost,
+        notes: `拍板确认 ${post.mainline ?? ""}`.trim(),
+      });
+      result.addedToTrade = true;
+    } catch { /* 不影响主链 */ }
+  }
 
   return result;
 }

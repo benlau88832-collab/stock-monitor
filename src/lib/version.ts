@@ -121,5 +121,15 @@
 //   "📚 研究台"details，盘后默认展开、盘中折叠（防分散注意力）
 //   ④事件三级研判 EventClassifyPanel 移回消息面 Tab（驾驶舱决策区只留 裁决+选股）
 // ============================================================
-export const APP_VERSION = "v9.133.0";
+// v9.135.0（游资改造·阶段二~五 合并发布）：
+//   阶段二 交易闭环：拍板确认自动写 trade_ledger（runPostHook 第⑤件事）+ 纪律面板"成交录入"一行表单
+//     （此前 saveTrade 生产零调用→纪律教练恒空）+ /api/positions 注入现价（push2delay→腾讯，未平仓盈亏可算）
+//   阶段三 主线一致性：作战卡标题"🧠 认知主线"徽标（认知层 primaryTheme 与实战候选不同时标注两口径）
+//   阶段四 阈值收口：前端 thresholds.ts 增 FUSE/PENALTY_START/LOW_ABSORB_MAX + regimeGate/mainline/lowAbsorb
+//     收口引用；服务端新建 server/lib/thresholds.js（cognition 15%/20%、factorIc 35/20 收口）；
+//     新增 thresholdsGolden.test.ts 双端 golden 锁定
+//   阶段五 竞价补强：竞价台"普涨日"提示（上涨占比>85% 板块效应参考性弱）+ 决策卡 9:25 多候选
+//     （认知龙头 + 主线 Top1-2×3 只候选按钮）
+// ============================================================
+export const APP_VERSION = "v9.135.0";
 export const BUILD_DATE = "2026-08-13";

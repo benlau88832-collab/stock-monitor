@@ -15,6 +15,32 @@ export default function DisciplinePanel({ overview }: { overview?: OverviewData 
   // v9.130.0（终审 N5）：接线蓝图端点——纪律教练（行为偏差检测）+ 持仓体检（trade_ledger 净额）
   const [coach, setCoach] = useState<{ biases: Array<{ type: string; severity: string; evidence: string; advice: string }>; sampleSize: number } | null>(null);
   const [positions, setPositions] = useState<Array<{ code: string; name: string; netQty: number; avgCost: number | null }>>([]);
+  // v9.134.0（游资改造·阶段二）：成交录入（trade_ledger 唯一 UI 写入口——此前生产零调用，纪律教练恒空）
+  const [tradeForm, setTradeForm] = useState({ code: "", name: "", action: "buy" as "buy" | "sell" | "stop", price: "", quantity: "" });
+  const submitTrade = async () => {
+    const price = parseFloat(tradeForm.price);
+    const quantity = parseFloat(tradeForm.quantity);
+    if (!tradeForm.code || !isFinite(price) || price <= 0) return;
+    const { saveTrade } = await import("../lib/tradeLedger");
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    await saveTrade({
+      date: today, ts: Date.now(), decisionPostRef: null,
+      code: tradeForm.code.trim(), name: tradeForm.name.trim() || tradeForm.code.trim(),
+      action: tradeForm.action, price, quantity: isFinite(quantity) && quantity > 0 ? quantity : 100,
+      cost: tradeForm.action === "buy" ? price : null,
+      notes: "纪律面板手工录入",
+    });
+    setTradeForm({ code: "", name: "", action: "buy", price: "", quantity: "" });
+    // 录入后刷新纪律教练/持仓体检
+    (async () => {
+      try {
+        const r = await fetch("/api/coach?days=30", { signal: AbortSignal.timeout(5000) });
+        if (r.ok) setCoach(await r.json());
+        const r2 = await fetch("/api/positions", { signal: AbortSignal.timeout(5000) });
+        if (r2.ok) { const j = await r2.json(); setPositions((Array.isArray(j.positions) ? j.positions : []).filter((p: any) => p.open)); }
+      } catch { /* 静默 */ }
+    })();
+  };
 
   useEffect(() => {
     let alive = true;
@@ -200,6 +226,27 @@ export default function DisciplinePanel({ overview }: { overview?: OverviewData 
       {state.positions.length === 0 && !showForm && (
         <div className="text-[10px] text-slate-600">录入持仓后自动计算仓位约束与止损参考 · 止损为 ATR/波动率估算，仅供参考</div>
       )}
+
+      {/* v9.134.0（游资改造·阶段二）：成交录入一行表单——trade_ledger 唯一 UI 写入口（拍板确认也会自动写 buy） */}
+      <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+        <div className="text-[10px] font-bold text-slate-400">✍️ 成交录入（纪律教练数据源；拍板确认会自动记 buy）</div>
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <input value={tradeForm.code} onChange={(e) => setTradeForm({ ...tradeForm, code: e.target.value })}
+            placeholder="代码" className="w-16 rounded bg-black/40 px-1 py-0.5 text-[10px] text-slate-200" />
+          <input value={tradeForm.name} onChange={(e) => setTradeForm({ ...tradeForm, name: e.target.value })}
+            placeholder="名称(可选)" className="w-20 rounded bg-black/40 px-1 py-0.5 text-[10px] text-slate-200" />
+          <select value={tradeForm.action} onChange={(e) => setTradeForm({ ...tradeForm, action: e.target.value as "buy" | "sell" | "stop" })}
+            className="rounded bg-black/40 px-1 py-0.5 text-[10px] text-slate-200">
+            <option value="buy">买入</option><option value="sell">卖出</option><option value="stop">止损</option>
+          </select>
+          <input value={tradeForm.price} onChange={(e) => setTradeForm({ ...tradeForm, price: e.target.value })}
+            placeholder="价格" className="w-16 rounded bg-black/40 px-1 py-0.5 text-[10px] text-slate-200" />
+          <input value={tradeForm.quantity} onChange={(e) => setTradeForm({ ...tradeForm, quantity: e.target.value })}
+            placeholder="数量(手)" className="w-16 rounded bg-black/40 px-1 py-0.5 text-[10px] text-slate-200" />
+          <button onClick={submitTrade}
+            className="rounded bg-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-200 hover:bg-emerald-500/30">记一笔</button>
+        </div>
+      </div>
 
       {/* v9.130.0（终审 N5）：纪律教练 + 持仓体检（蓝图 L6 端点接线，0 token 规则检测） */}
       {(coach || positions.length > 0) && (

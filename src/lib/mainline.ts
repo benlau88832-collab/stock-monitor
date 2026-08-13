@@ -3,7 +3,7 @@
 // v14-4（P1 复查确认）：5 个死函数（+detectExtremeBoard/detectExtremeBatch）全库 0 引用 0 定义 —— 已彻底清理，无残留
 //   （实际走 stockToMainline + themeLadder，此文件仅保留市场风格感知 detectMarketStyle + ETF 偏好）
 // 数据源：涨停池(rawPool) + 板块资金流(boards) + 真实新闻(news)
-import { RISK_APPETITE_ATTACK, RISK_APPETITE_DEFENSE, ZT_COUNT_BOOM, BLAST_RATE_DEFENSE } from "./thresholds";
+import { RISK_APPETITE_ATTACK, RISK_APPETITE_DEFENSE, ZT_COUNT_BOOM, BLAST_RATE_DEFENSE, BLAST_RATE_PENALTY_START } from "./thresholds";
 
 /** 市场风格 */
 export type MarketStyle = "attack" | "rotation" | "defense";
@@ -58,7 +58,7 @@ export function detectMarketStyle(args: {
   const riskAppetite = Math.round(0.4 * emoPart + 0.3 * ztPart + 0.3 * upPart);
 
   // 炸板率惩罚：>40% 大幅降风险偏好
-  const blastedPenalty = blastedRate != null && blastedRate > 40 ? (blastedRate - 40) * 1.5 : 0;
+  const blastedPenalty = blastedRate != null && blastedRate > BLAST_RATE_PENALTY_START ? (blastedRate - BLAST_RATE_PENALTY_START) * 1.5 : 0;
 
   // 闸门硬约束：极度贪婪/恐慌都降
   const gatePenalty = gateFactor != null && gateFactor <= 0.3 ? 15 : 0;

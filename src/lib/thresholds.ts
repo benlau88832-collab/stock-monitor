@@ -17,6 +17,12 @@ export const BLAST_RATE_LOW = 20;
 export const BLAST_RATE_WARN = 30;
 /** 炸板率 > 此值 = 防守日（风格判定：涨停潮熄火） */
 export const BLAST_RATE_DEFENSE = 45;
+/** v9.135.0（阈值收口）：炸板率 > 此值 = 闸门熔断关闸（regimeGate） */
+export const BLAST_RATE_FUSE = 40;
+/** v9.135.0（阈值收口）：炸板率 > 此值 = 主线强度开始罚分（mainline 线性扣分起点） */
+export const BLAST_RATE_PENALTY_START = 40;
+/** v9.135.0（阈值收口）：低吸环境允许的炸板率上限（lowAbsorb） */
+export const BLAST_RATE_LOW_ABSORB_MAX = 30;
 
 // ---------- 情绪分（0-100） ----------
 /** 情绪 ≥ 此值 = 极度贪婪 */

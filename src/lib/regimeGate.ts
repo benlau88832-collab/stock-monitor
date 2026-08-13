@@ -3,6 +3,7 @@
 // v9.15：3 模式（full/cautious/low/empty）—— 机构纪律+游资选股 融合
 
 import type { OverviewData } from "../App";
+import { BLAST_RATE_FUSE } from "./thresholds";
 
 // ============== 基础映射阈值（可调） ==============
 /** 情绪分→基础系数映射（v9.26.13：重新设计极端情绪档——不再一律"禁新开仓/空仓"） */
@@ -23,7 +24,7 @@ const FUSE_MULTIPLIER = 0.5;
 /** 熔断后系数下限（可调） */
 const FUSE_FLOOR = 0.2;
 /** 炸板率熔断阈值（可调） */
-const FUSE_BLASTED_RATE = 40;
+
 /** 晋级率熔断阈值（可调）：昨日首板今日继续封板比例 < 10% 时触发熔断 */
 const FUSE_PROMOTION_RATE = 0.10;
 
@@ -78,8 +79,8 @@ export function computeGate(overview: OverviewData): GateResult {
   const reason: string[] = [];
   const pool = overview.limitPool;
 
-  if (pool && pool.blastedRate > FUSE_BLASTED_RATE) {
-    reason.push(`炸板率${pool.blastedRate.toFixed(1)}%>${FUSE_BLASTED_RATE}%`);
+  if (pool && pool.blastedRate > BLAST_RATE_FUSE) {
+    reason.push(`炸板率${pool.blastedRate.toFixed(1)}%>${BLAST_RATE_FUSE}%`);
   }
   if (overview.premiumAvg != null && overview.premiumAvg < 0) {
     reason.push(`昨日涨停溢价${overview.premiumAvg.toFixed(2)}%为负`);

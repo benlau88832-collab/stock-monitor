@@ -15,9 +15,11 @@ interface Props {
   /** 今日涨停池（首封时间/连板/板块） */
   todayZt?: Array<{ c: string; n: string; fbt: number; lbc: number; hybk?: string }>;
   autoRefresh?: boolean;
+  /** v9.135.0（阶段五）：涨跌家数上涨占比（普涨日提示：>0.85 时板块效应参考性弱） */
+  upRatio?: number | null;
 }
 
-export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Props) {
+export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh, upRatio = null }: Props) {
   const [items, setItems] = useState<AuctionItem[]>([]);
   const [opps, setOpps] = useState<AuctionOpportunity[]>([]); // v9.130.0（终审 D2）：五步流水机会
   const [loading, setLoading] = useState(false);
@@ -173,6 +175,11 @@ export default function AuctionBoard({ yesterdayZt, todayZt, autoRefresh }: Prop
             <span className="text-[11px] font-bold text-emerald-300">🎯 板块异动 · 上车机会（挖早盘算力等板块异动）</span>
             <span className="text-[9px] text-slate-500">五步规则流水 0 token · 排除一字板 · LLM 预判另计</span>
           </div>
+          {upRatio != null && upRatio > 0.85 && (
+            <div className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">
+              ⚠ 普涨日（上涨占比 {(upRatio * 100).toFixed(0)}%）——板块效应参考性弱，上车机会以个股竞价承接为准（v9.135.0 阶段五）
+            </div>
+          )}
           {opps.slice(0, 3).map(o => (
             <div key={o.board} className="rounded bg-black/25 px-2 py-1">
               <div className="flex items-center gap-2 text-[11px]">

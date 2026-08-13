@@ -1,4 +1,5 @@
 // ============================================================
+import { BLAST_RATE_LOW_ABSORB_MAX } from "./thresholds"; // v9.135.0（阈值收口）
 // v9.101.1（产品级升级第一批 T-B3）：低吸信号引擎（纯函数）
 // 客户要求"不追高、做低吸、重胜率赔率" —— 低吸信号从文案级升级为量化信号。
 // 候选 = 主线内首板/二板回踩标的；信号组合（全部满足才 ok）：
@@ -50,7 +51,7 @@ export function judgeLowAbsorb(
 ): LowAbsorbResult {
   const tol = opts?.pullbackTolerance ?? 0.02;
   const volMax = opts?.volumeRatioMax ?? 0.8;
-  const blastMax = opts?.blastedRateMax ?? 30;
+  const blastMax = opts?.blastedRateMax ?? BLAST_RATE_LOW_ABSORB_MAX;
   const signals = [
     { name: "回踩5日线不破", pass: input.price >= input.ma5 * (1 - tol), detail: `现价 ${input.price.toFixed(2)} vs MA5 ${input.ma5.toFixed(2)}` },
     { name: "缩量（量比<" + volMax + "）", pass: input.volumeRatio < volMax, detail: `量比 ${input.volumeRatio.toFixed(2)}` },

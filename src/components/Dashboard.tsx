@@ -560,6 +560,8 @@ interface DashboardProps {
   globalData?: GlobalData | null;
   mainline?: MainlineData | null;
   battlePlan?: BattlePlanData | null;
+  /** v9.135.0（阶段三）：认知层主线（作战卡一致性徽标） */
+  cognMainline?: string;
   loading: boolean;
   phase?: SessionPhase;
   watchStocks?: WatchStockBrief[];
@@ -581,7 +583,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({
-  overview, fund, globalData, mainline, battlePlan, loading,
+  overview, fund, globalData, mainline, battlePlan, loading, cognMainline,
   phase: phaseProp = "post", watchStocks = [], mainlines = [], onSwitchTab, yesterdayZt,
   nextScenarios = null, riskRadarText = null, sealAlerts = null, nextGatePredict = null,
   llmBriefDegraded = {},
@@ -1160,7 +1162,7 @@ export default function Dashboard({
           {/* v9.96.0（批次 1）：红涨绿跌比例条（复用 breadth，零新增请求） */}
           <MarketEmotionWidget overview={overview} />
           {/* v10-4（P1）：作战卡内嵌 AI 裁决徽章（每条主线显示 LLM 结论） */}
-          <BattlePlan data={battlePlan ?? null} agentResults={agentResults} />
+          <BattlePlan data={battlePlan ?? null} agentResults={agentResults} cognMainline={cognMainline} />
           {/* v10-3：StockPickList 已上移至裁决区（见上），此处不再重复渲染 */}
           <AnomalyStrip stocks={watchStocks} mainlines={mainlines} />
           <PositionMatchStrip stocks={watchStocks} boards={mainline?.boards} />

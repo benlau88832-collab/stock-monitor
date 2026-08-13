@@ -304,10 +304,12 @@ function ETFBlock({ etfs }: { etfs: ETFScoreResult[] }) {
 }
 
 // ============== 主组件 ==============
-export default function BattlePlan({ data, agentResults }: {
+export default function BattlePlan({ data, agentResults, cognMainline }: {
   data: BattlePlanData | null;
   /** v10-4（P1）：Top-N 主线 AI 裁决（按 mainline 名匹配） */
   agentResults?: Array<{ mainline: string; verdict: { action: string; confidence: number } | null }>;
+  /** v9.135.0（阶段三）：认知层主线（与实战候选不一致时显示徽标） */
+  cognMainline?: string;
 }) {
   if (!data) return null;
 
@@ -395,6 +397,11 @@ export default function BattlePlan({ data, agentResults }: {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold text-amber-200">⚔️ 今日主线作战卡</span>
+          {cognMainline && data?.candidates?.[0]?.mainline && cognMainline !== data.candidates[0].mainline && (
+            <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-bold text-sky-300" title="认知层主线（市场理解口径）与实战候选（涨停池归类口径）并存，两口径已标注">
+              🧠 认知主线：{cognMainline}
+            </span>
+          )}
           <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${
             gate.factor != null && gate.factor >= 0.8 ? "bg-emerald-500/20 text-emerald-300" :
             gate.factor != null && gate.factor >= 0.5 ? "bg-amber-500/20 text-amber-300" :

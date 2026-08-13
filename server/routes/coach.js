@@ -27,19 +27,32 @@ module.exports = function coachRoutes(app) {
     }
   });
 
-  // v9.127.0（蓝图 L6 持仓体检前置）：持仓净额汇总 + 集中度（现价未注入 → 未平仓盈亏 null 诚实缺数据）
+  // v9.127.0（蓝图 L6 持仓体检前置）：持仓净额汇总 + 集中度；v9.134.0（游资改造·阶段二）注入现价
   app.get("/api/positions", async (req, res) => {
     try {
       const r = await pool.query(
         `SELECT code,name,action,price,quantity,ts,date,pnl_pct FROM trade_ledger ORDER BY ts ASC LIMIT 2000`,
       ).catch(() => ({ rows: [] }));
       const positions = netPositions(r.rows);
+      // v9.134.0：现价注入（push2delay→腾讯双源降级；失败 null 诚实缺数据）→ 未平仓盈亏可算
+      const { fetchStockSnapshotServer } = require("../lib/stockSnapshot");
+      for (const p of positions) {
+        if (!p.open) continue;
+        try {
+          const snap = await fetchStockSnapshotServer(p.code);
+          if (snap && typeof snap.price === "number" && snap.price > 0 && p.avgCost != null && p.avgCost > 0) {
+            p.lastPrice = snap.price;
+            p.pct = snap.pct ?? null;
+            p.unrealizedPnlPct = Math.round((snap.price - p.avgCost) / p.avgCost * 1000) / 10;
+          }
+        } catch { /* 单股失败跳过 */ }
+      }
       const conc = concentration(positions);
       res.json({
         positions,
         concentration: conc,
         sampleSize: r.rows.length,
-        caliber: "持仓体检= trade_ledger 净额汇总（buy+/sell·stop-）；均价=买入加权；未平仓盈亏待现价注入为 null；集中度=成本占比近似；不承诺收益",
+        caliber: "持仓体检= trade_ledger 净额汇总（buy+/sell·stop-）；均价=买入加权；现价=push2delay→腾讯（失败 null）；未平仓盈亏=(现价-均价)/均价；集中度=成本占比近似；不承诺收益",
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
