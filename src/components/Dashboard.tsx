@@ -61,7 +61,6 @@ import BattlePlan, { type BattlePlanData } from "./BattlePlan";
 import StockPickList from "./StockPickList";
 // v11-4（P1）：GlobalSignals 移出驾驶舱 → fundline Tab"🌐外围信号"（App.tsx 已渲染，此处不再 import）
 // v11-5（P1）：事件三级研判回驾驶舱
-import EventClassifyPanel from "./EventClassifyPanel";
 import { fmtMoney, fmtPct, pctColor, localDateStrOffset, localDateStr } from "../lib/format";
 import { loadIntradaySeries, computeMomentum, suggestPosition } from "../lib/sentimentStore";
 import { buildThemeLadder, type ZTPoolItem } from "../lib/themeLadder";
@@ -1086,9 +1085,7 @@ export default function Dashboard({
           }))}
           gate={battlePlan?.gate ?? null}
         />
-        {/* v11-5（P1）：事件三级研判移回驾驶舱（决策区下方，裁决→选股→事件一气呵成） */}
-        {/* v13-4/6（P0）：管线视图 + 展开/可点击（新闻/个股/ETF 东财外链） */}
-        <EventClassifyPanel onOpenNews={() => onSwitchTab?.("news")} />
+        {/* v11-5（P1）：事件三级研判 —— v9.133.0（游资改造）移回消息面 Tab（驾驶舱决策区只留裁决+选股） */}
         {/* v9.38（V3-2/3）：Agent 手动重审按钮（自动已每5分钟跑，手动可即时刷新） */}
         <div className="flex items-center gap-2">
           <button onClick={() => runAgent(false)} disabled={agentLoading}
@@ -1131,30 +1128,35 @@ export default function Dashboard({
               竞价台/竞价强度榜/AI 预判龙一 收敛为「竞价作战区」，不再散落本组件左栏底部 */}
           {/* v9.48 D4：核心温度条提到决策区下方（盘中核心进阶指标，D2 已去 EmotionCycle 冗余） */}
           <LimitTempBar overview={overview} />
-          {/* v9.95.1（第五段 P2）：情绪周期雷达卡重新接线 —— 五档周期（启动/主升/分歧/退潮/冰点）+证据链+退潮预警；
-              昨日高度/昨日炸板率 overview 未透传 → null（computeEmotionCycle 容忍缺项） */}
-          {overview && overview.limitPool && (() => {
-            const cycleInput: EmotionCycleInput = {
-              sentiment: overview.sentiment,
-              ztCount: overview.limitPool.limitUpCount,
-              ztCountYesterday: yesterdayZt && yesterdayZt.length > 0 ? yesterdayZt.length : null,
-              maxBoardHeight: overview.maxBoardHeight,
-              maxBoardYesterday: null,
-              blastedRate: overview.limitPool.blastedRate,
-              blastedRatePrev: null,
-              premiumAvg: overview.premiumAvg,
-              promotionRate: overview.promotionRate,
-              // v9.96.0（VibeAlpha 对照）：封板率炸板数 + 红盘率（溢价分布派生）
-              blastedCount: overview.limitPool.blastedCount ?? null,
-              redRate: (() => {
-                const d = overview.premiumDist;
-                if (!d) return null;
-                const total = d.ltNeg5 + d.neg5to0 + d.zeroTo3 + d.gt3;
-                return total > 0 ? (d.zeroTo3 + d.gt3) / total : null;
-              })(),
-            };
-            return <EmotionCycleCard input={cycleInput} premiumDist={overview.premiumDist ?? null} />;
-          })()}
+          {/* v9.95.1（第五段 P2）：情绪周期雷达卡 —— v9.133.0（游资改造）默认折叠（与认知横幅去重，证据链展开看） */}
+          {overview && overview.limitPool && (
+            <details className="rounded-lg border border-white/10 bg-black/20">
+              <summary className="cursor-pointer select-none px-2 py-1 text-[10px] text-slate-500 hover:text-slate-300">🎚️ 情绪周期雷达（证据链 · 展开）</summary>
+              <div className="px-2 pb-2">
+                {(() => {
+                  const cycleInput: EmotionCycleInput = {
+                    sentiment: overview.sentiment,
+                    ztCount: overview.limitPool.limitUpCount,
+                    ztCountYesterday: yesterdayZt && yesterdayZt.length > 0 ? yesterdayZt.length : null,
+                    maxBoardHeight: overview.maxBoardHeight,
+                    maxBoardYesterday: null,
+                    blastedRate: overview.limitPool.blastedRate,
+                    blastedRatePrev: null,
+                    premiumAvg: overview.premiumAvg,
+                    promotionRate: overview.promotionRate,
+                    blastedCount: overview.limitPool.blastedCount ?? null,
+                    redRate: (() => {
+                      const d = overview.premiumDist;
+                      if (!d) return null;
+                      const total = d.ltNeg5 + d.neg5to0 + d.zeroTo3 + d.gt3;
+                      return total > 0 ? (d.zeroTo3 + d.gt3) / total : null;
+                    })(),
+                  };
+                  return <EmotionCycleCard input={cycleInput} premiumDist={overview.premiumDist ?? null} />;
+                })()}
+              </div>
+            </details>
+          )}
           {/* v9.96.0（批次 1）：红涨绿跌比例条（复用 breadth，零新增请求） */}
           <MarketEmotionWidget overview={overview} />
           {/* v10-4（P1）：作战卡内嵌 AI 裁决徽章（每条主线显示 LLM 结论） */}
@@ -1182,9 +1184,12 @@ export default function Dashboard({
       </div>
       {/* v9.49（N1）：EventClassifyPanel 已移到"消息面"Tab（消息研判归消息面），驾驶舱不再渲染 */}
 
-      {/* ============== 复盘工具（v9.46：移到全 Dashboard 末尾 —— "现在进行"在前，"复盘"在后） ============== */}
-      {/* 全天可见按钮（默认折叠，状态持久化到 localStorage）：AI复盘/信号/回测/因子健康/决策审计/净值 */}
-      {/* v9.96.0（批次 1）：市场情绪叙事报告（周期引擎 + LLM + 导出） */}
+      {/* ============== 复盘工具（v9.46）—— v9.133.0（游资改造）：研究台 details（盘后默认展开，盘中折叠防分散注意力） ============== */}
+      <details className="rounded-xl border border-white/10 bg-white/5" open={phase === "post"}>
+        <summary className="cursor-pointer select-none px-4 py-2 text-sm font-bold text-slate-300 hover:text-slate-100">
+          📚 研究台（情绪叙事报告 · 回测 · 审计 · 复盘 —— 盘后默认展开）
+        </summary>
+        <div className="px-4 pb-4 space-y-2">
       <EmotionReportPanel />
       <div className="flex flex-wrap gap-2">
         <button onClick={() => setShowAI(v => !v)}
@@ -1292,6 +1297,8 @@ export default function Dashboard({
       {/* v9.44（④）：信号净值曲线（signalLedger 等权复利） */}
       {showEquity && <SignalEquityPanel />}
       {showSignal && <SignalPanel />}
+        </div>
+      </details>
     </div>
   );
 }

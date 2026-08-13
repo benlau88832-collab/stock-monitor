@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import AskAI from "./AskAI";
 import { fetchFastNews, type FastNewsItem } from "../lib/api";
 import AnnouncementPanel from "./AnnouncementPanel";
+import EventClassifyPanel from "./EventClassifyPanel";
 import { callAI, type AIResult } from "../lib/ai";
 import { getCurrentSession } from "../lib/tradingSession";
 import { exportMemoBackup, importMemoBackup } from "../lib/newsMemoStore";
@@ -374,6 +375,8 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
         marketSnapshot={marketSnapshot ?? undefined}
       />
 
+      {/* v9.133.0（游资改造）：事件三级研判移回消息面 Tab（驾驶舱决策区只留裁决+选股） */}
+      <EventClassifyPanel onOpenNews={() => {}} />
       {/* 公告淘金分区：盘后全市场公告扫描 */}
       <AnnouncementPanel onTopAnnouncements={setTopAnnouncements} />
 

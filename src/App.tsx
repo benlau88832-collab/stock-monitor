@@ -1603,17 +1603,34 @@ export default function App() {
                 autoRefresh={false}
               />
               <AuctionStrengthPanel yesterdayZt={yesterdayZtBrief} todayZt={overview?.limitPool?.rawZTPool as Array<{ c: string; n: string; fbt: number; lbc: number }> ?? undefined} />
+              {/* v9.133.0（游资改造·阶段一）：主动智能流并入竞价作战区（原在资金主线"盘前准备"折叠区，
+                  盘前必须同屏看到 竞价+隔夜+时段洞察） */}
+              <ProactiveFeed />
             </div>
           )}
           {/* v9.115.0（S1-4）：单一 AI 认知层横幅（全站唯一市场理解，5 维 + version/hash/asOf 溯源）——
               不增面板：横幅形态置于驾驶舱顶部，作战卡/决策卡/精灵/问答均消费同一认知 */}
           <CognitionBanner />
-          {/* v9.120.0（卓越 S1-1c）：认知推理面板（共振/因果/变化率/预判 + narrative）—— 认知横幅下方 */}
-          <ReasoningPanel />
+          {/* v9.120.0（卓越 S1-1c）：认知推理面板 —— v9.133.0（游资改造）盘中折叠（盘后研究工具） */}
+          <details className="rounded-xl border border-white/10 bg-white/5">
+            <summary className="cursor-pointer select-none px-4 py-1.5 text-xs font-bold text-slate-300 hover:text-slate-100">
+              🧭 认知推理（共振/因果/预判 —— 盘后展开）
+            </summary>
+            <div className="px-3 pb-3">
+              <ReasoningPanel />
+            </div>
+          </details>
           {/* v9.113.0（T4-2）：决策直达卡（纯函数直调，不依赖 AI，秒级） */}
           <DecisionCard />
-          {/* v9.118.0（S4-2）：操作习惯场景融合（独立条，不增面板）—— 竞价/异动/尾盘/情绪周期四场景 */}
-          <ScenarioPanel />
+          {/* v9.118.0（S4-2）：操作习惯场景融合 —— v9.133.0（游资改造）默认折叠（决策区一行化） */}
+          <details className="rounded-xl border border-violet-500/20 bg-violet-500/5">
+            <summary className="cursor-pointer select-none px-4 py-1.5 text-xs font-bold text-violet-300 hover:text-violet-200">
+              🧩 操作习惯场景融合（竞价/异动/尾盘/情绪周期 —— 展开）
+            </summary>
+            <div className="px-3 pb-3">
+              <ScenarioPanel />
+            </div>
+          </details>
       <Dashboard overview={overview} fund={fundStructure} globalData={globalData} mainline={mainline}
             battlePlan={battlePlan} loading={loading} phase={currentPhase} watchStocks={watchStocks}
             mainlines={battlePlan?.candidates.map(c => c.mainline) ?? []}
@@ -1665,13 +1682,12 @@ export default function App() {
               </div>
             </details>
             {/* 盘前准备组（默认折叠）—— GlobalSignals/CommodityChain 收敛于此（D-09），盘中决策非核心不占主屏 */}
-            {/* v9.117.0（S3-3）：主动智能流进盘前区（③ 定调：主动流进盘前准备） */}
+            {/* v9.117.0（S3-3）：主动智能流 v9.133.0 已并入驾驶舱竞价作战区（盘前同屏），此处不再重复 */}
             <details className="rounded-xl border border-white/10 bg-white/5">
               <summary className="cursor-pointer select-none px-4 py-2 text-sm font-bold text-slate-200 hover:text-slate-100">
                 ⏰ 盘前准备（全球 · 两融 · 产业链）
               </summary>
               <div className="space-y-3 px-4 pb-4">
-                <ProactiveFeed />
                 <GlobalSignals data={globalData} loading={loading} />
                 {/* 两融观察：全市场融资余额/净买入/历史趋势（独立拉取，T+1 数据） */}
                 <MarginPanel />
