@@ -196,15 +196,17 @@ export default function StockPickList({ candidate, rawPool, potential, gate }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pick?.mainline, pick?.stage, pick?.picks?.length, rawPool]);
 
+  // v9.137.0（审查 P2-04 修复）：AI 结论执行动作 —— 加入自选（localStorage stock_watchlist，
+  //   与 StockWatchlist 同键）+ 加盯价（POST /api/watch/add，复用拍板联动同款端点）。
+  // ⚠ hook 必须声明在下方条件 return（!pick）之前 —— 曾放在 return 后导致
+  //   React #310 "Rendered more hooks than during the previous render"（页面模块异常）
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+
   if (!pick || pick.picks.length === 0) return null;
 
   // v11-7（P2）：降级透明展示 —— 主线强度不足/闸门收紧时，不藏着候选，明示"候选参考（非正式推荐）"
   // v9.77（A2-P1-7 修复）：'closed' 非合法 GateMode（合法 full/cautious/low/empty）；闸门数据不足(empty)也应标降级
   const downgraded = (candidate?.strengthScore ?? 0) < 60 || gate?.mode === "low" || gate?.mode === "cautious" || gate?.mode === "empty";
-
-  // v9.137.0（审查 P2-04 修复）：AI 结论执行动作 —— 加入自选（localStorage stock_watchlist，
-  //   与 StockWatchlist 同键）+ 加盯价（POST /api/watch/add，复用拍板联动同款端点）。
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
   const addToWatchlist = (code: string, name: string) => {
     try {
       const raw = localStorage.getItem("stock_watchlist");
