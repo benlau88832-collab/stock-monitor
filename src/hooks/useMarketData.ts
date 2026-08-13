@@ -1,0 +1,1442 @@
+// ============================================================
+// src/hooks/useMarketData.ts —— 市场数据 Hook（v9.138.0 阶段二：#14 拆 God Component 落地）
+// 背景：App.tsx 1774 行（页面容器 + 全部数据管线 + 渲染耦合），任何新功能都要动巨型组件。
+// 本文件承接 App.tsx 原 237-1578 行全部状态/抓取/效果管线，按报告三层架构
+// "页面容器 + 领域组件 + 数据 hook" 拆出数据层；App.tsx 仅剩渲染容器。
+// 迁移为纯搬移（行为零改动）：返回值与 App JSX 引用一一对应，解构同名变量后 JSX 原样保留。
+// ============================================================
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// v9.84.3（4.2）：盘中板块集体异动轮询 → alertBus 强提示
+import { startAnomalyPolling } from "../lib/intradayAnomaly";
+// v9.62（V9-L1）：换手率拥挤阈值统一引用 thresholds.ts
+import { TURNOVER_CROWDED, TURNOVER_OVERHEAT } from "../lib/thresholds";
+import { saveTodaySentiment, loadPrevTradingDaySentiment, recordIntradaySentiment } from "../lib/sentimentStore";
+import type { TabKey } from "../components/TopNav";
+import type { WatchStockBrief } from "../components/Dashboard";
+import type { BattlePlanData } from "../components/BattlePlan";
+import type { AlertItem } from "../components/AlertBanner";
+import { detectHighLowSwitch, type ZTPoolItem } from "../lib/themeLadder";
+import { classifyBoard } from "../lib/boardTaxonomy";
+import { ensureBoardMap } from "../lib/boardMap";
+import { saveZTSnapshot, loadPrevZTSnapshot } from "../lib/ztSnapshot";
+import { judgeFlowType } from "../lib/stockScore"; // v9.65（V1-M2）：四象限唯一来源，防口径 drift
+import { computeGate } from "../lib/regimeGate";
+import { computeThemeScores, type NewsItem as ThemeNewsItem } from "../lib/themeScore";
+import { computeETFScores, ETF_POOL, type ETFQuote } from "../lib/etfScore";
+import { detectMarketStyle } from "../lib/mainline";
+import { rankMainlinesWithLLM } from "../lib/mainlineLLM";
+import { classifyStocksToMainlines, type MainlineGroup } from "../lib/stockToMainline";
+import { buildMainlineCatalysts } from "../lib/mainlineCatalyst";
+import { calcMainlineStrength } from "../lib/mainlineScore";
+// v9.136.0（主线单源）：认知锚定（第一主线=认知层 primaryTheme，前端引擎降级实时增量）
+import { anchorCognitionMainline } from "../lib/cognitionMainline";
+import { checkExitSignal } from "../lib/exitSignal";
+import { stageOfFunds } from "../lib/stageModel";
+import { getAllSince } from "../lib/dataStore";
+// v9.33（缺口3）：LLM 三剧本/龙头预判/风险雷达
+import { callAI } from "../lib/ai";
+import { parseLLMJSON, schemaForTask } from "../lib/llmJson";
+// v9.34（S1）：封单衰减实时监控（龙一开板前兆）
+import { detectSealDecay, type SealAlert } from "../lib/sealMonitor";
+// v9.36（B2）：昨日涨停统计纯函数（溢价/核按钮/晋级率）
+import { computePrevZtStats } from "../lib/prevZtStats";
+import { fetchPopularityRank } from "../lib/api";
+import { getCircuitState, getSourceState, startHealthProbe } from "../lib/jsonpQueue";
+import { auditLocalStorageQuota } from "../lib/storageQuota";
+import { checkSysRisk } from "../lib/sysRiskGuard";
+import { appendSignal } from "../lib/signalLedger";
+import { runSignalBackfill, isBackfilledToday, markBackfilledToday } from "../lib/signalLedger";
+import { recordRecommendation, runAttribution } from "../lib/recTracker";
+import { getCurrentSession, type SessionPhase } from "../lib/tradingSession";
+import { emit as emitAlert } from "../lib/alertBus";
+import { localDateStr, localDateStrOffset } from "../lib/format";
+// v9.77（P0-11 修复）：读 server 已落库的 market_daily（昨日炸板率）→ 复活主线退潮前兆"炸板率环比+15pp"规则
+import { kvGet } from "../lib/cloudStore";
+// v9.113.1（T1-1 D-01 收尾）：统一数据层 —— 结构化快照 PG 优先 + PG 派生涨停池（仅 PG 空才退 push2delay）
+import { fetchMarketSnapshot, buildPgLimitPool } from "../lib/dataLayer";
+// v9.138.0（阶段二：#17 API 契约单源化）—— 市场数据契约类型统一从 lib/marketTypes 导入
+import type { OverviewData, FundStructureData, DarkPoolData, GlobalData, MainlineData, SentimentFactors } from "../lib/marketTypes";
+import { PREMIUM_SCORE_MIN, PREMIUM_SCORE_MAX, PROMO_TIER, PROMO_FLOOR_SCORE } from "../lib/marketTypes";
+import {
+  fetchIndexOverview,
+  fetchMarketBreadth,
+  fetchMarketMainFund,
+  fetchGlobalIndices,
+  fetchCommodities,
+  fetchMarketTurnover,
+  fetchBoardFundFlow,
+  fetchBoardConstituents,
+  fetchMarketFundHistory,
+  fetchBoardRankTopBottom,
+  fetchLimitPoolSummary,
+  fetchTurnoverHistory,
+  fetchStockBriefBatch,
+  isRealConceptBoard,
+  stockLimitPct,
+  tradeDateStr,
+  type GlobalIndex,
+  type BoardStock,
+} from "../lib/api";
+
+// 告警跃迁护栏：只在 false→true 时报一次，避免每分钟刷屏
+const lastSignalActive: Record<string, boolean> = {};
+
+function boardWeight(stage: string) {
+  if (stage === "高潮期" || stage === "退潮期") return "降级观察";
+  if (stage === "观察中") return "谨慎参与";
+  return "推荐关注";
+}
+
+/** 市场数据 Hook（原 App.tsx 237-1578 行整块搬移，行为零改动）。
+ *  返回 App 渲染 JSX 引用的全部状态与动作；App 解构同名变量后 JSX 逐字不变。 */
+export function useMarketData() {
+  // 启动 tab 优先级：URL hash > localStorage > 默认 dashboard
+  const initialTab = (() => {
+    const fromUrl = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
+    const fromLs = typeof window !== "undefined" ? localStorage.getItem("stock:activeTab") : null;
+    const keys: TabKey[] = ["dashboard", "fundline", "radar", "dragon", "news"];
+    if (keys.includes(fromUrl as TabKey)) return fromUrl as TabKey;
+    if (fromLs && keys.includes(fromLs as TabKey)) return fromLs as TabKey;
+    return "dashboard";
+  })();
+  const [active, setActive] = useState<TabKey>(initialTab);
+  // v9.92.0（上下文感知）：active 变化（含初始化）同步登记全局 UI 上下文 —— AIConsole/AskAI 感知当前页
+  useEffect(() => {
+    import("../lib/uiContext").then(m => m.setActiveTab(active)).catch(() => {});
+  }, [active]);
+  const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [countdown] = useState(60); // v9.26.10：仅作 TopNav 兜底初值（实际显示用 nextRefreshAt）
+  // v9.26.10：下次自动刷新时间戳（替代每秒 setCountdown，避免全树重渲染）
+  const [nextRefreshAt, setNextRefreshAt] = useState<number>(0);
+  const [overview, setOverview] = useState<OverviewData | null>(null);
+  // v9.32.1（缺口1）：核按钮预警（昨高位涨停今日秒跌停，退潮信号）
+  const [nuclearAlerts, setNuclearAlerts] = useState<string[]>([]);
+  // v9.77（A3-P2-9）：核按钮触发时间戳（横幅显示"HH:MM 触发"，防止把早盘警报当当下信号）
+  const nuclearTsRef = useRef<number>(0);
+  const [fundStructure, setFundStructure] = useState<FundStructureData | null>(null);
+  const [darkPool, setDarkPool] = useState<DarkPoolData | null>(null);
+  const [globalData, setGlobalData] = useState<GlobalData | null>(null);
+  const [mainline, setMainline] = useState<MainlineData | null>(null);
+  const [battlePlan, setBattlePlan] = useState<BattlePlanData | null>(null);
+  // v9.26.19：行业资金流向（行业板块前 8 流入 + 前 8 流出 = 16 个，挂在 fundline tab）
+  const [topIndustryFund, setTopIndustryFund] = useState<Array<{ code: string; name: string; mainNet: number }>>([]);
+  const [watchStocks, setWatchStocks] = useState<WatchStockBrief[]>([]);
+  // v9.113.0（T1-2 横幅三态）：PG 快照可用性（dataLayer 探测，60s 刷新；state 触发横幅重算）——
+  // 结构化面板走 PG 时横幅不因 push2delay 命中就弹；初始 false（探测完成前保守弹，避免漏报）
+  const [pgSnapshotOk, setPgSnapshotOk] = useState(false);
+  const [currentPhase, setCurrentPhase] = useState<SessionPhase>(() => getCurrentSession().phase);
+  // v9.33（缺口3）：LLM 盘后三剧本 / 竞价龙头预判 / 风险雷达
+  const [nextScenarios, setNextScenarios] = useState<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }> | null>(null);
+  // v9.75（阶段二）：次日闸门预测（LLM 结合隔夜外围/政策预判，盘后生成）
+  const [nextGatePredict, setNextGatePredict] = useState<{ nextGate: string; reason: string; watchPoints: string[] } | null>(null);
+  // v9.138.0（波段重构·阶段一，Q5 降噪）：leaderPredict 状态移除（竞价 AI 预判龙一不再使用）
+  const [cognMainline, setCognMainline] = useState<string | undefined>(undefined); // v9.135.0（阶段三）：认知层主线（作战卡徽标）
+  // v9.136.0（主线单源）：ref 持有最新认知主线 —— refreshAll 为空依赖 useCallback（闭包捕获首帧值），
+  //   renderBattlePlan 锚定必须读 ref 而非 state，否则锚定永不生效
+  const cognMainlineRef = useRef<string | undefined>(undefined);
+  const [riskRadarText, setRiskRadarText] = useState<string | null>(null);
+  // v9.99.2（B3）：盘后四任务 LLM 降级标记 —— 三剧本/闸门/风险雷达/龙一预判原本不检查 r.degraded，
+  //   规则版 fallback 经 parseLLMJSON 剥前缀后以 AI 面目渲染（伪装）；此标记驱动 Dashboard 角标
+  const [llmBriefDegraded, setLlmBriefDegraded] = useState<Record<string, boolean>>({});
+  // v9.34（S1）：封单衰减预警（18s 高频通道轮询对比）
+  const [sealAlerts, setSealAlerts] = useState<SealAlert[]>([]);
+  const inFlight = useRef(false);
+  // v9.26.9：LLM 主线精排竞态护栏（慢响应不覆盖新一轮结果）
+  const llmRankSeq = useRef(0);
+  // v9.77（A8-04）：主线精排时间节流 —— 注释声称"每 20-30 分钟"实际每次 refreshAll(60s) 都跑，
+  // 与 5 分钟 Agent/个股研判抢 analysis 桶；加 20 分钟硬节流（规则排序即时展示，精排异步补位）
+  const lastLLMRankAt = useRef(0);
+  // v9.78（性能修复）：主线引擎轮次护栏 —— 渐进式渲染（快路径 hybk → 异步 LLM 升级）时，
+  // 慢的 LLM 升级不覆盖更新的轮次
+  const battleSeq = useRef(0);
+  // v9.81（性能）：18s 快刷在飞护栏（防与自身/refreshAll 叠加放大请求）
+  const fastInFlight = useRef(false);
+  // F-02 修复：refreshAll 空依赖，闭包需读最新 state → 用 ref 镜像（避免陈旧闭包）
+  const overviewRef = useRef(overview);
+  useEffect(() => { overviewRef.current = overview; }, [overview]);
+  const darkPoolRef = useRef(darkPool);
+  useEffect(() => { darkPoolRef.current = darkPool; }, [darkPool]);
+
+  const refreshAll = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    // 静默刷新：仅首次加载显示 loading 骨架，后续刷新数据原位更新不闪烁
+    const isFirstLoad = overviewRef.current === null;
+    if (isFirstLoad) setLoading(true);
+    try {
+      // Parallel fetches
+      // v9.113.1（T1-1 D-01 收尾）：第 9 路并行拉 PG 结构化快照（情绪/涨停梯队/溢价/晋级率，cron 落库）
+      // v9.129.1（一致性收口）：第 10 路拉认知层 —— 情绪分单一来源（顶部/雷达/状态机与认知横幅同源同值）
+      const [indices, breadth, fundMain, globals, turnover, fundHistory, limitPoolRes, turnoverHistRes, pgSnapRes, cogSnapRes] = await Promise.allSettled([
+        fetchIndexOverview(),
+        fetchMarketBreadth(),
+        fetchMarketMainFund(),
+        fetchGlobalIndices(),
+        fetchMarketTurnover(),
+        fetchMarketFundHistory(30),
+        fetchLimitPoolSummary(),
+        fetchTurnoverHistory(10),
+        fetchMarketSnapshot(),
+        (async () => {
+          try {
+            const r = await fetch("/api/cognition", { signal: AbortSignal.timeout(6000) });
+            if (!r.ok) return null;
+            const j = await r.json();
+            const v = j?.sentiment?.value;
+            // v9.135.0（阶段三）：同时取主线（作战卡一致性徽标用）
+            return { score: typeof v?.score === "number" ? Number(v.score) : null, primaryTheme: String(j?.mainline?.value?.primaryTheme ?? "") };
+          } catch { return null; }
+        })(),
+      ]);
+
+      // === Overview ===
+      const idxData = indices.status === "fulfilled" ? indices.value : [];
+      const brData = breadth.status === "fulfilled" ? breadth.value : null;
+      const limitPool = limitPoolRes.status === "fulfilled" ? limitPoolRes.value : null;
+      const turnoverData = turnover.status === "fulfilled" ? turnover.value : { amount: 0, available: false };
+      const fm0 = fundMain.status === "fulfilled" ? fundMain.value : null;
+
+      // v9.113.1（T1-1 D-01 收尾）：PG 快照派生涨停池 —— 三优先：实时池成功非 degraded（push2 直连最新）
+      //   > PG 派生池（cron 落库，push2 断时仍新鲜）> 实时降级池（push2delay 15min 旧，仅 PG 也空时兜底）。
+      //   终审 D-01：前端曾死磕 push2→push2delay 15min 陈旧数据，PG 2-20min 快照被冷落 —— 本改动让结构化字段 PG 优先。
+      const pgSnap = pgSnapRes.status === "fulfilled" ? pgSnapRes.value : null;
+      const pgMkt = pgSnap?.data?.market ?? null;
+      // v9.113.1（T1-1）：push2delay 最近 60s 有命中 → 实时池实为 15min 延迟数据（push2 断源），
+      //   不视为"实时池成功"——让位 PG 派生池（cron 2-20min 落库，比 push2delay 更新鲜）
+      const recentDelayHit = getSourceState().some(s => s.host.includes("push2delay") && Date.now() - s.at < 60_000);
+      const realtimePoolOk = Boolean(limitPool && !limitPool.degraded && limitPool.totalCount > 0 && !recentDelayHit);
+      const pgPool = buildPgLimitPool(pgSnap);
+      const displayPool = realtimePoolOk ? limitPool : (pgPool ?? limitPool);
+      const poolFromPg = !realtimePoolOk && pgPool !== null;
+      // v9.129.1（一致性收口）：情绪分单一来源 = 认知层 /api/cognition（cogSnapRes），
+      //   sentiment:键 前端上传值已从服务端兜底链删除——此处不再有独立新鲜度判定
+      // PG market 字段（涨停/溢价/晋级率）今日判定：market_daily 未回退最近交易日且快照新鲜（盘后收盘链落库后可用）
+      const mktFresh = pgSnap != null && !pgSnap.data.fallbackDate && !pgSnap.meta.stale;
+      const pgMeta: OverviewData["pgMeta"] = pgSnap ? {
+        source: "pg",
+        asOf: pgSnap.meta.asOf,
+        stale: pgSnap.meta.stale || Boolean(pgSnap.data.fallbackDate),
+        poolFromPg,
+      } : null;
+      
+      // ============== 溢价/晋级率/最高板计算（修改点1） ==============
+      // 今日最高板（同步，不依赖网络）；v9.113.1（T1-1）：实时池不可用时用 PG market.maxBoardHeight（cron 精确值）
+      let maxBoardHeight: number | null = null;
+      if (displayPool && displayPool.rawZTPool && displayPool.rawZTPool.length > 0 && realtimePoolOk) {
+        let maxLbc = 0;
+        for (const s of displayPool.rawZTPool) {
+          const lbc = s.lbc ?? 1;
+          if (lbc > maxLbc) maxLbc = lbc;
+        }
+        maxBoardHeight = maxLbc > 0 ? maxLbc : null;
+      } else if (pgMkt && typeof pgMkt.maxBoardHeight === "number") {
+        maxBoardHeight = pgMkt.maxBoardHeight;
+      }
+
+      // 昨日快照 → 溢价 + 晋级率（v9.36 B2：逻辑抽到 lib/prevZtStats.ts）
+      // v9.113.1（T1-1）：用展示池 qdate（PG 可用时 = 今日真实交易日，找昨日快照更准）
+      const prevZTPool = loadPrevZTSnapshot(displayPool?.qdate ?? null);
+
+      // 涨停池快照写入主刷新管道（与 Tab 解耦，确保高低切/断板检测次日有数据）
+      // v9.113.1（T1-1）：只写实时完整池 —— PG 派生池（ladder 20 条精简）不得落盘，否则污染次日溢价/晋级率计算
+      if (limitPool && limitPool.rawZTPool && limitPool.rawZTPool.length > 0) {
+        saveZTSnapshot(limitPool.qdate ?? tradeDateStr(), limitPool.rawZTPool);
+      }
+
+      // 计算昨日成交额和近5日均值
+      const turnoverHist = turnoverHistRes.status === "fulfilled" ? turnoverHistRes.value : [];
+      // turnoverHist[0] 是最新日（可能是今天），[1] 是昨天
+      const yesterdayAmount = turnoverHist.length >= 2 ? turnoverHist[1].amount : null;
+      const avg5dArr = turnoverHist.slice(1, 6); // 排除今天，取前5天
+      const turnoverAvg5d = avg5dArr.length > 0 ? avg5dArr.reduce((s, t) => s + t.amount, 0) / avg5dArr.length : null;
+
+      // v9.81（性能修复）：情绪计算提为纯函数 —— 首绘（premium 缺省）与补位（premium 就绪）各调用一次，
+      // 溢价/晋级率因子依赖 fetchStockBriefBatch（昨日涨停>100 只时最多 9 个 JSONP），不再阻塞首帧渲染
+      const prevSentiment = loadPrevTradingDaySentiment()?.score ?? null;
+      const computeSentimentNow = (pAvg: number | null, pRate: number | null): { sentiment: number | null; sentimentLabel: string; sentimentFactors: SentimentFactors | null } => {
+        let sentiment: number | null = null;
+        let sentimentLabel = "数据不足";
+        let sentimentFactors: SentimentFactors | null = null;
+        // v9.77（P0-6 修复）：涨停池被静默回退到昨日（接口失败）→ 池子派生的情绪因子失真，
+        // 抑制 limitDiff/limitUpBonus/blastedPenalty，避免把昨日涨停数当今日判断情绪强弱。
+        // v9.113.1（T1-1）：池引用改 displayPool（实时池→PG 派生池→降级池 三优先）
+        const lpDegraded = Boolean(displayPool?.degraded);
+        if (brData && brData.total > 0) {
+          const upRatio = brData.up / brData.total;
+          const upDownScore = Math.round(upRatio * 40 * 10) / 10;
+          const limitDiff = lpDegraded ? 0 : displayPool ? displayPool.limitUpCount - displayPool.limitDownCount : 0;
+          const limitScore = Math.round(Math.max(-15, Math.min(15, limitDiff * 0.3)) * 10) / 10;
+          const avgPctScore = Math.round(Math.max(-15, Math.min(15, brData.avgPct * 3)) * 10) / 10;
+          let indexScore = 0;
+          if (idxData.length > 0) {
+            const avgIdxPct = idxData.reduce((s, idx) => s + (idx.pct ?? 0), 0) / idxData.length;
+            indexScore = Math.round(Math.max(-15, Math.min(15, avgIdxPct * 5)) * 10) / 10;
+          }
+          // 涨停池加分（涨停多=市场活跃）—— degraded 时不计
+          const limitUpBonus = lpDegraded ? 0 : displayPool ? Math.round(Math.min(10, displayPool.limitUpCount * 0.1) * 10) / 10 : 0;
+          // 炸板率扣分（炸板多=情绪不稳）—— degraded 时不计
+          const blastedPenalty = lpDegraded ? 0 : displayPool ? Math.round(Math.min(8, displayPool.blastedRate * 0.15) * 10) / 10 : 0;
+          // 主力资金方向加减分
+          const fundFlowScore = fm0 ? Math.round(Math.max(-8, Math.min(8, fm0.mainNet / 1e10)) * 10) / 10 : 0;
+
+          // 溢价因子：pAvg 为 null 计 0；否则 clamp 到 ±5
+          const premiumScore = pAvg != null
+            ? Math.round(Math.max(PREMIUM_SCORE_MIN, Math.min(PREMIUM_SCORE_MAX, pAvg)) * 10) / 10
+            : 0;
+          // 晋级率因子
+          let promotionScore = 0;
+          if (pRate != null) {
+            let matched = false;
+            for (const tier of PROMO_TIER) {
+              if (pRate >= tier.threshold) { promotionScore = tier.score; matched = true; break; }
+            }
+            if (!matched) promotionScore = PROMO_FLOOR_SCORE;
+          }
+
+          sentimentFactors = { upDownScore, limitScore, avgPctScore, indexScore, limitUpBonus, blastedPenalty, fundFlowScore, premiumScore, promotionScore };
+          // v9.129.0（一致性收敛）：情绪分总分不再由前端公式合成——单一来源 = PG sentiment_snapshot
+          //   （与认知层/情绪雷达同源同值；原 upRatio×40+…+15 公式曾造成顶部 76 vs 认知 16 同屏互斥）。
+          //   sentimentFactors 仅作分解展示参考（实时涨跌家数/涨停池等原始因子），不参与总分。
+          sentiment = null; // 由下方 PG 单一源分支赋值
+        }
+        // 情绪分主值：v9.129.1（一致性收口）单一来源 = 认知层 /api/cognition（与横幅/雷达/状态机同源同值）；
+        //   认知不可用 → 昨日存储值兜底（诚实标注），不再读 sentiment:键 前端上传值（污染源已切断）
+        const cogSnap = cogSnapRes.status === "fulfilled" ? cogSnapRes.value : null;
+        const cogScore = typeof cogSnap?.score === "number" ? cogSnap.score : null;
+        setCognMainline(cogSnap?.primaryTheme || undefined); // v9.135.0（阶段三）
+        cognMainlineRef.current = cogSnap?.primaryTheme || undefined; // v9.136.0（主线单源）
+        const labelOf = (v: number) => (v >= 80 ? "极度贪婪" : v >= 65 ? "贪婪" : v >= 45 ? "中性" : v >= 25 ? "恐慌" : "极度恐慌");
+        if (typeof cogScore === "number" && Number.isFinite(cogScore)) {
+          sentiment = Math.max(0, Math.min(100, Math.round(cogScore)));
+          sentimentLabel = labelOf(sentiment);
+        } else {
+          sentiment = prevSentiment; // 可能为 null（首日无数据）
+          if (sentiment != null) sentimentLabel = labelOf(sentiment);
+          else sentimentLabel = "数据待刷新";
+        }
+        return { sentiment, sentimentLabel, sentimentFactors };
+      };
+
+      // ==== v9.81（性能修复）：首绘立即渲染（batch1 数据即可，premium 因子由并行任务补位）====
+      // v9.85.0（P0-5）：stale-while-revalidate —— 失败字段保留上一轮有效值，不再用空数据覆盖
+      //   （原无条件 setOverview：东财断源时 indices:[]/limitPool:null 抹掉上一轮快照，且 fetchedAt 更新误导为最新）
+      const firstSentiment = computeSentimentNow(null, null);
+      setOverview(prev => {
+        // v9.90.0：stale 判定扩大 —— 加入主力资金/全球指数（原只统计 4 项，
+        //   主力资金/全球指数/板块资金流全挂时横幅不亮，与健康面板 0% 口径不一致）
+        // v9.113.1（T1-1）：pgSnapRes 不计入 failures —— PG 快照是增强兜底非必备，断源不标 stale
+        const failures = [indices.status, breadth.status, limitPoolRes.status, turnover.status, fundMain.status, globals.status]
+          .filter(s => s === "rejected").length;
+        if (!prev) {
+          // 首帧：全量写入（从未成功过才 null，无旧值可保留）
+          return {
+            indices: idxData, breadth: brData,
+            sentiment: firstSentiment.sentiment, sentimentLabel: firstSentiment.sentimentLabel,
+            sentimentFactors: firstSentiment.sentimentFactors, sentimentYesterday: prevSentiment,
+            limitPool: displayPool,
+            turnoverAmount: turnoverData.amount,
+            turnoverYesterday: yesterdayAmount,
+            turnoverAvg5d,
+            premiumAvg: null,
+            premiumDist: null,
+            promotionRate: null,
+            maxBoardHeight,
+            fetchedAt: Date.now(), // v9.77（P0-5）：抓取完成时间，供"数据截至 X 秒前"展示
+            stale: failures >= 3,
+            pgMeta, // v9.113.1（T1-1）：结构化字段数据源元信息（角标 asOf）
+          };
+        }
+        // 非首帧：仅用本轮 fulfilled 的字段覆盖，rejected 保留旧值
+        const merged: OverviewData = { ...prev, fetchedAt: Date.now(), stale: failures >= 3, pgMeta };
+        if (indices.status === "fulfilled") merged.indices = idxData;
+        if (breadth.status === "fulfilled") merged.breadth = brData;
+        // v9.113.1（T1-1）：涨停池三优先 —— 实时池 fulfilled 或 PG 派生池可用都写入
+        if (limitPoolRes.status === "fulfilled" || poolFromPg) merged.limitPool = displayPool;
+        if (turnover.status === "fulfilled") merged.turnoverAmount = turnoverData.amount;
+        // 情绪/最高板等派生字段：仅当依赖的原始数据 fulfilled 才更新（否则保留旧值）
+        // v9.113.1（T1-1）：poolFromPg 时情绪可能已用 PG 快照兜底（breadth 实时失败场景）
+        if (breadth.status === "fulfilled" || limitPoolRes.status === "fulfilled" || poolFromPg) {
+          merged.sentiment = firstSentiment.sentiment;
+          merged.sentimentLabel = firstSentiment.sentimentLabel;
+          merged.sentimentFactors = firstSentiment.sentimentFactors;
+          merged.sentimentYesterday = prevSentiment;
+          merged.maxBoardHeight = maxBoardHeight;
+        }
+        if (turnoverHistRes.status === "fulfilled") {
+          merged.turnoverYesterday = yesterdayAmount;
+          merged.turnoverAvg5d = turnoverAvg5d;
+        }
+        return merged;
+      });
+
+      // ==== v9.81（性能修复）：5 个模块并行化（原串行 await 链 → Promise.allSettled）====
+      // 各模块仅依赖 batch1 数据，互不等待；任一模块失败/超慢不再阻塞其他模块渲染
+      const [premiumRes, , globalRes, , mainlineRes] = await Promise.allSettled([
+        // ① 溢价/晋级率 + 核按钮（昨日涨停今日表现，需 fetchStockBriefBatch 分批拉取）
+        (async (): Promise<{ premiumAvg: number | null; premiumDist: OverviewData["premiumDist"]; promotionRate: number | null }> => {
+          let premiumAvg: number | null = null;
+          let promotionRate: number | null = null;
+          // v9.32.1（缺口1）：溢价分布 4 档（游资看第一眼的是分布不是均值）
+          let premiumDist: OverviewData["premiumDist"] = null;
+          if (prevZTPool && prevZTPool.length > 0) {
+            // v9.26.17：取全部代码去重（push2 批量单接口 100 只限制改分批处理；昨日涨停常 > 100 不应截断）
+            const codes = [...new Set(prevZTPool.map(s => String(s.c)))];
+            if (codes.length > 0) {
+              try {
+                const briefMap = await fetchStockBriefBatch(codes);
+                if (briefMap.size > 0) {
+                  // v9.36（B2）：溢价均值/4档分布/核按钮/晋级率 全部抽到纯函数
+                  const stats = computePrevZtStats({ prevZTPool, todayRawPool: limitPool?.rawZTPool ?? null, briefMap });
+                  premiumAvg = stats.premiumAvg;
+                  premiumDist = stats.premiumDist;
+                  // v9.77（A3-P2-9）：核按钮带时间戳 + 消失即清空（原只增不清，早盘横幅挂到收盘被误读为实时）
+                  if (stats.nuclearAlerts.length > 0) {
+                    setNuclearAlerts(stats.nuclearAlerts);
+                    nuclearTsRef.current = Date.now();
+                  } else {
+                    setNuclearAlerts([]);
+                  }
+                  promotionRate = stats.promotionRate;
+                }
+              } catch { /* 查询失败 → premiumAvg 保持 null */ }
+            }
+          }
+          return { premiumAvg, premiumDist, promotionRate };
+        })(),
+
+      // ② 资金结构（主力/散户结构 + 板块资金排行）
+      (async () => {
+      // === Fund Structure ===
+      if (fundMain.status === "fulfilled") {
+        const fm = fundMain.value;
+        const mainNet = fm.mainNet;
+        const smallNet = fm.smallNet;
+        const mainNet5d = fm.mainNet5d;
+        const mainNet10d = fm.mainNet10d;
+        const mainOutRetailIn = mainNet < 0 && smallNet > 0;
+        const persistentOutflow = mainNet5d < 0 && mainNet10d < 0;
+        let verdict = "healthy";
+        let vetoTriggered = false;
+        const reasons: string[] = [];
+        let actionHint = "";
+        if (mainOutRetailIn && persistentOutflow) {
+          vetoTriggered = true; verdict = "danger";
+          reasons.push("今日主力资金净流出且散户净流入，同时近5日、近10日主力资金均为净流出");
+          actionHint = "当前结构资金承压，历史统计中该类结构后续风险偏高。";
+        } else if (mainOutRetailIn) {
+          verdict = "warning";
+          reasons.push("今日出现「主力净流出 + 散户净流入」结构，需警惕分歧加大");
+          actionHint = "可小仓位试探，严格设置止损。";
+        } else if (mainNet5d < 0 && mainNet < 0) {
+          verdict = "warning";
+          reasons.push("主力资金连续净流出（今日 + 近5日），资金面偏弱");
+          actionHint = "建议观望，等待资金结构方向进一步明确。";
+        } else if (mainNet > 0 && mainNet5d > 0) {
+          verdict = "healthy";
+          reasons.push("今日与近5日主力资金均为净流入，资金面结构健康");
+          actionHint = "资金面支持顺势操作，仍需结合个股风险确认。";
+        } else {
+          verdict = "caution";
+          reasons.push("资金结构处于分歧状态，今日与近5日方向不一致");
+          actionHint = "建议观望，等待资金结构方向进一步明确。";
+        }
+        const history = fundHistory.status === "fulfilled" ? fundHistory.value : [];
+        // 获取板块资金流排行（净流入/净流出 Top10）
+        let boardRank: FundStructureData["boardRank"] = null;
+        try {
+          boardRank = await fetchBoardRankTopBottom("concept", 10);
+        } catch { /* 板块排行获取失败不影响主数据 */ }
+        setFundStructure({
+          dataMissing: Boolean(fm.dataMissing),
+          structure: {
+            today: { mainNet: fm.mainNet, extraLargeNet: fm.extraLargeNet, largeNet: fm.largeNet, mediumNet: fm.mediumNet, smallNet: fm.smallNet },
+            mainNet5d: fm.mainNet5d, mainNet10d: fm.mainNet10d,
+            verdict, vetoTriggered, reasons, actionHint,
+          },
+          history,
+          boardRank,
+          turnoverAmount: turnoverData.amount,
+        });
+      }
+      })(),
+
+      // ③ 全球指数 + 商品期货
+      (async (): Promise<{ commodities: GlobalIndex[] }> => {
+      // === Global ===
+      let commodities: GlobalIndex[] = [];
+      try { commodities = await fetchCommodities(); } catch { /* skip */ }
+      setGlobalData({
+        globalSignals: globals.status === "fulfilled" ? globals.value : [],
+        commodities,
+        turnover: turnover.status === "fulfilled" ? turnover.value : { amount: 0, available: false },
+      });
+      return { commodities };
+      })(),
+
+      // ④ 暗盘（概念板块资金 + Top10 成分股）
+      (async () => {
+      // === Dark Pool (concept boards) ===
+      // v9.100.0（P2-04）：注释口径统一 —— 原"参照同花顺6种组合模型"与下方"四象限"实现不符（审查疑点③）
+      // 明暗盘四象限判断：明盘 = 超大单+大单（明面上的大资金行为）
+      // 暗盘 = 中单+小单（看似散户，但可能包含主力拆单的隐蔽资金）
+      // 四象限判断（f62≡f66+f72，totalFlow与openNet恒等，只有openNet与darkNet两个独立维度）
+      // v9.65（V1-M2）：judgeFlowType 统一引用 lib/stockScore（原此处内联版与 lib 版文案 drift）
+
+      try {
+        const conceptBoards = await fetchBoardFundFlow("concept", 60);
+        const topBoards: DarkPoolData["topBoards"] = [];
+        for (const d of conceptBoards) {
+          if (!isRealConceptBoard(d.name)) continue;
+          const openNet = d.extraLargeNet + d.largeNet;
+          const darkNet = d.mediumNet + d.smallNet;
+          const flowType = judgeFlowType(openNet, darkNet);
+          topBoards.push({ code: d.code, name: d.name, pct: d.pct, openNet, darkNet, flowType, boardType: "concept" });
+        }
+        // 按主力净流入（mainNet = openNet）排序
+        topBoards.sort((a, b) => b.openNet - a.openNet);
+        const top10 = topBoards.slice(0, 10);
+
+        // 全市场级别
+        const fm = fundMain.status === "fulfilled" ? fundMain.value : null;
+        const marketOpenNet = fm ? fm.extraLargeNet + fm.largeNet : 0;  // 明盘
+        const marketDarkNet = fm ? fm.mediumNet + fm.smallNet : 0;       // 暗盘
+        const marketTotalFlow = fm ? fm.mainNet : 0; // 资金总体流向=主力净流入(f62)
+        const marketMainNet5d = fm ? fm.mainNet5d : 0;
+        const marketMainNet10d = fm ? fm.mainNet10d : 0;
+
+        const marketFlowType = fm ? judgeFlowType(marketOpenNet, marketDarkNet) : "数据不足";
+
+        // v9.84（性能）：成分股预取 10→6 板块 × 8→6 只 —— 10 个成分请求是 darkPool 模块最慢环节
+        //（队列并发3下串行排队 3-5s）；暗盘面板其余板块展开时无成分数据（boardStocks 缺省显示"暂无"）
+        const prefetchBoards = top10.slice(0, 6);
+        const boardStocks: Record<string, BoardStock[]> = {};
+        const stockFetchPromises = prefetchBoards.map(async (b) => {
+          try {
+            const stocks = await fetchBoardConstituents(b.code, 6);
+            boardStocks[b.code] = stocks;
+          } catch {
+            boardStocks[b.code] = [];
+          }
+        });
+        await Promise.allSettled(stockFetchPromises);
+
+        setDarkPool({
+          totalFlow: marketTotalFlow,
+          openPoolToday: marketOpenNet, darkPoolToday: marketDarkNet,
+          darkPool5d: marketMainNet5d, darkPool10d: marketMainNet10d,
+          marketFlowType, topBoards: top10, boardStocks,
+        });
+      } catch {
+        // 失败时保留上一次有效数据（比清空显示"获取失败"更好）
+        // 首次即失败才显示null→"数据不可用"
+        if (!darkPoolRef.current) setDarkPool(null);
+      }
+      })(),
+
+      // ⑤ 主线（行业/概念/地域资金流 + 龙头成分股）
+      (async (): Promise<{ boards: MainlineData["boards"] }> => {
+      // === Mainline ===
+      let mainlineBoards: MainlineData["boards"] = []; // 作战引擎需要引用
+      try {
+        // v9.12 修复：扩大主线拉取范围（industry 10→30, concept 10→30, region 6→10），
+        // 让"持仓-主线匹配"更容易命中（涨停票常因小众概念发力，不在 top10 industry 内）
+        const [industryRes, conceptRes, regionRes] = await Promise.allSettled([
+          fetchBoardFundFlow("industry", 30),
+          fetchBoardFundFlow("concept", 30),
+          fetchBoardFundFlow("region", 10),
+        ]);
+        const boards: MainlineData["boards"] = [];
+        for (const r of [industryRes, conceptRes, regionRes]) {
+          if (r.status !== "fulfilled") continue;
+          for (const b of r.value) {
+            const { stage, reason } = stageOfFunds({ pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct });
+            boards.push({ ...b, stage, stageReason: reason, weight: boardWeight(stage) });
+          }
+        }
+        boards.sort((a, b) => b.mainNet - a.mainNet);
+        const topBoards = boards.slice(0, 15);
+        const leaderBoards = topBoards.filter(b => b.weight === "推荐关注").slice(0, 3);
+        const potential: MainlineData["potential"] = [];
+        for (const board of leaderBoards) {
+          try {
+            const stocks = await fetchBoardConstituents(board.code, 6);
+            for (const s of stocks) {
+              const vetoReasons: string[] = [];
+              if (s.mainNet < 0 && s.smallNet > 0) vetoReasons.push("主力净流出而散户净流入，结构不健康");
+              if (s.pct >= stockLimitPct(s.code) - 0.2) vetoReasons.push("已涨停，短线博弈风险陡增");
+              if (s.turnoverRate > TURNOVER_CROWDED) vetoReasons.push("换手率过高（>25%），交易过度拥挤");
+              let crowding = "正常";
+              if (s.turnoverRate > TURNOVER_OVERHEAT || s.volumeRatio > 3) crowding = "极度拥挤";
+              else if (s.turnoverRate > 10 || s.volumeRatio > 1.8) crowding = "偏高";
+              potential.push({
+                code: s.code, name: s.name, price: s.price, pct: s.pct,
+                mainNet: s.mainNet, mainNetPct: s.mainNetPct, turnoverRate: s.turnoverRate,
+                volumeRatio: s.volumeRatio, pe: s.pe, boardName: board.name,
+                vetoed: vetoReasons.length > 0, vetoReasons, crowding,
+              });
+            }
+          } catch { /* skip */ }
+        }
+        const seen = new Set<string>();
+        const dedupedPotential = potential.filter(p => { if (seen.has(p.code)) return false; seen.add(p.code); return true; });
+        dedupedPotential.sort((a, b) => Number(a.vetoed) - Number(b.vetoed) || b.mainNet - a.mainNet);
+        mainlineBoards = topBoards; // 供作战引擎复用
+        setMainline({ boards: topBoards, potential: dedupedPotential.slice(0, 15) });
+        return { boards: mainlineBoards };
+      } catch {
+        setMainline(null);
+        return { boards: [] };
+      }
+      })()
+      ]);
+
+      // ==== 并行任务结果汇聚（供作战引擎使用）====
+      const mainlineBoards: MainlineData["boards"] = mainlineRes.status === "fulfilled" ? mainlineRes.value.boards : [];
+      const commodities: GlobalIndex[] = globalRes.status === "fulfilled" ? globalRes.value.commodities : [];
+
+      // ==== 情绪终值（premium 就绪后重算）+ overview 合并（premium 补位）====
+      // v9.130.0（终审 N3）：溢价/晋级率单源 = PG market_daily（服务端腾讯批量口径，与认知层同源同值）；
+      //   前端逐股 quote 实时计算（prevZtStats）仅作 PG 缺失时兜底（原优先级相反——两算法并存曾造成
+      //   顶部与认知层溢价不一致）。premiumDist（4 档分布）仍用实时（PG 无分布字段）。
+      let prem = premiumRes.status === "fulfilled" ? premiumRes.value : { premiumAvg: null, premiumDist: null, promotionRate: null };
+      if (mktFresh && pgMkt) {
+        if (typeof pgMkt.premiumAvg === "number") prem = { ...prem, premiumAvg: pgMkt.premiumAvg };
+        if (typeof pgMkt.promotionRate === "number") prem = { ...prem, promotionRate: pgMkt.promotionRate };
+      }
+      const finalSentiment = computeSentimentNow(prem.premiumAvg, prem.promotionRate);
+      // 情绪分落盘/轨迹采样/信号账本 —— 只执行一次（premium 补齐后）
+      // v9.106.1（验收观察项①）：写入键用数据日期 limitPool.qdate（接口真实交易日）——凌晨跨日不再把昨日情绪错标到次日
+      if (finalSentiment.sentiment != null) {
+        saveTodaySentiment(finalSentiment.sentiment, limitPool?.qdate);
+        // P2：日内轨迹采样（5分钟节流），供情绪动量折线/仓位建议使用
+        recordIntradaySentiment(finalSentiment.sentiment, limitPool?.qdate);
+      }
+      if (brData && brData.total > 0 && finalSentiment.sentiment != null && (finalSentiment.sentiment >= 80 || finalSentiment.sentiment <= 25)) {
+        const today = localDateStr();
+        appendSignal({
+          date: today, type: "sentiment_cross", typeLabel: finalSentiment.sentiment >= 80 ? "极度贪婪" : "极度恐慌",
+          code: "MARKET", name: "全市场", priceAtSignal: idxData[0]?.price ?? 0,
+          description: `情绪温度计${finalSentiment.sentiment}分(${finalSentiment.sentimentLabel})`,
+        });
+      }
+      setOverview(prev => prev ? {
+        ...prev,
+        sentiment: finalSentiment.sentiment, sentimentLabel: finalSentiment.sentimentLabel,
+        sentimentFactors: finalSentiment.sentimentFactors,
+        premiumAvg: prem.premiumAvg, premiumDist: prem.premiumDist, promotionRate: prem.promotionRate,
+        fetchedAt: Date.now(),
+      } : prev);
+
+      // ============== 作战推荐引擎（规则机版） ==============
+      try {
+        // 需要 overview 数据（此处 limitPool/sentiment 已算好）
+        const overviewForGate: OverviewData = {
+          indices: idxData, breadth: brData, sentiment: finalSentiment.sentiment, sentimentLabel: finalSentiment.sentimentLabel,
+          sentimentFactors: finalSentiment.sentimentFactors, sentimentYesterday: prevSentiment, limitPool: displayPool,
+          turnoverAmount: turnoverData.amount, turnoverYesterday: yesterdayAmount,
+          turnoverAvg5d, premiumAvg: prem.premiumAvg, promotionRate: prem.promotionRate, maxBoardHeight,
+        };
+        const gate = computeGate(overviewForGate);
+
+        // ============== 主线作战引擎（v9.16 打破重建） ==============
+        // 三层：涨停潮检测 → 风格感知 → 主线排序 + ETF 直出
+        const mlBoards = mainlineBoards;
+        const rawPool = limitPool?.rawZTPool ?? [];
+        // v9.16 修复：newsItems 原来写死空数组 → 接 dataStore 真实新闻（近2日）
+        const { news: storeNews } = getAllSince(localDateStrOffset(2));
+        const newsItems: ThemeNewsItem[] = storeNews.map(n => ({ title: n.title, stars: n.stars ?? 0 }));
+        // v9.137.0（审查 P1-07 修复）：高低切脉冲真实接入 —— 原 hlPulseNew 恒为 []，
+        //   computeThemeScores 的"高低切脉冲+10"分支（themeScore.ts:162）生产永不可达。
+        //   现与渲染侧 hlSwitch（App.tsx:1446-1467）同输入同算法，把真实 pulseNew 喂进主题评分；
+        //   涨停池 degraded（静默回退昨日）时与 hlSwitch 一致返回 null → 空数组（不误报脉冲）。
+        let hlPulseNew: string[] = [];
+        try {
+          if (!displayPool?.degraded && displayPool?.rawZTPool?.length && mainlineBoards?.length) {
+            const hl = detectHighLowSwitch(
+              mainlineBoards
+                .filter(b => { const k = classifyBoard(b.name); return k === "theme" || k === "industry"; })
+                .map(b => ({ name: b.name, pct: b.pct, mainNet5d: b.mainNet5d })),
+              displayPool.rawZTPool as ZTPoolItem[],
+              loadPrevZTSnapshot(displayPool.qdate ?? null),
+            );
+            if (hl) hlPulseNew = hl.pulseNew ?? [];
+          }
+        } catch { /* 高低切检测失败 → 空数组（不阻塞主链） */ }
+
+        // 行业频道新增一次拉取（v9.30.1：all=true 拉全量含流出行业，资金走势图红绿双榜才完整）
+        let industryBoards: typeof mlBoards = [];
+        try {
+          const indRaw = await fetchBoardFundFlow("industry", 30, { all: true });
+          industryBoards = indRaw.map(b => {
+            const { stage } = stageOfFunds({ pct: b.pct, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct });
+            return { ...b, stage, stageReason: "", weight: "" };
+          });
+        } catch { /* 行业频道拉取失败不影响题材推荐 */ }
+
+        // 合并：mlBoards(concept已过滤style) + industryBoards，带kind字段
+        // F-08 修复：保留 mainNet/mainNet5d（旧版 map 丢弃后 as unknown as 强断言，导致资金显示 undefined/NaN）
+        const allScoringBoards = [
+          ...mlBoards
+            .filter(b => { const k = classifyBoard(b.name, "concept"); return k === "theme"; })
+            .map(b => ({ code: b.code, name: b.name, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct, stage: b.stage, kind: "theme" as const })),
+          ...industryBoards
+            .filter(b => classifyBoard(b.name, "industry") === "industry")
+            .map(b => ({ code: b.code, name: b.name, pct: b.pct, mainNet: b.mainNet, mainNet5d: b.mainNet5d, mainNetPct: b.mainNetPct, mainNet5dPct: b.mainNet5dPct, mainNet10dPct: b.mainNet10dPct, stage: b.stage, kind: "industry" as const })),
+        ];
+
+        // v9.26.20：行业资金流向图 —— 不硬编码数量，全部有数据的行业板块传入，组件按实际数据动态展示
+        const sortedIndustry = [...industryBoards]
+          .filter(b => b.code && typeof b.mainNet === "number" && Number.isFinite(b.mainNet))
+          .sort((a, b) => (b.mainNet ?? 0) - (a.mainNet ?? 0));
+        const topIndustryFund = sortedIndustry
+          .map(b => ({ code: b.code, name: b.name, mainNet: b.mainNet ?? 0 }));
+        setTopIndustryFund(topIndustryFund);
+
+        const themeResults = rawPool.length > 0 && allScoringBoards.length > 0
+          ? computeThemeScores(allScoringBoards, rawPool, newsItems, hlPulseNew)
+          : [];
+
+        // ---- ① 主线归类 + 渐进式渲染（v9.78 性能修复） ----
+        // 原实现：await classifyStocksToMainlines(LLM) 阻塞 refreshAll → 作战卡/裁决卡/选股清单
+        // 要等 LLM 完成才出现（Agnes 慢/并发限流时卡 10-30s）。
+        // 现改为：快路径 skipLLM(hybk，无 LLM ~1-3s) 先渲染；LLM 软语义归类异步升级（不阻塞首帧）。
+        const mySeq = ++battleSeq.current;
+        const renderBattlePlan = async (
+          cands: MainlineGroup[],
+          classifyOverview: { totalStocks: number; mainlineCount: number; trueMainlineCount: number; logic: string },
+        ) => {
+          const candidates: MainlineGroup[] = cands;
+
+        // ---- v9.23-1/2：主线强度分 + 离场信号注入（PRD 6.1/6.4） ----
+        // 基于涨停家数占比/连板高度/资金连续性 计算，避免"资金流入金额大≠主线强"
+        try {
+          const totalZt = rawPool.length || 30;
+          // v9.23.1-fix：昨日涨停池按主线分组（用股票名匹配 candidates.mainline 或 hybk 近似）
+          // 由于没有"昨日主线归类"历史，用"今日主线名包含昨日股名/昨日股 hybk 匹配今日主线"近似
+          const yesterdayZtByMainline = new Map<string, { zt: number; height: number }>();
+          if (prevZTPool && prevZTPool.length > 0) {
+            for (const z of prevZTPool) {
+              const yHybk = String(z.hybk ?? "");
+              const yName = String(z.n ?? "");
+              // 尝试匹配到今日某个主线（按 hybk 或 名字模糊匹配）
+              for (const c of candidates) {
+                if (
+                  c.mainline.includes(yHybk) ||
+                  yHybk.includes(c.mainline) ||
+                  c.mainline.includes(yName.slice(0, 2)) ||
+                  c.leaders.some(l => l.name === yName)
+                ) {
+                  const cur = yesterdayZtByMainline.get(c.mainline) ?? { zt: 0, height: 0 };
+                  yesterdayZtByMainline.set(c.mainline, {
+                    zt: cur.zt + 1,
+                    height: Math.max(cur.height, z.lbc ?? 1),
+                  });
+                  break;
+                }
+              }
+            }
+          }
+          // v9.77（P0-11 修复）：读 server 已落库的 market_daily（昨日炸板率）→ 复活退潮前兆
+          // "炸板率环比+15pp"规则（原 blastedRateYesterday 硬编码 null，规则永久失明）。
+          // 向后回看 3 天取最近一个有 market_daily 的交易日（跳过周末/节假日）；服务端不可用保持 null。
+          let yesterdayBlastedRate: number | null = null;
+          try {
+            for (let back = 1; back <= 3; back++) {
+              const mdKey = `market_daily:${localDateStrOffset(back)}`;
+              const mdVal = await kvGet(mdKey) as { blastedRate?: number } | null;
+              if (mdVal && typeof mdVal === "object" && mdVal.blastedRate != null) {
+                yesterdayBlastedRate = mdVal.blastedRate;
+                break;
+              }
+            }
+          } catch { /* 服务端不可用 → 保持 null */ }
+          for (const c of candidates) {
+            // v9.26 A.4：快照抓取时间（每条候选打同一时间戳，可回放审计）
+            c.observedAt = new Date().toISOString();
+            const strength = calcMainlineStrength({
+              ztCount: c.ztCount,
+              totalZtCount: totalZt,
+              height: c.height,
+              totalMaxHeight: Math.max(...candidates.map(x => x.height), 2),
+              promotionRate: null, // 晋级率暂无逐主线数据，中性
+              mainNet5d: c.mainNet5d,
+              mainNet10d: null,
+              boardPct: c.boardPct,
+              turnoverRate: null,
+              catalystStrength: c.newsTitles.length > 0 ? 60 : 50, // 有新闻催化 → 略加分
+            });
+            c.strengthScore = strength.score;
+            c.strengthFactors = strength.factors;
+            // v9.26 F-12：数据完整度 + 缺失字段（UI 显示"数据缺失"与置信度下调）
+            c.strengthCompleteness = strength.dataCompleteness;
+            c.strengthMissing = strength.missingFields;
+            // v9.23.1-fix：离场信号接入昨日数据（涨停数/高度环比 + v9.77 炸板率环比）
+            const yesterday = yesterdayZtByMainline.get(c.mainline);
+            const exit = checkExitSignal({
+              mainline: c.mainline,
+              ztCountToday: c.ztCount,
+              ztCountYesterday: yesterday?.zt ?? null,
+              heightToday: c.height,
+              heightYesterday: yesterday?.height ?? null,
+              blastedRateToday: limitPool?.blastedRate ?? null,
+              blastedRateYesterday: yesterdayBlastedRate, // v9.77：复活"炸板率环比+15pp"退潮规则
+              mainNetToday: c.mainNet,
+              mainNetYesterday: null, // 昨日资金 market_daily 未存 mainNet，规则4 待数据积累
+            });
+            c.exitSignal = exit.triggered;
+            c.exitSignalText = exit.text;
+          }
+          // 按强度分重新排序（最强主线在前）；v9.91.2："其他"沉底（LLM 归类的杂股组不占第一梯队）
+          candidates.sort((a, b) => {
+            const aOther = a.mainline === "其他" ? 1 : 0;
+            const bOther = b.mainline === "其他" ? 1 : 0;
+            if (aOther !== bOther) return aOther - bOther;
+            return (b.strengthScore ?? 0) - (a.strengthScore ?? 0);
+          });
+        } catch { /* 强度分计算失败不影响主流程 */ }
+
+        // ---- v9.136.0（主线单源）：认知锚定（第一主线 = 认知层 primaryTheme） ----
+        // 服务端 theme_analysis 30min 快照权威（排序键与 calcMainlineStrength 同口径）；
+        // 前端实时引擎降级为增量候选：同名组置顶；无同名组 → theme_analysis 补位。
+        // 读 ref（refreshAll 空依赖闭包拿不到最新 state）；失败静默保持前端引擎排序
+        if (cognMainlineRef.current) {
+          try {
+            const ta = await kvGet("theme_analysis:latest") as { themes?: Array<Record<string, unknown>> } | null;
+            const anchored = anchorCognitionMainline(candidates, cognMainlineRef.current, ta);
+            candidates.splice(0, candidates.length, ...anchored.list);
+          } catch { /* 服务端不可用 → 保持前端引擎排序 */ }
+        }
+
+        // ---- ①.5 人气榜对照（v9.17-fix）：给各主线龙头打人气排名 ----
+        // 用户要求对照人气榜单 + 资金进攻强度（如蓝色光标人气第一）
+        // 失败静默（不影响主线展示）
+        try {
+          const popularityList = await fetchPopularityRank(50);
+          const popRank = new Map<string, number>();
+          popularityList.forEach((item, idx) => {
+            if (item.code) popRank.set(item.code, idx + 1);
+          });
+          for (const c of candidates) {
+            for (const l of c.leaders) {
+              const rank = popRank.get(l.code);
+              if (rank != null) l.popularRank = rank;
+            }
+            // 龙一未入榜但组内涨停人气最高 → 用组内最高的人气
+            if (c.leaders.length > 0 && c.leaders[0].popularRank < 0) {
+              let bestRank = -1;
+              for (const l of c.leaders) if (l.popularRank > 0) bestRank = Math.min(bestRank < 0 ? l.popularRank : bestRank, l.popularRank);
+            }
+          }
+        } catch { /* 人气榜不可用不阻塞 */ }
+
+        // ---- ② 市场风格感知（进攻/轮动/防守） ----
+        const marketStyle = detectMarketStyle({
+          sentiment: finalSentiment.sentiment,
+          gateFactor: gate.factor,
+          ztCount: rawPool.length,
+          blastedRate: limitPool?.blastedRate ?? null,
+          maxBoardHeight: maxBoardHeight ?? 0,
+          upRatio: brData && brData.total > 0 ? brData.up / brData.total : null,
+        });
+
+        // ETF 行情：一次批量查询（fields 含 f164=5日主力净额）
+        const etfQuotes = new Map<string, ETFQuote>();
+        try {
+          const etfSecids = ETF_POOL.map(s => `${/^(60|68|5)/.test(s.code) ? "1" : "0"}.${s.code}`).join(",");
+          const etfUrl = `https://push2.eastmoney.com/api/qt/ulist.np/get?ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&fields=f3,f12,f14,f62,f164&secids=${etfSecids}`;
+          const etfJson = await (await import("../lib/jsonpQueue")).queuedJsonp<any>(etfUrl, 5000, "cb", 1);
+          const etfDiffRaw = etfJson?.data?.diff;
+          const etfDiff: any[] = Array.isArray(etfDiffRaw) ? etfDiffRaw : (etfDiffRaw && typeof etfDiffRaw === "object" ? Object.values(etfDiffRaw) : []);
+          for (const d of etfDiff) {
+            const code = String(d.f12 ?? "");
+            if (code) {
+              // v9.85.0（P0-3）：缺失字段不再静默归零 —— f164/f3 缺失/非数值 → 整只 ETF 跳过
+              // （原 `Number(x)||0 + valid:true` 让"无数据"冒充"资金为0"进入 etfScore 排序）
+              const f164 = Number(d.f164);
+              const f3 = Number(d.f3);
+              const f164Ok = d.f164 != null && Number.isFinite(f164);
+              const f3Ok = d.f3 != null && Number.isFinite(f3);
+              if (!f164Ok && !f3Ok) continue;
+              etfQuotes.set(code, {
+                code,
+                mainNet5d: f164Ok ? f164 : 0,
+                pct: f3Ok ? f3 : 0,  // v9.22-fix: ETF 自身今日涨跌幅
+                valid: true,
+              });
+            }
+          }
+        } catch {
+          console.warn("[ETF批量行情] 请求失败，资金趋势维记50");
+        }
+
+        const themeScoreMap = new Map<string, number>();
+        for (const t of themeResults) themeScoreMap.set(t.board, t.total);
+
+        // 商品涨跌幅映射
+        const commodityPcts: Record<string, number> = {};
+        try {
+          for (const c of commodities) {
+            if (c.name.includes("黄金")) commodityPcts.gold = c.pct;
+            if (c.name.includes("原油")) commodityPcts.oil = c.pct;
+            if (c.name.includes("铜")) commodityPcts.copper = c.pct;
+          }
+        } catch { /* commodities 可能未定义 */ }
+
+        // ---- ③ ETF 评分（风格感知 + 主线直出） ----
+        // v9.93.4：新闻催化分接入 ETF 排序（themeNewsScore → 主题催化 → ETF 加权）
+        const catalystMap = new Map<string, number>();
+        try {
+          const { getAllAIResults } = await import("../lib/aiConclusionStore");
+          for (const r of getAllAIResults("themeNewsScore")) {
+            const v = r.value as { catalyst?: number } | undefined;
+            if (v && typeof v.catalyst === "number") catalystMap.set(r.key, v.catalyst);
+          }
+        } catch { /* 催化分缺失不影响排序 */ }
+        const etfResults = computeETFScores(etfQuotes, themeScoreMap, commodityPcts, marketStyle, candidates.map(c => ({ board: c.mainline })), catalystMap);
+        const topETFs = etfResults.slice(0, 4); // 多只 ETF 排序
+
+        // 候选观察池（板块4-8名）
+        const candidateThemes = themeResults.slice(3, 8).map(t => ({ board: t.board, total: t.total, tier: t.tier }));
+
+          // ---- 先用规则分渲染作战卡（渐进式：先规则后LLM） ----
+          setBattlePlan({ gate, candidates, llmRanked: null, marketStyle, etfs: topETFs, candidateThemes, classifyOverview });
+
+          // ?debug=1 诊断模式（Fix4：可观测性）
+          if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
+            console.log("=== 主线引擎（LLM 归类）===", { 情绪: finalSentiment.sentiment, 涨停数: rawPool.length, 风格: marketStyle.label, 风险偏好: marketStyle.riskAppetite, 闸门: gate.factor, 归类概览: classifyOverview });
+            console.table(candidates.slice(0, 8).map(c => ({ 主线: c.mainline, 涨停: c.ztCount, 高度: c.height, 资金: (c.mainNet / 1e8).toFixed(0) + "亿", 强度: c.score, 脉冲: c.isPulse ? "是" : "否", 龙一: c.leaders[0]?.name ?? "—", 龙二: c.leaders[1]?.name ?? "—" })));
+            console.table(etfResults.map(e => ({ 代码: e.code, 名称: e.name, 总分: e.total, 置信: e.tier, 资金: e.factors.fundTrend, 联动: e.factors.boardLink, 风格: e.factors.styleFit, 主线: e.factors.mainlineLink, 宏观: e.factors.macro, 直出: e.fromMainline ? e.matchedMainline : "" })));
+          }
+
+          // 推荐落盘（每日首次，同日同code不重复）
+          const recDate = localDateStr();
+          const recGateFactor = gate.factor ?? 0;
+          for (const c of candidates.slice(0, 5)) {
+            recordRecommendation({ date: recDate, type: "theme", code: c.mainline, board: c.mainline, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+            for (const l of c.leaders) {
+              recordRecommendation({ date: recDate, type: "stock", code: l.code, board: c.mainline, priceAtRec: 0, totalScore: c.score, gateFactor: recGateFactor });
+            }
+          }
+          for (const e of topETFs) {
+            recordRecommendation({ date: recDate, type: "etf", code: e.code, board: e.matchedMainline ?? "", priceAtRec: 0, totalScore: e.total, gateFactor: recGateFactor });
+          }
+
+          // ---- LLM 主线精排（异步补位，不阻塞渲染；v9.77 20min 节流） ----
+          // 失败自动降级回规则排序（rankMainlinesWithLLM 内部处理）
+          if (candidates.length > 0 && Date.now() - lastLLMRankAt.current >= 20 * 60 * 1000) {
+            lastLLMRankAt.current = Date.now();
+            const { news: catNews, ann: catAnn } = getAllSince(localDateStrOffset(3));
+            const catalystsMap = buildMainlineCatalysts(candidates.map(c => c.mainline), catNews, catAnn);
+            (async () => {
+              try {
+                const seq = ++llmRankSeq.current; // v9.26.9：竞态护栏——只应用最新一轮结果
+                const llmRanked = await rankMainlinesWithLLM(candidates.slice(0, 6), marketStyle, catalystsMap);
+                if (seq === llmRankSeq.current) {
+                  setBattlePlan(prev => prev ? { ...prev, llmRanked } : prev);
+                }
+              } catch { /* LLM 精排失败 → 保持规则排序 */ }
+            })();
+          }
+        }; // renderBattlePlan 结束
+
+        // ---- 快路径：skipLLM hybk 归类先渲染（无 LLM，~1-3s）----
+        try {
+          const quick = await classifyStocksToMainlines({ rawPool, boards: allScoringBoards, newsItems, skipLLM: true });
+          if (mySeq !== battleSeq.current) return;
+          await renderBattlePlan(quick.groups, quick.overview);
+        } catch { setBattlePlan(null); }
+
+        // ---- 异步升级：LLM 软语义归类（不阻塞渲染；Agnes 慢/并发限流时首帧已是规则结果）----
+        if (rawPool.length > 0) {
+          (async () => {
+            try {
+              const llm = await classifyStocksToMainlines({ rawPool, boards: allScoringBoards, newsItems });
+              if (mySeq !== battleSeq.current) return; // 已有更新轮次 → 丢弃慢的 LLM 结果
+              if (!llm.groups || llm.groups.length === 0) return;
+              await renderBattlePlan(llm.groups, llm.overview);
+            } catch { /* LLM 升级失败 → 保持快路径结果 */ }
+          })();
+        }
+
+      } catch {
+        setBattlePlan(null);
+      }
+
+      setLastUpdated(new Date().toISOString());
+    } finally {
+      setLoading(false);
+      inFlight.current = false;
+    }
+  }, []);
+
+  // 同步当前 tab → URL hash + localStorage（便于分享/记忆）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.location.hash = active;
+    try { localStorage.setItem("stock:activeTab", active); } catch {}
+  }, [active]);
+
+  // 首次加载
+  // v9.79（性能修复）：首帧 refreshAll 完成后延迟构建板块映射表 —— 原 ensureBoardMap 与 refreshAll
+  // 挂载时并发，fetchStockIndustryMap(最多10页×2000只)+concept500 大请求与 refreshAll 的 ~30 个 JSONP
+  // 抢同一 jsonpQueue（并发3），大请求占满队列 → 关键数据模块排队加载不出来。合并为"先数据、后映射"。
+  useEffect(() => {
+    let cancelled = false;
+    // v9.96.0（阶段一-2）：push2 健康探测 —— 300s 周期 + 启动立即探测，恢复后自动切回主源
+    startHealthProbe();
+    const build = () => { if (!cancelled) ensureBoardMap().catch(e => console.warn("[boardMap] 构建失败:", e)); };
+    // refreshAll 无拒绝（try/finally 包裹），完成后再构建；异常兜底 8s 后重试
+    Promise.resolve(refreshAll()).then(() => setTimeout(build, 1500)).catch(() => setTimeout(build, 8000));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshAll]);
+  // v9.55（V7-20）：localStorage 全局用量巡检（启动 + 每小时；超限自动淘汰低价值 key 并提示）
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const audit = () => {
+      try {
+        const r = auditLocalStorageQuota();
+        if (r.message) console.warn(`[storageQuota] ${r.message}`);
+      } catch { /* 巡检失败不影响功能 */ }
+    };
+    audit();
+    const t = setInterval(audit, 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ============ v9.28（P1-8）：盘中高频小通道 ============
+  // 主刷新 60s 对"9:30:05 龙一直线封板"级爆发太慢；本通道独立 18s 一次，
+  // 仅刷涨停池（轻量接口，走 fetchLimitPoolSummary），让"第一时间识别主线"更快。
+  // 竞价段（auction）同样高频刷涨停池 —— 竞价涨停价锁定即出现，实现"竞价即封板"早期信号。
+  // 不碰板块资金/新闻/公告等重接口（仍走主刷新 60s），避免全量轮询打爆东财限流。
+  const refreshFast = useCallback(async () => {
+    // v9.81（性能）：快刷防重叠 —— 上一轮 18s 快刷未完成（东财黑洞/回退中）时跳过本轮，
+    // 避免 fetchLimitPoolSummary 回退放大请求与自身/refreshAll 叠加
+    if (fastInFlight.current) return;
+    fastInFlight.current = true;
+    try {
+      const phase = getCurrentSession().phase;
+      if (phase !== "trading" && phase !== "auction") return;
+      const limitPool = await fetchLimitPoolSummary();
+      // v9.79（性能/韧性）：18s 高频通道接口抖动时，不要用空池/降级池覆盖上一轮有效池
+      // （原无条件 setOverview 会用 totalCount=0 的空池或昨日回退池打空白涨停/情绪模块）
+      // v9.113.1（T1-1）：快刷池实为 push2delay（15min 旧）且上一轮是 PG 派生池 → 不覆盖（PG cron 更新鲜）
+      const delayHitNow = getSourceState().some(s => s.host.includes("push2delay") && Date.now() - s.at < 60_000);
+      setOverview(prev => {
+        if (!prev) return prev;
+        const hasData = (limitPool?.rawZTPool?.length ?? 0) > 0 || (limitPool?.totalCount ?? 0) > 0;
+        const isWorse = Boolean(limitPool?.degraded) || (!hasData && (prev.limitPool?.totalCount ?? 0) > 0)
+          || (delayHitNow && prev.pgMeta?.poolFromPg === true);
+        return { ...prev, limitPool: isWorse ? prev.limitPool : limitPool };
+      });
+      // v12-6（P1）：涨停池可能截断 → 全局 console 警告（五问条/温度条等主显示点不逐个透传，落一条日志兜底）
+      if (limitPool?.truncated) console.warn(`[ztpool] ${limitPool.truncated}`);
+      // v9.34（S1）：封单衰减检测（与上一轮 18s 快照对比）
+      if (phase === "trading" && limitPool?.rawZTPool?.length) {
+        const alerts = detectSealDecay(limitPool.rawZTPool);
+        if (alerts.length > 0) setSealAlerts(alerts);
+      }
+    } catch { /* 静默：高频通道失败不影响主刷新 */ } finally {
+      fastInFlight.current = false;
+    }
+  }, []);
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const t = setInterval(() => { refreshFast(); }, 18000);
+    return () => clearInterval(t);
+  }, [autoRefresh, refreshFast]);
+
+  // 交易时段状态机驱动刷新：盘中60s、集合竞价30s、盘后300s、休市不刷
+  // v9.26 F-01 修复：倒计时只用于显示（ref 计数），interval 只依赖 autoRefresh/refreshAll，
+  // 不再依赖 countdown state（旧版每 setCountdown 一次就销毁重建 interval，countdown 永远到不了 0）
+  // v9.26.10：App 不再每秒 setCountdown（避免全树每秒重渲染）——只维护 nextRefreshAt 时间戳，
+  //           TopNav 内部每秒本地计算剩余秒数。
+  useEffect(() => {
+    if (!autoRefresh) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let nextAt = 0;
+    // v9.55-fix（V7-15 复盘补做）：refreshIntervalMs===0 表示休市（周末/节假日）→ 停刷，
+    //   原 `|| 60000` 把 0 退化成 60s，节假日仍空刷
+    const computeIntervalMs = (): number => {
+      const s = getCurrentSession();
+      return s.refreshIntervalMs; // 0 = 休市停刷
+    };
+    const arm = () => {
+      const ms = computeIntervalMs();
+      if (ms <= 0) { nextAt = 0; setNextRefreshAt(0); return; } // 休市：不排下次刷新
+      nextAt = Date.now() + ms;
+      setNextRefreshAt(nextAt);
+    };
+    arm();
+    timer = setInterval(() => {
+      if (cancelled) return;
+      if (nextAt > 0 && Date.now() >= nextAt) {
+        arm(); // 先排下一次（防刷新耗时 > 周期时连刷）
+        refreshAll();
+      }
+    }, 1000);
+    return () => { cancelled = true; if (timer) clearInterval(timer); };
+  }, [autoRefresh, refreshAll]);
+
+  // 每分钟更新时段
+  useEffect(() => {
+    const t = setInterval(() => setCurrentPhase(getCurrentSession().phase), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // v9.84.3（4.2）：盘中板块集体异动轮询（30s）→ alertBus 强提示（横幅/声音/标题闪烁）
+  useEffect(() => {
+    const stop = startAnomalyPolling();
+    return stop;
+  }, []);
+
+  // v9.33（缺口3）：LLM 盘后三剧本 + 竞价龙头预判 + 风险雷达（LLM 可用时自动触发一次）
+  const llmBriefSeq = useRef(0); // 护栏：只触发一次（避免每轮 refreshAll 重复调用）
+  useEffect(() => {
+    let cancelled = false;
+    const phase = getCurrentSession().phase;
+    const bl = battlePlan;
+    const ov = overview;
+    if (!bl || !ov) return;
+    // 已触发过同类型 → 跳过（盘后/竞价各一次）
+    const want = phase === "post" ? "post" : phase === "auction" ? "auction" : null;
+    if (!want) return;
+    if (llmBriefSeq.current === (want === "post" ? 1 : 2)) return;
+
+    // 盘后（15:00 后）：三剧本 + 风险雷达
+    if (want === "post" && bl.candidates.length > 0) {
+      llmBriefSeq.current = 1;
+      const top3 = bl.candidates.slice(0, 3).map(c => `${c.mainline}(强度${c.strengthScore ?? c.score ?? 0}/涨停${c.ztCount})`).join("；");
+      // v9.75（深化）：补梯队分布/市场风格/溢价分布 —— 原 prompt 只有 6 个数字，三剧本概率全靠模型猜
+      const ladderStr = ov.limitPool?.boardCounts
+        ? Object.entries(ov.limitPool.boardCounts).sort((a, b) => Number(b[0]) - Number(a[0])).slice(0, 5).map(([k, v]) => `${k}板${v}只`).join(" ")
+        : "";
+      const premStr = ov.premiumDist ? `昨日涨停今日分布：跌超5%${ov.premiumDist.ltNeg5}只/大赚${ov.premiumDist.gt3}只` : "";
+      const styleStr = bl.marketStyle ? `${bl.marketStyle.label ?? ""}${(bl.marketStyle as { riskAppetite?: number }).riskAppetite ? `（风险偏好${(bl.marketStyle as { riskAppetite?: number }).riskAppetite}）` : ""}` : "";
+      const prompt = `今日涨停${ov.limitPool?.limitUpCount ?? 0}只，炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}%，最高${ov.maxBoardHeight ?? "?"}板，情绪${ov.sentiment ?? "?"}分。\nTop3主线：${top3}\n昨日溢价均值：${ov.premiumAvg ?? "?"}%${ladderStr ? "\n连板梯队：" + ladderStr : ""}${premStr ? "\n" + premStr : ""}${styleStr ? `\n市场风格：${styleStr}` : ""}`;
+      callAI("nextDayScenarios", { prompt }).then((r) => {
+        if (cancelled) return;
+        try {
+          const arr = parseLLMJSON<Array<{ scenario: string; probability: number; conditions: string[]; focus: string[] }>>(r.text, schemaForTask("nextDayScenarios"));
+          if (Array.isArray(arr) && arr.length > 0) { setNextScenarios(arr.slice(0, 3)); setLlmBriefDegraded(p => ({ ...p, nextScenarios: !!r.degraded })); } // v9.99.2（B3）：降级标记
+        } catch { /* 解析失败静默 */ }
+      }).catch(() => {});
+      // v9.75（阶段二）：次日闸门预测 —— 规则闸门是"当日快照"，此调用让 LLM 结合隔夜外围/政策预判明日闸门（盘后一次）
+      {
+        const gateStr = bl.gate ? `今日闸门=${bl.gate.label}（系数${bl.gate.factor ?? "?"}）${(bl.gate.reason ?? []).length ? `，熔断：${bl.gate.reason.join("；")}` : ""}` : "";
+        const idxStr2 = (ov.indices ?? []).slice(0, 4).map(i => `${i.name}${i.pct >= 0 ? "+" : ""}${i.pct}%`).join(" ");
+        callAI("nextGatePredict", { prompt: `今日盘面：情绪${ov.sentiment ?? "?"}分 · 涨停${ov.limitPool?.limitUpCount ?? 0} · 炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}% · 最高${ov.maxBoardHeight ?? "?"}板\n${gateStr}\n外围指数：${idxStr2 || "无"}\n\n请预判明日开盘闸门状态并给出关键观察点。` }).then((r) => {
+          if (cancelled) return;
+          try {
+            const j = parseLLMJSON<{ nextGate: string; reason: string; watchPoints: string[] }>(r.text, schemaForTask("nextGatePredict"));
+            if (j && j.nextGate) { setNextGatePredict({ nextGate: String(j.nextGate), reason: String(j.reason ?? ""), watchPoints: Array.isArray(j.watchPoints) ? j.watchPoints.slice(0, 3) : [] }); setLlmBriefDegraded(p => ({ ...p, nextGate: !!r.degraded })); } // v9.99.2（B3）
+          } catch { /* 静默 */ }
+        }).catch(() => {});
+      }
+      // 风险雷达（黑天鹅公告 + 跌停池由 overview 提供）
+      // v9.75（深化）：原只喂 4 个数字（涨停/跌停/炸板/情绪）→ LLM 只能编。补外围指数/溢价分布/晋级率，让风险判定有真实依据
+      const idxStr = (ov.indices ?? []).slice(0, 4).map(i => `${i.name}${i.pct >= 0 ? "+" : ""}${i.pct}%`).join(" ");
+      const riskPremStr = ov.premiumDist ? `昨日涨停今日分布：跌超5%${ov.premiumDist.ltNeg5}只/微亏${ov.premiumDist.neg5to0}只/小赚${ov.premiumDist.zeroTo3}只/大赚${ov.premiumDist.gt3}只` : "";
+      const rPrompt = `涨停${ov.limitPool?.limitUpCount ?? 0}只，跌停${ov.limitPool?.limitDownCount ?? 0}只，炸板率${ov.limitPool?.blastedRate?.toFixed(1) ?? "?"}%，情绪${ov.sentiment ?? "?"}分。\n外围指数：${idxStr || "无"}${riskPremStr ? "\n" + riskPremStr : ""}${ov.promotionRate != null ? `\n晋级率${(ov.promotionRate * 100).toFixed(0)}%` : ""}`;
+      callAI("riskRadar", { prompt: rPrompt }).then((r) => {
+        if (cancelled) return;
+        try {
+          const j = parseLLMJSON<{ level: string; points: Array<{ item: string; desc: string }>; advice: string }>(r.text, schemaForTask("riskRadar"));
+          if (j && j.level) { const pts = Array.isArray(j.points) ? j.points : []; setRiskRadarText(`风险雷达[${j.level}]：${pts.map(p => `${p.item}(${p.desc})`).join("；") || "无明显风险"}${j.advice ? `。建议：${j.advice}` : ""}`); setLlmBriefDegraded(p => ({ ...p, riskRadar: !!r.degraded })); } // v9.99.2（B3）
+        } catch { /* 静默 */ }
+      }).catch(() => {});
+    }
+    // v9.138.0（波段重构·阶段一，Q5 降噪）：竞价段 AI 龙头预判（leaderPredict）移除 ——
+    //   竞价台/强度榜/预判龙一均为超短打板件，波段客不消费；不再调用 leaderPredict LLM 任务（省配额）
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPhase, battlePlan, overview]);
+
+  // 自选股异动带：每次刷新后用 fetchStockBriefBatch 批量拉取
+  // v9.75（性能修复）：refreshFast 每 18s setOverview 产生新引用 → 本 effect 被拖成 18s 轮询，
+  // 违背设计意图（主刷新 60s 才拉重接口）。加 lastWatchFetchAt 节流，60s 内重复触发直接跳过。
+  const lastWatchFetchAt = useRef(0);
+  // v9.113.0（T1-2）：PG 快照可用性探测（60s；供横幅三态判定，勿阻塞渲染）
+  useEffect(() => {
+    let alive = true;
+    const probe = async () => {
+      try {
+        const { fetchMarketSnapshot } = await import("../lib/dataLayer");
+        const snap = await fetchMarketSnapshot();
+        if (alive) setPgSnapshotOk(!!snap && !snap.meta.stale);
+      } catch { if (alive) setPgSnapshotOk(false); }
+    };
+    probe();
+    const t = setInterval(probe, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  useEffect(() => {
+    if (!overview) return;
+    const now = Date.now();
+    if (now - lastWatchFetchAt.current < 60000) return;
+    lastWatchFetchAt.current = now;
+    let cancelled = false; // v9.26.9：慢响应不再覆盖新响应
+    (async () => {
+      try {
+        const raw = localStorage.getItem("stock_watchlist");
+        const codes: string[] = raw ? JSON.parse(raw) : [];
+        if (codes.length === 0) { if (!cancelled) setWatchStocks([]); return; }
+        // v9.26.17：自选股全量（fetchStockBriefBatch 已支持分批）
+        const map = await fetchStockBriefBatch(codes);
+        if (cancelled) return;
+        const items: WatchStockBrief[] = [];
+        for (const [code, b] of map) {
+          const alert = Math.abs(b.pct) >= 5 || b.turnoverRate > 10;
+          const alertTag = Math.abs(b.pct) >= 5 ? `${b.pct > 0 ? "↑" : "↓"}${Math.abs(b.pct).toFixed(1)}%` : b.turnoverRate > 10 ? `换手${b.turnoverRate.toFixed(0)}%` : "";
+          // v9.24-P1-4：量比注入（异动分级 S/A/B 用）
+          items.push({ code, name: b.name, price: b.price, pct: b.pct, turnoverRate: b.turnoverRate, alert, alertTag, volumeRatio: b.volumeRatio, limitPct: stockLimitPct(code) });
+        }
+        items.sort((a, b) => Number(b.alert) - Number(a.alert) || Math.abs(b.pct) - Math.abs(a.pct));
+        if (!cancelled) setWatchStocks(items);
+      } catch { if (!cancelled) setWatchStocks([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [overview]);
+
+  // 将三级警报发送到 alertBus（跃迁护栏：只在 false→true 时报一次）
+  useEffect(() => {
+    if (!overview) return;
+
+    // 重度背离：资金数据缺失/为0不报
+    // P0-5：veto_main 的 emit 统一走 alerts 数组 useEffect 通道（下方 1220 行附近），此处不再单独 emit
+    const st = fundStructure?.structure;
+    const mn = st?.today.mainNet, sn = st?.today.smallNet;
+    const ok = mn != null && sn != null && mn !== 0 && sn !== 0;
+    const divergenceActive = !!ok && mn! < 0 && sn! > 0 && (st?.mainNet5d ?? 0) < 0 && (st?.mainNet10d ?? 0) < 0;
+    lastSignalActive["divergence"] = divergenceActive;
+
+    // 极度贪婪
+    const sent = overview.sentiment;
+    if (sent != null && sent >= 80) {
+      if (!lastSignalActive["overbought"]) { lastSignalActive["overbought"] = true; emitAlert({ severity: "warning", id: "sentiment_high", message: `情绪${sent}分（极度贪婪），历史统计中追高风险偏高` }); }
+    } else lastSignalActive["overbought"] = false;
+
+    // 极度恐慌：sentiment≤0 不报（数据异常），null 也不报
+    if (sent == null || sent <= 0) lastSignalActive["oversold"] = false;
+    else if (sent < 20) {
+      if (!lastSignalActive["oversold"]) { lastSignalActive["oversold"] = true; emitAlert({ severity: "warning", id: "sentiment_low", message: `情绪${sent}分（极度恐慌），超跌机会` }); }
+    } else lastSignalActive["oversold"] = false;
+
+    // 量能偏离（成交额 vs 5日均 ±50%）
+    // v9.100.0（P1-07）：turnoverAmount<=0 或 ratio 异常（<0.05/>20，push2 断源垃圾值）→ 不报荒谬警报（审查实测"缩量至5日均量0%"）
+    if (overview.turnoverAmount > 0 && overview.turnoverAvg5d && overview.turnoverAvg5d > 0) {
+      const ratio = overview.turnoverAmount / overview.turnoverAvg5d;
+      if (ratio >= 0.05 && ratio <= 20) {
+        if (ratio > 1.5) {
+          if (!lastSignalActive["vol_high"]) { lastSignalActive["vol_high"] = true; emitAlert({ severity: "info", id: "vol_high", message: `成交额放量${(ratio * 100).toFixed(0)}%于5日均量` }); }
+        } else lastSignalActive["vol_high"] = false;
+        if (ratio < 0.5) {
+          if (!lastSignalActive["vol_low"]) { lastSignalActive["vol_low"] = true; emitAlert({ severity: "info", id: "vol_low", message: `成交额缩量至5日均量${(ratio * 100).toFixed(0)}%` }); }
+        } else lastSignalActive["vol_low"] = false;
+      } else { lastSignalActive["vol_high"] = false; lastSignalActive["vol_low"] = false; }
+    }
+  }, [overview, fundStructure]);
+
+  // ============== P1 信号回填三保险 ==============
+  // 1) 首载兜底：页面打开即尝试补全（之前只在 phase=post 且当天打开才触发）
+  // 2) 定时兜底：每 30 分钟尝试一次（盘中也会补 T+1 的昨日信号）
+  // 3) 手动按钮：SignalPanel 提供"补全回填"
+  // 幂等：signalLedger 按天记录 isBackfilledToday / recTracker 按天 markAttributedToday
+  useEffect(() => {
+    const tryBackfill = async () => {
+      // 信号账本回填（T+1/T+5）
+      // F-09 修复：必须 await 成功后才标记完成（旧版未 await → 失败也标记，30 分钟重试被跳过）
+      if (!isBackfilledToday()) {
+        try {
+          await runSignalBackfill();
+          markBackfilledToday();
+        } catch (e) {
+          console.warn("[backfill] 信号回填失败，30 分钟后重试:", e);
+          // 不标记 → 下轮定时重试
+        }
+      }
+      // 推荐归因回填（T+1/T+3）
+      runAttribution(localDateStr()).catch(() => { /* 回填失败不阻塞 */ });
+      // v9.137.0（审查 P2-12 修复）：拍板 T+5 批量回填 —— 原 backfillAllPendingPosts 无生产调用，
+      //   "拍板后约 7 个交易日自动回填"（DecisionAuditPanel 文案）实际只靠打开审计面板时惰性回填兜底；
+      //   现并入 30 分钟定时（幂等：executed 标记防重复）
+      try {
+        const { backfillAllPendingPosts } = await import("../lib/tradeLedger");
+        await backfillAllPendingPosts(30);
+      } catch { /* 回填失败静默，下轮重试 */ }
+      // v9.137.0（审查 P2-12）：AI 结论 store 定期清理 —— pruneAIResults 原无调用方，
+      //   模块 AI 结果内存 Map 永不清除（陈旧结论长期可读）
+      try {
+        const { pruneAIResults } = await import("../lib/aiConclusionStore");
+        pruneAIResults(24 * 3600 * 1000);
+      } catch { /* 清理失败静默 */ }
+    };
+    tryBackfill();
+    const t = setInterval(tryBackfill, 30 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const vetoActive = fundStructure?.structure?.vetoTriggered;
+
+  // ============== 高低切切换检测 ==============
+  // 调试开关：URL ?simulate=1 时用构造数据演示两种警报样式（仅供验证，正常访问不触发）
+  const isSimulateMode = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("simulate") === "1";
+
+  // 加载昨日 ZTPool 快照（用"找最近历史快照"替代本地日期推算，天然兼容法定节假日）
+  // v9.81（性能）：useMemo —— 原每次渲染都全量扫 localStorage + JSON.parse ~500 条快照
+  // （18s 快刷全树重渲染时这是每次渲染的主线程大头之一）
+  const yesterdayZTPool = useMemo(
+    () => loadPrevZTSnapshot(overview?.limitPool?.qdate ?? null),
+    [overview?.limitPool?.qdate],
+  );
+  // v9.26.10：useMemo 缓存数组引用，避免每次渲染新数组 → AuctionBoard effect 每秒重建 → 每秒请求
+  const yesterdayZtBrief = useMemo(
+    // v9.132.0（终审复核 D2 修正）：带 hybk —— 竞价五步流水"未涨停+套利空间"候选的板块映射
+    //   （未涨停股不在今日涨停池，板块归属必须来自昨日快照）
+    () => yesterdayZTPool?.map(z => ({ code: String(z.c), name: String(z.n), hybk: String(z.hybk ?? "") })) ?? [],
+    [yesterdayZTPool],
+  );
+
+  // 高低切检测：需要 mainline.boards 和 overview.limitPool.rawZTPool
+  const hlSwitch = (() => {
+    if (isSimulateMode) {
+      // 构造模拟数据演示两种警报样式（注释标明仅供验证）
+      return {
+        stalledOld: ["AI概念", "半导体"],
+        pulseNew: ["低空经济"],
+        fullSwitch: true,
+        noYesterdayData: false,
+      };
+    }
+    const boards = mainline?.boards;
+    const todayPool = overview?.limitPool?.rawZTPool as ZTPoolItem[] | undefined;
+    // v9.77（P0-6 修复）：涨停池被静默回退到昨日时，'今日池'与'昨日池'都是昨日 → 高低切检测永久失效，
+    // 且把昨日涨停当今日脉冲，直接禁用检测。
+    if (overview?.limitPool?.degraded) return null;
+    if (!boards || !todayPool || todayPool.length === 0) return null;
+    return detectHighLowSwitch(
+      boards.filter(b => { const k = classifyBoard(b.name); return k === "theme" || k === "industry"; }).map(b => ({ name: b.name, pct: b.pct, mainNet5d: b.mainNet5d })),
+      todayPool,
+      yesterdayZTPool,
+    );
+  })();
+
+  // 构建三级警报列表
+  const alerts: AlertItem[] = [];
+  // v9.34（S1）：封单衰减预警（龙一开板前兆，最高优先级）
+  // v9.77（P0-10）：告警 id 从聚合 seal_red 改为按代码维度 —— 原聚合 id 使 alertBus 15min 冷却
+  //   压制第二只票的炸板推送；现每票独立 id，逐只崩落都能提醒，且横幅逐票显示更清晰
+  if (sealAlerts.length > 0) {
+    for (const a of sealAlerts) {
+      if (a.level === "red") {
+        alerts.push({ id: `seal_red_${a.code}`, level: "critical",
+          message: `💥 ${a.name}(${a.boardCount}板) 封单崩落 ${a.changePct.toFixed(0)}%${a.nowFund <= 0 ? "，炸板确认！" : "，即将炸板！"}` });
+      } else {
+        alerts.push({ id: `seal_yellow_${a.code}`, level: "warning",
+          message: `⚠️ ${a.name} 封单衰减 ${a.changePct.toFixed(0)}%，关注开板风险` });
+      }
+    }
+  }
+  // v9.32.1（缺口1）：核按钮预警（昨高位涨停今日秒跌停）
+  // v9.77（A3-P2-9）：消息带触发时间戳，避免把早盘警报当当下信号
+  const nuclearTsText = nuclearTsRef.current > 0 ? `（${new Date(nuclearTsRef.current).toTimeString().slice(0, 5)}触发）` : "";
+  if (nuclearAlerts.length >= 2) {
+    alerts.push({ id: "nuclear", level: "critical", message: `⚠️ 核按钮预警${nuclearTsText}：${nuclearAlerts.slice(0, 3).join("、")}${nuclearAlerts.length > 3 ? ` 等${nuclearAlerts.length}只` : ""}，退潮信号` });
+  } else if (nuclearAlerts.length === 1) {
+    alerts.push({ id: "nuclear_1", level: "warning", message: `⚠️ 核按钮${nuclearTsText}：${nuclearAlerts[0]}` });
+  }
+  // v9.32：系统性风险预警（最高优先级，置顶）
+  if (overview) {
+    const hs300 = overview.indices?.find(i => i.code === "000300");
+    const sysRisk = checkSysRisk({
+      hs300Pct: hs300?.pct ?? null,
+      limitDownCount: overview.limitPool?.limitDownCount ?? 0,
+      blastedRate: overview.limitPool?.blastedRate ?? 0,
+      sentiment: overview.sentiment,
+    });
+    if (sysRisk.level === "red") alerts.push({ id: "sys_risk_red", level: "critical", message: sysRisk.text });
+    else if (sysRisk.level === "yellow") alerts.push({ id: "sys_risk_yellow", level: "warning", message: sysRisk.text });
+  }
+  if (vetoActive) {
+    alerts.push({ id: "veto_main", level: "critical", message: "重度背离：主力持续流出+散户接盘（历史统计风险偏高）" });
+  }
+  if (overview && overview.sentiment != null && overview.sentiment >= 80) {
+    alerts.push({ id: "sentiment_high", level: "warning", message: `情绪温度计${overview.sentiment}分（极度贪婪），历史统计中后续风险偏高` });
+  }
+  if (overview && overview.sentiment != null && overview.sentiment <= 25) {
+    alerts.push({ id: "sentiment_low", level: "warning", message: `情绪温度计${overview.sentiment}分（极度恐慌），关注超跌机会` });
+  }
+  // 高低切切换警报
+  if (hlSwitch) {
+    if (hlSwitch.fullSwitch) {
+      // A+B 同日成立 → amber 级
+      alerts.push({
+        id: "hl_switch_full",
+        level: "warning",
+        message: `资金高低切：资金从[${hlSwitch.stalledOld.join("/")}]撤出迹象，[${hlSwitch.pulseNew.join("/")}]首板脉冲，关注换边`,
+      });
+    } else if (hlSwitch.pulseNew.length > 0) {
+      // 仅B → info 提示
+      alerts.push({
+        id: "hl_switch_pulse",
+        level: "info",
+        message: `新题材首板脉冲：${hlSwitch.pulseNew.join("/")}`,
+      });
+    }
+  }
+
+  // ============== v9.80（P0 卡顿修复）：数据源异常横幅 ==============
+  // v9.85.2：横幅改用 overview.stale（P0-5 本轮真实失败信号）—— 原用 getOverallHealth 历史统计，
+  //   fallback（push2→push2delay/腾讯）已就绪后统计残留仍触发"连续失败"误报；
+  //   且熔断短路已下沉到 script 层（jsonpQueue v9.85.2），proxy fallback 不再被旧熔断阻断。
+  // v9.113.0（T1-2 横幅三态）：PG 快照可用（结构化数据新鲜）→ 即使 push2delay 命中也不弹"15分钟延迟"；
+  //   仅 PG 也不可用且确为 push2delay 才弹橙级。实时源切腾讯由 fetchLiveQuote 单独轻提示。
+  if (overview) {
+    const circuit = getCircuitState();
+    const degradedPool = overview.limitPool?.degraded === true;
+    // v9.86.0（P1-16）：主源实际由 fallback 源供数（push2 → push2delay 延迟行情）→ info 级提示
+    const sourceState = getSourceState();
+    const delayedHost = sourceState.find(s => s.source === "push2delay.eastmoney.com");
+    // v9.113.0（T1-2）：结构化面板已走 PG（dataLayer）→ 该源不依赖 push2delay，横幅不因碰过 push2delay 就弹
+    const pgOk = pgSnapshotOk;
+    if (overview.stale || degradedPool || (circuit.open && !overview.stale)) {
+      alerts.push({
+        id: "data_source_issue",
+        level: "critical",
+        message: `⚠ 数据源异常${degradedPool ? "：涨停池数据来自历史日期（接口不可达/非交易日），情绪与梯队数据可能失真" : overview.stale ? "：本轮刷新多数数据源失败，显示上一轮快照（已尝试多源 fallback）" : "：行情接口熔断中（恢复后自动刷新）"}${circuit.open ? "（已触发快速熔断）" : ""}`,
+      });
+    } else if (delayedHost && !pgOk) {
+      // 仅 PG 也不可用且确为 push2delay → 橙"15分钟延迟"（终审 D-01：不因碰过 push2delay 就常驻）
+      alerts.push({
+        id: "data_source_delayed",
+        level: "warning",
+        message: `⚠ 实时源与 PG 快照均不可达，当前数据来自延迟源（push2delay，约 15 分钟延迟）`,
+      });
+    }
+  }
+
+  // ============== P0-5：critical 级警报 → alertBus.emit → 外部推送 ==============
+  // 跃迁护栏：每个 critical 警报只在首次出现时 emit 一次（lastSignalActive 同款模式）
+  useEffect(() => {
+    for (const a of alerts) {
+      if (a.level !== "critical") continue;
+      if (lastSignalActive[a.id]) continue;   // 已报过（true→true 不重复）
+      lastSignalActive[a.id] = true;
+      emitAlert({ severity: "critical", id: a.id, message: a.message });
+    }
+    // 反向：不在当前 alerts 中的 critical id → 复位（下次再触发能再报）
+    for (const k of Object.keys(lastSignalActive)) {
+      if (!alerts.some(a => a.id === k)) lastSignalActive[k] = false;
+    }
+  }, [alerts]);
+
+  return {
+    active, setActive, loading, lastUpdated, autoRefresh, setAutoRefresh, countdown, nextRefreshAt,
+    overview, fundStructure, globalData, darkPool, mainline, battlePlan, cognMainline,
+    currentPhase, watchStocks, nextScenarios, riskRadarText, nextGatePredict,
+    llmBriefDegraded, sealAlerts, topIndustryFund, alerts, yesterdayZtBrief, refreshAll,
+  };
+}

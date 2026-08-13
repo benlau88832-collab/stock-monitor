@@ -12,6 +12,10 @@ if (typeof document !== "undefined") {
 // v9.25-local：本地部署云端同步（PG 双写 + localStorage 迁移 + 定时增量）
 import { syncLocalWithCloud, startAutoSync } from "./lib/cloudStore";
 import { syncNewsFromCloud } from "./lib/dataStore";
+// v9.138.0（阶段二：#19）：localStorage 版本迁移 —— 挂载前一次性执行（幂等，失败不阻断）
+import { registerBuiltinMigrations, runLocalStorageMigrations } from "./lib/lsMigrate";
+registerBuiltinMigrations();
+runLocalStorageMigrations();
 
 // 启动即同步：本地 localStorage → PG；PG news/ann → 本地合并（跨浏览器一致）
 // GitHub Pages 上 isLocalServer()=false 自动跳过，线上行为不变

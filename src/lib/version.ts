@@ -153,9 +153,21 @@
 //   🆕 业绩验证日历 earningsCalendar（财报季窗口/持仓提醒）
 //   🆕 波段决策核 swingDecision（波段五支柱：位置/买点/止损/止盈/逻辑）
 //   🆕 波段作战室 SwingWarRoom（方向榜+逻辑台账+波段决策卡+业绩日历，驾驶舱置顶）
-//   🆕 服务端 /api/proxy/board-kline、/api/proxy/stock-kline（板块/个股日K，push2his+腾讯兜底）
+//   🆕 服务端 /api/proxy/board-kline、/api/proxy/stock-kline（板块/个股日K，push2his http 主源实测修正：
+//      push2his 仅 https 对 node TLS ban，http 直连稳定；腾讯 fqkline 不支持 bk 前缀板块代码（param error））
 //   🔻 降噪（Q5）：竞价作战区/竞价台/强度榜/预判龙一/盘中精灵（cron+浮层）移除或停用，
 //      保留涨停池/情绪参考；leaderPredict LLM 任务不再调用（省配额）
 // ============================================================
-export const APP_VERSION = "v9.138.0";
+// v9.139.0（阶段二：代码结构重构 —— 拆 God Component + 契约单源 + 存储迁移机制）：
+//   #14 App.tsx 1774→250 行：状态/抓取/效果管线整块搬移 src/hooks/useMarketData.ts（数据 hook 层），
+//      App 只剩页面容器（Tab 分派 + JSX，解构同名返回值行为零改动）
+//   #14 Dashboard.tsx 1337→842 行：9 个展示型组件拆入 src/components/dashboard/DashboardWidgets.tsx
+//      （领域组件层，纯 props 驱动，不消费 useMarketData）
+//   #17 API 契约单源化：OverviewData/FundStructureData/DarkPoolData/GlobalData/MainlineData/
+//      SentimentFactors 迁至 src/lib/marketTypes.ts（App 仅 re-export，17 处既有导入零改动）
+//   #19 localStorage 版本迁移机制：src/lib/lsMigrate.ts（registerMigration/runLocalStorageMigrations，
+//      ls_schema:key 版本戳幂等，逐键隔离失败不阻断）+ 首个迁移（user_profile_v1→v2 补齐 feedbackStats、
+//      stock_watchlist→v2 规范化去重）+ 5 单测；main.tsx 挂载前执行
+// ============================================================
+export const APP_VERSION = "v9.139.0";
 export const BUILD_DATE = "2026-08-14";

@@ -21,7 +21,8 @@
 // v9.136.0锛堜氦鎺?0813 浜斾换鍔℃壒娆★級锛氫富绾垮崟婧?闂搁棬鏀舵暃/decisions 濂戠害/鍙拌处闂幆 鍙戠増
 // v9.137.0（审查全量修复发布）：CACHE v48→v49 —— AI 大脑审查修复（精灵频率/15:40链/PG工具/反馈闭环/待拍板条/画像卡）
 // v9.138.0（波段重构·阶段一）：CACHE v49→v50 —— 波段作战室（方向榜/持仓逻辑/波段决策/业绩日历）+ 超短件降噪
-const CACHE = "stock-monitor-v50";
+// v9.139.0（阶段二：拆 God Component）：CACHE v50→v51 —— 页面容器+数据hook分层 / 契约单源 / lsMigrate
+const CACHE = "stock-monitor-v51";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {
