@@ -471,6 +471,22 @@ function startCron({ pool }) {
 
   console.log("[cron] scheduled: 15:40 快照+分析+复盘 · 每20分钟抓快讯/公告/政策 · 盘中每5分钟盯价 · Asia/Shanghai");
 
+  // v9.140.0（阶段三 #13）：大宗商品价格采集（百川盈孚 SSR，景气度价格维度数据源）
+  // 交易日 09:20 早盘价 + 15:10 收盘价；外部站点抖动失败静默（不阻塞主链）
+  const runCommodityPriceTask = async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      const { fetchCommodityPrices, saveCommodityPrices } = require("./lib/commodityPrice");
+      const r = await fetchCommodityPrices();
+      const dateStr = await saveCommodityPrices(pool, r);
+      const up = r.items.filter(i => i.dir === "up").length;
+      const down = r.items.filter(i => i.dir === "down").length;
+      console.log(`[cron] commodity_price ${dateStr}: ${r.items.length} 项（涨${up}/跌${down}，${r.source}）`);
+    } catch (e) { console.warn("[cron] commodity_price 失败（外部站点）:", e.message); }
+  };
+  cron.schedule("20 9 * * 1-5", runCommodityPriceTask);
+  cron.schedule("10 15 * * 1-5", runCommodityPriceTask);
+
   // v9.66：个股盯价监控 —— 盘中每 5 分钟（`*/5 9-15` 实际 9:00-15:55；v9.128.0 一致性审查 P2 注释对齐，
   //   无内部时段守卫属已知宽松，盘后空转待后续收紧）
   cron.schedule("*/5 9-15 * * 1-5", async () => {

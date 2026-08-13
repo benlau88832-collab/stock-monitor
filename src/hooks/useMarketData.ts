@@ -140,7 +140,7 @@ export function useMarketData() {
   // v9.99.2（B3）：盘后四任务 LLM 降级标记 —— 三剧本/闸门/风险雷达/龙一预判原本不检查 r.degraded，
   //   规则版 fallback 经 parseLLMJSON 剥前缀后以 AI 面目渲染（伪装）；此标记驱动 Dashboard 角标
   const [llmBriefDegraded, setLlmBriefDegraded] = useState<Record<string, boolean>>({});
-  // v9.34（S1）：封单衰减预警（18s 高频通道轮询对比）
+  // v9.34（S1）：封单衰减预警（30s 高频通道轮询对比，v9.140.0 #11 18s→30s 降噪）
   const [sealAlerts, setSealAlerts] = useState<SealAlert[]>([]);
   const inFlight = useRef(false);
   // v9.26.9：LLM 主线精排竞态护栏（慢响应不覆盖新一轮结果）
@@ -151,7 +151,7 @@ export function useMarketData() {
   // v9.78（性能修复）：主线引擎轮次护栏 —— 渐进式渲染（快路径 hybk → 异步 LLM 升级）时，
   // 慢的 LLM 升级不覆盖更新的轮次
   const battleSeq = useRef(0);
-  // v9.81（性能）：18s 快刷在飞护栏（防与自身/refreshAll 叠加放大请求）
+  // v9.81（性能）：快刷在飞护栏（防与自身/refreshAll 叠加放大请求）
   const fastInFlight = useRef(false);
   // F-02 修复：refreshAll 空依赖，闭包需读最新 state → 用 ref 镜像（避免陈旧闭包）
   const overviewRef = useRef(overview);
@@ -1007,12 +1007,12 @@ export function useMarketData() {
   }, []);
 
   // ============ v9.28（P1-8）：盘中高频小通道 ============
-  // 主刷新 60s 对"9:30:05 龙一直线封板"级爆发太慢；本通道独立 18s 一次，
+  // 主刷新 60s 对"9:30:05 龙一直线封板"级爆发太慢；本通道独立 30s 一次（v9.140.0 #11 降噪），
   // 仅刷涨停池（轻量接口，走 fetchLimitPoolSummary），让"第一时间识别主线"更快。
   // 竞价段（auction）同样高频刷涨停池 —— 竞价涨停价锁定即出现，实现"竞价即封板"早期信号。
   // 不碰板块资金/新闻/公告等重接口（仍走主刷新 60s），避免全量轮询打爆东财限流。
   const refreshFast = useCallback(async () => {
-    // v9.81（性能）：快刷防重叠 —— 上一轮 18s 快刷未完成（东财黑洞/回退中）时跳过本轮，
+    // v9.81（性能）：快刷防重叠 —— 上一轮快刷未完成（东财黑洞/回退中）时跳过本轮，
     // 避免 fetchLimitPoolSummary 回退放大请求与自身/refreshAll 叠加
     if (fastInFlight.current) return;
     fastInFlight.current = true;
@@ -1020,7 +1020,7 @@ export function useMarketData() {
       const phase = getCurrentSession().phase;
       if (phase !== "trading" && phase !== "auction") return;
       const limitPool = await fetchLimitPoolSummary();
-      // v9.79（性能/韧性）：18s 高频通道接口抖动时，不要用空池/降级池覆盖上一轮有效池
+      // v9.79（性能/韧性）：高频通道接口抖动时，不要用空池/降级池覆盖上一轮有效池
       // （原无条件 setOverview 会用 totalCount=0 的空池或昨日回退池打空白涨停/情绪模块）
       // v9.113.1（T1-1）：快刷池实为 push2delay（15min 旧）且上一轮是 PG 派生池 → 不覆盖（PG cron 更新鲜）
       const delayHitNow = getSourceState().some(s => s.host.includes("push2delay") && Date.now() - s.at < 60_000);
@@ -1033,7 +1033,7 @@ export function useMarketData() {
       });
       // v12-6（P1）：涨停池可能截断 → 全局 console 警告（五问条/温度条等主显示点不逐个透传，落一条日志兜底）
       if (limitPool?.truncated) console.warn(`[ztpool] ${limitPool.truncated}`);
-      // v9.34（S1）：封单衰减检测（与上一轮 18s 快照对比）
+      // v9.34（S1）：封单衰减检测（与上一轮快照对比）
       if (phase === "trading" && limitPool?.rawZTPool?.length) {
         const alerts = detectSealDecay(limitPool.rawZTPool);
         if (alerts.length > 0) setSealAlerts(alerts);
@@ -1044,7 +1044,8 @@ export function useMarketData() {
   }, []);
   useEffect(() => {
     if (!autoRefresh) return;
-    const t = setInterval(() => { refreshFast(); }, 18000);
+    // v9.140.0（阶段三 #11）：快刷 18s→30s（Q7 降噪为 30-60s；盘中实时性由主刷新 60s + 本通道 30s 双层保证）
+    const t = setInterval(() => { refreshFast(); }, 30000);
     return () => clearInterval(t);
   }, [autoRefresh, refreshFast]);
 
@@ -1156,7 +1157,7 @@ export function useMarketData() {
   }, [currentPhase, battlePlan, overview]);
 
   // 自选股异动带：每次刷新后用 fetchStockBriefBatch 批量拉取
-  // v9.75（性能修复）：refreshFast 每 18s setOverview 产生新引用 → 本 effect 被拖成 18s 轮询，
+  // v9.75（性能修复）：refreshFast 每 30s setOverview 产生新引用 → 本 effect 被拖成 30s 轮询，
   // 违背设计意图（主刷新 60s 才拉重接口）。加 lastWatchFetchAt 节流，60s 内重复触发直接跳过。
   const lastWatchFetchAt = useRef(0);
   // v9.113.0（T1-2）：PG 快照可用性探测（60s；供横幅三态判定，勿阻塞渲染）
@@ -1287,7 +1288,7 @@ export function useMarketData() {
 
   // 加载昨日 ZTPool 快照（用"找最近历史快照"替代本地日期推算，天然兼容法定节假日）
   // v9.81（性能）：useMemo —— 原每次渲染都全量扫 localStorage + JSON.parse ~500 条快照
-  // （18s 快刷全树重渲染时这是每次渲染的主线程大头之一）
+  // （快刷全树重渲染时这是每次渲染的主线程大头之一）
   const yesterdayZTPool = useMemo(
     () => loadPrevZTSnapshot(overview?.limitPool?.qdate ?? null),
     [overview?.limitPool?.qdate],

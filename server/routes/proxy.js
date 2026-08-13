@@ -272,6 +272,8 @@ function proxyRoutes(app) {
   // GET /api/proxy/board-kline?secid=90.BK0478&days=60 → { klines: ["date,open,close,high,low,...", ...] }
   // v9.138.0 实测修正：push2his 仅 https 对 node TLS ban（socket hang up），http 直连稳定；
   // 腾讯 fqkline/kline 不支持 bk 前缀（param error）—— 故主源 = push2his http，无腾讯兜底。
+  // v9.140.0：push2his 偶发整域 IP 短时 ban（http/https 全挂，实测 1-2h 恢复）→ 加 retries:1（网络错退避重试）
+  //   + 失败落日志（原 catch 吞掉真实错误，无从区分 ban/空数据）
   app.get("/api/proxy/board-kline", async (req, res) => {
     if (!(await checkAuth(req, res))) return;
     const secid = String(req.query.secid ?? "");
@@ -280,11 +282,12 @@ function proxyRoutes(app) {
     try {
       const { getJson } = require("../lib/outbound");
       const url = `http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=0&lmt=${days}&end=20500101&ut=7eea3edcaed734bea9cbfc24409ed989`;
-      const r = await getJson(url, { timeout: 8000, source: "push2his" });
+      const r = await getJson(url, { timeout: 8000, retries: 1, source: "push2his" });
       const klines = r.data?.data?.klines ?? [];
       if (!Array.isArray(klines) || klines.length === 0) throw new Error("push2his empty");
       res.json({ secid, klines });
-    } catch {
+    } catch (e) {
+      console.warn(`[proxy] board-kline ${secid} 失败（push2his ${e?.type ?? ""} ${e?.message ?? e}）`);
       res.status(502).json({ error: "板块K线获取失败" });
     }
   });
@@ -301,11 +304,12 @@ function proxyRoutes(app) {
     try {
       const { getJson } = require("../lib/outbound");
       const url = `http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${days}&end=20500101&ut=7eea3edcaed734bea9cbfc24409ed989`;
-      const r = await getJson(url, { timeout: 8000, source: "push2his" });
+      const r = await getJson(url, { timeout: 8000, retries: 1, source: "push2his" });
       const klines = r.data?.data?.klines ?? [];
       if (!Array.isArray(klines) || klines.length === 0) throw new Error("push2his empty");
       res.json({ code, secid, klines });
-    } catch {
+    } catch (e) {
+      console.warn(`[proxy] stock-kline ${code} 主源失败（push2his ${e?.type ?? ""} ${e?.message ?? e}），走腾讯兜底`);
       // 腾讯 fqkline 兜底（个股可用；push2his 双失败才到这里）
       try {
         const { getJson } = require("../lib/outbound");

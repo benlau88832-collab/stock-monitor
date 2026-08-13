@@ -26,6 +26,9 @@ const PROVIDERS = [
   { id: "sina",         host: "hq.sinajs.cn",                    kind: "quote", priority: 1 },
   { id: "ths",          host: "dq.10jqka.com.cn",                kind: "data",  priority: 1 },
   { id: "thsConcepts",  host: "q.10jqka.com.cn",                 kind: "data",  priority: 1 },
+  // ---- 免费大宗商品价格（v9.140.0 阶段三 #13：景气度价格数据源）----
+  // 实测：百川盈孚首页 SSR 直出"今日涨跌"81 项可解析；生意社 100ppi.com JS challenge + API 需密钥（blocked，不进白名单）
+  { id: "baiinfo",      host: "www.baiinfo.com",                 kind: "data",  priority: 1 },
   // ---- AI 网关（LLM 出站）----
   { id: "agnes",        host: "apihub.agnes-ai.cn",              kind: "ai" },
   { id: "opencode",     host: "opencode.ai",                     kind: "ai" },

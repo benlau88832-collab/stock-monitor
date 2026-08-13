@@ -22,7 +22,8 @@
 // v9.137.0（审查全量修复发布）：CACHE v48→v49 —— AI 大脑审查修复（精灵频率/15:40链/PG工具/反馈闭环/待拍板条/画像卡）
 // v9.138.0（波段重构·阶段一）：CACHE v49→v50 —— 波段作战室（方向榜/持仓逻辑/波段决策/业绩日历）+ 超短件降噪
 // v9.139.0（阶段二：拆 God Component）：CACHE v50→v51 —— 页面容器+数据hook分层 / 契约单源 / lsMigrate
-const CACHE = "stock-monitor-v51";
+// v9.140.0（阶段三：景气度深化）：CACHE v51→v52 —— 景气卡+传导链+大宗商品价格条 / 刷新降噪30s
+const CACHE = "stock-monitor-v52";
 const CORE = ["./", "./index.html"];
 
 self.addEventListener("install", (e) => {

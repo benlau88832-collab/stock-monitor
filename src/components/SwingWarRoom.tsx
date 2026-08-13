@@ -8,7 +8,7 @@
 // 数据：行业板块指数日K（东财 push2his 90.BKxxxx，腾讯兜底）+ fund_streak 历史（PG/kv）
 //      + 快讯催化 + logicLedger（localStorage）+ 业绩日历（纯函数）
 // ============================================================
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { analyzeSwing, type KlineBar } from "../lib/swingStage";
 import { scoreBoard, rankSwingBoards, type SwingBoardScore } from "../lib/swingMainline";
 import { swingDecision } from "../lib/swingDecision";
@@ -17,8 +17,12 @@ import {
   type LogicEntry,
 } from "../lib/logicLedger";
 import { earningsWindows, checkAllEarnings } from "../lib/earningsCalendar";
+// v9.140.0（阶段三 #12/#14）：景气度评分卡（价格/业绩/政策/资金四维）+ 产业链传导链
+import { assessIndustryCycle, type IndustryCycleScore } from "../lib/industryCycle";
+import { buildChainView, type ChainView } from "../lib/transmissionChain";
+import { getAllSince } from "../lib/dataStore";
 import { apiFetch } from "../lib/cloudStore";
-import { localDateStr } from "../lib/format";
+import { localDateStr, localDateStrOffset } from "../lib/format";
 
 // ---------- 数据装配：板块指数日K（东财 push2his 90.BKxxxx） ----------
 async function fetchBoardKlines(boardCode: string, days = 60): Promise<KlineBar[] | null> {
@@ -297,10 +301,146 @@ function SwingDecisionCard() {
 }
 
 // ============================================================
+// v9.140.0（阶段三 #12/#14）：景气度研究 —— 景气卡 + 产业链传导链
+// 定位：产业链景气度投资人的"周期位置"层。与波段方向榜互补：
+//   方向榜回答"现在能不能上车"，景气卡回答"行业周期在哪、价格/政策往哪传"。
+// 数据与方向榜同源（板块K线 + fund_streak + 快讯 + 财报窗口），零新增请求。
+// ============================================================
+
+/** 方向榜计算时保留的原始数据（景气卡复用，避免重复抓取） */
+interface BoardRawData {
+  score: SwingBoardScore;
+  klines: KlineBar[];
+  fundSeq: number[];
+}
+
+const CYCLE_STAGE_COLOR: Record<string, string> = {
+  景气上行: "text-emerald-300 bg-emerald-500/10", 景气高位: "text-amber-300 bg-amber-500/10",
+  景气下行: "text-rose-300 bg-rose-500/10", 景气底部: "text-sky-300 bg-sky-500/10",
+  数据不足: "text-slate-500 bg-white/5",
+};
+
+/** 景气卡（单板块）：阶段徽标 + 总分 + 四维条 + 依据 */
+function CycleCard({ score, chain }: { score: IndustryCycleScore; chain: ChainView | null }) {
+  const dims = [
+    { label: "价格", v: score.price, color: "bg-sky-500" },
+    { label: "资金", v: score.fund, color: "bg-emerald-500" },
+    { label: "业绩", v: score.earnings, color: "bg-amber-500" },
+    { label: "政策", v: score.policy, color: "bg-violet-500" },
+  ];
+  return (
+    <div className="rounded-lg border border-white/5 bg-black/20 p-2.5">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-black text-slate-100">{score.name}</span>
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${CYCLE_STAGE_COLOR[score.stage] ?? ""}`}>{score.stage}</span>
+        <span className="ml-auto text-sm font-black text-teal-300">{score.total}分</span>
+      </div>
+      <div className="mt-1.5 grid grid-cols-4 gap-2">
+        {dims.map(d => (
+          <div key={d.label} className="text-center">
+            <div className="h-1.5 w-full overflow-hidden rounded bg-white/5">
+              <div className={`h-full ${d.color}`} style={{ width: `${d.v}%` }} />
+            </div>
+            <div className="mt-0.5 text-[10px] text-slate-400">{d.label} {d.v}</div>
+          </div>
+        ))}
+      </div>
+      {/* 传导链：上游 → 本节点 → 下游（多跳） */}
+      {chain && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
+          {chain.upstream.map((u, i) => (
+            <span key={`u${i}`} className="rounded bg-slate-500/10 px-1.5 py-0.5 text-slate-400" title={`${chain.chainName} · 上游`}>{u}</span>
+          ))}
+          {chain.upstream.length > 0 && <span className="text-slate-600">←</span>}
+          <span className="rounded bg-teal-500/20 px-1.5 py-0.5 font-bold text-teal-200">{chain.nodeName}</span>
+          {chain.downstream.length > 0 && <span className="text-slate-600">→</span>}
+          {chain.downstream.map((d, i) => (
+            <span key={`d${i}`} className="rounded bg-slate-500/10 px-1.5 py-0.5 text-slate-400" title={`${chain.chainName} · 下游`}>{d}</span>
+          ))}
+          <span className="ml-auto text-slate-600">{chain.chainName}</span>
+        </div>
+      )}
+      {score.reasons.length > 0 && (
+        <div className="mt-1 text-[10px] leading-tight text-slate-500">
+          {score.reasons.slice(0, 4).map((r, i) => <div key={i}>· {r}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 景气度研究面板：方向榜 Top5 的景气卡 + 传导链（复用方向榜已抓数据，零新增请求） */
+function CycleResearchPanel({ boardData }: { boardData: BoardRawData[] }) {
+  // 近 7 日快讯/政策（政策维度输入；失败 → 空数组，政策分中性）
+  const news = useMemo(() => {
+    try {
+      return getAllSince(localDateStrOffset(7)).news.slice(0, 300).map(n => ({ title: n.title, ts: n.time }));
+    } catch { return []; }
+  }, []);
+  const wins = useMemo(() => earningsWindows(), []);
+  // v9.140.0（#13）：百川大宗商品价格（kv commodity_price:今日，服务端 09:20/15:10 采集）
+  const [commodities, setCommodities] = useState<Array<{ name: string; unit: string; price: number; dir: string }>>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await apiFetch(`/api/db/kv?key=${encodeURIComponent(`commodity_price:${localDateStr()}`)}`);
+        if (r.ok) {
+          const j = await r.json();
+          const items = j?.value?.items ?? [];
+          if (alive && Array.isArray(items) && items.length > 0) setCommodities(items);
+        }
+      } catch { /* 价格数据未就绪 → 不显示 */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+  if (boardData.length === 0 && commodities.length === 0) {
+    return <div className="text-xs text-slate-600">暂无景气数据（波段方向榜就绪后自动计算；大宗商品价格 09:20/15:10 采集）</div>;
+  }
+  return (
+    <div className="space-y-1.5">
+      {boardData.map(bd => {
+        const score = assessIndustryCycle({
+          code: bd.score.code, name: bd.score.name, klines: bd.klines,
+          fundSeq: bd.fundSeq.length > 0 ? bd.fundSeq : undefined,
+          earningsWindows: wins, news,
+        });
+        const chain = buildChainView(bd.score.name);
+        return <CycleCard key={bd.score.code} score={score} chain={chain} />;
+      })}
+      {/* 大宗商品价格（百川盈孚免费数据，景气度价格维度旁证） */}
+      {commodities.length > 0 && (
+        <div className="rounded-lg border border-white/5 bg-black/20 p-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-black text-slate-100">🛢 大宗商品价格（百川盈孚）</span>
+            <span className="ml-auto text-[10px] text-slate-600">今日 {commodities.length} 项 · 09:20/15:10 采集</span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+            {commodities.slice(0, 20).map(c => (
+              <span key={c.name} className="whitespace-nowrap">
+                <span className="text-slate-300">{c.name}</span>
+                <span className={`ml-1 font-semibold ${c.dir === "up" ? "text-rose-300" : c.dir === "down" ? "text-emerald-300" : "text-slate-400"}`}>
+                  {c.price}{c.dir === "up" ? "↑" : c.dir === "down" ? "↓" : ""}
+                </span>
+                <span className="ml-0.5 text-slate-600">{c.unit}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="text-[10px] text-slate-600">
+        景气评分 = 价格35%（60日周期位置）+ 资金30%（近10/20日主力方向）+ 业绩20%（财报披露窗口临近）+ 政策15%（近7日催化命中）；传导链为产业链知识库映射；商品价格来自百川盈孚公开页
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // 主组件：波段作战室
 // ============================================================
 export default function SwingWarRoom() {
   const [boards, setBoards] = useState<SwingBoardScore[]>([]);
+  const [boardRaw, setBoardRaw] = useState<BoardRawData[]>([]); // v9.140.0：景气卡复用原始K线/资金数据
   const [boardsLoading, setBoardsLoading] = useState(false);
   const [entries, setEntries] = useState<LogicEntry[]>(() => loadLedger());
   const [boardSources, setBoardSources] = useState<BoardSource[]>([]);
@@ -332,6 +472,7 @@ export default function SwingWarRoom() {
     setBoardsLoading(true);
     try {
       const results: SwingBoardScore[] = [];
+      const rawArr: BoardRawData[] = [];
       // 并行取前 8 个板块（限并发防东财限流）
       const sources = boardSources.slice(0, 8);
       for (const src of sources) {
@@ -353,9 +494,13 @@ export default function SwingWarRoom() {
           const fundSeq = await fetchFundSeq(src.name, 20);
           const s = scoreBoard({ code: bkCode, name: src.name, klines, fundSeq });
           results.push(s);
+          rawArr.push({ score: s, klines, fundSeq });
         } catch { /* 单板块失败跳过 */ }
       }
-      setBoards(rankSwingBoards(results));
+      const ranked = rankSwingBoards(results);
+      setBoards(ranked);
+      // 景气卡按方向榜排序复用原始数据（Top5，零新增请求）
+      setBoardRaw(rawArr.sort((a, b) => ranked.findIndex(r => r.code === a.score.code) - ranked.findIndex(r => r.code === b.score.code)).slice(0, 5));
     } finally { setBoardsLoading(false); }
   }, [boardSources]);
 
@@ -411,6 +556,16 @@ export default function SwingWarRoom() {
         <LogicLedgerPanel entries={entries} onAdd={addEntry} onRemove={delEntry} />
         <SwingDecisionCard />
       </div>
+
+      {/* v9.140.0（阶段三 #12/#14）：第三行 景气度研究（景气卡 + 产业链传导链）—— 默认展开 */}
+      <details className="rounded-xl border border-teal-500/20 bg-teal-950/10" open>
+        <summary className="cursor-pointer select-none px-3 py-2 text-xs font-bold text-teal-300 hover:text-teal-200">
+          📊 景气度研究（景气卡 · 产业链传导）
+        </summary>
+        <div className="px-3 pb-3">
+          <CycleResearchPanel boardData={boardRaw} />
+        </div>
+      </details>
     </div>
   );
 }

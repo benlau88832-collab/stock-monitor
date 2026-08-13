@@ -168,6 +168,22 @@
 //   #19 localStorage 版本迁移机制：src/lib/lsMigrate.ts（registerMigration/runLocalStorageMigrations，
 //      ls_schema:key 版本戳幂等，逐键隔离失败不阻断）+ 首个迁移（user_profile_v1→v2 补齐 feedbackStats、
 //      stock_watchlist→v2 规范化去重）+ 5 单测；main.tsx 挂载前执行
+//   #16 cron.js 2407→689 行按领域拆模块（server/cron/{base,zt,fund,news,brain,review,ledger}.js，
+//      cron.js 只留调度注册 + 20 导出原样保留）；发现并修复潜在 P0：markCronStep/hasCronStep
+//      引用模块级未定义 pool → checkpoint 从未落库（重启重复计费），改显式 pool 参数实测往返
 // ============================================================
-export const APP_VERSION = "v9.139.0";
+// v9.140.0（阶段三：景气度深化 —— 景气卡 + 传导链 + 大宗商品价格源）：
+//   #12 景气度评分卡 src/lib/industryCycle.ts：价格35%（60日周期位置/MA60/动量）+ 资金30%（10/20日主力方向）
+//      + 业绩20%（财报披露窗口临近度）+ 政策15%（近7日催化命中）→ 景气上行/高位/下行/底部 四阶段 + 依据；19 单测
+//   #14 传导链 src/lib/transmissionChain.ts：10 条产业链知识库（锂电/光伏/铜/半导体/钢铁/石化/生猪/贵金属/风电/电力），
+//      板块名定位节点 → 上游/下游多跳视图（匹配打分防"电池"误配"电池材料"）；5 单测
+//   #13 大宗商品价格源 server/lib/commodityPrice.js：百川盈孚首页 SSR "今日涨跌"解析（实测 36 项商品
+//      真实价格/方向，原油83.27美元/桶/天然橡胶17233元/吨/生猪10.6元/公斤…），kv commodity_price:日期，
+//      cron 09:20/15:10 交易日采集；生意社 100ppi.com 实测 JS challenge+API 需密钥 → blocked 留接口位；
+//      hostGuard 白名单 +baiinfo.com（sources.js 单源）
+//   UI：SwingWarRoom 新增"📊 景气度研究"第三行（方向榜 Top5 景气卡 + 传导链 + 百川商品价格条，
+//      复用方向榜已抓 K线/资金数据零新增请求）
+//   #11 刷新降噪：18s 快刷→30s（Q7 30-60s 口径），注释同步
+// ============================================================
+export const APP_VERSION = "v9.140.0";
 export const BUILD_DATE = "2026-08-14";
