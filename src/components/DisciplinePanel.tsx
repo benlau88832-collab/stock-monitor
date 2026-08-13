@@ -2,7 +2,7 @@
 // 实时计算：单票超限 / 总仓位超限 / 新开仓次数 / 连续亏损冷静期 / 止损参考
 // 报告口径："选股是徒弟活，仓位管理是师傅活"
 // v9.36（A1）：组合风险预算联动 —— 总仓位上限 = 基础预算 × 市场状态系数 × 连亏熔断
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { loadDisciplineState, saveDisciplineState, computeDisciplineViolations, computeStopLoss, type DisciplineState } from "../lib/discipline";
 import { classifyMarketState } from "../lib/marketStateMachine";
 import { computePortfolioRisk, type PortfolioRiskResult } from "../lib/portfolioRisk";
@@ -12,6 +12,24 @@ import DisclaimerTag from "./DisclaimerTag";
 export default function DisciplinePanel({ overview }: { overview?: OverviewData | null }) {
   const [state, setState] = useState<DisciplineState>(loadDisciplineState);
   const [showForm, setShowForm] = useState(false);
+  // v9.130.0（终审 N5）：接线蓝图端点——纪律教练（行为偏差检测）+ 持仓体检（trade_ledger 净额）
+  const [coach, setCoach] = useState<{ biases: Array<{ type: string; severity: string; evidence: string; advice: string }>; sampleSize: number } | null>(null);
+  const [positions, setPositions] = useState<Array<{ code: string; name: string; netQty: number; avgCost: number | null }>>([]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/coach?days=30", { signal: AbortSignal.timeout(5000) });
+        if (r.ok) { const j = await r.json(); if (alive) setCoach(j); }
+      } catch { /* 静默 */ }
+      try {
+        const r = await fetch("/api/positions", { signal: AbortSignal.timeout(5000) });
+        if (r.ok) { const j = await r.json(); if (alive && Array.isArray(j.positions)) setPositions(j.positions.filter((p: any) => p.open)); }
+      } catch { /* 静默 */ }
+    })();
+    return () => { alive = false; };
+  }, []);
   // 录入表单
   const [formCode, setFormCode] = useState("");
   const [formName, setFormName] = useState("");
@@ -181,6 +199,30 @@ export default function DisciplinePanel({ overview }: { overview?: OverviewData 
 
       {state.positions.length === 0 && !showForm && (
         <div className="text-[10px] text-slate-600">录入持仓后自动计算仓位约束与止损参考 · 止损为 ATR/波动率估算，仅供参考</div>
+      )}
+
+      {/* v9.130.0（终审 N5）：纪律教练 + 持仓体检（蓝图 L6 端点接线，0 token 规则检测） */}
+      {(coach || positions.length > 0) && (
+        <div className="rounded-lg border border-white/10 bg-black/20 p-2 space-y-1">
+          <div className="text-[10px] font-bold text-slate-400">🛡️ 纪律教练（成交台账 · 行为偏差检测 · N&lt;3 不判定）</div>
+          {positions.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {positions.map((p) => (
+                <span key={p.code} className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300">
+                  {p.name || p.code} · {p.netQty > 0 ? `${p.netQty}手` : ""}{p.avgCost != null ? ` 均价${p.avgCost}` : ""}
+                </span>
+              ))}
+            </div>
+          )}
+          {coach && coach.biases.length > 0 && coach.biases.map((b, i) => (
+            <div key={i} className={`rounded px-1.5 py-0.5 text-[10px] ${b.severity === "alert" ? "bg-rose-500/10 text-rose-300" : "bg-amber-500/10 text-amber-200"}`}>
+              ⚠ {b.type}：{b.advice}（{b.evidence}）
+            </div>
+          ))}
+          {coach && coach.biases.length === 0 && (
+            <div className="text-[10px] text-slate-600">行为偏差检测：样本 {coach.sampleSize} 条，未触发（N&lt;3 不判定）</div>
+          )}
+        </div>
       )}
     </div>
   );

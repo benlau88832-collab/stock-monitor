@@ -375,13 +375,18 @@ async function runIntradayBrain(pool, force = false) {
       // 推送（多通道并发：飞书/QQ/Server酱 等已配置渠道全推）
       // 频率保护：每轮最多推 3 条（critical 优先），落库保留全部 —— 防首轮 40 条刷屏
       const { sendPushIfConfigured } = require("./routes/push");
+      const { shouldPush } = require("./lib/pushDedup"); // v9.130.0（终审 N7）：跨引擎统一冷却
       const toPush = [...fresh].sort((a, b) => (a.severity === "critical" ? 0 : 1) - (b.severity === "critical" ? 0 : 1)).slice(0, 3);
       for (const a of toPush) {
         const title = a.type === "集体涨停" ? `⚡ 板块集体涨停：${a.board}` : `💥 资金脉冲：${a.board}`;
         const body = a.type === "集体涨停"
           ? `${a.board} ${a.count} 只涨停（最高 ${a.lbc} 板）\n${a.stocks}`
           : `${a.board} 涨 ${a.pct}% · 主力净流入 ${(a.mainNet / 1e8).toFixed(1)} 亿`;
-        try { await sendPushIfConfigured({ title, body, severity: a.severity }); } catch { /* 推送失败不影响主链 */ }
+        try {
+          if (await shouldPush(pool, a.severity, a.board)) {
+            await sendPushIfConfigured({ title, body, severity: a.severity });
+          }
+        } catch { /* 推送失败不影响主链 */ }
       }
       console.log(`[cron] ⚡ 盘中板块异动 ${ds}: ${fresh.map(a => `${a.board}(${a.type})`).join(" | ")}`);
     }

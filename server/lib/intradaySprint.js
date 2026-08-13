@@ -101,11 +101,14 @@ async function runIntradaySprint(pool) {
   // T-A4 推送分级：S→critical / A→warning / B→info，每轮最多 3 条（critical 优先）
   try {
     const { sendPushIfConfigured } = require("../routes/push");
+    const { shouldPush } = require("./pushDedup"); // v9.130.0（终审 N7）：跨引擎统一冷却（与盘中大脑共用去重键）
     const rank = { S: 0, A: 1, B: 2 };
     const sorted = [...fresh].sort((a, b) => (rank[a.level] ?? 9) - (rank[b.level] ?? 9));
     for (const ev of sorted.slice(0, 3)) {
       try {
-        await sendPushIfConfigured({ title: `⚡盘中精灵[${ev.level}]${ev.type}${ev.board ? "·" + ev.board : ""}`, body: ev.reason, severity: ev.severity });
+        if (await shouldPush(pool, ev.severity, ev.board)) {
+          await sendPushIfConfigured({ title: `⚡盘中精灵[${ev.level}]${ev.type}${ev.board ? "·" + ev.board : ""}`, body: ev.reason, severity: ev.severity });
+        }
       } catch { /* 单条推送失败不阻塞 */ }
     }
   } catch (e) { console.error("[sprint] 推送失败:", e.message); }

@@ -397,7 +397,7 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
               disabled={stockRunning}
               className="rounded bg-fuchsia-500/20 px-2 py-0.5 text-[11px] text-fuchsia-200 hover:bg-fuchsia-500/30 disabled:opacity-50"
             >
-              {stockRunning ? "裁决中…" : Object.keys(stockVerdicts).length > 0 ? "重新裁决" : "AI 逐只裁决"}
+              {stockRunning ? "裁决中…" : Object.keys(stockVerdicts).length > 0 ? "读取缓存裁决" : "AI 逐只裁决"}
             </button>
           </div>
           {Object.keys(stockVerdicts).length > 0 ? (

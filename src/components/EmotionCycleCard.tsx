@@ -3,6 +3,7 @@
 // v9.129.0（一致性收敛）：词表=emotionStage 六词（与认知层同构），删除 emotionToStage 映射
 //   （原"冰点→退潮期"词表混用，与认知横幅互斥）
 // v9.32.1（缺口1）：溢价分布 4 档柱图 —— 游资看第一眼是分布不是均值（焖面多=亏钱效应）
+import { useEffect, useState } from "react";
 import { computeEmotionCycle, PHASE_META, type EmotionCycleInput, type EmotionCycleResult } from "../lib/emotionCycle";
 import DisclaimerTag from "./DisclaimerTag";
 
@@ -16,6 +17,22 @@ export default function EmotionCycleCard({ input, premiumDist = null }: Props) {
   const result: EmotionCycleResult = computeEmotionCycle(input);
   const meta = PHASE_META[result.phase];
   const stageLabel = result.phase; // v9.129.0：六词直显（与认知层同词表，不再映射主线词表）
+  // v9.130.0（终审 N5）：阶段回测统计接线（/api/backtest/stage，N≥5 才展示次日溢价胜率）
+  const [bt, setBt] = useState<{ winRate: number; n: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch("/api/backtest/stage?days=60", { signal: AbortSignal.timeout(6000) });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!alive || !Array.isArray(j.perStage)) return;
+        const cur = j.perStage.find((g: { stage: string }) => g.stage === result.phase);
+        if (cur && cur.sampleEnough) setBt({ winRate: cur.winRate, n: cur.n });
+      } catch { /* 静默 */ }
+    })();
+    return () => { alive = false; };
+  }, [result.phase]);
 
   // v9.32.1：溢价分布 → 赚钱/亏钱效应定性
   const distTotal = premiumDist ? premiumDist.ltNeg5 + premiumDist.neg5to0 + premiumDist.zeroTo3 + premiumDist.gt3 : 0;
@@ -41,6 +58,9 @@ export default function EmotionCycleCard({ input, premiumDist = null }: Props) {
             {meta.icon} {stageLabel}
           </span>
           <span className="text-[10px] text-slate-500">置信度 {result.confidence}%</span>
+          {bt && (
+            <span className="text-[10px] text-slate-400">历史回测：次日溢价胜率 {bt.winRate}%（n={bt.n}）</span>
+          )}
           <DisclaimerTag />
         </div>
         {result.ebbAlert && (

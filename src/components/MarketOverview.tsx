@@ -118,7 +118,7 @@ function SentimentGauge({ value, label, factors, yesterday, premiumAvg, promotio
       {/* 因子明细 */}
       {factors && (
         <div className="border-t border-white/10 pt-2">
-          <div className="text-[11px] font-bold text-slate-400 mb-1">计分因子明细</div>
+          <div className="text-[11px] font-bold text-slate-400 mb-1">计分因子明细 <span className="font-normal text-slate-600">（原始因子参考·实时口径；总分以认知层为准，v9.130.0 终审 N9）</span></div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
             {[
               { name: "涨跌家数比", score: factors.upDownScore },

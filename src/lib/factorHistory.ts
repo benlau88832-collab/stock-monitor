@@ -1,3 +1,6 @@
+// v9.130.0（终审 N8）：本文件直读 kv sentiment:{日期} 属「历史情绪分归档通道」（前端 localStorage
+//   5min 同步上传，用于回测/归因的日级历史序列）；盘中实时权威值 = sentiment_snapshot:日期（服务端 cron 落库），
+//   两者语义不同勿混用（历史序列无法从 snapshot 补齐——snapshot 仅当日）。
 // ============================================================
 // v9.42：因子健康度数据加载层
 // - loadFactorRows:        读最近 N 交易日 kv（sentiment + market_daily）→ 因子日行序列
