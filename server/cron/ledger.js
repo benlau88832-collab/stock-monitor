@@ -20,8 +20,8 @@ async function runTradeBackfill(pool) {
     if (ageDays < 7) continue;
     try {
       const pnl = await backfillOnePost(post);
-      if (pnl != null) {
-        await pool.query(`UPDATE decision_post SET pnl=$1, executed=true WHERE ticket_id=$2`, [pnl, post.ticket_id]);
+      if (pnl && pnl.pnl != null) {
+        await pool.query(`UPDATE decision_post SET pnl=$1, pnl_t20=$2, pnl_t60=$3, pnl_source=$4, executed=true WHERE ticket_id=$5`, [pnl.pnl, pnl.t20, pnl.t60, pnl.source, post.ticket_id]);
         backfilled++;
       }
     } catch { /* single failure continues */ }
@@ -31,7 +31,7 @@ async function runTradeBackfill(pool) {
 
 async function backfillOnePost(post) {
   const secid = /^(60|68|5)/.test(post.code) ? `1.${post.code}` : `0.${post.code}`;
-  const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55&klt=101&fqt=0&lmt=10&ut=${EM_UT}`;
+  const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55&klt=101&fqt=0&lmt=80&ut=${EM_UT}`;
   let kl = [];
   try {
     const j = await httpsGet(url, 10000);
@@ -41,9 +41,9 @@ async function backfillOnePost(post) {
   if (kl.length === 0) {
     try {
       const qSymbol = /^(60|68|5)/.test(post.code) ? `sh${post.code}` : `sz${post.code}`;
-      const txUrl = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${qSymbol},day,,,10,qfq`;
+      const txUrl = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${qSymbol},day,,,80,qfq`;
       const tj = await httpsGet(txUrl, 10000);
-      const rows = tj?.data?.data?.[qSymbol]?.qfqday ?? tj?.data?.data?.[qSymbol]?.day ?? [];
+      const rows = tj?.data?.[qSymbol]?.qfqday ?? tj?.data?.[qSymbol]?.day ?? [];
       if (Array.isArray(rows)) kl = rows.map((r) => (Array.isArray(r) ? r.join(",") : String(r)));
     } catch { /* return null */ }
   }
@@ -58,19 +58,20 @@ async function backfillOnePost(post) {
   }
   const base = Number(post.price_at_post) > 0 ? Number(post.price_at_post) : Number(kl[idx].split(",")[2]);
   if (!(base > 0)) return null;
-  const t5line = kl[idx + 5];
-  if (t5line) {
-    const t5Close = Number(t5line.split(",")[2]);
-    if (t5Close > 0) return Math.round((t5Close / base - 1) * 10000) / 100;
-  }
-  const t1line = kl[idx + 1];
-  if (t1line) {
-    const t1Close = Number(t1line.split(",")[2]);
-    if (t1Close > 0) return Math.round((t1Close / base - 1) * 10000) / 100;
-  }
-  return null;
+  const pctAt = (offset) => {
+    const line = kl[idx + offset];
+    if (!line) return null;
+    const close = Number(line.split(",")[2]);
+    return close > 0 ? Math.round((close / base - 1) * 10000) / 100 : null;
+  };
+  const t1 = pctAt(1);
+  const t5 = pctAt(5);
+  const t20 = pctAt(20);
+  const t60 = pctAt(60);
+  const source = t60 != null ? "T+60" : t20 != null ? "T+20" : t5 != null ? "T+5" : t1 != null ? "T+1" : null;
+  const pnl = t60 ?? t20 ?? t5 ?? t1;
+  return { pnl, t1, t5, t20, t60, source };
 }
-
 async function runPostSummary(pool) {
   const date = bjDate();
   const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
@@ -105,7 +106,7 @@ async function runPostSummary(pool) {
 
   const postsText = posts.length === 0
     ? "今日无拍板记录"
-    : posts.map((p) => `${p.mainline ?? p.code ?? "?"} → ${p.human_action}${p.pnl != null ? `（T+5 ${p.pnl}%）` : ""}`).join("；");
+    : posts.map((p) => `${p.mainline ?? p.code ?? "?"} → ${p.human_action}${p.pnl != null ? `（波段 ${p.pnl}%）` : ""}`).join("；");
 
   let cogLine = "";
   try {

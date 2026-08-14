@@ -17,6 +17,9 @@ export interface DecisionPost {
   decisionLogRef: string | null;
   executed: boolean;
   pnl: number | null;
+  pnlT20?: number | null;
+  pnlT60?: number | null;
+  pnlSource?: string | null;
   simulated?: boolean;
 }
 

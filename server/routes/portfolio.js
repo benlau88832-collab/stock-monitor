@@ -48,7 +48,7 @@ async function loadPortfolio() {
     pool.query(`SELECT * FROM logic_ledger ORDER BY updated_at DESC LIMIT 200`),
     pool.query(`SELECT * FROM price_watch WHERE status='active' ORDER BY created_at`),
     pool.query(
-      `SELECT ticket_id,date,mainline,code,human_action,confidence_at_post,price_at_post,simulated,ts
+      `SELECT ticket_id,date,mainline,code,human_action,confidence_at_post,price_at_post,simulated,ts,pnl_t20,pnl_t60,pnl_source
        FROM decision_post WHERE date >= to_char(now() - interval '30 days', 'YYYY-MM-DD')
        ORDER BY ts DESC LIMIT 100`
     ),
@@ -93,6 +93,9 @@ async function loadPortfolio() {
     confidenceAtPost: num(p.confidence_at_post),
     priceAtPost: num(p.price_at_post),
     simulated: Boolean(p.simulated),
+    pnlT20: num(p.pnl_t20),
+    pnlT60: num(p.pnl_t60),
+    pnlSource: p.pnl_source ?? null,
   }));
 
   const priceMap = new Map();

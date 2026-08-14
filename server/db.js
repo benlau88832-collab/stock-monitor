@@ -143,6 +143,9 @@ CREATE TABLE IF NOT EXISTS decision_post (
   price_at_post   DOUBLE PRECISION,
   executed        BOOLEAN DEFAULT false,
   pnl             DOUBLE PRECISION,
+  pnl_t20         DOUBLE PRECISION,
+  pnl_t60         DOUBLE PRECISION,
+  pnl_source      TEXT,
   notes           TEXT,
   decision_log_ref TEXT
 );

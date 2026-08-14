@@ -9,6 +9,7 @@ import { computeDecisionHitrate, computePostHitrate, type HitrateResult, type Po
 import { loadRecentPosts, type DecisionPost } from "../lib/decisionPost";
 import DisclaimerTag from "./DisclaimerTag";
 // P3-1：长期胜率仪表盘（月度/主线/AI vs 规则）
+import { apiFetch } from "../lib/cloudStore";
 import LongTermStatsPanel from "./LongTermStatsPanel";
 
 interface DecisionLog {
@@ -57,13 +58,16 @@ export default function DecisionAuditPanel() {
   const [postCount, setPostCount] = useState(0);
   // P1-8：人类拍板（decision_post）加载 —— 与 AI 裁决双轨时间线
   const [posts, setPosts] = useState<DecisionPost[]>([]);
+  const [serverDecisions, setServerDecisions] = useState<Array<Record<string, any>>>([]);
 
   useEffect(() => { setData(loadLogs(days)); }, [days]);
 
-  // P1-8：加载近 days 天拍板（同 decision_log 对齐窗口）
+  // P1-8：加载近 days 天拍板（同 decision_log 对齐窗口，并合并服务端 T+20/T+60 回填）
   useEffect(() => {
-    setPosts(loadRecentPosts(days).sort((a, b) => b.ts - a.ts));
-  }, [days]);
+    const local = loadRecentPosts(days).sort((a, b) => b.ts - a.ts);
+    const map = new Map(serverDecisions.map((d) => [d.ticketId, d]));
+    setPosts(local.map((p) => map.has(p.ticketId) ? { ...p, ...map.get(p.ticketId) } : p));
+  }, [days, serverDecisions]);
 
   // v9.45（V5-3）：决策器命中率对账（AI vs 规则，近 30 日，情绪延续标签）
   useEffect(() => {
@@ -72,11 +76,17 @@ export default function DecisionAuditPanel() {
     return () => { alive = false; };
   }, []);
 
-  // P0-3：拍板真实盈亏归因（近 30 日 confirm 拍板 → T+5 真实涨跌）
+  // P0-3：拍板真实盈亏归因（近 30 日 confirm 拍板 → T+5/T+20/T+60 真实涨跌）
   useEffect(() => {
     let alive = true;
     setPostCount(loadRecentPosts(30).filter(p => p.humanAction === "confirm").length);
     computePostHitrate(30).then(r => { if (alive) setPostHitrate(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    apiFetch("/api/portfolio").then(async (r) => { if (r.ok) { const j = await r.json(); if (alive) setServerDecisions(Array.isArray(j.decisions) ? j.decisions : []); } }).catch(() => {});
     return () => { alive = false; };
   }, []);
 
@@ -272,6 +282,9 @@ export default function DecisionAuditPanel() {
                               //   （原实现反色，与同屏 DisciplinePanel 矛盾）
                               <div className={`mt-1 text-[10px] font-bold ${(p.pnl ?? 0) >= 0 ? "text-rose-400" : "text-emerald-400"}`}>
                                 📈 T+5 实际盈亏：{(p.pnl ?? 0) > 0 ? "+" : ""}{(p.pnl ?? 0)}%
+                                {p.pnlT20 != null && <span className="ml-1">· T+20 {(p.pnlT20 ?? 0) > 0 ? "+" : ""}{p.pnlT20}%</span>}
+                                {p.pnlT60 != null && <span className="ml-1">· T+60 {(p.pnlT60 ?? 0) > 0 ? "+" : ""}{p.pnlT60}%</span>}
+                                {p.pnlSource && <span className="ml-1 text-slate-500">（{p.pnlSource}）</span>}
                               </div>
                             )}
                           </div>
