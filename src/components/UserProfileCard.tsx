@@ -9,7 +9,7 @@
 import { useState, useEffect } from "react";
 import { loadUserProfile, profileToPrompt } from "../lib/userProfile";
 import { localDateStr } from "../lib/format";
-import { isLocalServer } from "../lib/cloudStore";
+import { isLocalServer, apiFetch } from "../lib/cloudStore";
 
 interface ServerStyle {
   style?: string;
@@ -22,6 +22,7 @@ interface ServerStyle {
 export default function UserProfileCard() {
   const [serverStyle, setServerStyle] = useState<ServerStyle | null>(null);
   const [profileVersion, setProfileVersion] = useState(0); // 拍板后刷新
+  const [feedbackStats, setFeedbackStats] = useState<{ accurate: number; inaccurate: number; byAttribution: Record<string, number> }>({ accurate: 0, inaccurate: 0, byAttribution: {} });
 
   useEffect(() => {
     let alive = true;
@@ -39,6 +40,23 @@ export default function UserProfileCard() {
         }
       } catch { /* 服务端画像未生成（周六 cron 前）→ 静默 */ }
     })();
+    return () => { alive = false; };
+  }, [profileVersion]);
+  useEffect(() => {
+    let alive = true;
+    apiFetch("/api/db/decision_feedback?limit=200").then(async (r) => {
+      if (!r.ok) return;
+      const j = await r.json();
+      const items = Array.isArray(j.items) ? j.items : [];
+      if (!alive) return;
+      const stat = { accurate: 0, inaccurate: 0, byAttribution: {} as Record<string, number> };
+      for (const it of items) {
+        if (it.feedback === "accurate") stat.accurate++;
+        if (it.feedback === "inaccurate") stat.inaccurate++;
+        if (it.attribution) stat.byAttribution[String(it.attribution)] = (stat.byAttribution[String(it.attribution)] ?? 0) + 1;
+      }
+      setFeedbackStats(stat);
+    }).catch(() => {});
     return () => { alive = false; };
   }, [profileVersion]);
 
@@ -77,6 +95,15 @@ export default function UserProfileCard() {
         </div>
       )}
       <div className="mt-1.5 text-[10px] text-slate-500">
+      {(feedbackStats.accurate + feedbackStats.inaccurate) > 0 && (
+        <div className="mt-1.5 rounded border border-white/5 bg-white/[0.03] p-1.5 text-[11px]">
+          <div className="text-[10px] font-bold text-slate-400">✅ 决策反馈统计</div>
+          <div className="mt-0.5 text-slate-300">准确 {feedbackStats.accurate} · 不准确 {feedbackStats.inaccurate}</div>
+          {Object.keys(feedbackStats.byAttribution).length > 0 && (
+            <div className="text-[10px] text-amber-300/90">错误归因：{Object.entries(feedbackStats.byAttribution).map(([k, v]) => `${k} ${v}`).join("、")}</div>
+          )}
+        </div>
+      )}
         画像随拍板/成交自动更新并注入 AI 裁决参考；否决时的快速反馈也会计入（见"用户反馈"）。AI 结论仅供参考。
       </div>
     </div>
