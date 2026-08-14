@@ -118,14 +118,16 @@ async function buildDirection() {
   await Promise.allSettled(tasks);
 
   const ranked = rankSwingBoards(results);
+  const klineReady = raw.some((r) => Array.isArray(r.klines) && r.klines.length >= 25);
+  const degraded = results.length === 0 || !klineReady;
   const out = {
     date: today,
     sourceDate: date,
     boards: ranked,
     raw: raw.sort((a, b) => ranked.findIndex((r) => r.code === a.score.code) - ranked.findIndex((r) => r.code === b.score.code)).slice(0, 5),
     asOf: new Date().toISOString(),
-    degraded: results.length === 0,
-    reason: results.length === 0 ? "板块K线/资金数据暂不可用，显示最近缓存或空态" : null,
+    degraded,
+    reason: degraded ? (results.length === 0 ? "板块K线/资金数据暂不可用，显示最近缓存或空态" : "板块K线暂不可用，当前仅资金/涨停维度，禁止标记为完整方向") : null,
   };
 
   try {

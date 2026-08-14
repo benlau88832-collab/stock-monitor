@@ -76,16 +76,26 @@ async function loadPortfolio() {
   }
 
   const logic = logicRows.rows.map(rowToLogic);
-  const watch = watchRows.rows.map((w) => ({
-    code: w.code,
-    name: w.name,
-    buyLow: num(w.buy_low),
-    buyHigh: num(w.buy_high),
-    stopLoss: num(w.stop_loss),
-    triggerPct: num(w.trigger_pct) ?? 5,
-    status: w.status,
-    note: w.note,
-  }));
+  const watch = [];
+  for (const w of watchRows.rows) {
+    let name = String(w.name || "");
+    if (!name || name === String(w.code)) {
+      try {
+        const snap = await fetchStockSnapshotServer(w.code);
+        if (snap?.name) name = String(snap.name);
+      } catch { /* 名称解析失败时保留 code */ }
+    }
+    watch.push({
+      code: w.code,
+      name: name || String(w.code),
+      buyLow: num(w.buy_low),
+      buyHigh: num(w.buy_high),
+      stopLoss: num(w.stop_loss),
+      triggerPct: num(w.trigger_pct) ?? 5,
+      status: w.status,
+      note: w.note,
+    });
+  }
 
   const decisions = postRows.rows.map((p) => ({
     ticketId: p.ticket_id,

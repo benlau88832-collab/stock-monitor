@@ -6,6 +6,7 @@
 // 合规：每维 title 带 Provenance caliber（样本量+口径全公开，不承诺胜率）。
 // ============================================================
 import { useState, useEffect } from "react";
+import { apiFetch } from "../lib/cloudStore";
 
 interface CogBannerData {
   version?: number;
@@ -27,6 +28,7 @@ const STAGE_COLOR: Record<string, string> = {
 
 export default function CognitionBanner() {
   const [cog, setCog] = useState<CogBannerData | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -52,13 +54,24 @@ export default function CognitionBanner() {
   const l = cog.leader?.value ?? {};
   const staleMs = cog.asOf ? Date.now() - new Date(cog.asOf).getTime() : Infinity;
   const stale = staleMs > 30 * 60 * 1000;
+  const rebuild = async () => {
+    setRebuilding(true);
+    try {
+      const r = await apiFetch("/api/cognition/rebuild", { method: "POST" });
+      if (r.ok) {
+        const j = await r.json();
+        if (j?.hash) setCog(j);
+      }
+    } catch { /* 重建失败保持旧快照 */ }
+    finally { setRebuilding(false); }
+  };
 
   return (
     <section className="mb-3 rounded-xl border border-amber-500/20 bg-gradient-to-br from-amber-500/5 to-transparent p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-sm font-bold text-amber-300">🧠 单一 AI 认知层 · 全站唯一市场理解</span>
         <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-200">v{cog.version}</span>
-        <span className="text-[10px] text-slate-500">hash {cog.hash} · asOf {cog.asOf?.slice(0, 19)?.replace("T", " ")}</span> {stale && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">认知层已过期</span>}
+        <span className="text-[10px] text-slate-500">hash {cog.hash} · asOf {cog.asOf?.slice(0, 19)?.replace("T", " ")}</span> {stale && <><span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">认知层已过期</span><button onClick={rebuild} disabled={rebuilding} className="ml-2 rounded bg-amber-500/20 px-2 py-1 text-[10px] font-bold text-amber-200 hover:bg-amber-500/30 disabled:opacity-50">{rebuilding ? "重建中…" : "立即重建"}</button></>}
         <span className="ml-auto hidden text-[10px] text-slate-500 sm:inline">作战/决策/精灵/复盘/问答 均消费此对象 → 杜绝各自为政</span>
       </div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">

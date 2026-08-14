@@ -25,6 +25,7 @@ export default function OpsPanel() {
   const [pgHealth, setPgHealth] = useState<{ ok: boolean; latencyMs?: number } | null>(null);
   const [swCache, setSwCache] = useState<string | null>(null);
   const [aiHealth, setAiHealth] = useState<{ degraded: boolean; endpoints?: Array<{ base: string; ok: boolean; emptyRate: number }> } | null>(null);
+  const [serverHealthOk, setServerHealthOk] = useState<boolean | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -44,6 +45,7 @@ export default function OpsPanel() {
           if (j?.pg) setPgHealth(j.pg);
           if (j?.sw?.cache) setSwCache(j.sw.cache);
           if (j?.ai) setAiHealth(j.ai);
+          if (typeof j?.ok === "boolean") setServerHealthOk(j.ok);
         }
       } catch { /* 本地无服务端时静默 */ }
       try {
@@ -64,7 +66,7 @@ export default function OpsPanel() {
     return () => { alive = false; clearInterval(t); };
   }, []);
 
-  const overall = (() => { try { return getOverallHealth(); } catch { return "yellow" as const; } })();
+  const overall = (() => { if (serverHealthOk === false) return "red" as const; try { return getOverallHealth(); } catch { return "yellow" as const; } })();
   const overallColor = overall === "green" ? "text-emerald-300" : overall === "yellow" ? "text-amber-300" : "text-rose-300";
   const totalCalls = apiRecs.reduce((s, r) => s + r.recentCalls, 0);
   const totalOk = apiRecs.reduce((s, r) => s + r.recentSuccesses, 0);

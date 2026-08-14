@@ -5,6 +5,11 @@
   scrollbar-color: rgba(255,255,255,0.1) transparent;
 }
 
+html,
+body {
+  overflow-x: hidden;
+}
+
 html {
   /* v9.26.6：整体字号微放大（阅读舒适度），组件内小字再单独提升 */
   font-size: 17px;
@@ -27,3 +32,11 @@ body {
 .text-xs { font-size: 14px !important; line-height: 1.35 !important; }
 .text-sm { font-size: 15px !important; }
 
+
+
+/* v9.144.0：移动端最小点击高度，避免主按钮过小 */
+@media (max-width: 640px) {
+  button {
+    min-height: 36px;
+  }
+}

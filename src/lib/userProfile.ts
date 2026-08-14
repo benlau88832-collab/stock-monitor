@@ -83,7 +83,7 @@ export function updateUserProfile(): UserProfile {
   if (p.totalPosts > 0) {
     const confirms = posts.filter(x => x.humanAction === "confirm").length;
     p.confirmRate = Math.round(confirms / p.totalPosts * 100) / 100;
-    const confs = posts.filter(x => x.confidenceAtPost != null).map(x => x.confidenceAtPost!);
+    const confs = posts.filter(x => x.humanAction === "confirm" && x.confidenceAtPost != null && Number(x.confidenceAtPost) > 0).map(x => x.confidenceAtPost!);
     p.avgConfidence = confs.length > 0 ? Math.round(confs.reduce((s, c) => s + c, 0) / confs.length) : 0;
   }
 
@@ -165,9 +165,11 @@ export function profileToPrompt(p: UserProfile | null): string {
     scalper: "超短打板型",
     speculator: "题材博弈型",
   };
+  const confirmCount = Math.round(p.totalPosts * p.confirmRate);
+  const confidenceText = p.avgConfidence > 0 ? `${p.avgConfidence}%` : "样本不足";
   const parts = [
     `风格：${styleName[p.style]}`,
-    `拍板 ${p.totalPosts} 次（确认率 ${Math.round(p.confirmRate * 100)}%，平均置信 ${p.avgConfidence}%）`,
+    `确认拍板 ${confirmCount} 次（动作留痕 ${p.totalPosts} 次，确认率 ${Math.round(p.confirmRate * 100)}%，平均置信 ${confidenceText}）`,
   ];
   if (p.avgPnlT5 != null) parts.push(`平均 T+5 盈亏 ${p.avgPnlT5 > 0 ? "+" : ""}${p.avgPnlT5}%`);
   if (p.lossStreak >= 2) parts.push(`⚠ 已连亏 ${p.lossStreak} 次，建议保守`);

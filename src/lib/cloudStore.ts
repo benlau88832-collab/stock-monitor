@@ -85,7 +85,8 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
     if (t) headers.set("x-local-token", t);
   }
   const timeoutSignal = AbortSignal.timeout(API_FETCH_TIMEOUT_MS);
-  const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  // 调用方传入 signal 时视为显式覆盖，避免慢接口（波段决策最长 35s+）被默认 15s 提前中止
+  const signal = init?.signal ?? timeoutSignal;
   return fetch(path, { ...init, headers, signal });
 }
 

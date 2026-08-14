@@ -29,6 +29,22 @@ interface SwingBoardScore {
   signals: string[];
 }
 
+interface ApiSwingDecision {
+  verdict: string;
+  score: number;
+  buyPoint: string | null;
+  stopLossPct: number;
+  targetPct: number;
+  positionRange: number[];
+  holdingHorizonDays?: number;
+  reviewCycleDays?: number;
+  reasons: string[];
+  blocks: string[];
+  evidenceChain?: Array<{ step: string; evidence: string }>;
+  invalidationConditions?: string[];
+  signal: string;
+}
+
 const PHASE_COLOR: Record<string, string> = {
   主升: "text-emerald-300 bg-emerald-500/10",
   启动: "text-sky-300 bg-sky-500/10",
@@ -55,6 +71,7 @@ function BoardRow({ b }: { b: SwingBoardScore }) {
         {b.fund10d != null && <span className="text-slate-400">10日主力 {b.fund10d}亿</span>}
       </div>
       {b.catalystsTop.length > 0 && <div className="mt-1 text-[10px] text-violet-300/80">催化：{b.catalystsTop.join("、")}</div>}
+      {b.pct20d == null && <div className="mt-1 text-[10px] text-amber-300/80">K线暂缺，仅资金/涨停维度</div>}
     </div>
   );
 }
@@ -94,7 +111,7 @@ function TodayActionStrip({ portfolio, directionCount, asOf, degraded, refresh }
 function LogicLedgerPanel({ entries, priceMap, boardHealth, onAdd, onUpdate, onRemove }: {
   entries: LogicEntry[];
   priceMap: Map<string, number>;
-  boardHealth: Map<string, boolean>;
+  boardHealth: Map<string, boolean | null>;
   onAdd: (input: PortfolioLogicInput) => Promise<void>;
   onUpdate: (input: PortfolioLogicInput) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
@@ -102,18 +119,10 @@ function LogicLedgerPanel({ entries, priceMap, boardHealth, onAdd, onUpdate, onR
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ code: "", name: "", thesis: "", catalystDesc: "", catalystKind: "价格" as LogicEntry["catalysts"][0]["kind"], dueDate: "", breakLine: "" });
   const active = activeEntries(entries);
-  const alerts = checkAllLedgerAlerts(entries, { price: null, boardHealthy: null }); void alerts;
-
-  const withLive = checkAllLedgerAlerts(entries, {
-    price: null,
-    boardHealthy: null,
-  }).concat(
-    active.map((e) => checkAllLedgerAlerts([e], {
-      price: priceMap.get(e.code) ?? null,
-      boardHealthy: e.board ? (boardHealth.get(e.board) ?? null) : null,
-    })).flat(),
-  );
-  const liveAlerts = withLive.filter((a, i, arr) => arr.findIndex((x) => x.type === a.type && x.code === a.code) === i);
+  const liveAlerts = active.map((e) => checkAllLedgerAlerts([e], {
+    price: priceMap.get(e.code) ?? null,
+    boardHealthy: e.board ? boardHealth.get(e.board) ?? null : null,
+  })).flat().filter((a, i, arr) => arr.findIndex((x) => x.type === a.type && x.code === a.code) === i);
 
   const submit = async () => {
     if (!form.code.trim() || !form.thesis.trim()) return;
@@ -221,7 +230,7 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<ReturnType<typeof swingDecision> | null>(null);
+  const [result, setResult] = useState<ApiSwingDecision | null>(null);
   const [stage, setStage] = useState<ReturnType<typeof analyzeSwing> | null>(null);
   const [lastPrice, setLastPrice] = useState<number | null>(null);
   const [chainCtx, setChainCtx] = useState<{ chain: any; signals: any } | null>(null);
@@ -234,7 +243,7 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
     setBusy(true); setErr(""); setResult(null); setStage(null); setFeedbackPenalty(null);
     try {
       const r = await apiFetch("/api/decisions/swing", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: c }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: c }), signal: AbortSignal.timeout(60000),
       });
       if (!r.ok) {
         const ej = await r.json().catch(() => ({}));
@@ -267,7 +276,6 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
     setBusy(false);
   };
 
-
   return (
     <div className="rounded-xl border border-emerald-500/25 bg-emerald-950/10 p-3">
       <div className="flex items-center justify-between">
@@ -287,15 +295,27 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
           <div className="flex items-center gap-2">
             <span className={`text-lg font-black ${result.verdict === "波段买入" ? "text-emerald-300" : result.verdict === "持有" ? "text-teal-300" : result.verdict === "减仓" ? "text-amber-300" : result.verdict === "观望" ? "text-slate-300" : "text-rose-300"}`}>{result.signal}</span>
             {stage && <span className="text-slate-300">位置：<b className="text-sky-300">{stage.phase}</b></span>}
-          {chainCtx?.chain && <div className="text-[10px] text-teal-300/80">产业链：{chainCtx.chain.chainName} · {chainCtx.chain.nodeName} · 上游 {chainCtx.chain.upstream.join(" / ") || "无"} → 下游 {chainCtx.chain.downstream.join(" / ") || "无"}</div>}
+            {chainCtx?.chain && <div className="text-[10px] text-teal-300/80">产业链：{chainCtx.chain.chainName} · {chainCtx.chain.nodeName} · 上游 {chainCtx.chain.upstream.join(" / ") || "无"} → 下游 {chainCtx.chain.downstream.join(" / ") || "无"}</div>}
             {lastPrice != null && <span className="text-slate-400">参考价 {lastPrice.toFixed(2)}</span>}
           </div>
           {result.buyPoint && <div className="text-cyan-300">买点：{result.buyPoint}</div>}
           {result.verdict === "波段买入" && <div className="text-slate-300">止损 {result.stopLossPct}% 路 止盈 +{result.targetPct}% 路 仓位 {result.positionRange[0]}-{result.positionRange[1]}%</div>}
+          {(result.holdingHorizonDays != null || result.reviewCycleDays != null) && (
+            <div className="text-sky-300/90">持有周期 {result.holdingHorizonDays ?? 20} 天 · 复核周期 {result.reviewCycleDays ?? 20} 天</div>
+          )}
           {result.reasons.length > 0 && <div className="text-emerald-300/80">{result.reasons.join("；")}</div>}
           {result.blocks.length > 0 && <div className="text-rose-300/80">{result.blocks.join("；")}</div>}
+          {result.evidenceChain && result.evidenceChain.length > 0 && (
+            <div className="space-y-0.5 rounded bg-black/20 p-1.5">
+              <div className="text-[10px] font-bold text-violet-300">证据链</div>
+              {result.evidenceChain.map((e, i) => <div key={i} className="text-[10px] text-slate-300"><b className="text-violet-300/90">{e.step}</b>：{e.evidence}</div>)}
+            </div>
+          )}
+          {result.invalidationConditions && result.invalidationConditions.length > 0 && (
+            <div className="rounded bg-black/20 p-1.5 text-[10px] text-amber-300/90">失效条件：{result.invalidationConditions.join("；")}</div>
+          )}
           {feedbackPenalty?.total ? <div className="text-amber-300/80">用户反馈硬扣：-{Math.min(15, feedbackPenalty.total * 3)} 分（{Object.entries(feedbackPenalty.byAttribution).map(([k, v]) => `${k} ${v}`).join("、")}）</div> : null}
-            <DecisionActionPanel code={code.trim()} name={name.trim() || code.trim()} price={lastPrice} defaultThesis={`${result?.reasons.join("；") || stage?.signals.join("；") || "波段决策"}；止损参考 ${result?.stopLossPct != null ? Math.round((lastPrice ?? 0) * (1 - result.stopLossPct / 100) * 100) / 100 : ""}`} addTrade={addTrade} saveLogic={saveLogic} />
+          <DecisionActionPanel code={code.trim()} name={name.trim() || code.trim()} price={lastPrice} defaultThesis={`${result?.reasons.join("；") || stage?.signals.join("；") || "波段决策"}；止损参考 ${result?.stopLossPct != null ? Math.round((lastPrice ?? 0) * (1 - result.stopLossPct / 100) * 100) / 100 : ""}`} defaultInvalidation={result.invalidationConditions ?? []} defaultReviewCycle={result.reviewCycleDays ?? 20} addTrade={addTrade} saveLogic={saveLogic} />
         </div>
       )}
     </div>
@@ -332,6 +352,9 @@ export default function SwingWarRoomV2() {
   useEffect(() => { refreshDirection(); }, [refreshDirection]);
   useEffect(() => { portfolio.refresh(); }, [portfolio.refresh]);
 
+  const effectiveDegraded = degraded || (boards.length > 0 && boards.every((b) => b.pct20d == null));
+  const effectiveReason = reason || (effectiveDegraded && !degraded ? "板块K线暂不可用，当前仅资金/涨停维度" : null);
+
   const priceMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const w of portfolio.watch) if (w.price != null && Number(w.price) > 0) m.set(String(w.code), Number(w.price));
@@ -340,8 +363,8 @@ export default function SwingWarRoomV2() {
   }, [portfolio.watch, portfolio.positions]);
 
   const boardHealth = useMemo(() => {
-    const m = new Map<string, boolean>();
-    for (const b of boards) m.set(String(b.name), b.phase !== "退潮");
+    const m = new Map<string, boolean | null>();
+    for (const b of boards) m.set(String(b.name), b.pct20d != null ? b.phase !== "退潮" : null);
     return m;
   }, [boards]);
 
@@ -351,11 +374,11 @@ export default function SwingWarRoomV2() {
 
   return (
     <div className="space-y-3">
-      <TodayActionStrip portfolio={portfolio} directionCount={boards.length} asOf={asOf} degraded={degraded} refresh={() => { refreshDirection(); portfolio.refresh(); }} />
+      <TodayActionStrip portfolio={portfolio} directionCount={boards.length} asOf={asOf} degraded={effectiveDegraded} refresh={() => { refreshDirection(); portfolio.refresh(); }} />
 
-      {degraded && reason && (
+      {effectiveDegraded && effectiveReason && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
-          <AlertTriangle className="mr-1 inline h-3 w-3" /> 方向榜降级：{reason}
+          <AlertTriangle className="mr-1 inline h-3 w-3" /> 方向榜降级：{effectiveReason}
         </div>
       )}
 
@@ -369,7 +392,7 @@ export default function SwingWarRoomV2() {
           </div>
           <div className="mt-2 space-y-1.5">
             {boards.length === 0 ? (
-              <div className="text-xs text-slate-600">{degraded ? "方向数据暂不可用，已显示降级原因；有涨停池/资金数据后会自动计算。" : "正在计算方向榜..."}</div>
+              <div className="text-xs text-slate-600">{effectiveDegraded ? "方向数据暂不可用，已显示降级原因；有涨停池/资金数据后会自动计算。" : "正在计算方向榜..."}</div>
             ) : boards.slice(0, 6).map((b) => <BoardRow key={b.code} b={b} />)}
           </div>
         </div>
@@ -408,7 +431,7 @@ export default function SwingWarRoomV2() {
             <div key={raw.score.code} className="rounded-lg border border-teal-500/15 bg-black/20 px-2.5 py-2">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-black text-slate-100">{raw.score.name}</span>
-                <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-amber-300 bg-amber-500/10">{raw.score.phase}</span>
+                <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold text-amber-300 bg-amber-500/10`}>{raw.score.phase}</span>
                 <span className="ml-auto text-xs font-black text-teal-300">{raw.score.total}分</span>
               </div>
               <div className="mt-1 text-[10px] text-slate-400">资金 {raw.score.fund} · 催化 {raw.score.catalyst} · 10日主力 {raw.score.fund10d ?? "-"}亿 · 20日 {raw.score.fund20d ?? "-"}亿</div>

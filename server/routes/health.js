@@ -57,7 +57,13 @@ module.exports = function healthRoutes(app) {
     out.checks = [
       { name: "pg_connectivity", ok: out.pg?.ok === true, latencyMs: out.pg?.latencyMs ?? null },
       { name: "cognition_build", ok: out.cognition?.ok === true, detail: out.cognition?.ok ? `v${out.cognition.version} hash=${out.cognition.hash}` : "build failed" },
-      { name: "market_source", ok: (Array.isArray(out.sources) ? out.sources.some((s) => s.state === "ok") : false), detail: "数据源健康（push2/push2delay 等 host 状态）" },
+      { name: "market_source", ok: (() => {
+        if (!Array.isArray(out.sources)) return false;
+        const ok = (h) => out.sources.some((s) => s.host === h && s.state === "ok");
+        const primaryOk = ok("push2.eastmoney.com") || ok("push2delay.eastmoney.com") || ok("qt.gtimg.cn");
+        const klineOk = ok("push2his.eastmoney.com") || ok("web.ifzq.gtimg.cn");
+        return primaryOk && klineOk;
+      })(), detail: "主行情源与历史K线源至少一个可用；失败时显示降级" },
       { name: "ai_endpoint", ok: out.ai?.degraded === false, detail: "deepseek-v4-flash（恒思考）/ OpenCode Go failover" },
       { name: "sw_version", ok: !!out.sw?.cache, detail: out.sw?.cache ?? "sw.js 未读取" },
     ];

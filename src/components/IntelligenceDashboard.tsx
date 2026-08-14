@@ -71,6 +71,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
   const [sourceCount, setSourceCount] = useState({ news: 0, ann: 0 });
   const [scopeDays, setScopeDays] = useState<number>(3);
   const [scopeLabel, setScopeLabel] = useState<string>("");
+  const [analysisError, setAnalysisError] = useState<string>("");
   // 指定日期分析：用户可选某一天，"📅 分析该日"时只取该天数据
   const [customDate, setCustomDate] = useState<string>("");
   const triggeredSlots = useRef<Set<IntelSlot>>(loadTrig(today));
@@ -97,6 +98,11 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
   // 运行情报引擎（合并：limitPool + 智能窗口 + 手动全量 + 指定日期）
   const runIntelligence = useCallback(async (targetSlot: IntelSlot, scopeDaysArg?: number, customDateArg?: string) => {
     setLoading(true);
+    setAnalysisError("");
+    const timeoutTimer = setTimeout(() => {
+      setLoading(false);
+      setAnalysisError("AI 分析超时，已恢复操作，请重试");
+    }, 40000);
     try {
       const todayStore = dateForStore(today);
       const normDate = (s: string) => s.includes("-") ? s : `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
@@ -175,7 +181,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
       });
       if (result) { setMemo(result); setLastUpdateTime(fmtTime()); }
     } catch { /* callAI 内部已降级 */ }
-    finally { setLoading(false); }
+    finally { clearTimeout(timeoutTimer); setLoading(false); }
   }, [today, news, announcements, strongBoards, marketSnapshot, getAnalysisData]);
 
   // 段末触发（持久化，刷新不重跑）
@@ -286,6 +292,7 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
 
       {/* 状态条 + 存储说明（v9.26.8：本地部署显示 PG 存储状态） */}
       <div className="text-[11px] text-slate-600">
+        {analysisError && <div className="mb-1 rounded bg-rose-500/10 border border-rose-500/20 px-2 py-1 text-[11px] text-rose-300">{analysisError}</div>}
         本次基于 {sourceCount.news}条快讯+{sourceCount.ann}条公告 · {scopeLabel || SLOT_LABELS[slot ?? "afterclose"]} · 更新{lastUpdateTime || "—"}
         {isLocalServer()
           ? <span className="ml-2">📀 数据已存本地 PostgreSQL · 可回溯至 {cloudDataRef.current?.oldestDate ?? stats.oldestDate ?? "—"}</span>

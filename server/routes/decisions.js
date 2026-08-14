@@ -15,6 +15,7 @@ const { analyzeSwing } = require("../lib/swingStage");
 const { swingDecision } = require("../lib/swingDecision");
 const { chatComplete } = require("../lib/llmCore");
 const { loadFeedbackPenalty, applyDecisionPenalty } = require("../lib/feedbackPenalty");
+const { fetchResearchReportsServer, fetchInstitutionSurveysServer, fetchHolderCountServer, fetchLiftBanServer } = require("../lib/researchData");
 const { buildChainView } = require("../../src/shared/transmission-chain.js");
 
 function num(v) {
@@ -82,17 +83,18 @@ async function fetchNewsContext(code) {
   };
 }
 
-async function llmSwingDecision(code, snap, stage, chain, newsCtx) {
-  const system = "你是A股波段投研决策引擎。输入真实K线阶段、行情快照、产业链和消息，输出严格JSON。";
+async function llmSwingDecision(code, snap, stage, chain, newsCtx, fundamentals) {
+  const system = "你是A股波段投研分层决策引擎。每一层结论必须引用输入中的具体数据，输出严格JSON。";
   const user = `请对 ${code} 做波段决策：
 阶段：${JSON.stringify(stage)}
 行情：${JSON.stringify(snap)}
 产业链：${JSON.stringify(chain)}
+研报/调研/股东/解禁：${JSON.stringify(fundamentals)}
 消息：${JSON.stringify(newsCtx)}
 
 输出严格JSON：
-{"verdict":"波段买入|持有|减仓|观望|回避","score":0-100,"buyPoint":"买点或null","stopLossPct":5,"targetPct":15,"positionRange":[10,20],"reasons":["证据链"],"blocks":["风险"],"signal":"一句话"}`;
-  const r = await chatComplete({ system, user, maxTokens: 4000, temperature: 0.2, thinking: true });
+{"verdict":"波段买入|持有|减仓|观望|回避","score":0-100,"buyPoint":"买点或null","stopLossPct":5,"targetPct":15,"positionRange":[10,20],"holdingHorizonDays":20,"reviewCycleDays":20,"reasons":["证据链"],"blocks":["风险"],"evidenceChain":[{"step":"产业链","evidence":"引用具体数据"}],"invalidationConditions":["假设失效条件"],"signal":"一句话"}`;
+  const r = await chatComplete({ system, user, maxTokens: 8000, temperature: 0.2, thinking: true });
   const text = String(r?.text ?? "").trim();
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -105,8 +107,12 @@ async function llmSwingDecision(code, snap, stage, chain, newsCtx) {
     stopLossPct: num(j.stopLossPct) ?? 5,
     targetPct: num(j.targetPct) ?? 15,
     positionRange: Array.isArray(j.positionRange) ? [num(j.positionRange[0]) ?? 0, num(j.positionRange[1]) ?? 0] : [0, 0],
+    holdingHorizonDays: num(j.holdingHorizonDays) ?? 20,
+    reviewCycleDays: num(j.reviewCycleDays) ?? 20,
     reasons: Array.isArray(j.reasons) ? j.reasons.map(String) : [],
     blocks: Array.isArray(j.blocks) ? j.blocks.map(String) : [],
+    evidenceChain: Array.isArray(j.evidenceChain) ? j.evidenceChain.slice(0, 10) : [],
+    invalidationConditions: Array.isArray(j.invalidationConditions) ? j.invalidationConditions.slice(0, 10).map(String) : [],
     signal: String(j.signal || "观望"),
   };
 }
@@ -132,11 +138,15 @@ module.exports = function decisionsRoutes(app) {
     try {
       const code = String(req.body?.code ?? "").trim();
       if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
-      const [snap, klines, chainCtx, newsCtx] = await Promise.allSettled([
+      const [snap, klines, chainCtx, newsCtx, researchForecastR, surveyR, holderR, liftR] = await Promise.allSettled([
         fetchStockSnapshotServer(code),
         fetchStockKlines(code),
         fetchChainContext(code),
         fetchNewsContext(code),
+        fetchResearchReportsServer(code, 5),
+        fetchInstitutionSurveysServer(code, 5),
+        fetchHolderCountServer(code),
+        fetchLiftBanServer(code, 5),
       ]);
       const snapVal = snap.status === "fulfilled" ? snap.value : null;
       const rows = klines.status === "fulfilled" ? klines.value : [];
@@ -150,19 +160,29 @@ module.exports = function decisionsRoutes(app) {
       const stage = analyzeSwing(bars);
       const chainVal = chainCtx.status === "fulfilled" ? chainCtx.value : { board: null, chain: null };
       const newsVal = newsCtx.status === "fulfilled" ? newsCtx.value : { news: [], anns: [] };
+      const fundamentalsVal = {
+        research: researchForecastR.status === "fulfilled" ? researchForecastR.value : [],
+        surveys: surveyR.status === "fulfilled" ? surveyR.value : [],
+        holder: holderR.status === "fulfilled" ? holderR.value : null,
+        liftBan: liftR.status === "fulfilled" ? liftR.value : [],
+      };
       let decision = null;
       let fromLLM = false;
       let llmError = null;
       try {
-        decision = await llmSwingDecision(code, snapVal, stage, chainVal, newsVal);
+        decision = await Promise.race([
+          llmSwingDecision(code, snapVal, stage, chainVal, newsVal, fundamentalsVal),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("llm timeout 35s")), 35000)),
+        ]);
         fromLLM = true;
       } catch (e) {
         llmError = String(e?.message ?? e);
-        decision = swingDecision({ stage, board: null, holding: false });
+        const base = swingDecision({ stage, board: null, holding: false });
+        decision = { ...base, holdingHorizonDays: 20, reviewCycleDays: 20, evidenceChain: [{ step: "规则研判", evidence: stage?.signals?.join("；") || "K线/资金规则兜底" }], invalidationConditions: ["跌破买点或MA20，波段逻辑失效"] };
       }
       const fp = await loadFeedbackPenalty(pool, code);
       const applied = applyDecisionPenalty(decision, fp);
-      res.json({ ok: true, code, snap: snapVal, stage, chain: chainVal, decision: applied.decision, fromLLM, llmError, feedbackPenalty: applied.penalty });
+      res.json({ ok: true, code, snap: snapVal, stage, chain: chainVal, fundamentals: fundamentalsVal, decision: applied.decision, fromLLM, llmError, feedbackPenalty: applied.penalty, pipeline: { dataReady: true, chainReady: !!chainVal.chain, fundamentalsReady: fundamentalsVal.research.length > 0 || fundamentalsVal.surveys.length > 0 || !!fundamentalsVal.holder || fundamentalsVal.liftBan.length > 0, timingReady: !!stage, llmSynthesis: fromLLM } });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

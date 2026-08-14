@@ -65,8 +65,8 @@ export default function PendingVerdictBar() {
   return (
     <div className="rounded-xl border border-amber-500/30 bg-amber-950/15 p-2.5">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-bold text-amber-300">🎬 待你拍板（{pending.length} 条 AI 裁决未表态）</span>
-        <span className="text-[10px] text-slate-500">AI 仅提议，拍板才进闭环台账 · 裁决卡在下方</span>
+        <span className="text-xs font-bold text-amber-300">🎬 待你拍板（{pending.length} 条裁决未表态）</span>
+        <span className="text-[10px] text-slate-500">AI/规则仅提议，拍板才进闭环台账 · 裁决卡在下方</span>
       </div>
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {pending.map(v => (

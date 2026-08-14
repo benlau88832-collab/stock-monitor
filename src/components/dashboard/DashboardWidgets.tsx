@@ -47,7 +47,7 @@ export function IndexStripImpl({ overview }: { overview: OverviewData | null }) 
     <div className="flex items-center gap-3 rounded-lg bg-black/30 px-3 py-1 overflow-x-auto text-[11px]">
       {indices.slice(0, 4).map(idx => (
         <span key={idx.code} className="whitespace-nowrap">
-          <span className="text-slate-500">{idx.name}</span>
+          <span className="text-slate-500">{idx.name} </span>
           <span className={`ml-1 font-semibold ${pctColor(idx.pct)}`}>{fmtPct(idx.pct)}</span>
         </span>
       ))}

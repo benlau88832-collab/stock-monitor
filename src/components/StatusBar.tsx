@@ -5,6 +5,7 @@ import { getLedger } from "../lib/signalLedger";
 import { getOverallHealth } from "../lib/apiHealth";
 
 // 顶部常驻状态条：所有Tab可见，一行展示核心数据
+// v9.144.0：移动端改为 flex-wrap，不再用 min-w-max 制造整页横向溢出
 export default function StatusBar({ overview, fund }: {
   overview: OverviewData | null;
   fund: FundStructureData | null;
@@ -12,13 +13,11 @@ export default function StatusBar({ overview, fund }: {
   const b = overview?.breadth;
   const lp = overview?.limitPool;
   const healthColor = { green: "text-emerald-400", yellow: "text-amber-400", red: "text-rose-400" }[getOverallHealth()];
-  // 修复：本地日期与 signalLedger/appendSignal 的 date 字段口径一致
   const todaySignals = getLedger().filter(e => e.date === localDateStr()).length;
 
   return (
     <div className="border-b border-white/5 bg-[#080c18]/90 backdrop-blur-sm px-4 py-1 overflow-x-auto whitespace-nowrap">
-      <div className="flex items-center gap-4 text-[11px] min-w-max mx-auto max-w-[1500px]">
-        {/* 情绪分 */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] mx-auto max-w-[1500px]">
         {overview && (
           <span className="flex items-center gap-1">
             <Activity size={12} className="text-amber-400" />
@@ -32,7 +31,6 @@ export default function StatusBar({ overview, fund }: {
           </span>
         )}
 
-        {/* 涨/平/跌 */}
         {b && (
           <span className="flex items-center gap-1.5">
             <TrendingUp size={11} className="text-rose-400" /><span className="text-rose-400">{b.up}</span>
@@ -41,7 +39,6 @@ export default function StatusBar({ overview, fund }: {
           </span>
         )}
 
-        {/* 涨停/跌停/炸板率 */}
         {lp && (
           <span className="text-slate-400">
             涨停<span className="text-rose-400 font-semibold">{lp.limitUpCount}</span>
@@ -50,16 +47,13 @@ export default function StatusBar({ overview, fund }: {
           </span>
         )}
 
-        {/* 成交额 */}
         {overview && overview.turnoverAmount > 0 && (
           <span className="text-slate-400">
             成交<span className="text-slate-200 font-semibold">{fmtMoney(overview.turnoverAmount)}</span>
-            {/* v9.106.1（验收#1）：turnoverYesterday 路径补 P1-07 同款过滤 —— 盘前/跨日 yesterday 异常时
-                曾显示"成交+23209.86亿 -100%"荒谬环比（Dashboard/App 的 turnoverAvg5d 路径已修，此处遗漏） */}
             {overview.turnoverYesterday && overview.turnoverYesterday > 0 && (
               (() => {
                 const r = overview.turnoverAmount / overview.turnoverYesterday;
-                if (r < 0.05 || r > 20) return null; // 异常比值（断源/垃圾值）不渲染百分比
+                if (r < 0.05 || r > 20) return null;
                 const color = overview.turnoverAmount > overview.turnoverYesterday ? "text-rose-400" : "text-emerald-400";
                 return (
                   <span className={color}>{" "}{((r - 1) * 100).toFixed(0)}%</span>
@@ -69,14 +63,12 @@ export default function StatusBar({ overview, fund }: {
           </span>
         )}
 
-        {/* 主力净额 */}
         {fund?.structure && (
           <span className="text-slate-400">
             主力<span className={`font-semibold ${pctColor(fund.structure.today.mainNet)}`}>{fmtMoney(fund.structure.today.mainNet)}</span>
           </span>
         )}
 
-        {/* 信号数 */}
         {todaySignals > 0 && (
           <span className="flex items-center gap-1">
             <Zap size={11} className="text-amber-400" />
@@ -84,7 +76,6 @@ export default function StatusBar({ overview, fund }: {
           </span>
         )}
 
-        {/* 健康点 */}
         <span className={`flex items-center gap-1 ${healthColor}`}>
           <span className="inline-block w-1.5 h-1.5 rounded-full bg-current" />
         </span>

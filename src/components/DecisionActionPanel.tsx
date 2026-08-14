@@ -1,5 +1,6 @@
 // v9.143.0 决策动作面板：加盯盘/录逻辑/纸上确认/真实成交全部先确认后落库
-import { useState } from "react";
+// v9.144.0：支持服务端证据链的失效条件/复核周期预填
+import { useEffect, useState } from "react";
 import { BookOpen, Check, Save, Target, Wallet, X } from "lucide-react";
 import { apiFetch } from "../lib/cloudStore";
 import { buildPost, savePost } from "../lib/decisionPost";
@@ -10,6 +11,8 @@ interface Props {
   name: string;
   price: number | null;
   defaultThesis?: string;
+  defaultInvalidation?: string[];
+  defaultReviewCycle?: number;
   confidenceAtPost?: number | null;
   addTrade: (input: PortfolioTradeInput) => Promise<any>;
   saveLogic: (input: PortfolioLogicInput) => Promise<any>;
@@ -25,14 +28,14 @@ function num(v: string): number | null {
 const inputCls = "w-full rounded bg-black/30 px-2 py-1 text-[11px] text-slate-200 border border-white/10 outline-none";
 const labelCls = "text-[10px] text-slate-500";
 
-export default function DecisionActionPanel({ code, name, price, defaultThesis = "", confidenceAtPost = null, addTrade, saveLogic }: Props) {
+export default function DecisionActionPanel({ code, name, price, defaultThesis = "", defaultInvalidation = [], defaultReviewCycle = 20, confidenceAtPost = null, addTrade, saveLogic }: Props) {
   const [mode, setMode] = useState<ActionMode | null>(null);
   const [thesis, setThesis] = useState(defaultThesis);
   const [breakLine, setBreakLine] = useState(price != null ? String(Math.round(price * 0.95 * 100) / 100) : "");
   const [board, setBoard] = useState("");
   const [catalysts, setCatalysts] = useState("");
-  const [invalidation, setInvalidation] = useState("");
-  const [reviewCycle, setReviewCycle] = useState("20");
+  const [invalidation, setInvalidation] = useState(defaultInvalidation.join("\n"));
+  const [reviewCycle, setReviewCycle] = useState(String(defaultReviewCycle));
   const [tradePrice, setTradePrice] = useState(price != null ? String(price) : "");
   const [qty, setQty] = useState("100");
   const [buyLow, setBuyLow] = useState(price != null ? String(Math.round(price * 0.98 * 100) / 100) : "");
@@ -43,14 +46,20 @@ export default function DecisionActionPanel({ code, name, price, defaultThesis =
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
+  useEffect(() => {
+    if (defaultThesis) setThesis(defaultThesis);
+    if (defaultInvalidation.length > 0) setInvalidation(defaultInvalidation.join("\n"));
+    if (defaultReviewCycle > 0) setReviewCycle(String(defaultReviewCycle));
+  }, [defaultThesis, defaultInvalidation, defaultReviewCycle]);
+
   const reset = () => {
     setMode(null);
     setThesis(defaultThesis);
     setBreakLine(price != null ? String(Math.round(price * 0.95 * 100) / 100) : "");
     setBoard("");
     setCatalysts("");
-    setInvalidation("");
-    setReviewCycle("20");
+    setInvalidation(defaultInvalidation.join("\n"));
+    setReviewCycle(String(defaultReviewCycle));
     setTradePrice(price != null ? String(price) : "");
     setQty("100");
     setBuyLow(price != null ? String(Math.round(price * 0.98 * 100) / 100) : "");
