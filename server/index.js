@@ -148,10 +148,19 @@ initDb().then(async () => {
     await runMigrations();
   try { const { refreshCatalystCalendar } = require("./lib/catalystCalendar"); await refreshCatalystCalendar(pool); } catch (e) { console.warn("[calendar] refresh failed:", e.message); }
   try { const { seedFundamentalHistory } = require("./lib/fundamentalTrend"); const sr = await seedFundamentalHistory(pool); console.log("[fundamental] seeded history:", sr.inserted); } catch (e) { console.warn("[fundamental] seed failed:", e.message); }
+  try { const { ensureChainKb } = require("./lib/chainDb"); await ensureChainKb(pool); console.log("[chain] shared KB synced"); } catch (e) { console.warn("[chain] seed failed:", e.message); }
   } catch (e) { console.warn("[server] db-migrations failed:", e.message); }
   const token = await ensureLocalToken(pool);
   try { const { buildDirection } = require("./routes/swing"); buildDirection().catch((e) => console.warn("[swing] warmup failed:", e.message)); setInterval(() => buildDirection().catch((e) => console.warn("[swing] background refresh failed:", e.message)), 30 * 60 * 1000); } catch (e) { console.warn("[swing] warmup setup failed:", e.message); }
   app.listen(PORT, "127.0.0.1", () => {
+    // v9.145.0：产业信号同步较重，放到服务监听后异步执行，避免阻塞首屏启动
+    setTimeout(() => {
+      require("./lib/industryData").syncLocalIndustrySignals(pool)
+        .then((sig) => console.log("[industryData] synced:", sig))
+        .catch((e) => console.warn("[industryData] sync failed:", e.message));
+      require("./cron/base").markCronStep(pool, require("./cron/base").bjDateStr(), "system-boot")
+        .catch((e) => console.warn("[cron] system-boot checkpoint failed:", e.message));
+    }, 1000);
     console.log(`[server] stock-monitor local server on port ${PORT}`);
     console.log(`[server] local: http://localhost:${PORT}${token ? " (x-local-token enabled)" : ""}`);
   });

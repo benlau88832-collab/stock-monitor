@@ -7,6 +7,7 @@ const { pool } = require("../db");
 const { buildChainView } = require("../../src/shared/transmission-chain.js");
 const { getChainDbContext } = require("../lib/chainDb");
 const { runChainReasoning } = require("../lib/chainReasoning");
+const { getChainSignals } = require("../lib/industryData");
 
 function bjDateStr() {
   const d = new Date(Date.now() + 8 * 3600 * 1000);
@@ -123,6 +124,17 @@ module.exports = function chainRoutes(app) {
       if (!chainId) return res.status(400).json({ error: "chainId required" });
       const out = await runChainReasoning(pool, chainId);
       res.json(out);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/chain/signals", async (req, res) => {
+    try {
+      const chainId = String(req.query.chainId || "").trim();
+      const days = Math.max(7, Math.min(365, Number(req.query.days) || 90));
+      if (!chainId) return res.status(400).json({ error: "chainId required" });
+      res.json({ ok: true, chainId, days, items: await getChainSignals(pool, chainId, days) });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

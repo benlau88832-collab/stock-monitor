@@ -8,7 +8,6 @@ const { syncCommoditySignals } = require("./chainSignals");
 
 async function ensureChainKb(p) {
   const r = await p.query("SELECT count(*)::int AS n FROM industry_chain");
-  if (Number(r.rows?.[0]?.n || 0) > 0) return;
   for (const c of CHAIN_KB) {
     await p.query(
       `INSERT INTO industry_chain(id,name,description) VALUES($1,$2,$3) ON CONFLICT(id) DO NOTHING`,

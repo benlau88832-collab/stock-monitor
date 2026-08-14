@@ -138,6 +138,7 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
   // v9.77（P0-3 修复）：历史命中率对账 —— 置信旁展示"近14日 AI/规则 次日情绪延续命中率（代理）"
   // 让游资看到"系统声称的置信"与真实历史表现的差距，而不是只看一个拍脑袋数字。
   const [hitrate, setHitrate] = useState<{ aiRate: string; aiN: number; ruleRate: string; ruleN: number } | null>(null);
+  const [realPnl, setRealPnl] = useState<{ t5: string; t20: string; t60: string } | null>(null);
   useEffect(() => {
     let alive = true;
     if (!isLocalServer()) return;
@@ -152,6 +153,20 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
           ruleRate: r.rule.total > 0 && r.rule.rate != null ? `${r.rule.rate}%` : "—",
           ruleN: r.rule.total,
         });
+      } catch { /* 对账不可用不阻塞 */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    if (!isLocalServer()) return;
+    (async () => {
+      try {
+        const { computePostHitrate } = await import("../lib/decisionAttribution");
+        const r = await computePostHitrate(60);
+        if (!alive || !r) return;
+        const fmt = (avg: number | null, n: number) => avg == null ? `—(n=${n})` : `${avg > 0 ? "+" : ""}${avg}%·${n}笔`;
+        setRealPnl({ t5: fmt(r.aiPnlT5.avg ?? r.rulePnlT5.avg ?? r.degradedPnlT5.avg, r.aiPnlT5.n + r.rulePnlT5.n + r.degradedPnlT5.n), t20: fmt(r.aiPnlT20.avg ?? r.rulePnlT20.avg ?? r.degradedPnlT20.avg, r.aiPnlT20.n + r.rulePnlT20.n + r.degradedPnlT20.n), t60: fmt(r.aiPnlT60.avg ?? r.rulePnlT60.avg ?? r.degradedPnlT60.avg, r.aiPnlT60.n + r.rulePnlT60.n + r.degradedPnlT60.n) });
       } catch { /* 对账不可用不阻塞 */ }
     })();
     return () => { alive = false; };
@@ -257,6 +272,11 @@ export default function DecisionVerdictCard({ mainline = "—", sources = [], si
       {hitrate && (
         <div className="mt-1 text-[11px] text-slate-500" title="口径：次日情绪分延续（≥当日=win）的宏观代理，非个股盈亏；近14日">
           历史对账（近14日）：AI 命中 {hitrate.aiRate}（n={hitrate.aiN}）· 规则 {hitrate.ruleRate}（n={hitrate.ruleN}）
+        </div>
+      )}
+      {realPnl && (
+        <div className="mt-1 text-[11px] text-slate-500">
+          真实回填：T+5 {realPnl.t5} · T+20 {realPnl.t20} · T+60 {realPnl.t60}
         </div>
       )}
 

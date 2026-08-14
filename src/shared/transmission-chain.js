@@ -148,6 +148,230 @@ export const CHAIN_KB = [
       { name: "下游：整车/运营", keywords: ["汽车整车", "新能源车", "汽车零部件"] },
     ],
   },
+  {
+    id: "consumer-electronics", name: "消费电子产业链",
+    nodes: [
+      { name: "上游：芯片/面板", keywords: ["消费电子", "芯片", "面板", "半导体"] },
+      { name: "中游：模组/组装", keywords: ["消费电子零部件", "光学元件", "声学", "结构件"] },
+      { name: "下游：品牌/终端", keywords: ["手机", "PC", "可穿戴", "AI眼镜"] },
+    ],
+  },
+  {
+    id: "storage", name: "存储产业链",
+    nodes: [
+      { name: "上游：设备/材料", keywords: ["半导体设备", "存储材料", "光刻"] },
+      { name: "中游：制造/封测", keywords: ["存储芯片", "DRAM", "NAND", "封装"] },
+      { name: "下游：服务器/终端", keywords: ["服务器", "数据中心", "消费电子"] },
+    ],
+  },
+  {
+    id: "optical-comm", name: "光通信产业链",
+    nodes: [
+      { name: "上游：芯片/材料", keywords: ["光芯片", "光器件", "光材料"] },
+      { name: "中游：模块/设备", keywords: ["光模块", "CPO", "通信设备"] },
+      { name: "下游：运营商/云", keywords: ["通信服务", "数据中心", "云计算"] },
+    ],
+  },
+  {
+    id: "liquid-cooling", name: "液冷产业链",
+    nodes: [
+      { name: "上游：材料/泵阀", keywords: ["液冷", "冷却液", "泵", "阀"] },
+      { name: "中游：冷板/系统", keywords: ["液冷板", "温控", "服务器散热"] },
+      { name: "下游：数据中心", keywords: ["数据中心", "IDC", "算力"] },
+    ],
+  },
+  {
+    id: "compute-service", name: "算力服务产业链",
+    nodes: [
+      { name: "上游：芯片/服务器", keywords: ["算力芯片", "GPU", "服务器", "AI芯片"] },
+      { name: "中游：IDC/云", keywords: ["IDC", "数据中心", "云计算", "智算中心"] },
+      { name: "下游：模型/应用", keywords: ["大模型", "AI应用", "AI"] },
+    ],
+  },
+  {
+    id: "machine-tool", name: "工业母机产业链",
+    nodes: [
+      { name: "上游：数控/刀具", keywords: ["数控系统", "刀具", "机床零部件"] },
+      { name: "中游：整机", keywords: ["工业母机", "机床", "加工中心"] },
+      { name: "下游：制造", keywords: ["智能制造", "汽车零部件", "航空航天"] },
+    ],
+  },
+  {
+    id: "satellite", name: "卫星互联网产业链",
+    nodes: [
+      { name: "上游：卫星制造", keywords: ["卫星", "火箭", "卫星制造"] },
+      { name: "中游：地面站/终端", keywords: ["卫星互联网", "地面站", "相控阵"] },
+      { name: "下游：应用", keywords: ["通信", "导航", "遥感"] },
+    ],
+  },
+  {
+    id: "nuclear", name: "核电/核聚变产业链",
+    nodes: [
+      { name: "上游：燃料/材料", keywords: ["核电", "铀", "核材料"] },
+      { name: "中游：设备/工程", keywords: ["核岛", "核电设备", "核工程"] },
+      { name: "下游：发电", keywords: ["电力", "绿电", "可控核聚变"] },
+    ],
+  },
+  {
+    id: "solid-battery", name: "固态电池产业链",
+    nodes: [
+      { name: "上游：材料", keywords: ["固态电解质", "硫化物", "氧化物"] },
+      { name: "中游：电芯", keywords: ["固态电池", "电池", "电芯"] },
+      { name: "下游：整车/储能", keywords: ["新能源车", "储能", "汽车整车"] },
+    ],
+  },
+  {
+    id: "hydrogen", name: "氢能产业链",
+    nodes: [
+      { name: "上游：制氢", keywords: ["电解槽", "绿氢", "制氢"] },
+      { name: "中游：储运/加注", keywords: ["储氢", "运氢", "加氢"] },
+      { name: "下游：燃料电池/应用", keywords: ["燃料电池", "氢能", "商用车"] },
+    ],
+  },
+  {
+    id: "energy-storage", name: "储能产业链",
+    nodes: [
+      { name: "上游：电池/材料", keywords: ["储能", "电池", "正极", "负极"] },
+      { name: "中游：PCS/系统", keywords: ["储能变流器", "PCS", "储能系统"] },
+      { name: "下游：电网/应用", keywords: ["电网设备", "电力", "新能源"] },
+    ],
+  },
+  {
+    id: "grid", name: "电网/特高压产业链",
+    nodes: [
+      { name: "上游：设备", keywords: ["特高压", "变压器", "开关"] },
+      { name: "中游：线路/工程", keywords: ["电网设备", "电网", "电缆"] },
+      { name: "下游：电力/用电", keywords: ["电力", "数据中心", "电解铝"] },
+    ],
+  },
+  {
+    id: "real-estate", name: "地产产业链",
+    nodes: [
+      { name: "上游：土地/资金", keywords: ["土地", "房地产", "地产"] },
+      { name: "中游：开发/建筑", keywords: ["房地产开发", "建筑", "装修"] },
+      { name: "下游：家电/物业", keywords: ["家电", "物业", "建材"] },
+    ],
+  },
+  {
+    id: "infrastructure", name: "基建产业链",
+    nodes: [
+      { name: "上游：材料/机械", keywords: ["水泥", "钢铁", "工程机械"] },
+      { name: "中游：工程", keywords: ["基建", "建筑", "铁路"] },
+      { name: "下游：运营", keywords: ["交通", "公用事业", "港口"] },
+    ],
+  },
+  {
+    id: "liquor", name: "白酒产业链",
+    nodes: [
+      { name: "上游：粮食/包装", keywords: ["粮食", "包装"] },
+      { name: "中游：酿造", keywords: ["白酒", "酿酒", "酒"] },
+      { name: "下游：渠道/消费", keywords: ["食品饮料", "零售", "消费"] },
+    ],
+  },
+  {
+    id: "food", name: "食品饮料产业链",
+    nodes: [
+      { name: "上游：农业/原料", keywords: ["农业", "种植", "原料"] },
+      { name: "中游：加工", keywords: ["食品加工", "饮料", "调味"] },
+      { name: "下游：渠道/消费", keywords: ["食品饮料", "零售", "消费"] },
+    ],
+  },
+  {
+    id: "medical-device", name: "医疗器械产业链",
+    nodes: [
+      { name: "上游：核心部件", keywords: ["医疗器械", "影像", "耗材"] },
+      { name: "中游：设备/IVD", keywords: ["医疗设备", "体外诊断", "高值耗材"] },
+      { name: "下游：医疗服务", keywords: ["医疗服务", "医院", "康复"] },
+    ],
+  },
+  {
+    id: "tcm", name: "中药产业链",
+    nodes: [
+      { name: "上游：药材", keywords: ["中药材", "中药饮片"] },
+      { name: "中游：制药", keywords: ["中药", "中成药", "中医药"] },
+      { name: "下游：零售/医院", keywords: ["医药商业", "药店", "医疗服务"] },
+    ],
+  },
+  {
+    id: "rare-earth", name: "稀土永磁产业链",
+    nodes: [
+      { name: "上游：稀土矿", keywords: ["稀土", "稀土矿"] },
+      { name: "中游：冶炼/磁材", keywords: ["稀土永磁", "磁材", "钕铁硼"] },
+      { name: "下游：电机/新能源", keywords: ["新能源车", "风电", "机器人", "电机"] },
+    ],
+  },
+  {
+    id: "aluminum", name: "铝产业链",
+    nodes: [
+      { name: "上游：铝土矿", keywords: ["铝土矿", "氧化铝"] },
+      { name: "中游：电解铝/加工", keywords: ["电解铝", "铝加工", "铝箔"] },
+      { name: "下游：汽车/新能源", keywords: ["汽车零部件", "光伏", "消费电子"] },
+    ],
+  },
+  {
+    id: "coal", name: "煤炭产业链",
+    nodes: [
+      { name: "上游：煤炭开采", keywords: ["煤炭", "焦煤", "动力煤"] },
+      { name: "中游：洗选/运输", keywords: ["煤化工", "焦化", "运输"] },
+      { name: "下游：电力/钢铁", keywords: ["电力", "钢铁", "水泥"] },
+    ],
+  },
+  {
+    id: "securities", name: "证券金融科技产业链",
+    nodes: [
+      { name: "上游：系统/数据", keywords: ["金融科技", "证券软件", "数据"] },
+      { name: "中游：券商/交易", keywords: ["券商", "证券", "财富管理"] },
+      { name: "下游：资管/机构", keywords: ["基金", "保险", "银行"] },
+    ],
+  },
+  {
+    id: "insurance", name: "保险产业链",
+    nodes: [
+      { name: "上游：投资/承保", keywords: ["保险", "再保险"] },
+      { name: "中游：寿险/财险", keywords: ["寿险", "财险", "健康险"] },
+      { name: "下游：医疗/养老", keywords: ["医疗服务", "养老", "资产管理"] },
+    ],
+  },
+  {
+    id: "game-media", name: "游戏传媒产业链",
+    nodes: [
+      { name: "上游：IP/研发", keywords: ["游戏", "影视", "IP"] },
+      { name: "中游：发行/平台", keywords: ["游戏发行", "流媒体", "广告"] },
+      { name: "下游：渠道/消费", keywords: ["传媒", "互联网", "AI应用"] },
+    ],
+  },
+  {
+    id: "education", name: "教育产业链",
+    nodes: [
+      { name: "上游：内容/系统", keywords: ["教育信息化", "教材", "软件"] },
+      { name: "中游：学校/培训", keywords: ["教育", "培训", "职业教育"] },
+      { name: "下游：就业/人才", keywords: ["人才", "招聘", "人力资源"] },
+    ],
+  },
+  {
+    id: "tourism", name: "旅游消费产业链",
+    nodes: [
+      { name: "上游：景区/交通", keywords: ["景区", "酒店", "航空"] },
+      { name: "中游：旅行社/平台", keywords: ["旅游", "OTA", "免税"] },
+      { name: "下游：消费/零售", keywords: ["消费", "零售", "餐饮"] },
+    ],
+  },
+  {
+    id: "agricultural", name: "现代农业产业链",
+    nodes: [
+      { name: "上游：种业/农资", keywords: ["种业", "种子", "化肥", "农药"] },
+      { name: "中游：种植/养殖", keywords: ["农业", "种植", "养殖"] },
+      { name: "下游：食品/贸易", keywords: ["食品", "粮食", "农产品"] },
+    ],
+  },
+  {
+    id: "environmental", name: "环保产业链",
+    nodes: [
+      { name: "上游：设备/材料", keywords: ["环保设备", "膜", "催化剂"] },
+      { name: "中游：工程/运营", keywords: ["环保", "污水处理", "固废"] },
+      { name: "下游：再生/资源", keywords: ["再生资源", "碳交易", "节能"] },
+    ],
+  },
 ];
 
 function matchScore(node, boardName) {

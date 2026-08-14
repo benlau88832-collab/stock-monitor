@@ -187,7 +187,17 @@ module.exports = function decisionsRoutes(app) {
         fromLLM = true;
       } catch (e) {
         llmError = String(e?.message ?? e);
-        const base = swingDecision({ stage, board: null, holding: false });
+        const hist = Array.isArray(fundamentalsVal.history) ? fundamentalsVal.history : [];
+        const latest = hist[0] || {};
+        const fundamentalScore = hist.length >= 4 && (latest.roe != null || latest.revYoy != null || latest.profitYoy != null)
+          ? Math.max(0, Math.min(100, Math.round(
+              ((latest.roe != null ? Math.max(0, Math.min(20, latest.roe)) / 20 * 40 : 30)
+                + (latest.profitYoy != null ? (latest.profitYoy > 0 ? 30 : 10) : 15)
+                + (latest.revYoy != null ? (latest.revYoy > 0 ? 30 : 10) : 15))
+            )))
+          : null;
+        const catalystCount = Array.isArray(fundamentalsVal.catalysts) ? fundamentalsVal.catalysts.length : 0;
+        const base = swingDecision({ stage, board: null, holding: false, fundamentalScore, catalystCount });
         decision = { ...base, holdingHorizonDays: 20, reviewCycleDays: 20, evidenceChain: [{ step: "规则研判", evidence: stage?.signals?.join("；") || "K线/资金规则兜底" }], invalidationConditions: ["跌破买点或MA20，波段逻辑失效"] };
       }
       const fp = await loadFeedbackPenalty(pool, code);
