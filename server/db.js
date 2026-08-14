@@ -222,6 +222,40 @@ CREATE TABLE IF NOT EXISTS decision_feedback (
   created_at     TIMESTAMPTZ DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_df_ticket ON decision_feedback(ticket_id);
+CREATE TABLE IF NOT EXISTS industry_chain (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  description   TEXT,
+  updated_at    TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS industry_chain_node (
+  id            SERIAL PRIMARY KEY,
+  chain_id      TEXT NOT NULL REFERENCES industry_chain(id),
+  name          TEXT NOT NULL,
+  node_role     TEXT,
+  sequence      INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(chain_id, name)
+);
+CREATE TABLE IF NOT EXISTS industry_chain_node_stock (
+  id            SERIAL PRIMARY KEY,
+  node_id       INTEGER NOT NULL REFERENCES industry_chain_node(id),
+  stock_code    TEXT NOT NULL,
+  exposure_pct  NUMERIC,
+  role_note     TEXT,
+  source        TEXT NOT NULL DEFAULT 'auto-kb',
+  confirmed_at   TIMESTAMPTZ,
+  UNIQUE(node_id, stock_code)
+);
+CREATE TABLE IF NOT EXISTS industry_chain_signal (
+  id            SERIAL PRIMARY KEY,
+  node_id       INTEGER NOT NULL REFERENCES industry_chain_node(id),
+  signal_type   TEXT NOT NULL DEFAULT 'price',
+  value         NUMERIC,
+  unit          TEXT,
+  direction     TEXT,
+  effective_date DATE,
+  source_url    TEXT
+);
 `;
 
 async function initDb() {

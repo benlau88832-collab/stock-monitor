@@ -4,6 +4,7 @@
 // ============================================================
 const { pool } = require("../db");
 const { buildChainView } = require("../../src/shared/transmission-chain.js");
+const { getChainDbContext } = require("../lib/chainDb");
 
 function bjDateStr() {
   const d = new Date(Date.now() + 8 * 3600 * 1000);
@@ -70,6 +71,12 @@ module.exports = function chainRoutes(app) {
     const board = String(req.query.board || "").trim();
     try {
       if (code && !/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
+      if (code) {
+        const dbCtx = await getChainDbContext(pool, code);
+        if (dbCtx.mapped) {
+          return res.json({ code, board: dbCtx.chain.boardName, boards: dbCtx.boards, chain: dbCtx.chain, signals: { fund: null, ztCount: null }, source: "db" });
+        }
+      }
       const candidates = code ? await findBoardsForCode(code) : (board ? [board] : []);
       if (candidates.length === 0) {
         return res.json({ code, board, chain: null, reason: "未收录，待补充" });
