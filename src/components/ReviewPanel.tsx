@@ -201,6 +201,8 @@ export default function ReviewPanel() {
   const todayReview = reviews.find(r => r.date === today);
   const session = getCurrentSession();
   const isPostMarket = session.phase === "post";
+  const actualTrades = portfolio.trades.filter((t: any) => String(t.date) === today && (t.action === "sell" || t.action === "stop") && !t.simulated && t.pnlPct != null);
+  const actualPnlPct = actualTrades.length > 0 ? Math.round(actualTrades.reduce((s: number, t: any) => s + Number(t.pnlPct || 0), 0) / actualTrades.length * 10) / 10 : null;
 
   const update = (next: DailyReview[]) => { setReviews(next); saveReviews(next); };
 
@@ -211,7 +213,7 @@ export default function ReviewPanel() {
       mainline: mainline.trim(),
       leader: leader.trim(),
       myStocks: myStocks.trim(),
-      pnl: pnl.trim() !== "" && isFinite(parseFloat(pnl)) ? parseFloat(pnl) : null,
+      pnl: pnl.trim() !== "" && isFinite(parseFloat(pnl)) ? parseFloat(pnl) : actualPnlPct,
       reflection: reflection.trim(),
       createdAt: Date.now(),
     };
@@ -256,6 +258,12 @@ export default function ReviewPanel() {
         </div>
       </div>
 
+      {actualPnlPct != null && (
+        <div className="rounded border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1.5 text-[11px]">
+          <span className="font-bold text-emerald-300">今日实际成交盈亏：{(actualPnlPct ?? 0) > 0 ? "+" : ""}{actualPnlPct}%</span>
+          <span className="ml-1 text-slate-500">由 trade_ledger 卖出/止损自动汇总，手动复盘只补充主观原因</span>
+        </div>
+      )}
       {/* v9.33（缺口2）：服务端自动复盘展示 */}
       {autoReview && (
         <div className="rounded border border-violet-500/25 bg-violet-500/10 p-2">

@@ -42,7 +42,7 @@ function rowToLogic(row) {
 async function loadPortfolio() {
   const [tradeRows, logicRows, watchRows, postRows] = await Promise.all([
     pool.query(
-      `SELECT code,name,action,price,quantity,ts,date,pnl_pct,simulated
+      `SELECT id,code,name,action,price,quantity,cost,pnl_pct,notes,ts,date,pnl_pct,simulated
        FROM trade_ledger ORDER BY ts ASC LIMIT 2000`
     ),
     pool.query(`SELECT * FROM logic_ledger ORDER BY updated_at DESC LIMIT 200`),
@@ -141,6 +141,7 @@ async function loadPortfolio() {
   return {
     positions,
     simulatedPositions,
+    trades: allTrades.map((x) => ({ id: x.id, code: x.code, name: x.name, action: x.action, price: num(x.price), quantity: num(x.quantity), cost: num(x.cost), pnlPct: num(x.pnl_pct), date: x.date, simulated: Boolean(x.simulated), notes: x.notes })),
     logic,
     watch,
     decisions,

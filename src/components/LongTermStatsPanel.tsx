@@ -1,10 +1,10 @@
 // ============================================================
 // P3-1：长期胜率仪表盘 —— 按月/按主线/按 AI 路径分组
-// 数据：decision_post（人类拍板，含真实回填 pnl）+ decision_log（AI 来源）
-// 展示：月度胜率折线 / 主线 T+5 平均 PnL 排行 / AI vs 规则对比
-// 挂在 DecisionAuditPanel 内（复用其数据加载）
+// 数据：decision_post（人类拍板，含真实回填 pnl/pnl_t20/pnl_t60）+ decision_log（AI 来源）
+// 展示：月度胜率折线 / 主线平均 PnL 排行 / AI vs 规则对比
+// 支持 T+5 / T+20 / T+60 周期切换；服务端回填经 DecisionAuditPanel 传入合并
 // ============================================================
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { loadRecentPosts, type DecisionPost } from "../lib/decisionPost";
 import { loadDecisionLogs } from "../lib/decisionAttribution";
 import DisclaimerTag from "./DisclaimerTag";
@@ -12,25 +12,39 @@ import DisclaimerTag from "./DisclaimerTag";
 interface MonthlyStat { month: string; total: number; winRate: number | null; avgPnl: number | null; }
 interface MainlineStat { mainline: string; total: number; avgPnl: number | null; winRate: number | null; }
 
-export default function LongTermStatsPanel() {
+type Horizon = "T+5" | "T+20" | "T+60";
+
+const HORIZONS: Horizon[] = ["T+5", "T+20", "T+60"];
+
+export default function LongTermStatsPanel({ serverDecisions = [] }: { serverDecisions?: Array<Record<string, any>> }) {
   const [posts, setPosts] = useState<DecisionPost[]>([]);
   const [logs, setLogs] = useState<ReturnType<typeof loadDecisionLogs>>([]);
+  const [horizon, setHorizon] = useState<Horizon>("T+5");
 
   useEffect(() => {
-    setPosts(loadRecentPosts(180));  // 近 180 天拍板
-    setLogs(loadDecisionLogs(180));  // 近 180 天 AI 裁决
-  }, []);
+    const local = loadRecentPosts(180); // 近 180 天拍板
+    const map = new Map(serverDecisions.map((d) => [d.ticketId, d]));
+    setPosts(local.map((p) => map.has(p.ticketId) ? { ...p, ...map.get(p.ticketId) } : p));
+    setLogs(loadDecisionLogs(180)); // 近 180 天 AI 裁决
+  }, [serverDecisions]);
 
-  // 仅统计已回填的 confirm 拍板（有真实 pnl）
-  const confirmed = posts.filter(p => p.humanAction === "confirm" && p.pnl != null);
+  const pnlOf = (p: DecisionPost, h: Horizon): number | null => {
+    if (h === "T+20") return p.pnlT20 ?? null;
+    if (h === "T+60") return p.pnlT60 ?? null;
+    return p.pnl ?? null;
+  };
+
+  // 仅统计已回填的 confirm 拍板（有当前周期真实 pnl）
+  const confirmed = useMemo(() => posts.filter(p => p.humanAction === "confirm" && pnlOf(p, horizon) != null), [posts, horizon]);
 
   // 按月聚合
-  const monthly: MonthlyStat[] = (() => {
+  const monthly: MonthlyStat[] = useMemo(() => {
     const map = new Map<string, { total: number; wins: number; pnlSum: number }>();
     for (const p of confirmed) {
+      const v = pnlOf(p, horizon) ?? 0;
       const m = p.date.slice(0, 7);
       const rec = map.get(m) ?? { total: 0, wins: 0, pnlSum: 0 };
-      rec.total++; rec.pnlSum += p.pnl ?? 0; if ((p.pnl ?? 0) > 0) rec.wins++;
+      rec.total++; rec.pnlSum += v; if (v > 0) rec.wins++;
       map.set(m, rec);
     }
     return [...map.entries()]
@@ -41,15 +55,16 @@ export default function LongTermStatsPanel() {
         winRate: Math.round(r.wins / r.total * 100),
         avgPnl: Math.round(r.pnlSum / r.total * 10) / 10,
       }));
-  })();
+  }, [confirmed, horizon]);
 
   // 按主线聚合
-  const mainlineStats: MainlineStat[] = (() => {
+  const mainlineStats: MainlineStat[] = useMemo(() => {
     const map = new Map<string, { total: number; wins: number; pnlSum: number }>();
     for (const p of confirmed) {
+      const v = pnlOf(p, horizon) ?? 0;
       const ml = p.mainline ?? p.code ?? "未知";
       const rec = map.get(ml) ?? { total: 0, wins: 0, pnlSum: 0 };
-      rec.total++; rec.pnlSum += p.pnl ?? 0; if ((p.pnl ?? 0) > 0) rec.wins++;
+      rec.total++; rec.pnlSum += v; if (v > 0) rec.wins++;
       map.set(ml, rec);
     }
     return [...map.entries()]
@@ -59,10 +74,10 @@ export default function LongTermStatsPanel() {
         winRate: Math.round(r.wins / r.total * 100),
         avgPnl: Math.round(r.pnlSum / r.total * 10) / 10,
       }))
-      .filter(x => x.total >= 2)  // 样本 ≥2 才展示
+      .filter(x => x.total >= 2) // 样本 ≥2 才展示
       .sort((a, b) => (b.avgPnl ?? 0) - (a.avgPnl ?? 0))
       .slice(0, 10);
-  })();
+  }, [confirmed, horizon]);
 
   // AI vs 规则对比（基于 decision_log 来源 + 拍板配对）
   const aiLogs = logs.filter(l => l.source === "AI-Agent");
@@ -70,8 +85,8 @@ export default function LongTermStatsPanel() {
   const rulePosts = confirmed.filter(p => !p.decisionLogRef || !aiLogs.some(l => l.ts === p.decisionLogRef));
   const calc = (arr: DecisionPost[]) => {
     if (arr.length === 0) return { n: 0, avgPnl: null as number | null, winRate: null as number | null };
-    const sum = arr.reduce((s, p) => s + (p.pnl ?? 0), 0);
-    const wins = arr.filter(p => (p.pnl ?? 0) > 0).length;
+    const sum = arr.reduce((s, p) => s + (pnlOf(p, horizon) ?? 0), 0);
+    const wins = arr.filter(p => (pnlOf(p, horizon) ?? 0) > 0).length;
     return { n: arr.length, avgPnl: Math.round(sum / arr.length * 10) / 10, winRate: Math.round(wins / arr.length * 100) };
   };
   const aiStat = calc(aiPosts);
@@ -82,12 +97,20 @@ export default function LongTermStatsPanel() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <div className="text-xs font-bold text-slate-300">📈 长期胜率仪表盘 <span className="text-[10px] text-slate-500 font-normal">近 180 天 · 拍板真实 T+5 盈亏</span></div>
-        <DisclaimerTag />
+        <div className="text-xs font-bold text-slate-300">📈 长期胜率仪表盘 <span className="text-[10px] text-slate-500 font-normal">近 180 天 · 拍板真实 {horizon} 盈亏</span></div>
+        <div className="flex items-center gap-1">
+          {HORIZONS.map(h => (
+            <button key={h} onClick={() => setHorizon(h)}
+              className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${horizon === h ? "bg-cyan-500/25 text-cyan-200" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}>
+              {h}
+            </button>
+          ))}
+          <DisclaimerTag />
+        </div>
       </div>
 
       {confirmed.length === 0 ? (
-        <div className="text-[11px] text-slate-500">暂无已回填拍板（拍板后约 7 个交易日自动回填）。持续使用拍板功能后此面板自动积累。</div>
+        <div className="text-[11px] text-slate-500">暂无已回填拍板（{horizon} 周期）。拍板后按交易日自动回填，持续使用拍板功能后此面板自动积累。</div>
       ) : (
         <>
           {/* AI vs 规则对比 */}
@@ -107,7 +130,7 @@ export default function LongTermStatsPanel() {
           {/* 月度趋势 */}
           {monthly.length > 0 && (
             <div className="rounded-lg border border-white/5 bg-white/[0.03] p-2">
-              <div className="mb-1 text-[10px] text-slate-400">📅 月度表现</div>
+              <div className="mb-1 text-[10px] text-slate-400">📅 月度表现（{horizon}）</div>
               <div className="flex items-end gap-2 overflow-x-auto pb-1">
                 {monthly.map(m => (
                   <div key={m.month} className="flex flex-col items-center min-w-[52px]">
@@ -133,7 +156,7 @@ export default function LongTermStatsPanel() {
           {/* 主线排行 */}
           {mainlineStats.length > 0 && (
             <div className="rounded-lg border border-white/5 bg-white/[0.03] p-2">
-              <div className="mb-1 text-[10px] text-slate-400">🎯 主线表现排行（T+5 平均盈亏）</div>
+              <div className="mb-1 text-[10px] text-slate-400">🎯 主线表现排行（{horizon} 平均盈亏）</div>
               <div className="space-y-0.5">
                 {mainlineStats.map(m => (
                   <div key={m.mainline} className="flex items-center gap-2 text-[11px]">

@@ -56,12 +56,13 @@ describe("v9.97.0 keywordSentiment 词典打分", () => {
 });
 
 describe("v9.97.0 sentimentWindowStats 窗口统计", () => {
+  const ds = (offset: number) => new Date(Date.now() + 8 * 3600 * 1000 - offset * 86400000).toISOString().slice(0, 10);
   const rows = [
-    { title: "中标大单", time: "2026-08-10 10:00" },
-    { title: "股东减持", time: "2026-08-09 10:00" },
-    { title: "业绩预增", time: "2026-08-08 10:00" },
-    { title: "例行会议", time: "2026-08-07 10:00" },
-    { title: "立案调查", time: "2026-08-01 10:00" }, // 7 日窗口外
+    { title: "中标大单", time: `${ds(4)} 10:00` },
+    { title: "股东减持", time: `${ds(5)} 10:00` },
+    { title: "业绩预增", time: `${ds(6)} 10:00` },
+    { title: "例行会议", time: `${ds(7)} 10:00` },
+    { title: "立案调查", time: `${ds(12)} 10:00` }, // 7 日窗口外
   ];
   it("7 日窗口过滤 + 计数/占比/趋势", () => {
     const w = sentimentWindowStats(rows, 7);

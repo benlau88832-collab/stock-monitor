@@ -300,7 +300,7 @@ export default function DecisionAuditPanel() {
           <details className="rounded-lg border border-white/5 bg-white/[0.03] p-2">
             <summary className="cursor-pointer text-[11px] font-bold text-slate-300 hover:text-slate-200">📈 长期胜率仪表盘（点开）</summary>
             <div className="mt-2">
-              <LongTermStatsPanel />
+              <LongTermStatsPanel serverDecisions={serverDecisions} />
             </div>
           </details>
 

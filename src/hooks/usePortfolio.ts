@@ -36,6 +36,7 @@ export interface PortfolioLogicInput {
 
 export interface PortfolioState {
   positions: Array<Record<string, any>>;
+  trades: Array<Record<string, any>>;
   simulatedPositions: Array<Record<string, any>>;
   logic: LogicEntry[];
   watch: Array<Record<string, any>>;
@@ -47,6 +48,7 @@ export interface PortfolioState {
 
 const EMPTY: PortfolioState = {
   positions: [],
+  trades: [],
   simulatedPositions: [],
   logic: [],
   watch: [],
@@ -94,6 +96,7 @@ export function usePortfolio() {
       const j = await r.json();
       setState({
         positions: Array.isArray(j.positions) ? j.positions : [],
+        trades: Array.isArray(j.trades) ? j.trades : [],
         simulatedPositions: Array.isArray(j.simulatedPositions) ? j.simulatedPositions : [],
         logic: Array.isArray(j.logic) ? j.logic.map(toLogicEntry) : [],
         watch: Array.isArray(j.watch) ? j.watch : [],
