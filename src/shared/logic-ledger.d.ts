@@ -30,9 +30,15 @@ export interface LogicEntry {
   updatedAt: number;
   /** 离场原因（status=已离场 时） */
   exitReason?: string;
+  /** 假设失效条件（触发任一即应复核/离场） */
+  invalidationConditions?: string[];
+  /** 强制复核周期（天） */
+  reviewCycleDays?: number;
+  /** 下次强制复核日期 YYYY-MM-DD */
+  nextReviewAt?: string | null;
 }
 
-export type LogicAlertType = "break_line" | "catalyst_due" | "board_ebb" | "logic_falsified";
+export type LogicAlertType = "break_line" | "catalyst_due" | "board_ebb" | "logic_falsified" | "review_due";
 
 export interface LogicAlert {
   type: LogicAlertType;

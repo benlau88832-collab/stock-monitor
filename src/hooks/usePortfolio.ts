@@ -32,6 +32,9 @@ export interface PortfolioLogicInput {
   decisionRef?: string | null;
   tradeRef?: number | null;
   simulated?: boolean;
+  invalidationConditions?: string[];
+  reviewCycleDays?: number;
+  nextReviewAt?: string | null;
 }
 
 export interface PortfolioState {
@@ -75,6 +78,9 @@ function toLogicEntry(row: Record<string, any>): LogicEntry {
     decisionRef: row.decisionRef ?? null,
     tradeRef: row.tradeRef ?? null,
     simulated: Boolean(row.simulated),
+    invalidationConditions: Array.isArray(row.invalidationConditions) ? row.invalidationConditions : [],
+    reviewCycleDays: Number(row.reviewCycleDays) || 20,
+    nextReviewAt: row.nextReviewAt ?? null,
   };
   return entry as LogicEntry;
 }

@@ -199,6 +199,8 @@ function LogicLedgerPanel({ entries, priceMap, boardHealth, onAdd, onUpdate, onR
               <div key={i} className="mt-0.5 text-[10px] text-slate-500">{c.kind}·{c.desc}{c.dueDate ? `（${c.dueDate}）` : ""} <b className={c.status === "已兑现" ? "text-emerald-300" : c.status === "已证伪" ? "text-rose-300" : "text-amber-300"}>{c.status}</b></div>
             ))}
             {e.breakLine != null && <div className="mt-0.5 text-[10px] text-rose-300/70">破位线 {e.breakLine}</div>}
+            {(e.invalidationConditions?.length ?? 0) > 0 && <div className="mt-0.5 text-[10px] text-amber-300/80">失效条件：{(e.invalidationConditions ?? []).join("；")}</div>}
+            {e.nextReviewAt && <div className="mt-0.5 text-[10px] text-sky-300/80">下次复核 {e.nextReviewAt}（{e.reviewCycleDays || 20} 天周期）</div>}
             <div className="mt-1 flex flex-wrap gap-1">
               <button onClick={() => onUpdate({ id: e.id, code: e.code, name: e.name, thesis: e.thesis, status: "已兑现" })} className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-500/30">兑现</button>
               <button onClick={() => onUpdate({ id: e.id, code: e.code, name: e.name, thesis: e.thesis, status: "已证伪" })} className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-300 hover:bg-rose-500/30">证伪</button>

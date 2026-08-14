@@ -219,6 +219,9 @@ async function loadLogicEntries(pool) {
     decisionRef: row.decision_ref,
     tradeRef: row.trade_ref,
     simulated: Boolean(row.simulated),
+    invalidationConditions: Array.isArray(row.invalidation_conditions) ? row.invalidation_conditions : [],
+    reviewCycleDays: Number(row.review_cycle_days) || 20,
+    nextReviewAt: row.next_review_at ?? null,
   }));
 }
 

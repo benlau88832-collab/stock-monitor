@@ -36,6 +36,9 @@ function rowToLogic(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
+    invalidationConditions: Array.isArray(row.invalidation_conditions) ? row.invalidation_conditions : [],
+    reviewCycleDays: num(row.review_cycle_days) ?? 20,
+    nextReviewAt: row.next_review_at ?? null,
   };
 }
 
@@ -228,23 +231,26 @@ module.exports = function portfolioRoutes(app) {
     const decisionRef = b.decisionRef ? String(b.decisionRef) : null;
     const tradeRef = b.tradeRef != null ? Math.round(Number(b.tradeRef)) : null;
     const simulated = Boolean(b.simulated);
+    const invalidationConditions = Array.isArray(b.invalidationConditions) ? b.invalidationConditions.map(String).slice(0, 20) : [];
+    const reviewCycleDays = Math.max(1, Math.min(365, Math.round(Number(b.reviewCycleDays) || 20)));
+    const nextReviewAt = new Date(Date.now() + 8 * 3600 * 1000 + reviewCycleDays * 86400000).toISOString().slice(0, 10);
 
     let row;
     if (b.id) {
       const r = await pool.query(
         `UPDATE logic_ledger
          SET code=$2,name=$3,status=$4,thesis=$5,catalysts=$6,break_line=$7,board=$8,
-             decision_ref=$9,trade_ref=$10,simulated=$11,updated_at=now(),
+             decision_ref=$9,trade_ref=$10,simulated=$11,invalidation_conditions=$12,review_cycle_days=$13,next_review_at=$14,updated_at=now(),
              closed_at=CASE WHEN $4='已离场' THEN COALESCE(closed_at,now()) ELSE NULL END
          WHERE id=$1 RETURNING *`,
-        [Number(b.id), code, name, status, String(b.thesis), JSON.stringify(catalysts), breakLine, board, decisionRef, tradeRef, simulated]
+        [Number(b.id), code, name, status, String(b.thesis), JSON.stringify(catalysts), breakLine, board, decisionRef, tradeRef, simulated, JSON.stringify(invalidationConditions), reviewCycleDays, nextReviewAt]
       );
       row = r.rows[0];
     } else {
       const r = await pool.query(
-        `INSERT INTO logic_ledger(code,name,status,thesis,catalysts,break_line,board,decision_ref,trade_ref,simulated)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-        [code, name, status, String(b.thesis), JSON.stringify(catalysts), breakLine, board, decisionRef, tradeRef, simulated]
+        `INSERT INTO logic_ledger(code,name,status,thesis,catalysts,break_line,board,decision_ref,trade_ref,simulated,invalidation_conditions,review_cycle_days,next_review_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+        [code, name, status, String(b.thesis), JSON.stringify(catalysts), breakLine, board, decisionRef, tradeRef, simulated, JSON.stringify(invalidationConditions), reviewCycleDays, nextReviewAt]
       );
       row = r.rows[0];
     }

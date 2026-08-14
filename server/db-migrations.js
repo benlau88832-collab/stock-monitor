@@ -19,7 +19,10 @@ CREATE TABLE IF NOT EXISTS logic_ledger (
   simulated         BOOLEAN DEFAULT false,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  closed_at         TIMESTAMPTZ
+  closed_at         TIMESTAMPTZ,
+  invalidation_conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  review_cycle_days  INTEGER NOT NULL DEFAULT 20,
+  next_review_at     DATE
 );
 CREATE INDEX IF NOT EXISTS idx_logic_code_status ON logic_ledger(code, status);
 `;
@@ -28,6 +31,9 @@ async function runMigrations() {
   await pool.query(LOGIC_LEDGER_SQL);
   await pool.query(`ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
+  await pool.query(`ALTER TABLE logic_ledger ADD COLUMN IF NOT EXISTS invalidation_conditions JSONB DEFAULT '[]'::jsonb`);
+  await pool.query(`ALTER TABLE logic_ledger ADD COLUMN IF NOT EXISTS review_cycle_days INTEGER DEFAULT 20`);
+  await pool.query(`ALTER TABLE logic_ledger ADD COLUMN IF NOT EXISTS next_review_at DATE`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_t20 DOUBLE PRECISION`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_t60 DOUBLE PRECISION`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_source TEXT`);

@@ -41,6 +41,10 @@ export function checkLedgerAlerts(entry, input) {
     }
   }
 
+  // ②.5 强制复核到期（warning：假设监控）
+  if (entry.nextReviewAt && entry.nextReviewAt <= today) {
+    alerts.push({ type: "review_due", code: entry.code, name: entry.name, severity: "warning", message: `${entry.name} 持仓逻辑到期复核（${entry.nextReviewAt}）——核对失效条件与最新数据`, date: today });
+  }
   // ③ 板块退潮（warning）
   if (entry.board != null && input.boardHealthy === false) {
     alerts.push({ type: "board_ebb", code: entry.code, name: entry.name, severity: "warning", message: `${entry.name} 所属板块「${entry.board}」趋势转弱/资金流出——考虑减仓`, date: today });

@@ -31,6 +31,8 @@ export default function DecisionActionPanel({ code, name, price, defaultThesis =
   const [breakLine, setBreakLine] = useState(price != null ? String(Math.round(price * 0.95 * 100) / 100) : "");
   const [board, setBoard] = useState("");
   const [catalysts, setCatalysts] = useState("");
+  const [invalidation, setInvalidation] = useState("");
+  const [reviewCycle, setReviewCycle] = useState("20");
   const [tradePrice, setTradePrice] = useState(price != null ? String(price) : "");
   const [qty, setQty] = useState("100");
   const [buyLow, setBuyLow] = useState(price != null ? String(Math.round(price * 0.98 * 100) / 100) : "");
@@ -47,6 +49,8 @@ export default function DecisionActionPanel({ code, name, price, defaultThesis =
     setBreakLine(price != null ? String(Math.round(price * 0.95 * 100) / 100) : "");
     setBoard("");
     setCatalysts("");
+    setInvalidation("");
+    setReviewCycle("20");
     setTradePrice(price != null ? String(price) : "");
     setQty("100");
     setBuyLow(price != null ? String(Math.round(price * 0.98 * 100) / 100) : "");
@@ -86,6 +90,8 @@ export default function DecisionActionPanel({ code, name, price, defaultThesis =
           catalysts: catalystList.map((desc) => ({ kind: "其他" as const, desc, dueDate: null, status: "待验证" as const })),
           breakLine: num(breakLine),
           board: board.trim() || null,
+          invalidationConditions: invalidation.split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean),
+          reviewCycleDays: Math.max(1, Math.min(365, Math.round(Number(reviewCycle) || 20))),
           status: "验证中",
         });
         setMsg("已录逻辑台账");
@@ -113,6 +119,8 @@ export default function DecisionActionPanel({ code, name, price, defaultThesis =
           catalysts: catalysts.split(/[,，]/).map((s) => s.trim()).filter(Boolean).map((desc) => ({ kind: "其他" as const, desc, dueDate: null, status: "待验证" as const })),
           breakLine: num(breakLine),
           board: board.trim() || null,
+          invalidationConditions: invalidation.split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean),
+          reviewCycleDays: Math.max(1, Math.min(365, Math.round(Number(reviewCycle) || 20))),
           status: "验证中",
           decisionRef: post.ticketId,
           simulated,
@@ -169,6 +177,8 @@ export default function DecisionActionPanel({ code, name, price, defaultThesis =
                 <div><div className={labelCls}>所属板块</div><input value={board} onChange={(e) => setBoard(e.target.value)} className={inputCls} /></div>
               </div>
               <div><div className={labelCls}>验证催化点（逗号分隔）</div><input value={catalysts} onChange={(e) => setCatalysts(e.target.value)} className={inputCls} /></div>
+              <div><div className={labelCls}>失效条件（每行一条）</div><textarea value={invalidation} onChange={(e) => setInvalidation(e.target.value)} rows={2} className={inputCls} /></div>
+              <div><div className={labelCls}>复核周期（天）</div><input value={reviewCycle} onChange={(e) => setReviewCycle(e.target.value)} className={inputCls} /></div>
             </>
           )}
           {(mode === "paper" || mode === "real") && (
@@ -182,6 +192,8 @@ export default function DecisionActionPanel({ code, name, price, defaultThesis =
                 <div><div className={labelCls}>破位线</div><input value={breakLine} onChange={(e) => setBreakLine(e.target.value)} className={inputCls} /></div>
                 <div><div className={labelCls}>板块</div><input value={board} onChange={(e) => setBoard(e.target.value)} className={inputCls} /></div>
               </div>
+              <div><div className={labelCls}>失效条件（每行一条）</div><textarea value={invalidation} onChange={(e) => setInvalidation(e.target.value)} rows={2} className={inputCls} /></div>
+              <div><div className={labelCls}>复核周期（天）</div><input value={reviewCycle} onChange={(e) => setReviewCycle(e.target.value)} className={inputCls} /></div>
               <div><div className={labelCls}>备注</div><input value={notes} onChange={(e) => setNotes(e.target.value)} className={inputCls} /></div>
             </>
           )}
