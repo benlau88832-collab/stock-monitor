@@ -84,6 +84,70 @@ export const CHAIN_KB = [
       { name: "下游：电网/用电", keywords: ["电网设备", "特高压", "数据中心", "电解铝"] },
     ],
   },
+
+  {
+    id: "ai-hardware", name: "AI算力硬件产业链",
+    nodes: [
+      { name: "上游：芯片/设备", keywords: ["半导体", "芯片", "光刻", "GPU", "算力芯片", "存储芯片"] },
+      { name: "中游：光模块/服务器/PCB", keywords: ["光模块", "CPO", "通信设备", "服务器", "PCB", "铜缆高速连接"] },
+      { name: "下游：数据中心/云", keywords: ["数据中心", "云计算", "液冷", "IDC"] },
+    ],
+  },
+  {
+    id: "ai-app", name: "AI应用产业链",
+    nodes: [
+      { name: "上游：模型/数据", keywords: ["AI", "大模型", "数据要素", "算法"] },
+      { name: "中游：软件/工具", keywords: ["软件开发", "IT服务", "办公软件", "网络安全"] },
+      { name: "下游：应用/端侧", keywords: ["AI应用", "消费电子", "机器人", "传媒", "游戏"] },
+    ],
+  },
+  {
+    id: "robot", name: "机器人产业链",
+    nodes: [
+      { name: "上游：减速器/伺服/传感器", keywords: ["减速器", "伺服", "传感器", "电机"] },
+      { name: "中游：本体/控制器", keywords: ["机器人", "工业机器人", "控制器"] },
+      { name: "下游：应用场景", keywords: ["智能制造", "汽车整车", "3C", "物流"] },
+    ],
+  },
+  {
+    id: "innovative-drug", name: "创新药/CXO产业链",
+    nodes: [
+      { name: "上游：研发服务", keywords: ["CXO", "CRO", "CDMO", "医药外包"] },
+      { name: "中游：创新药", keywords: ["创新药", "生物制品", "化学制药"] },
+      { name: "下游：销售/医疗服务", keywords: ["医药商业", "医疗服务", "医疗器械"] },
+    ],
+  },
+  {
+    id: "defense-lowalt", name: "军工/低空经济产业链",
+    nodes: [
+      { name: "上游：材料/元器件", keywords: ["军工", "航空材料", "电子元器件"] },
+      { name: "中游：整机/系统", keywords: ["航空装备", "低空经济", "无人机", "航天"] },
+      { name: "下游：运营/应用", keywords: ["机场", "物流", "应急"] },
+    ],
+  },
+  {
+    id: "consumer-export", name: "消费出海产业链",
+    nodes: [
+      { name: "上游：制造/供应链", keywords: ["小家电", "纺织制造", "跨境电商", "轻工制造"] },
+      { name: "下游：品牌/渠道", keywords: ["电商", "品牌", "海外", "商贸零售"] },
+    ],
+  },
+  {
+    id: "data-security", name: "数据要素/信创产业链",
+    nodes: [
+      { name: "上游：基础软硬件", keywords: ["信创", "国产软件", "操作系统", "数据库"] },
+      { name: "中游：数据服务", keywords: ["数据要素", "大数据", "云计算", "IT服务"] },
+      { name: "下游：行业应用", keywords: ["政务", "金融科技", "网络安全"] },
+    ],
+  },
+  {
+    id: "smart-driving", name: "智能驾驶产业链",
+    nodes: [
+      { name: "上游：传感器/芯片", keywords: ["激光雷达", "摄像头", "车载芯片", "传感器"] },
+      { name: "中游：智驾方案/域控", keywords: ["智能驾驶", "汽车电子", "域控制器", "线控"] },
+      { name: "下游：整车/运营", keywords: ["汽车整车", "新能源车", "汽车零部件"] },
+    ],
+  },
 ];
 
 function matchScore(node, boardName) {
