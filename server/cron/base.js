@@ -104,6 +104,12 @@ async function markCronStep(pool, dateStr, step) {
        ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
       [`${CRON_CP_KEY}:${dateStr}`, JSON.stringify({ date: dateStr, steps })],
     );
+    await pool.query(
+      `INSERT INTO cron_checkpoint(task,last_start,last_end,last_status,last_error,updated_at)
+       VALUES($1,$2,now(),'ok',NULL,now())
+       ON CONFLICT(task) DO UPDATE SET last_start=$2,last_end=now(),last_status='ok',last_error=NULL,updated_at=now()`,
+      [`${dateStr}:${step}`, new Date().toISOString()],
+    );
   } catch { /* checkpoint 失败不影响主流程 */ }
 }
 
@@ -125,4 +131,3 @@ function isTradingDayCN(d = new Date()) {
   return !TRADE_HOLIDAYS.set.has(ds);
 }
 module.exports = { contentKey, httpsGet, bjDate, bjDateStr, EM_UT, detectSealDecayServer, markCronStep, hasCronStep, isTradingDayCN, getJson, getJsonWithFallback, requestRaw, parseLLMJSON, SCHEMAS, withPgLock, LOCK_CRON_MAIN, LOCK_THEME, LOCK_WATCH, LOCK_INTRADAY, callLLM, saveFactorIc };
-

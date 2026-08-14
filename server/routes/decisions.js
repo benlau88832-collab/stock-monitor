@@ -168,6 +168,14 @@ module.exports = function decisionsRoutes(app) {
         holder: holderR.status === "fulfilled" ? holderR.value : null,
         liftBan: liftR.status === "fulfilled" ? liftR.value : [],
       };
+      const [historyV, peerV, catalystV] = await Promise.allSettled([
+        require("../lib/fundamentalTrend").getFundamentalTrend(pool, code),
+        require("../lib/fundamentalTrend").getPeerComparison(pool, code),
+        require("../lib/catalystCalendar").getCatalystCalendar(code, 180),
+      ]);
+      fundamentalsVal.history = historyV.status === "fulfilled" ? historyV.value : [];
+      fundamentalsVal.peer = peerV.status === "fulfilled" ? peerV.value : null;
+      fundamentalsVal.catalysts = catalystV.status === "fulfilled" ? catalystV.value : [];
       let decision = null;
       let fromLLM = false;
       let llmError = null;

@@ -6,6 +6,7 @@
 // - 银行识别：SECURITY_NAME_ABBR 含"银行" → 负债率/ROE 豁免，资本充足率 NEWCAPITALADER 专项
 // ============================================================
 const { getJson } = require("./outbound");
+const { persistFundamentalHistory, getFundamentalTrend, getPeerComparison } = require("./fundamentalTrend");
 
 const DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get";
 
@@ -128,13 +129,17 @@ function computeRightPrice(f, opts = {}) {
 }
 
 // ---------- 主入口：拉数据（表缓存 24h）→ 体检 + 合理价 ----------
-async function getFundamentalCheck(pool, code) {
+async function getFundamentalCheck(pool, code, force = false) {
   // 表缓存（24h TTL）
   try {
     const cached = await pool.query("SELECT name, data, updated_at FROM stock_fundamentals WHERE code=$1", [code]);
-    if (cached.rows.length > 0) {
+    if (!force && cached.rows.length > 0) {
       const ageMs = Date.now() - new Date(cached.rows[0].updated_at).getTime();
-      if (ageMs < 24 * 3600 * 1000) return cached.rows[0].data;
+      if (ageMs < 24 * 3600 * 1000) {
+        const base = cached.rows[0].data;
+        const { getCatalystCalendar } = require("./catalystCalendar");
+        return { ...base, history: await getFundamentalTrend(pool, code), peerComparison: await getPeerComparison(pool, code), catalysts: await getCatalystCalendar(pool, code, 180) };
+      }
     }
   } catch { /* 缓存读失败继续实时拉 */ }
 
@@ -148,6 +153,11 @@ async function getFundamentalCheck(pool, code) {
   if (body.error) return body;
   const rp = computeRightPrice(f);
   const out = { ...body, rightPrice: rp, asOf: new Date().toISOString() };
+  await persistFundamentalHistory(pool, code, f);
+  out.history = await getFundamentalTrend(pool, code);
+  out.peerComparison = await getPeerComparison(pool, code);
+  const { getCatalystCalendar } = require("./catalystCalendar");
+  out.catalysts = await getCatalystCalendar(pool, code, 180);
 
   // 落表缓存（失败不阻塞）
   try {

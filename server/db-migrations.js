@@ -58,10 +58,59 @@ CREATE TABLE IF NOT EXISTS industry_chain_event (
 CREATE INDEX IF NOT EXISTS idx_ice_chain ON industry_chain_event(chain_id, published_at DESC);
 `;
 
+// v9.145.0（P2）：本地 SQL 基本面历史 / 催化剂日历 / cron checkpoint
+const FUNDAMENTAL_HISTORY_SQL = `
+CREATE TABLE IF NOT EXISTS fundamental_history (
+  id SERIAL PRIMARY KEY,
+  code TEXT NOT NULL,
+  name TEXT,
+  report_date DATE NOT NULL,
+  roe NUMERIC,
+  debt NUMERIC,
+  gross NUMERIC,
+  rev_yoy NUMERIC,
+  profit_yoy NUMERIC,
+  eps NUMERIC,
+  cash_ps NUMERIC,
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(code, report_date)
+);
+`;
+
+const CATALYST_CALENDAR_SQL = `
+CREATE TABLE IF NOT EXISTS catalyst_calendar (
+  id SERIAL PRIMARY KEY,
+  code TEXT NOT NULL,
+  name TEXT,
+  type TEXT NOT NULL,
+  title TEXT,
+  event_date DATE NOT NULL,
+  source TEXT,
+  status TEXT DEFAULT 'scheduled',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(code, type, event_date, title)
+);
+CREATE INDEX IF NOT EXISTS idx_catalyst_code_date ON catalyst_calendar(code, event_date);
+`;
+
+const CRON_CHECKPOINT_SQL = `
+CREATE TABLE IF NOT EXISTS cron_checkpoint (
+  task TEXT PRIMARY KEY,
+  last_start TIMESTAMPTZ,
+  last_end TIMESTAMPTZ,
+  last_status TEXT,
+  last_error TEXT,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+`;
+
 async function runMigrations() {
   await pool.query(LOGIC_LEDGER_SQL);
   await pool.query(DECISION_FEEDBACK_SQL);
   await pool.query(CHAIN_EVENT_SQL);
+  await pool.query(FUNDAMENTAL_HISTORY_SQL);
+  await pool.query(CATALYST_CALENDAR_SQL);
+  await pool.query(CRON_CHECKPOINT_SQL);
   await pool.query(`ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE logic_ledger ADD COLUMN IF NOT EXISTS invalidation_conditions JSONB DEFAULT '[]'::jsonb`);
@@ -71,7 +120,7 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_t60 DOUBLE PRECISION`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_source TEXT`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_logic_updated ON logic_ledger(updated_at DESC)`);
-  console.log("[db-migrations] logic_ledger/simulated/chain_event ready");
+  console.log("[db-migrations] logic_ledger/simulated/chain_event/fundamental_history/catalyst/cron ready");
 }
 
 module.exports = { runMigrations };

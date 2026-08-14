@@ -336,7 +336,8 @@ module.exports = function dbRoutes(app) {
       const code = String(req.params.code || "").trim();
       if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
       const { getFundamentalCheck } = require("../lib/fundamentalChecker");
-      const out = await getFundamentalCheck(pool, code);
+      const force = String(req.query.refresh || "") === "1";
+      const out = await getFundamentalCheck(pool, code, force);
       res.json(out);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -523,6 +524,11 @@ module.exports = function dbRoutes(app) {
         require("../lib/researchData").fetchHolderCountServer(code),
         require("../lib/researchData").fetchLiftBanServer(code, 5),
       ]);
+      const [historyR, peerR, catalystsR] = await Promise.allSettled([
+        require("../lib/fundamentalTrend").getFundamentalTrend(pool, code),
+        require("../lib/fundamentalTrend").getPeerComparison(pool, code),
+        require("../lib/catalystCalendar").getCatalystCalendar(code, 180),
+      ]);
       res.json({
         code,
         concepts,                                     // { themes, allBoards, hybk } | null
@@ -533,6 +539,9 @@ module.exports = function dbRoutes(app) {
         surveys: surveyR.status === "fulfilled" ? surveyR.value : [],
         holderCount: holderR.status === "fulfilled" ? holderR.value : null,
         liftBan: liftR.status === "fulfilled" ? liftR.value : [],
+        fundamentalHistory: historyR.status === "fulfilled" ? historyR.value : [],
+        peerComparison: peerR.status === "fulfilled" ? peerR.value : { peerCount: 0, peers: [], metrics: {}, caliber: "本地数据暂不可用" },
+        catalysts: catalystsR.status === "fulfilled" ? catalystsR.value : [],
         watch: watchR.status === "fulfilled" ? watchR.value.rows : [],
         watchLog: watchLogR.status === "fulfilled" ? watchLogR.value.rows : [],
         seats,                                        // 近 45 天席位净买/卖记录

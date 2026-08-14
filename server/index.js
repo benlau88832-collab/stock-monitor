@@ -91,6 +91,7 @@ require("./routes/portfolio")(app);
 require("./routes/portfolioReport")(app);
 require("./routes/swing")(app);
 require("./routes/chain")(app);
+require("./routes/calendar")(app);
 require("./routes/feedback")(app);
 
 require("./routes/cognition")(app);
@@ -145,6 +146,8 @@ initDb().then(async () => {
   try {
     const { runMigrations } = require("./db-migrations");
     await runMigrations();
+  try { const { refreshCatalystCalendar } = require("./lib/catalystCalendar"); await refreshCatalystCalendar(pool); } catch (e) { console.warn("[calendar] refresh failed:", e.message); }
+  try { const { seedFundamentalHistory } = require("./lib/fundamentalTrend"); const sr = await seedFundamentalHistory(pool); console.log("[fundamental] seeded history:", sr.inserted); } catch (e) { console.warn("[fundamental] seed failed:", e.message); }
   } catch (e) { console.warn("[server] db-migrations failed:", e.message); }
   const token = await ensureLocalToken(pool);
   try { const { buildDirection } = require("./routes/swing"); buildDirection().catch((e) => console.warn("[swing] warmup failed:", e.message)); setInterval(() => buildDirection().catch((e) => console.warn("[swing] background refresh failed:", e.message)), 30 * 60 * 1000); } catch (e) { console.warn("[swing] warmup setup failed:", e.message); }

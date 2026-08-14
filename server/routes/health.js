@@ -70,4 +70,13 @@ module.exports = function healthRoutes(app) {
     out.ok = out.checks.every((c) => c.ok);
     res.json(out);
   });
+
+  app.get("/api/health/cron", async (req, res) => {
+    try {
+      const { getCronHealth } = require("../lib/cronAudit");
+      res.json(await getCronHealth(pool));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 };

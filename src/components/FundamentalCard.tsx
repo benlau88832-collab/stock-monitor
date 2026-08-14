@@ -22,6 +22,9 @@ interface FundamentalData {
   bank: boolean;
   error?: string;
   asOf?: string;
+  history?: Array<{ reportDate: string; roe: number | null; debt: number | null; gross: number | null; revYoy: number | null; profitYoy: number | null; eps: number | null; cashPs: number | null }>;
+  peerComparison?: { peerCount: number; peers: Array<{ code: string; name: string }>; metrics: Record<string, number | null> };
+  catalysts?: Array<{ type: string; title: string; eventDate: string }>;
 }
 
 interface Props {
@@ -81,6 +84,45 @@ export default function FundamentalCard({ code, price = null }: Props) {
           合理价 <b>{rp.rightPrice}</b>
           {rpVsPrice != null && <span className="ml-1">({rpVsPrice >= 0 ? "+" : ""}{rpVsPrice.toFixed(1)}%{price != null ? " vs 现价" : "空间"})</span>}
           <span className="block text-[9px] text-slate-600">{rp.note}{rp.annualDate ? ` · 年报 ${rp.annualDate}` : ""}</span>
+        </div>
+      )}
+      {(data.history?.length ?? 0) > 0 && (
+        <div className="rounded bg-white/5 p-1.5">
+          <div className="text-[9px] text-slate-500 mb-0.5">📈 基本面历史趋势（本地 SQL 最近 {data.history!.length} 期）</div>
+          <div className="space-y-0.5">
+            {data.history!.slice(0, 6).map((h, i) => (
+              <div key={i} className="flex gap-1 text-[9px] text-slate-400">
+                <span className="w-20 shrink-0">{h.reportDate}</span>
+                <span>ROE {h.roe != null ? `${h.roe.toFixed(1)}%` : "—"}</span>
+                <span>毛利 {h.gross != null ? `${h.gross.toFixed(1)}%` : "—"}</span>
+                <span>营收 {h.revYoy != null ? `${h.revYoy.toFixed(1)}%` : "—"}</span>
+                <span>净利 {h.profitYoy != null ? `${h.profitYoy.toFixed(1)}%` : "—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {data.peerComparison && (
+        <div className="rounded bg-white/5 p-1.5 text-[9px] text-slate-400">
+          <div className="text-slate-500 mb-0.5">🏭 同行对比（本地 {data.peerComparison.peerCount} 只可比）</div>
+          <div className="flex flex-wrap gap-x-2">
+            <span>PE分位 {data.peerComparison.metrics.pePercentile ?? "未采集"}</span>
+            <span>ROE分位 {data.peerComparison.metrics.roePercentile ?? "未采集"}</span>
+            <span>营收分位 {data.peerComparison.metrics.revYoyPercentile ?? "未采集"}</span>
+          </div>
+          {data.peerComparison.peers.slice(0, 6).map((p, i) => (
+            <span key={i} className="mr-1 text-slate-500">{p.name}({p.code})</span>
+          ))}
+        </div>
+      )}
+      {(data.catalysts?.length ?? 0) > 0 && (
+        <div className="rounded bg-white/5 p-1.5">
+          <div className="text-[9px] text-slate-500 mb-0.5">📅 催化剂日历（未来 180 天，本地 SQL {data.catalysts!.length} 条）</div>
+          <div className="space-y-0.5">
+            {data.catalysts!.slice(0, 5).map((c, i) => (
+              <div key={i} className="text-[9px] text-slate-400"><b className="text-amber-300/80">{c.eventDate}</b> [{c.type}] {c.title}</div>
+            ))}
+          </div>
         </div>
       )}
     </div>
