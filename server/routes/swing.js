@@ -143,6 +143,10 @@ async function buildDirection() {
 module.exports = function swingRoutes(app) {
   app.get("/api/swing/direction", async (_req, res) => {
     try {
+      const cached = await loadCachedDirection();
+      if (cached && Date.now() - new Date(cached.asOf || 0).getTime() < 30 * 60 * 1000) {
+        return res.json(cached);
+      }
       const out = await buildDirection();
       res.json(out);
     } catch (e) {
