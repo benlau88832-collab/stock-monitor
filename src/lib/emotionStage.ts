@@ -34,8 +34,8 @@ export function deriveStage(score: number, premium: number | null, brokenRatePct
 /** 阶段 → 买卖点（与 decisionCore.stageActionOf 同词表；决策层为准，此处供展示复用） */
 export function stageActionOf(stage: EmotionStage): string {
   const map: Record<EmotionStage, string> = {
-    冰点: "低吸首板试错(轻仓)", 退潮: "回避接力，管住手", 启动: "打首板/低吸梯队",
-    发酵: "接力核心龙头", 高潮: "只持不开，防爆头", 分歧: "高低切，减高位",
+    冰点: "底部观察，等待放量企稳", 退潮: "回避新仓，等逻辑重建", 启动: "趋势启动确认，低吸/突破试仓",
+    发酵: "主线确认，回踩分批加仓", 高潮: "持有不追高，分批止盈", 分歧: "减仓观察，等分歧转一致",
   };
   return map[stage] ?? "观望为主";
 }

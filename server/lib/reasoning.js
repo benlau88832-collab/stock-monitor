@@ -90,7 +90,7 @@ function makeForecast(cog, coh) {
       nextWindow: "下一窗口(午后开盘/尾盘)：关注进攻延续性",
       watch: [`${l.name ?? "龙头"}能否封板 / 接力梯队是否扩散(tier2→tier1)`, "两市成交额是否放大", "炸板率是否抬头"],
       conditions: [
-        { iff: `炸板率>${BLAST_RISK_PCT}% 或 昨涨停今溢价转负`, then: "高低切：减高位接力，低吸新主线首板" },
+        { iff: `炸板率>${BLAST_RISK_PCT}% 或 昨涨停今溢价转负`, then: "减仓观察，等分歧转一致" },
         { iff: "龙头放量烂板/尾盘炸板", then: "接力梯队瓦解预警，清跟风" },
       ],
     };
@@ -99,14 +99,14 @@ function makeForecast(cog, coh) {
     return {
       nextWindow: "下一窗口：警惕首分歧",
       watch: ["跟风板是否大面积回落", "龙头是否爆量滞涨"],
-      conditions: [{ iff: "出现首分歧(龙头开板/封单骤减)", then: "只持不开，减仓锁定" }],
+      conditions: [{ iff: "出现首分歧(龙头开板/封单骤减)", then: "减仓观察，等分歧转一致" }],
     };
   }
   // v9.123.0（卓越审查 P1-3）：六阶段全覆盖——启动=进攻试错、分歧=只持不开
   //   （此前启动/分歧/冰点/退潮四阶段全落"防守等待冰点"，与游资战术"打首板"自相矛盾）
   if (stage === "启动") {
     return {
-      nextWindow: "下一窗口：进攻试错，打首板/低吸梯队",
+      nextWindow: "下一窗口：趋势启动确认，低吸/突破试仓",
       watch: ["新主线首板是否放量", "晋级率是否回升", "跌停数是否收敛"],
       conditions: [
         { iff: `炸板率>${BLAST_RISK_PCT}% 或 接力溢价转负`, then: "试错失败：撤出追高，管住手" },
@@ -116,7 +116,7 @@ function makeForecast(cog, coh) {
   }
   if (stage === "分歧") {
     return {
-      nextWindow: "下一窗口：分歧日只持不开",
+      nextWindow: "下一窗口：分歧日减仓观察",
       watch: ["高标是否断板", "是否出现新主线承接"],
       conditions: [{ iff: "分歧转退潮(跌停潮+炸板潮)", then: "清跟风，保留核心底仓" }],
     };

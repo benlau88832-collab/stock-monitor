@@ -69,13 +69,13 @@ describe("v9.121.0 assessTactics（游资战术，S2-1b）", () => {
   });
 
   it("stageActionOf(发酵) === '接力核心龙头'；高潮 → 只持不开", () => {
-    expect(stageActionOf("发酵")).toBe("接力核心龙头");
-    expect(stageActionOf("高潮")).toBe("只持不开，防爆头");
+    expect(stageActionOf("发酵")).toBe("主线确认，回踩分批加仓");
+    expect(stageActionOf("高潮")).toBe("持有不追高，分批止盈");
   });
 
   it("buyPointOf：竞价窗口 → '竞价打板/低吸'；涨停2板 → 回封接力", () => {
-    expect(buyPointOf(null, cogStub(), "竞价")).toBe("竞价打板/低吸");
-    expect(buyPointOf({ code: "600001", limitUp: true, relay: 2 }, cogStub(), "盘中")).toBe("回封接力");
+    expect(buyPointOf(null, cogStub(), "竞价")).toBe("竞价观察，不追高");
+    expect(buyPointOf({ code: "600001", limitUp: true, relay: 2 }, cogStub(), "盘中")).toBe("连板加速，谨慎参与");
   });
 
   it("composeDecisionCore 返回含 tactics（五支柱不动）", () => {

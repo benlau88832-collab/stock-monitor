@@ -62,7 +62,7 @@ describe("v9.120.0 推理层 makeForecast（S1-1b）", () => {
     const coh = assessCoherence(cogStub());
     const fc = makeForecast(cogStub(), coh);
     expect(fc.conditions[0].iff).toContain("炸板率>20%");
-    expect(fc.conditions[0].then).toContain("高低切");
+    expect(fc.conditions[0].then).toContain("减仓观察");
   });
 
   it("高潮 → 首分歧预警；退潮 → 防守等待冰点回暖", () => {
@@ -85,9 +85,9 @@ describe("v9.120.0 推理层 makeForecast（S1-1b）", () => {
       capital: { value: { signal: "出货", netFlow: -12.4, darkVsLight: -6.2 } },
     }));
     const fcS = makeForecast(cogStub({ sentiment: { value: { stage: "启动", score: 55 } } }), cohWeak);
-    expect(fcS.nextWindow).toContain("进攻试错");
+    expect(fcS.nextWindow).toContain("趋势启动确认");
     const fcF = makeForecast(cogStub({ sentiment: { value: { stage: "分歧", score: 55 } } }), cohWeak);
-    expect(fcF.nextWindow).toContain("只持不开");
+    expect(fcF.nextWindow).toContain("减仓观察");
   });
 });
 

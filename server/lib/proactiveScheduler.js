@@ -100,7 +100,7 @@ function runProactiveTick(cog, session, prevStage, reasoning) {
       id: "next-day-playbook",
       phase: session.phase, window: session.window, priority: "P2", kind: "明日剧本",
       title: "明日剧本：两种情景",
-      body: `情景A(主线延续)：低吸梯队 ${(cog?.mainline?.value?.ladder?.tier2 ?? []).join("、") || "tier2"}；情景B(分歧退潮)：高低切，回避高位接力。预算内双情景简述。`,
+      body: `情景A(主线延续)：低吸梯队 ${(cog?.mainline?.value?.ladder?.tier2 ?? []).join("、") || "tier2"}；情景B(分歧退潮)：减仓观察，等分歧转一致。预算内双情景简述。`,
       action: "展开明日自选",
       llmUsed: true, tokenCost: 800,
       evidence: { sampleSize: 2, caliber: "情景推演 N=2，LLM 润色（预算内）", asOf: cog?.asOf ?? "" },

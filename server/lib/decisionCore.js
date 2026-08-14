@@ -40,8 +40,8 @@ function relayEnvScore(cog) {
 /** 情绪周期买卖点（游资核心坐标系） */
 function stageActionOf(stage) {
   const map = {
-    冰点: "低吸首板试错(轻仓)", 退潮: "回避接力，管住手", 启动: "打首板/低吸梯队",
-    发酵: "接力核心龙头", 高潮: "只持不开，防爆头", 分歧: "高低切，减高位",
+    冰点: "底部观察，等待放量企稳", 退潮: "回避新仓，等逻辑重建", 启动: "趋势启动确认，低吸/突破试仓",
+    发酵: "主线确认，回踩分批加仓", 高潮: "持有不追高，分批止盈", 分歧: "减仓观察，等分歧转一致",
   };
   return map[stage] ?? "观望为主";
 }
@@ -49,16 +49,16 @@ function stageActionOf(stage) {
 /** 买点时机（时段/涨停状态/量价）—— sessionPhase 可选注入（服务端 currentSession；前端本地时间） */
 function buyPointOf(stock, cog, sessionPhase) {
   const isAuction = sessionPhase === "竞价" || /09:2/.test(cog?.session?.window ?? "");
-  if (isAuction) return "竞价打板/低吸";
-  if (stock?.limitUp && (stock?.relay ?? 0) >= 2) return "回封接力";
+  if (isAuction) return "竞价观察，不追高";
+  if (stock?.limitUp && (stock?.relay ?? 0) >= 2) return "连板加速，谨慎参与";
   if (!stock?.limitUp && (stock?.pct ?? 0) >= 3 && (stock?.pct ?? 0) <= 7 && (stock?.mainNet ?? 0) > 0) return "回踩低吸";
-  if (stock?.limitUp && (stock?.relay ?? 0) === 1) return "首板打板(需量能)";
-  return "盘中分时确认";
+  if (stock?.limitUp && (stock?.relay ?? 0) === 1) return "放量首板后低吸";
+  return "回踩确认";
 }
 
 /** 卖点纪律（阶段决定） */
 function sellDisciplineOf(stage) {
-  return stage === "高潮" || stage === "分歧" ? "断板即走；烂板减半；14:50未封减仓" : "破均线/量能背离减仓；止损不犹豫";
+  return stage === "高潮" || stage === "分歧" ? "破位或逻辑转弱分批止盈，不追高" : "破均线/量能背离减仓；止损不犹豫";
 }
 
 /** 梯队位置（主线 tier1/tier2） */
