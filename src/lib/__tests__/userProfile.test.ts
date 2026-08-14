@@ -77,6 +77,17 @@ describe("P1-1 userProfile 用户画像", () => {
     expect(txt).toContain("AI");
   });
 
+  it("旧置信0不显示平均置信0%误导", () => {
+    const p: UserProfile = {
+      updatedAt: 1, style: "swing", totalPosts: 4, confirmRate: 0.5, avgConfidence: 0,
+      avgPnlT5: null, recentMaxDrawdown: null, lossStreak: 0, mainlineStats: {}, riskTendency: 0, feedbackStats: {},
+    };
+    const txt = profileToPrompt(p);
+    expect(txt).toContain("确认拍板 2 次");
+    expect(txt).toContain("样本不足");
+    expect(txt).not.toContain("平均置信 0%");
+  });
+
   // v9.137.0（审查 P1-11）：快速反馈聚合测试 —— reject 拍板带 [反馈:overconfident] notes → 画像统计
   it("否决反馈聚合：notes 的 [反馈:key] 计入 feedbackStats 并在 prompt 展示", () => {
     const today = new Date();

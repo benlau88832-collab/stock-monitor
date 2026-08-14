@@ -30,6 +30,12 @@ describe("checkLedgerAlerts（shared 单源）", () => {
     expect(a.some(x => x.type === "board_ebb" && x.severity === "warning")).toBe(true);
   });
 
+  it("板块健康未知不误报退潮", () => {
+    const e = mk({ board: "有色金属" });
+    const a = checkLedgerAlerts(e, { price: null, boardHealthy: null, today: "2026-08-14" });
+    expect(a.some(x => x.type === "board_ebb")).toBe(false);
+  });
+
   it("已离场不提醒", () => {
     expect(checkLedgerAlerts(mk({ status: "已离场", breakLine: 10 }), { price: 9, boardHealthy: null })).toEqual([]);
   });
