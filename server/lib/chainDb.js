@@ -3,6 +3,7 @@
 // ============================================================
 const { pool } = require("../db");
 const { CHAIN_KB, locateChain } = require("../../src/shared/transmission-chain.js");
+const { getJson } = require("./outbound");
 
 async function ensureChainKb(p) {
   const r = await p.query("SELECT count(*)::int AS n FROM industry_chain");
@@ -44,6 +45,15 @@ async function findBoards(p, code) {
   return [...new Set(candidates.filter(Boolean))];
 }
 
+async function fetchMainBusiness(code) {
+  const url = `https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=RPT_F10_FN_MAINOP&columns=ALL&filter=(SECURITY_CODE%3D%22${code}%22)&pageNumber=1&pageSize=40&sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=WEB`;
+  try {
+    const r = await getJson(url, { timeout: 6000, source: "datacenter" });
+    const list = Array.isArray(r.data?.result?.data) ? r.data.result.data : [];
+    const latest = String(list[0]?.REPORT_DATE ?? "").slice(0, 10);
+    return { reportDate: latest, items: list.filter((x) => String(x.REPORT_DATE).startsWith(latest)).map((x) => ({ name: String(x.ITEM_NAME ?? ""), ratio: Number(x.MBI_RATIO) || 0 })) };
+  } catch { return { reportDate: null, items: [] }; }
+}
 async function mapStockToChain(p, code, boards) {
   for (const b of boards) {
     const hit = locateChain(b);
@@ -57,6 +67,13 @@ async function mapStockToChain(p, code, boards) {
        ON CONFLICT(node_id,stock_code) DO NOTHING`,
       [nodeId, code, `板块匹配：${b}`],
     );
+    const mb = await fetchMainBusiness(code);
+    const keywords = [...(hit.chain.nodes[hit.nodeIdx].keywords || []), b];
+    const preferred = ["电池", "储能", "新能源", "能源", "锂", "光", "电力", "电网"];
+    const hitItem = mb.items.find((x) => keywords.some((k) => k && (x.name.includes(k) || k.includes(x.name)))) || preferred.map((k) => mb.items.find((x) => x.name.includes(k))).find(Boolean);
+    if (hitItem && hitItem.ratio > 0) {
+      await p.query(`UPDATE industry_chain_node_stock SET exposure_pct=$1, role_note=$2, confirmed_at=now() WHERE node_id=$3 AND stock_code=$4`, [Math.round(hitItem.ratio * 10000) / 10000, `主营：${hitItem.name} ${(hitItem.ratio * 100).toFixed(2)}%（${mb.reportDate}）`, nodeId, code]);
+    }
     return { nodeId, chainId: hit.chain.id, chainName: hit.chain.name, nodeName: hit.chain.nodes[hit.nodeIdx].name, board: b };
   }
   return null;
@@ -74,6 +91,8 @@ async function getChainDbContext(p, code) {
      WHERE n.id=$1`, [mapped.nodeId],
   );
   const node = nodeR.rows?.[0];
+  const stockR = await p.query(`SELECT exposure_pct,role_note,source,confirmed_at FROM industry_chain_node_stock WHERE node_id=$1 AND stock_code=$2`, [mapped.nodeId, code]);
+  const stockMap = stockR.rows?.[0];
   if (!node) return { mapped: false, boards, chain: null };
 
   const nodesR = await p.query(`SELECT name,sequence FROM industry_chain_node WHERE chain_id=$1 ORDER BY sequence`, [node.chain_id]);
@@ -98,7 +117,8 @@ async function getChainDbContext(p, code) {
       downstream,
       atHead: idx === 0,
       atTail: idx === nodes.length - 1,
-      exposurePct: null,
+      exposurePct: stockMap?.exposure_pct ?? null,
+      exposureNote: stockMap?.role_note ?? null,
       signals: signalR.rows,
     },
   };
