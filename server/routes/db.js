@@ -535,7 +535,10 @@ module.exports = function dbRoutes(app) {
         kline: indicatorsR.status === "fulfilled" ? indicatorsR.value.klines : [],
         sentimentWindows: (() => {
           const { sentimentWindowStats } = require("../lib/keywordSentiment");
-          return { window7: sentimentWindowStats(newsAllRowsR.rows, 7), window30: sentimentWindowStats(newsAllRowsR.rows, 30) };
+          const annRows = (annsR.status === "fulfilled" ? annsR.value.rows : [])
+            .map(r => ({ title: r.title, time: r.time }));
+          const allRows = [...newsAllRowsR.rows, ...annRows];
+          return { window7: sentimentWindowStats(allRows, 7), window30: sentimentWindowStats(allRows, 30) };
         })(),
         asOf: todayStr,
       });

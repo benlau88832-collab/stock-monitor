@@ -4,6 +4,7 @@
 //   用同一份超集 payload 对比 system/user 输出与 TASK_CONFIG 参数。
 import { describe, it, expect } from "vitest";
 import { buildPrompt as feBuild, TASK_CONFIG as feCfg } from "../aiPrompts";
+import { FALLBACKS as feFallbacks } from "../aiPrompts";
 // @ts-ignore 服务端 CJS 无 .d.ts
 import { buildPrompt as svBuild, TASK_CONFIG as svCfg } from "../../../server/lib/aiPrompts.js";
 
@@ -52,6 +53,13 @@ describe("v9.88.0 buildPrompt golden 一致性（前端 ↔ 服务端）", () =>
     for (const k of feKeys) {
       expect(svCfg[k], k).toEqual(feCfg[k as keyof typeof feCfg]);
     }
+  });
+
+  it("AI 督导降级不得输出原始上下文或行情", () => {
+    const text = feFallbacks.supervisor({ user: "涨跌=-349.00% 主力=-622971376万 用户问题" } as never);
+    expect(text).toContain("AI 督导暂不可用");
+    expect(text).not.toContain("用户问题");
+    expect(text).not.toContain("涨跌");
   });
 
   it("27 个 task 的 system+user 输出逐字一致", () => {

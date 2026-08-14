@@ -971,7 +971,7 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                   </div>
                   {/* K线卡（5 列）—— 手绘蜡烛 6 周期 */}
                   <div className="lg:col-span-5">
-                    <KlineCard klines={aggData.kline ?? []} name={aggData.concepts?.themes?.[0] ?? selected ?? ""} />
+                    <KlineCard klines={aggData.kline ?? []} name={stocks[selected]?.name ?? selected ?? ""} />
                   </div>
                   {/* AI 研判卡（4 列）—— 与行情同权重（tinavi 关键决策） */}
                   <div className="lg:col-span-4 rounded-lg border border-white/10 bg-black/20 p-2 flex flex-col">

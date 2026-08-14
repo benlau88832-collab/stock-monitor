@@ -6,6 +6,12 @@ import { fetchStockNews, fetchStockAnnouncements } from "../lib/api";
 import { getAllSince, getAllOnDate } from "../lib/dataStore";
 import { computeStats, formatStatsForPrompt } from "../lib/intelStats";
 import { localDateStr, localDateStrOffset } from "../lib/format";
+function formatMainNet(v: number | null | undefined): string {
+  const n = Number(v ?? 0);
+  const a = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  return `${sign}${a >= 1e8 ? `${(a / 1e8).toFixed(2)}亿` : `${(a / 1e4).toFixed(0)}万`}`;
+}
 
 // ============== 聊天消息类型 ==============
 interface ChatMsg {
@@ -205,7 +211,7 @@ async function buildSupervisorPrompt(question: string): Promise<{ system: string
         const annStr = sAnns.map(a => a.title).join("; ") || "无";
         
         const quoteStr = quote 
-          ? `价格=${quote.price.toFixed(2)} 涨跌=${(quote.pct * 100).toFixed(2)}% 主力=${quote.mainNet > 0 ? '+' : ''}${quote.mainNet.toFixed(0)}万`
+          ? `价格=${quote.price.toFixed(2)} 涨跌=${Number(quote.pct ?? 0).toFixed(2)}% 主力=${formatMainNet(quote.mainNet)}`
           : "行情暂缺";
         
         wl.push(`${code} ${quote?.name || ''}: ${quoteStr} | 消息:${newsItems} | 公告:${annStr}`);

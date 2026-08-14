@@ -68,7 +68,7 @@ export default function DisciplinePanel({ overview }: { overview?: OverviewData 
   const submitTrade = async () => {
     const price = parseFloat(tradeForm.price);
     const quantity = parseFloat(tradeForm.quantity);
-    if (!tradeForm.code || !isFinite(price) || price <= 0) return;
+    if (!tradeForm.code || !isFinite(price) || price <= 0 || !isFinite(quantity) || quantity <= 0) return;
     const action = tradeForm.action;
     const pos = portfolio.positions.find((x) => x.code === tradeForm.code.trim());
     const cost = action === "buy" ? price : (pos?.avgCost ?? null);
@@ -77,7 +77,7 @@ export default function DisciplinePanel({ overview }: { overview?: OverviewData 
       name: tradeForm.name.trim() || tradeForm.code.trim(),
       action,
       price,
-      quantity: isFinite(quantity) && quantity > 0 ? quantity : 100,
+      quantity,
       cost,
       notes: "纪律面板成交录入",
     });

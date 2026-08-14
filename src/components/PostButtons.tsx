@@ -29,6 +29,7 @@ interface Props {
 export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = null, priceAtPost = null, hookCtx }: Props) {
   const [posted, setPosted] = useState<HumanAction | null>(null);
   const [note, setNote] = useState("");
+  const [qty, setQty] = useState("");
   const lastTicketId = useRef<string | null>(null);
 
   // 仅当有 AI 或规则裁决时才显示按钮（无 agentVerdict 时仍可显示，使用户随手记一句"否决"）
@@ -103,7 +104,8 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
     if (action === "confirm") {
       try {
         const { runPostHook } = await import("../lib/hookDecisionPost");
-        const hook = await runPostHook(post as DecisionPost, hookCtx);
+        const hook = await runPostHook(post as DecisionPost, { ...(hookCtx ?? {}), quantity: code ? Math.round(Number(qty) || 0) : null });
+        if (hook.error) emitAlert({ id: `post_hook_${post.ticketId}`, severity: "warning", message: hook.error });
         if (hook.addedToDiscipline) {
           emitAlert({ id: `post_disc_${post.ticketId}`, severity: "info", message: `已加入纪律面板持仓（默认 20% 仓位，可到纪律面板修订）` });
         }
@@ -137,6 +139,7 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
           🚫 否决回避
         </button>
       </div>
+      {code && <input value={qty} onChange={(e) => setQty(e.target.value)} placeholder="成交数量（确认上车必填）" className="w-full px-2 py-1 text-xs rounded bg-slate-950/60 border border-slate-700 text-slate-200 focus:outline-none focus:border-sky-500" />}
       {/* v9.137.0（审查 P1-11）：快速反馈 chips —— 否决/观望时点选理由，反哺 AI 置信校准 */}
       <div className="flex flex-wrap gap-1">
         {FEEDBACK_OPTIONS.map(o => (

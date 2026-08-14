@@ -46,6 +46,12 @@ export function getResearchTools(): AgentTool[] {
       execute: async (args: any) => serverGet(`/api/research/search?q=${encodeURIComponent(String(args?.q ?? ""))}`),
     },
     {
+      name: "chainContext",
+      description: '查询个股产业链上下文：传入 {code}，返回该股所在产业链、上下游节点、资金/涨停信号。深度调研 Phase 3 必须先用本工具，禁止跳过产业链直接搜索行业。',
+      kind: "data",
+      execute: async (args: any) => serverGet(`/api/chain/context?code=${encodeURIComponent(String(args?.code ?? ""))}`),
+    },
+    {
       name: "addPriceWatch",
       description: '把个股加入盯价监控清单（跌到买入区 ±5% 强提示）—— 传 {code,name,buy_low,buy_high,stop_loss?,trigger_pct?}，如 {"code":"600522","name":"中天科技","buy_low":30,"buy_high":32,"stop_loss":27.5}',
       kind: "data",
@@ -104,7 +110,7 @@ export const RESEARCH_SYSTEM = `【个股深度调研流程 · stock-deep-resear
 - Phase 0 鹰眼速览：researchQuote 核实代码（防相似代码混淆）+ 最新价/估值/近期涨跌 → 给"第一印象"
 - Phase 1 财务骨架：researchData 查财务三表/业绩/现金流 → 财务质量判断
 - Phase 2 消息面：researchSearch 查最新研报/公告/新闻 → 机构预期与消息催化
-- Phase 3 行业博弈：researchData/researchSearch 查行业对比/景气/风险 → 行业判断
+- Phase 3 行业博弈：先 chainContext 查该股所在产业链与上下游节点，再 researchData/researchSearch 查景气/风险 → 行业判断（产业链未收录时必须明确说明“未收录，待补充”）
 - Phase 4 综合评级：汇总前四阶段 → 三档估值（乐观/合理/悲观）→ 合理目标价区间 → 支撑压力位 → 胜率×赔率 → 评级与建议操作
 最后：主动询问是否把结论（买入区/止损位）加入盯价监控（addPriceWatch），并说明可随时 listWatches 查看。
 【v9.67 联动】若用户想持续跟踪该股：先 addToRadar 加入个股雷达（自选股），再 addPriceWatch 开启盯价监控（买入区±5%强提示）——两步可一次完成，并在回复中说明已加入。`;

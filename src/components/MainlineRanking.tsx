@@ -41,12 +41,13 @@ export default function MainlineRanking({ battlePlan, loading }: {
 
   // 按强度分降序（LLM 精排结果 llmRanked 已在 App 端重排 candidates，这里再兜底一次）
   const rows = [...candidates].sort((a, b) => {
-    // v9.91.2："其他"沉底（LLM 归类杂股组不占榜首）
+    // v9.91.2：“其他”沉底（LLM 归类杂股组不占榜首）
     const aOther = a.mainline === "其他" ? 1 : 0;
     const bOther = b.mainline === "其他" ? 1 : 0;
     if (aOther !== bOther) return aOther - bOther;
     return (b.strengthScore ?? b.score) - (a.strengthScore ?? a.score);
   });
+  const missing = (c: MainlineGroup) => new Set(c.strengthMissing ?? []);
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4">
@@ -83,6 +84,7 @@ export default function MainlineRanking({ battlePlan, loading }: {
               const leader = c.leaders[0];
               const badge = actionBadge(c);
               const stage = stageOfStrength(c);
+              const miss = missing(c);
               return (
                 <tr key={c.mainline} className={`border-b border-white/5 ${rowBg}`}>
                   <td className="py-2 pr-2 text-slate-500">{i + 1}</td>
@@ -97,10 +99,10 @@ export default function MainlineRanking({ battlePlan, loading }: {
                   <td className="py-2 pr-2 text-right text-slate-300">{c.ztCount}只</td>
                   <td className="py-2 pr-2 text-right text-slate-300">{c.height}板</td>
                   <td className="py-2 pr-2 text-right text-slate-400">
-                    {c.strengthFactors?.promotion != null ? `${c.strengthFactors.promotion}` : "—"}
+                    {miss.has("晋级率") ? "未采集" : c.strengthFactors?.promotion != null ? `${c.strengthFactors.promotion}` : "—"}
                   </td>
                   <td className="py-2 pr-2 text-right text-slate-400">
-                    {c.strengthFactors?.turnover != null ? `${c.strengthFactors.turnover}` : "—"}
+                    {miss.has("换手率") ? "未采集" : c.strengthFactors?.turnover != null ? `${c.strengthFactors.turnover}` : "—"}
                   </td>
                   <td className="py-2 pr-2 text-right">
                     {/* v9.59-fix（V8-6）：资金匹配失败 → "⚠未匹配"而非假 0 */}
@@ -131,7 +133,7 @@ export default function MainlineRanking({ battlePlan, loading }: {
                     {c.strengthCompleteness != null ? (
                       <span className={c.strengthCompleteness >= 0.75 ? "text-emerald-300" : c.strengthCompleteness >= 0.5 ? "text-amber-300" : "text-rose-300"}
                         title={`缺失字段：${c.strengthMissing?.join("、") || "无"}`}>
-                        {Math.round(c.strengthCompleteness * 100)}%
+                        {c.strengthMissing?.length ? "未采集" : Math.round(c.strengthCompleteness * 100) + "%"}
                       </span>
                     ) : "—"}
                   </td>

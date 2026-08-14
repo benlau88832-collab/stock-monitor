@@ -100,6 +100,15 @@ export function useMarketData() {
     return "dashboard";
   })();
   const [active, setActive] = useState<TabKey>(initialTab);
+  useEffect(() => {
+    const onHash = () => {
+      const h = window.location.hash.replace("#", "");
+      const keys: TabKey[] = ["dashboard", "fundline", "radar", "dragon", "news"];
+      if (keys.includes(h as TabKey)) setActive(h as TabKey);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   // v9.92.0（上下文感知）：active 变化（含初始化）同步登记全局 UI 上下文 —— AIConsole/AskAI 感知当前页
   useEffect(() => {
     import("../lib/uiContext").then(m => m.setActiveTab(active)).catch(() => {});

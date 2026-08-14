@@ -38,7 +38,7 @@ async function checkAuth(req, res) {
 
 // 短 TTL 缓存（5 秒），降低东财限流风险
 const cache = new Map();
-const TTL = 5000;
+const TTL = 30000;
 
 // v9.30.3：模拟浏览器 UA（node 默认 "node" 会被 emappdata 等接口 ban 导致 socket hang up）
 const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -167,6 +167,19 @@ function forward(req, res, target, bodyBuf) {
   const { url: u } = checkTarget(target);
   // v9.99.0：分级冷却快速失败 —— WAF 断流(403/ECONNRESET)期间不再逐请求重试加速被封
   if (isCircuitOpen(u.hostname)) {
+    if (!bodyBuf) {
+      try {
+        const cu = new URL(target);
+        cu.searchParams.delete("req_trace");
+        cu.searchParams.delete("_");
+        const stale = cache.get(cu.toString());
+        if (stale) {
+          res.set("X-Data-Source", "circuit-stale");
+          res.set("Content-Type", stale.type);
+          return res.send(stale.body);
+        }
+      } catch { /* fallthrough */ }
+    }
     res.set("X-Data-Source", "circuit-open");
     return res.status(502).json({ error: "circuit open (source cooling)" });
   }

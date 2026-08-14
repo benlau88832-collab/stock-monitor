@@ -420,10 +420,12 @@ ${JSON.stringify(themes.map(t => ({
           });
           // v9.136.0（主线单源）：收集主题涨停信息（强度分输入；mainNet5d 取资金匹配值）
           const thFund = fundMatchForTheme(th.name);
+                    const themeTurnover = themeStocks.length > 0 ? themeStocks.reduce((sum, s) => sum + Number(s.hs ?? 0), 0) / themeStocks.length : null;
           ztInfo.set(th.name, {
             ztCount: themeStocks.length,
             height: themeStocks.reduce((m, s) => Math.max(m, Number(s.lbc ?? s.lbc ?? 1) || 1), 1),
             mainNet5d: thFund?.mainNet5d ?? 0,
+            turnoverRate: themeTurnover,
           });
           // 3b. 排序选股（封单 > 连板 > 涨幅，取 2-3 只）
           const picks = themeStocks
@@ -446,7 +448,7 @@ ${JSON.stringify(themes.map(t => ({
       const totalZt = arr.length;
       const totalMaxHeight = arr.reduce((m, s) => Math.max(m, Number(s.lbc ?? 1) || 1), 1);
       for (const th of themes) {
-        const zi = ztInfo.get(th.name) ?? { ztCount: 0, height: 1, mainNet5d: 0 };
+        const zi = ztInfo.get(th.name) ?? { ztCount: 0, height: 1, mainNet5d: 0, turnoverRate: null };
         const r = calcMainlineStrength({
           ztCount: zi.ztCount,
           totalZtCount: totalZt,
@@ -456,7 +458,7 @@ ${JSON.stringify(themes.map(t => ({
           mainNet5d: zi.mainNet5d,
           mainNet10d: null,
           boardPct: 0,
-          turnoverRate: null,
+          turnoverRate: zi.turnoverRate ?? null,
           catalystStrength: (th.evidence?.length ?? 0) > 0 ? 60 : 50, // 有新闻催化 → 略加分（与前端 newsTitles 判定一致）
         });
         th.ztCount = zi.ztCount;

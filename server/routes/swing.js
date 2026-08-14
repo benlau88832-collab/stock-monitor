@@ -112,6 +112,7 @@ async function buildDirection() {
         catalystsTop: c2.catalystsTop, signals: [...f.signals, ...c2.signals, "板块K线暂不可用，使用资金/涨停数据"],
       };
       results.push(s);
+      raw.push({ score: s, klines: [], fundSeq });
     }
   });
   await Promise.allSettled(tasks);

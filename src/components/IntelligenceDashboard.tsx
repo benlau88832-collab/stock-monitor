@@ -74,6 +74,10 @@ export default function IntelligenceDashboard({ news, announcements, strongBoard
   // 指定日期分析：用户可选某一天，"📅 分析该日"时只取该天数据
   const [customDate, setCustomDate] = useState<string>("");
   const triggeredSlots = useRef<Set<IntelSlot>>(loadTrig(today));
+  useEffect(() => {
+    if (sourceCount.news === 0 && news.length > 0) setSourceCount((prev) => ({ ...prev, news: news.length }));
+    if (sourceCount.ann === 0 && announcements.length > 0) setSourceCount((prev) => ({ ...prev, ann: announcements.length }));
+  }, [news.length, announcements.length, sourceCount.news, sourceCount.ann]);
   // v9.26.8：本地部署时缓存 PG 全量数据（供分析直接用，绕过 localStorage 5MB 限制）
   const cloudDataRef = useRef<CloudAnalysisData | null>(null);
   const cloudLoadedRef = useRef(false);

@@ -55,12 +55,12 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   weeklyCoach: { temperature: 0.4, maxTokens: 3000, thinking: true },
   stockJudge:  { temperature: 0.3, maxTokens: 8000, thinking: true },
   mainlineClassify: { temperature: 0.1, maxTokens: 8000, thinking: false }, // v9.111.0（R-2）：长输出提档
-  mainlineDiagnosis: { temperature: 0.2, maxTokens: 3000, thinking: false },
+  mainlineDiagnosis: { temperature: 0.2, maxTokens: 6000, thinking: true },
   // v9.26 F-05：主线精排专用任务 —— 低延迟确定性优先（thinking=false、低温、小输出）
   mainlineRank: { temperature: 0.1, maxTokens: 2000, thinking: false },
   // v9.26 A.6：异动事件一句话解释（事件驱动，每 eventId 一次，小 schema）
   eventExplain: { temperature: 0.2, maxTokens: 2000, thinking: false },
-  supervisor:  { temperature: 0.4, maxTokens: 4000, thinking: false },
+  supervisor:  { temperature: 0.4, maxTokens: 8000, thinking: true },
   policyDiff:  { temperature: 0.2, maxTokens: 3000, thinking: true },
   // v9.28（P1-9）：独立业务 task —— 主题新闻评分 / 个股新闻评分 / 每日情报
   // 均关闭 thinking（结构化 JSON 输出），避免此前复用 stockJudge(thinking=true) 的高延迟与配额浪费
@@ -75,9 +75,9 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   // v9.38（V3-12）：事件三级分类（政策级/行业级/事件级）—— 批量小输出
   eventClassify:   { temperature: 0.1, maxTokens: 2000, thinking: false },
   // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
-  eventDeepDive:   { temperature: 0.3, maxTokens: 2000, thinking: false },
+  eventDeepDive:   { temperature: 0.3, maxTokens: 6000, thinking: true },
   // v9.41（V4-A）：Agent 工具推理
-  agentReason:     { temperature: 0.2, maxTokens: 8000, thinking: false }, // v9.111.0（R-2）：恒思考+JSON+工具结果最吃 token
+  agentReason:     { temperature: 0.2, maxTokens: 8000, thinking: true }, // v9.111.0（R-2）：恒思考+JSON+工具结果最吃 token
   // v9.75（阶段三）：Critic 挑刺 —— 独立小任务（不再复用 dailyIntel 2000 token 配置）
   criticReview:    { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.75（阶段二）：失效因子归因 —— 小输出结构化
@@ -96,7 +96,7 @@ export const TASK_CONFIG: Record<AITask, TaskConfigItem> = {
   // v9.95.3：个股聚合研判 —— 中等输出结构化
   stockAggregate: { temperature: 0.2, maxTokens: 2000, thinking: false },
   // v9.96.0：情绪叙事报告 —— 中温长文（Markdown）
-  emotionReport: { temperature: 0.4, maxTokens: 3000, thinking: false },
+  emotionReport: { temperature: 0.4, maxTokens: 6000, thinking: true },
 };
 
 // ============== 任务负载类型 ==============
@@ -491,7 +491,7 @@ export const FALLBACKS: { [K in AITask]: FF<K> } = {
   mainlineClassify: (p) => `主线归类规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n按申万行业 hybk 分组。`,
   mainlineRank: (p) => `主线精排规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n按规则引擎分数排序。`,
   eventExplain: (p) => `异动解释规则版（LLM不可用）：\n${p.prompt.slice(0, 200)}...\n请以规则卡原因为准。`,
-  supervisor: (p) => `AI督导暂不可用，请稍后重试。\n\n提问：${p.user.slice(-100)}`,
+  supervisor: (_p) => `AI 督导暂不可用，本次不输出研判结论。请稍后重试。`,
   policyDiff: (p) => `政策摘要：\n${p.policyText.slice(0, 200)}...\n规则版无法深度对比。`,
   themeNewsScore: (_p) => JSON.stringify([{ theme: "未知", score: 50, reason: "规则版（LLM不可用）" }]),
   stockNewsScore: (_p) => JSON.stringify({ score: 50, sentiment: "中性", reason: "规则版（LLM不可用）" }),

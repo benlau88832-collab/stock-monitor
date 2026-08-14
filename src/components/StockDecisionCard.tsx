@@ -1,14 +1,11 @@
-import { useState } from "react";
-import { BookOpen, Check, Target, Wallet } from "lucide-react";
 import { fmtMoney, fmtPct } from "../lib/format";
 import type { WatchStock, VetoItem } from "./StockWatchlist";
 import DisclaimerTag from "./DisclaimerTag";
 import { checkStockExit, exitBadge } from "../lib/stockExit";
 import { orderUrl } from "../lib/realLinks";
-import { apiFetch, isLocalServer } from "../lib/cloudStore";
-import { buildPost, savePost } from "../lib/decisionPost";
 import { usePortfolio } from "../hooks/usePortfolio";
 import AskAI from "./AskAI";
+import DecisionActionPanel from "./DecisionActionPanel";
 
 interface Props {
   stock: WatchStock;
@@ -60,8 +57,6 @@ function stopRef(s: WatchStock) {
 
 export default function StockDecisionCard({ stock, vetoList, mainlines = [], cost = null, classify = null }: Props) {
   const portfolio = usePortfolio();
-  const [actionMsg, setActionMsg] = useState("");
-  const [actionErr, setActionErr] = useState("");
   const pos = techPosition(stock);
   const fund = fundNature(stock);
   const own = mainlineOwn(stock, mainlines, classify);
@@ -87,36 +82,6 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
           ? { label: "谨慎参与", color: "bg-amber-500/20 text-amber-300 border-amber-500/40" }
           : { label: "观望", color: "bg-slate-500/20 text-slate-400 border-slate-500/40" };
   const confidence = vetoed ? 40 : 65 + (stock.volumeRatio ? 10 : 0) + (stock.turnoverRate ? 5 : 0);
-
-  const runAction = async (action: "watch" | "logic" | "paper" | "real") => {
-    if (!isLocalServer()) return;
-    setActionMsg(""); setActionErr("");
-    try {
-      if (action === "watch") {
-        const price = stock.price > 0 ? stock.price : null;
-        if (!price) throw new Error("现价不可用，无法设置盯盘区间");
-        const r = await apiFetch("/api/watch/add", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: stock.code, name: stock.name, buy_low: Math.round(price * 0.98 * 100) / 100, buy_high: Math.round(price * 1.02 * 100) / 100, stop_loss: Math.round(price * 0.95 * 100) / 100, trigger_pct: 5, status: "active", note: "个股决策卡" }),
-        });
-        if (!r.ok) throw new Error("加盯盘失败");
-      }
-      if (action === "logic" || action === "paper" || action === "real") {
-        await portfolio.saveLogic({
-          code: stock.code, name: stock.name,
-          thesis: `${conclusion.label}：${own.label}；${fund.label}；${pos.label}`,
-          breakLine: stock.price > 0 ? Math.round(stock.price * 0.95 * 100) / 100 : null,
-          board: null, status: "验证中", simulated: action === "paper",
-        });
-      }
-      if (action === "paper" || action === "real") {
-        const post = buildPost({ code: stock.code, mainline: null, humanAction: "confirm", priceAtPost: stock.price, notes: action === "paper" ? "纸上确认" : "真实成交", simulated: action === "paper" });
-        await savePost(post);
-        await portfolio.addTrade({ code: stock.code, name: stock.name, action: "buy", price: stock.price, quantity: 100, cost: stock.price, simulated: action === "paper", notes: action === "paper" ? "纸上确认" : "真实成交" });
-      }
-      setActionMsg(action === "watch" ? "已加入盯盘" : action === "logic" ? "已录逻辑台账" : action === "paper" ? "纸上确认已记录" : "真实成交已记录");
-    } catch (e) { setActionErr(String(e)); }
-  };
 
   const Row = ({ k, children }: { k: string; children: React.ReactNode }) => (
     <div className="flex justify-between gap-3 text-xs">
@@ -151,14 +116,7 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
             <a href={orderUrl(stock.code, "dfcf")} className="rounded px-1.5 py-0.5 text-[10px] bg-amber-500/20 text-amber-300 hover:bg-amber-500/30">东财</a>
           </div>
         </Row>
-        <div className="grid grid-cols-2 gap-1 pt-1">
-          <button onClick={() => runAction("watch")} className="inline-flex items-center justify-center gap-1 rounded bg-sky-500/15 px-2 py-1 text-[10px] font-bold text-sky-300 hover:bg-sky-500/30"><Target className="h-3 w-3" /> 加盯盘</button>
-          <button onClick={() => runAction("logic")} className="inline-flex items-center justify-center gap-1 rounded bg-teal-500/15 px-2 py-1 text-[10px] font-bold text-teal-300 hover:bg-teal-500/30"><BookOpen className="h-3 w-3" /> 录逻辑</button>
-          <button onClick={() => runAction("paper")} className="inline-flex items-center justify-center gap-1 rounded bg-violet-500/15 px-2 py-1 text-[10px] font-bold text-violet-300 hover:bg-violet-500/30"><Check className="h-3 w-3" /> 纸上确认</button>
-          <button onClick={() => runAction("real")} className="inline-flex items-center justify-center gap-1 rounded bg-emerald-500/15 px-2 py-1 text-[10px] font-bold text-emerald-300 hover:bg-emerald-500/30"><Wallet className="h-3 w-3" /> 记真实成交</button>
-        </div>
-        {actionMsg && <div className="rounded bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-300">{actionMsg}</div>}
-        {actionErr && <div className="rounded bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300">{actionErr}</div>}
+        <DecisionActionPanel code={stock.code} name={stock.name} price={stock.price} defaultThesis={`${conclusion.label}：${own.label}；${fund.label}；${pos.label}`} confidenceAtPost={confidence} addTrade={portfolio.addTrade} saveLogic={portfolio.saveLogic} />
       </div>
       <AskAI
         code={stock.code}

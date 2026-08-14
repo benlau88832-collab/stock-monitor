@@ -114,7 +114,7 @@ export default function TopNav({ active, onChange, loading, autoRefresh, onToggl
               <div className="text-[11px] text-slate-500">资金结构 · 涨跌幅 · 风险信号 · 机会信号</div>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap min-w-0">
             {/* P2-2：当前交易阶段指示器（时间轴感知） */}
             <span className="mr-1 hidden md:inline rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-bold text-slate-400"
               title="当前交易时段">

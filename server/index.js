@@ -89,6 +89,7 @@ require("./routes/db")(app);
 // v9.142.0 unified portfolio/trade/logic ledger + server swing direction
 require("./routes/portfolio")(app);
 require("./routes/swing")(app);
+require("./routes/chain")(app);
 
 require("./routes/cognition")(app);
 require("./routes/decisions")(app);

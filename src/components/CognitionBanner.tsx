@@ -50,13 +50,15 @@ export default function CognitionBanner() {
   const cp = cog.capital?.value ?? {};
   const r = cog.risk?.value ?? {};
   const l = cog.leader?.value ?? {};
+  const staleMs = cog.asOf ? Date.now() - new Date(cog.asOf).getTime() : Infinity;
+  const stale = staleMs > 30 * 60 * 1000;
 
   return (
     <section className="mb-3 rounded-xl border border-amber-500/20 bg-gradient-to-br from-amber-500/5 to-transparent p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-sm font-bold text-amber-300">🧠 单一 AI 认知层 · 全站唯一市场理解</span>
         <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-200">v{cog.version}</span>
-        <span className="text-[10px] text-slate-500">hash {cog.hash} · asOf {cog.asOf?.slice(0, 19)?.replace("T", " ")}</span>
+        <span className="text-[10px] text-slate-500">hash {cog.hash} · asOf {cog.asOf?.slice(0, 19)?.replace("T", " ")}</span> {stale && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">认知层已过期</span>}
         <span className="ml-auto hidden text-[10px] text-slate-500 sm:inline">作战/决策/精灵/复盘/问答 均消费此对象 → 杜绝各自为政</span>
       </div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">

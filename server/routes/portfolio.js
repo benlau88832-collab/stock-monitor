@@ -107,16 +107,26 @@ async function loadPortfolio() {
   }
 
   const todos = [];
+  const seenTodos = new Set();
   for (const e of logic) {
     const alerts = checkLedgerAlerts(e, {
       price: priceMap.get(e.code) ?? null,
       boardHealthy: null,
       today: bjDateStr(),
     });
-    for (const a of alerts) todos.push({ type: a.type, severity: a.severity, message: a.message, code: e.code });
+    for (const a of alerts) {
+      const key = `${a.type}:${a.code}`;
+      if (seenTodos.has(key)) continue;
+      seenTodos.add(key);
+      todos.push({ type: a.type, severity: a.severity, message: a.message, code: e.code });
+    }
   }
-  const pendingDecisions = decisions.filter((d) => d.humanAction === "watch" || d.humanAction === "confirm" && !d.simulated);
-  for (const d of pendingDecisions.slice(0, 5)) {
+    const pendingDecisions = decisions.filter((d) => d.humanAction === "watch" || (d.humanAction === "confirm" && d.code && Number(d.priceAtPost) > 0 && !d.simulated));
+  const seenDecisions = new Set();
+  for (const d of pendingDecisions.slice(0, 8)) {
+    const key = `${d.code || "?"}|${d.humanAction}|${d.mainline || ""}`;
+    if (seenDecisions.has(key)) continue;
+    seenDecisions.add(key);
     todos.push({
       type: "decision_pending",
       severity: "warning",
@@ -157,7 +167,10 @@ module.exports = function portfolioRoutes(app) {
       return res.status(400).json({ error: "invalid action" });
     }
     const price = Number(t.price);
-    const quantity = Math.max(1, Math.round(Number(t.quantity) || 100));
+    const quantity = Math.round(Number(t.quantity));
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return res.status(400).json({ error: "quantity required" });
+    }
     const date = String(t.date || bjDateStr());
     const simulated = Boolean(t.simulated);
     let cost = t.cost != null ? num(t.cost) : null;

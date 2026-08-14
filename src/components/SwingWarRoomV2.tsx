@@ -3,17 +3,15 @@
 // Direction from /api/swing/direction; portfolio from usePortfolio.
 // ============================================================
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Activity, AlertTriangle, BookOpen, Check, Plus, RefreshCw, Target, Wallet, X,
-} from "lucide-react";
+import { Activity, AlertTriangle, Plus, RefreshCw, X } from "lucide-react";
 import { apiFetch, isLocalServer } from "../lib/cloudStore";
 import { analyzeSwing, type KlineBar } from "../lib/swingStage";
 import { swingDecision } from "../lib/swingDecision";
-import { buildPost, savePost } from "../lib/decisionPost";
 import {
   activeEntries, checkAllLedgerAlerts, type LogicEntry,
 } from "../lib/logicLedger";
 import { usePortfolio, type PortfolioLogicInput, type PortfolioTradeInput } from "../hooks/usePortfolio";
+import DecisionActionPanel from "./DecisionActionPanel";
 
 interface SwingBoardScore {
   code: string;
@@ -221,10 +219,10 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [actionMsg, setActionMsg] = useState("");
   const [result, setResult] = useState<ReturnType<typeof swingDecision> | null>(null);
   const [stage, setStage] = useState<ReturnType<typeof analyzeSwing> | null>(null);
   const [lastPrice, setLastPrice] = useState<number | null>(null);
+  const [chainCtx, setChainCtx] = useState<{ chain: any; signals: any } | null>(null);
   const [err, setErr] = useState("");
 
   const run = async () => {
@@ -245,37 +243,14 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
       setStage(st);
       setLastPrice(bars[bars.length - 1].close);
       setResult(swingDecision({ stage: st }));
+      try {
+        const cr = await apiFetch(`/api/chain/context?code=${c}`);
+        if (cr.ok) { const cj = await cr.json(); setChainCtx(cj.chain ? cj : null); }
+      } catch { setChainCtx(null); }
     } catch (e) { setErr(String(e)); }
     setBusy(false);
   };
 
-  const runAction = async (action: "watch" | "logic" | "paper" | "real") => {
-    const c = code.trim();
-    const price = lastPrice;
-    if (!c || !price) { setErr("先完成波段分析"); return; }
-    setActionMsg("");
-    try {
-      if (action === "watch") {
-        const r = await apiFetch("/api/watch/add", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: c, name: name || c, buy_low: Math.round(price * 0.98 * 100) / 100, buy_high: Math.round(price * 1.02 * 100) / 100, stop_loss: Math.round(price * 0.95 * 100) / 100, trigger_pct: 5, status: "active", note: "波段决策卡" }),
-        });
-        if (!r.ok) throw new Error("加盯盘失败");
-      }
-      if (action === "logic" || action === "paper" || action === "real") {
-        const thesis = result?.reasons.join("；") || stage?.signals.join("；") || "波段决策";
-        const breakLine = result?.stopLossPct != null ? Math.round(price * (1 - result.stopLossPct / 100) * 100) / 100 : null;
-        const logicInput: PortfolioLogicInput = { code: c, name: name || c, thesis, breakLine, board: null, status: "验证中", simulated: action === "paper" };
-        await saveLogic(logicInput);
-      }
-      if (action === "paper" || action === "real") {
-        const post = buildPost({ code: c, humanAction: "confirm", priceAtPost: price, notes: action === "paper" ? "纸上确认" : "真实成交", simulated: action === "paper" });
-        await savePost(post);
-        await addTrade({ code: c, name: name || c, action: "buy", price, quantity: 100, cost: price, simulated: action === "paper", notes: action === "paper" ? "纸上确认" : "真实成交" });
-      }
-      setActionMsg(action === "watch" ? "已加入盯盘" : action === "logic" ? "已录逻辑台账" : action === "paper" ? "纸上确认已记录" : "真实成交已记录");
-    } catch (e) { setErr(String(e)); }
-  };
 
   return (
     <div className="rounded-xl border border-emerald-500/25 bg-emerald-950/10 p-3">
@@ -296,19 +271,14 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
           <div className="flex items-center gap-2">
             <span className={`text-lg font-black ${result.verdict === "波段买入" ? "text-emerald-300" : result.verdict === "持有" ? "text-teal-300" : result.verdict === "减仓" ? "text-amber-300" : result.verdict === "观望" ? "text-slate-300" : "text-rose-300"}`}>{result.signal}</span>
             {stage && <span className="text-slate-300">位置：<b className="text-sky-300">{stage.phase}</b></span>}
+          {chainCtx?.chain && <div className="text-[10px] text-teal-300/80">产业链：{chainCtx.chain.chainName} · {chainCtx.chain.nodeName} · 上游 {chainCtx.chain.upstream.join(" / ") || "无"} → 下游 {chainCtx.chain.downstream.join(" / ") || "无"}</div>}
             {lastPrice != null && <span className="text-slate-400">参考价 {lastPrice.toFixed(2)}</span>}
           </div>
           {result.buyPoint && <div className="text-cyan-300">买点：{result.buyPoint}</div>}
           {result.verdict === "波段买入" && <div className="text-slate-300">止损 {result.stopLossPct}% 路 止盈 +{result.targetPct}% 路 仓位 {result.positionRange[0]}-{result.positionRange[1]}%</div>}
           {result.reasons.length > 0 && <div className="text-emerald-300/80">{result.reasons.join("；")}</div>}
           {result.blocks.length > 0 && <div className="text-rose-300/80">{result.blocks.join("；")}</div>}
-          <div className="grid grid-cols-2 gap-1 pt-1">
-            <button onClick={() => runAction("watch")} className="inline-flex items-center justify-center gap-1 rounded bg-sky-500/15 px-2 py-1 text-[11px] font-bold text-sky-300 hover:bg-sky-500/30"><Target className="h-3 w-3" /> 加盯盘</button>
-            <button onClick={() => runAction("logic")} className="inline-flex items-center justify-center gap-1 rounded bg-teal-500/15 px-2 py-1 text-[11px] font-bold text-teal-300 hover:bg-teal-500/30"><BookOpen className="h-3 w-3" /> 录逻辑</button>
-            <button onClick={() => runAction("paper")} className="inline-flex items-center justify-center gap-1 rounded bg-violet-500/15 px-2 py-1 text-[11px] font-bold text-violet-300 hover:bg-violet-500/30"><Check className="h-3 w-3" /> 纸上确认</button>
-            <button onClick={() => runAction("real")} className="inline-flex items-center justify-center gap-1 rounded bg-emerald-500/15 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/30"><Wallet className="h-3 w-3" /> 记真实成交</button>
-          </div>
-          {actionMsg && <div className="rounded bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-300">{actionMsg}</div>}
+            <DecisionActionPanel code={code.trim()} name={name.trim() || code.trim()} price={lastPrice} defaultThesis={`${result?.reasons.join("；") || stage?.signals.join("；") || "波段决策"}；止损参考 ${result?.stopLossPct != null ? Math.round((lastPrice ?? 0) * (1 - result.stopLossPct / 100) * 100) / 100 : ""}`} addTrade={addTrade} saveLogic={saveLogic} />
         </div>
       )}
     </div>
@@ -414,8 +384,21 @@ export default function SwingWarRoomV2() {
 
       <details className="rounded-xl border border-teal-500/20 bg-teal-950/10">
         <summary className="cursor-pointer select-none px-3 py-2 text-xs font-bold text-teal-300">景气度研究（收起）</summary>
-        <div className="px-3 pb-3 text-[11px] text-slate-500">
-          {boardRaw.length === 0 ? "暂无景气度原始数据；方向榜恢复后自动填充。" : `${boardRaw.length} 个方向已保留板块K线与资金序列，供后续景气度研究。`}
+        <div className="space-y-1.5 px-3 pb-3">
+          {boardRaw.length === 0 ? (
+            <div className="text-[11px] text-slate-500">暂无景气度原始数据；方向榜恢复后自动填充。</div>
+          ) : boardRaw.slice(0, 5).map((raw) => (
+            <div key={raw.score.code} className="rounded-lg border border-teal-500/15 bg-black/20 px-2.5 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black text-slate-100">{raw.score.name}</span>
+                <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-amber-300 bg-amber-500/10">{raw.score.phase}</span>
+                <span className="ml-auto text-xs font-black text-teal-300">{raw.score.total}分</span>
+              </div>
+              <div className="mt-1 text-[10px] text-slate-400">资金 {raw.score.fund} · 催化 {raw.score.catalyst} · 10日主力 {raw.score.fund10d ?? "-"}亿 · 20日 {raw.score.fund20d ?? "-"}亿</div>
+              {raw.score.signals.slice(0, 4).map((sig, i) => <div key={i} className="text-[10px] text-slate-500">· {sig}</div>)}
+            </div>
+          ))}
+          <div className="text-[10px] text-slate-600">板块K线缺失时仅展示资金/涨停维度，K线恢复后自动升级为完整景气评分。</div>
         </div>
       </details>
     </div>

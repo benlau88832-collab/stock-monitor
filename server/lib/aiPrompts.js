@@ -24,12 +24,12 @@ const TASK_CONFIG = {
   weeklyCoach: { temperature: 0.4, maxTokens: 3000, thinking: true },
   stockJudge:  { temperature: 0.3, maxTokens: 8000, thinking: true },
   mainlineClassify: { temperature: 0.1, maxTokens: 8000, thinking: false }, // v9.111.0（R-2）：长输出提档
-  mainlineDiagnosis: { temperature: 0.2, maxTokens: 3000, thinking: false },
+  mainlineDiagnosis: { temperature: 0.2, maxTokens: 6000, thinking: true },
   // v9.26 F-05：主线精排专用任务 —— 低延迟确定性优先（thinking=false、低温、小输出）
   mainlineRank: { temperature: 0.1, maxTokens: 2000, thinking: false },
   // v9.26 A.6：异动事件一句话解释（事件驱动，每 eventId 一次，小 schema）
   eventExplain: { temperature: 0.2, maxTokens: 2000, thinking: false },
-  supervisor:  { temperature: 0.4, maxTokens: 4000, thinking: false },
+  supervisor:  { temperature: 0.4, maxTokens: 8000, thinking: true },
   policyDiff:  { temperature: 0.2, maxTokens: 3000, thinking: true },
   // v9.28（P1-9）：独立业务 task —— 主题新闻评分 / 个股新闻评分 / 每日情报
   // 均关闭 thinking（结构化 JSON 输出），避免此前复用 stockJudge(thinking=true) 的高延迟与配额浪费
@@ -44,9 +44,9 @@ const TASK_CONFIG = {
   // v9.38（V3-12）：事件三级分类（政策级/行业级/事件级）—— 批量小输出
   eventClassify:   { temperature: 0.1, maxTokens: 2000, thinking: false },
   // v9.38.1（V3-14）：单事件深挖（仅高分事件触发，控成本）
-  eventDeepDive:   { temperature: 0.3, maxTokens: 2000, thinking: false },
+  eventDeepDive:   { temperature: 0.3, maxTokens: 6000, thinking: true },
   // v9.41（V4-A）：Agent 工具推理
-  agentReason:     { temperature: 0.2, maxTokens: 8000, thinking: false }, // v9.111.0（R-2）：恒思考+JSON+工具结果最吃 token
+  agentReason:     { temperature: 0.2, maxTokens: 8000, thinking: true }, // v9.111.0（R-2）：恒思考+JSON+工具结果最吃 token
   // v9.75（阶段三）：Critic 挑刺 —— 独立小任务（不再复用 dailyIntel 2000 token 配置）
   criticReview:    { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.75（阶段二）：失效因子归因 —— 小输出结构化
@@ -60,7 +60,7 @@ const TASK_CONFIG = {
   // v9.95.3：个股聚合研判 —— 中等输出结构化
   stockAggregate: { temperature: 0.2, maxTokens: 2000, thinking: false },
   // v9.96.0：情绪叙事报告 —— 中温长文（Markdown）
-  emotionReport: { temperature: 0.4, maxTokens: 3000, thinking: false },
+  emotionReport: { temperature: 0.4, maxTokens: 6000, thinking: true },
   // v9.104.0（第四批 C，T-C3）：盘中快评（轻量四段式，≤200 字）
   intradayQuickComment: { temperature: 0.3, maxTokens: 2000, thinking: false },
   // v9.105.0（第五批 E）：政策首写裁决 / 政策解读报告
