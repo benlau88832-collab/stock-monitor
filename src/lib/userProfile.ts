@@ -147,6 +147,15 @@ export function updateUserProfile(): UserProfile {
   return p;
 }
 
+/** 记录结构化决策反馈（准确/不准确+归因），立即进入画像 prompt */
+export function recordDecisionFeedback(feedback: "accurate" | "inaccurate", attribution?: string): UserProfile {
+  const p = loadUserProfile() ?? { ...EMPTY, updatedAt: Date.now() };
+  const key = feedback === "accurate" ? "accurate" : `inaccurate:${attribution || "unknown"}`;
+  p.feedbackStats[key] = (p.feedbackStats[key] ?? 0) + 1;
+  saveProfile(p);
+  return p;
+}
+
 /** 生成注入 prompt 的一段用户画像描述 */
 export function profileToPrompt(p: UserProfile | null): string {
   if (!p || p.totalPosts === 0) return "（无历史拍板，画像积累中）";
@@ -165,6 +174,7 @@ export function profileToPrompt(p: UserProfile | null): string {
   // v9.137.0（审查 P1-11）：反馈修正信号注入 —— 用户曾对 AI 裁决明确表达过的不满
   const fbLabels: Record<string, string> = {
     overconfident: "置信虚高", data_mismatch: "数据与盘面不符", risk_uncovered: "风险未覆盖", timing: "时机不对",
+    accurate: "AI判断准确", "inaccurate:chain": "AI产业链判断错", "inaccurate:fundamentals": "AI基本面判断错", "inaccurate:timing": "AI择时判断错", "inaccurate:data": "AI数据本身错", "inaccurate:unknown": "AI判断不准确",
   };
   const fbParts = Object.entries(p.feedbackStats)
     .filter(([, n]) => n > 0)

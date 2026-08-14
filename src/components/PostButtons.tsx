@@ -10,6 +10,7 @@ import { buildPost, savePost, hasPosted, type HumanAction, type DecisionPost } f
 import { emit as emitAlert } from "../lib/alertBus";
 import type { PostHookCtx } from "../lib/hookDecisionPost";
 import { apiFetch } from "../lib/cloudStore";
+import { recordDecisionFeedback } from "../lib/userProfile";
 import DisclaimerTag from "./DisclaimerTag";
 
 interface Props {
@@ -90,6 +91,7 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
         body: JSON.stringify({ ticketId: lastTicketId.current, code, mainline, feedback, attribution, note: postFbNote }),
       });
       setPostFbSent(true);
+      recordDecisionFeedback(feedback, attribution);
       emitAlert({ id: `post_fb_${lastTicketId.current}`, severity: "info", message: "已记录决策反馈，用于画像与置信校准" });
     } catch { /* 反馈失败不影响主流程 */ }
   };
