@@ -4,6 +4,7 @@
 const { pool } = require("../db");
 const { CHAIN_KB, locateChain } = require("../../src/shared/transmission-chain.js");
 const { getJson } = require("./outbound");
+const { syncCommoditySignals } = require("./chainSignals");
 
 async function ensureChainKb(p) {
   const r = await p.query("SELECT count(*)::int AS n FROM industry_chain");
@@ -81,6 +82,7 @@ async function mapStockToChain(p, code, boards) {
 
 async function getChainDbContext(p, code) {
   await ensureChainKb(p);
+  await syncCommoditySignals(p);
   const boards = await findBoards(p, code);
   const mapped = await mapStockToChain(p, code, boards);
   if (!mapped) return { mapped: false, boards, chain: null };
