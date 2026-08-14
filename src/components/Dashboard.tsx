@@ -8,6 +8,7 @@ import EmotionReportPanel from "./EmotionReportPanel";
 import type { EmotionCycleInput } from "../lib/emotionCycle";
 import DisciplinePanel from "./DisciplinePanel";
 import ReviewPanel from "./ReviewPanel";
+import PortfolioReportPanel from "./PortfolioReportPanel";
 import FiveQBar from "./FiveQBar";
 import DailySummary from "./DailySummary";
 import SignalPanel from "./SignalPanel";
@@ -813,6 +814,7 @@ export default function Dashboard({
             </div>
           )}
           <ReviewPanel />
+          <PortfolioReportPanel />
         </div>
       )}
       {showSignalEffect && <SignalEffectivenessPanel />}
