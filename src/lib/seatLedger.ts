@@ -115,7 +115,7 @@ export async function backfillSeatDay(date: string): Promise<void> {
   if (pending.length === 0) return;
 
   // 按股票代码去重，批量查询
-  const codes = [...new Set(pending.map(r => r.stockCode))];
+  const codes = [...new Set(pending.map(r => r.stockCode))].slice(0, 20);
 
   // 计算 T+1 和 T+5 的日期
   const baseDate = new Date(date + "T00:00:00+08:00");
@@ -160,7 +160,7 @@ export async function backfillSeatDay(date: string): Promise<void> {
 
 /** 每天检查所有未回填的台账日期 */
 export async function runBackfill(): Promise<void> {
-  const dates = getAllSeatDates();
+  const dates = getAllSeatDates().slice(0, 3);
   const now = Date.now();
   for (const date of dates) {
     const daysSince = Math.floor((now - new Date(date + "T00:00:00+08:00").getTime()) / 86400000);

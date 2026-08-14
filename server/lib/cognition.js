@@ -164,6 +164,8 @@ function buildCognition(raw, version, session) {
   const payload = JSON.stringify({
     v: version,
     asOf: raw.asOf,
+    date: raw._pg?.date ?? (raw.asOf ? String(raw.asOf).slice(0, 10) : null),
+    fallbackDate: raw._pg?.fallbackDate ?? null,
     m: mainline.value,
     s: sentiment.value,
     c: capital.value,
@@ -175,6 +177,8 @@ function buildCognition(raw, version, session) {
     hash: hashString(payload),
     generatedAt: raw.asOf,
     asOf: raw.asOf,
+    date: raw._pg?.date ?? (raw.asOf ? String(raw.asOf).slice(0, 10) : null),
+    fallbackDate: raw._pg?.fallbackDate ?? null,
     // v9.123.0（卓越审查 P1-1）：session 由调用方注入（proactiveSession.currentSession 真实时段）——
     //   缺省保持"盘中"仅作纯函数兼容（生产调用点必须注入，此前硬编码导致盘前/盘后认知时段错标）
     session: session ?? { phase: "盘中", window: "09:30-11:30", decisionWindow: false, note: "认知已锁定，全站消费 v" + version },
@@ -306,12 +310,20 @@ async function prevCognition(pool) {
 let _lastRebuildAt = 0;
 async function getFreshCognition(pool, staleMs = 30 * 60 * 1000) {
   const latest = await latestCognition(pool);
+  const rowR = await pool.query("SELECT created_at FROM cognition_snapshots ORDER BY id DESC LIMIT 1").catch(() => ({ rows: [] }));
+  const cogTs = rowR.rows?.[0]?.created_at ? new Date(rowR.rows[0].created_at).getTime() : 0;
+  const mdR = await pool.query("SELECT updated_at FROM kv_store WHERE key LIKE 'market_daily:%' ORDER BY key DESC LIMIT 1").catch(() => ({ rows: [] }));
+  const mdTs = mdR.rows?.[0]?.updated_at ? new Date(mdR.rows[0].updated_at).getTime() : 0;
+  const staleSnapshot = mdTs > 0 && cogTs > 0 && mdTs - cogTs > 60 * 1000;
   const asOfMs = latest?.asOf ? new Date(latest.asOf).getTime() : 0;
   const { currentSession } = require("./proactiveSession"); // 惰性 require，保持模块纯函数性
   const inSession = ["竞价", "早盘", "盘中", "午后", "尾盘"].includes(currentSession().phase);
+  const todayBj = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const latestDate = latest?.date ?? (latest?.asOf ? new Date(new Date(latest.asOf).getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10) : null);
+  const needsDateRefresh = latestDate != null && latestDate < todayBj && !latest?.fallbackDate;
   const fresh = Number.isFinite(asOfMs) && Date.now() - asOfMs <= staleMs;
-  if (latest && (!inSession || fresh)) return latest;
-  if (Date.now() - _lastRebuildAt < 5 * 60 * 1000) return latest; // 5min 节流：数据时间旧≠行旧
+  if (latest && !needsDateRefresh && !staleSnapshot && (!inSession || fresh)) return latest;
+  if (latest && Date.now() - _lastRebuildAt < 5 * 60 * 1000) return latest; // 5min 节流：数据时间旧≠行旧
   _lastRebuildAt = Date.now();
   const { buildBrainContext } = require("./brainContext");
   const ctx = await buildBrainContext(pool);

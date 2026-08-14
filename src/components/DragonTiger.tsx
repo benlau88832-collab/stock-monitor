@@ -594,7 +594,7 @@ export default function DragonTiger() {
       // 其余股票展开时按需取（toggleExpand 带缓存 + 补写台账，画像逐步补全）。
       const latestDate = [...dateGroups.keys()].sort().pop() ?? "";
       const latestItems = dateGroups.get(latestDate) ?? [];
-      const prefetchItems = latestItems.slice(0, 15);
+      const prefetchItems = latestItems.slice(0, 8);
       const allRecords: SeatRecord[] = [];
       const stockSeats: Record<string, { buy: Array<{ deptName: string; net: number }>; sell: Array<{ deptName: string; net: number }> }> = {};
       const stockNames: Record<string, string> = {};
@@ -647,9 +647,15 @@ export default function DragonTiger() {
     setExpanded(prev => ({ ...prev, [key]: isExpanding }));
     if (isExpanding && !seats[key]) {
       setSeatsLoading(prev => ({ ...prev, [key]: true }));
-      const result = await fetchDragonTigerSeats(item.code, item.tradeDate);
-      setSeats(prev => ({ ...prev, [key]: result }));
-      setSeatsLoading(prev => ({ ...prev, [key]: false }));
+      let result: { buy: DragonTigerSeat[]; sell: DragonTigerSeat[] } = { buy: [], sell: [] };
+      try {
+        result = await fetchDragonTigerSeats(item.code, item.tradeDate);
+        setSeats(prev => ({ ...prev, [key]: result }));
+      } catch {
+        setSeats(prev => ({ ...prev, [key]: { buy: [], sell: [] } }));
+      } finally {
+        setSeatsLoading(prev => ({ ...prev, [key]: false }));
+      }
       // v9.81：展开即补写席位台账（预取裁剪后，未预取股票的画像数据靠展开逐步补全）
       try {
         const records: SeatRecord[] = [];

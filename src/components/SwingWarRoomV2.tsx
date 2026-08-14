@@ -230,24 +230,36 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
     if (!/^\d{6}$/.test(c)) { setErr("请输入 6 位股票代码"); return; }
     setBusy(true); setErr(""); setResult(null); setStage(null);
     try {
-      const r = await apiFetch(`/api/proxy/stock-kline?code=${c}&days=70`);
-      if (!r.ok) throw new Error("K线获取失败");
-      const j = await r.json();
-      const rows: string[] = j?.klines ?? [];
-      const bars: KlineBar[] = rows.map((line) => {
-        const [date, open, close, high, low, volume] = line.split(",");
-        return { date, open: Number(open), close: Number(close), high: Number(high), low: Number(low), volume: Number(volume) || 0 };
+      const r = await apiFetch("/api/decisions/swing", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: c }),
       });
-      if (bars.length < 30) { setErr("K线数据不足（<30 根）"); setBusy(false); return; }
-      const st = analyzeSwing(bars);
-      setStage(st);
-      setLastPrice(bars[bars.length - 1].close);
-      setResult(swingDecision({ stage: st }));
+      if (!r.ok) {
+        const ej = await r.json().catch(() => ({}));
+        throw new Error(ej?.error ?? `波段决策服务 ${r.status}`);
+      }
+      const j = await r.json();
+      setStage(j.stage ?? null);
+      setLastPrice(j.snap?.price ?? j.stage?.ma20 ?? null);
+      setResult(j.decision ?? null);
+      setChainCtx(j.chain?.chain ? j.chain : null);
+      if (j.llmError) setErr(`AI 研判暂不可用，已使用规则研判：${j.llmError}`);
+    } catch (e) {
       try {
-        const cr = await apiFetch(`/api/chain/context?code=${c}`);
-        if (cr.ok) { const cj = await cr.json(); setChainCtx(cj.chain ? cj : null); }
-      } catch { setChainCtx(null); }
-    } catch (e) { setErr(String(e)); }
+        const kr = await apiFetch(`/api/proxy/stock-kline?code=${c}&days=70`);
+        if (!kr.ok) throw new Error("K线获取失败");
+        const kj = await kr.json();
+        const rows: string[] = kj?.klines ?? [];
+        const bars: KlineBar[] = rows.map((line) => {
+          const [date, open, close, high, low, volume] = line.split(",");
+          return { date, open: Number(open), close: Number(close), high: Number(high), low: Number(low), volume: Number(volume) || 0 };
+        });
+        if (bars.length < 30) { setErr("K线数据不足（<30 根）"); setBusy(false); return; }
+        const st = analyzeSwing(bars);
+        setStage(st);
+        setLastPrice(bars[bars.length - 1].close);
+        setResult(swingDecision({ stage: st }));
+      } catch (e2) { setErr(String(e2)); }
+    }
     setBusy(false);
   };
 

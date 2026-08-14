@@ -16,7 +16,7 @@ import { buildCognition } from "../cognition";
 /** 认知层构造（与 buildCognition 输入形状一致） */
 function makeCog(version = 7) {
   const raw = {
-    asOf: "2026-08-13T10:00:00.000Z",
+    asOf: new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10) + "T00:00:00.000Z",
     indexes: [], breadth: { total: 0 },
     limit: { up: [{ code: "600001", name: "龙头甲", pct: 10, reason: "", relay: 3 }], down: [], broken: [] },
     sentimentRaw: { upRatio: 0.5, limitScore: 30, avgPct: 0.3, premium: 1.2 },
@@ -42,8 +42,9 @@ describe("v9.123.0 decisionLayer.composeDecision（P0-2）", () => {
     expect(v.decision).toBeDefined();
     expect(v.tactics).toBeDefined();
     expect(v.evidence.caliber).toContain("v7"); // 用表真实 version（废弃 0 硬编码）
-    expect(calls).toHaveLength(1); // 仅 latestCognition 一次查询
-    expect(calls[0]).toContain("cognition_snapshots");
+    expect(calls.length).toBeGreaterThan(0); // 新增 created_at/market_daily 陈旧检测查询
+    expect(calls.some((c) => c.includes("cognition_snapshots"))).toBe(true);
+    expect(calls.some((c) => c.includes("INSERT INTO cognition_snapshots"))).toBe(false); // 有权威快照不重建
   });
 
   it("表空 → 重建+落库（nextVersion 用表序列；失败不崩）", async () => {

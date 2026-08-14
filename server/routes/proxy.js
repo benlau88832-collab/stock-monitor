@@ -163,8 +163,10 @@ function checkTarget(target) {
 const MAX_RESP_BYTES = 5 * 1024 * 1024;
 const CACHE_MAX_BYTES = 40 * 1024 * 1024;
 let cacheBytes = 0;
-function forward(req, res, target, bodyBuf) {
+function forward(req, res, target, bodyBuf, fallbackDepth = 0) {
   const { url: u } = checkTarget(target);
+  const fallbackHost = u.hostname === "push2.eastmoney.com" ? "push2delay.eastmoney.com" : null;
+  const fallbackTarget = fallbackHost ? target.replace(u.hostname, fallbackHost) : null;
   // v9.99.0：分级冷却快速失败 —— WAF 断流(403/ECONNRESET)期间不再逐请求重试加速被封
   if (isCircuitOpen(u.hostname)) {
     if (!bodyBuf) {
@@ -181,6 +183,9 @@ function forward(req, res, target, bodyBuf) {
       } catch { /* fallthrough */ }
     }
     res.set("X-Data-Source", "circuit-open");
+    if (fallbackTarget && fallbackDepth === 0) {
+      return forward(req, res, fallbackTarget, bodyBuf, 1);
+    }
     return res.status(502).json({ error: "circuit open (source cooling)" });
   }
   res.set("X-Data-Source", u.hostname); // v9.99.0：data_source 标记（实际供数源，前端可观测）
@@ -229,6 +234,11 @@ function forward(req, res, target, bodyBuf) {
       if (overLimit) { done(() => res.status(502).json({ error: "upstream response too large" })); return; }
       const body = Buffer.concat(chunks);
       const type = r.headers["content-type"] || "application/json";
+      if (r.statusCode >= 400) {
+        recordFail(u.hostname, new Error("upstream http " + r.statusCode));
+        if (fallbackTarget && fallbackDepth === 0) return done(() => forward(req, res, fallbackTarget, bodyBuf, 1));
+        return done(() => res.status(502).json({ error: "upstream http " + r.statusCode }));
+      }
       if (cacheKey) {
         const old = cache.get(cacheKey);
         if (old) cacheBytes -= old.body.length;
@@ -251,9 +261,19 @@ function forward(req, res, target, bodyBuf) {
       });
     });
   });
-  upstream.on("error", e => { recordFail(u.hostname, e); done(() => res.status(502).json({ error: e.message })); });
+  upstream.on("error", e => {
+    recordFail(u.hostname, e);
+    if (fallbackTarget && fallbackDepth === 0) return done(() => forward(req, res, fallbackTarget, bodyBuf, 1));
+    done(() => res.status(502).json({ error: e.message }));
+  });
   // v9.81（性能）：上游超时 12s→6s —— 东财断源时前端不再挂 12s 等 504
-  upstream.setTimeout(6000, () => { recordFail(u.hostname, new Error("upstream timeout")); done(() => res.status(504).json({ error: "upstream timeout" })); upstream.destroy(); });
+  upstream.setTimeout(6000, () => {
+    const e = new Error("upstream timeout");
+    recordFail(u.hostname, e);
+    upstream.destroy();
+    if (fallbackTarget && fallbackDepth === 0) return done(() => forward(req, res, fallbackTarget, bodyBuf, 1));
+    done(() => res.status(504).json({ error: "upstream timeout" }));
+  });
   if (bodyBuf) upstream.write(bodyBuf);
   upstream.end();
 }
