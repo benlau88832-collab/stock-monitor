@@ -1,30 +1,24 @@
-// 个股决策卡（v9.24-P1-2，PRD C1）
-// 个股雷达页选中个股首屏：一句话结论/主线归属/技术位置/资金性质/风险点/止损止盈/置信度
-// 实现：纯规则引擎基于现有实时数据（零额外请求、零等待），符合 PRD "决策卡先于信息流"
-// v9.27（P1-7）：新增"离场信号"行（个股级离场，联动持仓成本止损）
-// v9.32：新增"快速下单"行（券商 URL Scheme 直通同花顺/通达信/东财，秒级执行）
+import { useState } from "react";
+import { BookOpen, Check, Target, Wallet } from "lucide-react";
 import { fmtMoney, fmtPct } from "../lib/format";
 import type { WatchStock, VetoItem } from "./StockWatchlist";
 import DisclaimerTag from "./DisclaimerTag";
 import { checkStockExit, exitBadge } from "../lib/stockExit";
 import { orderUrl } from "../lib/realLinks";
+import { apiFetch, isLocalServer } from "../lib/cloudStore";
+import { buildPost, savePost } from "../lib/decisionPost";
+import { usePortfolio } from "../hooks/usePortfolio";
 import AskAI from "./AskAI";
 
 interface Props {
   stock: WatchStock;
   vetoList: VetoItem[];
-  /** 今日主线名称列表（由 App 传入 battlePlan.candidates），用于主线归属判断 */
   mainlines?: string[];
-  /** v9.27（P1-7）：持仓成本（若该股在持仓中），用于成本止损 */
   cost?: number | null;
-  /** v9.91.0（概念地基）：该股权威分类结果（classifyStock），板块级主线判定 */
   classify?: { mainline?: string; concept?: string | null; source?: string } | null;
 }
 
-// ============== 规则引擎 ==============
-
-/** 技术位置：基于涨跌幅+量比+换手率近似（无均线数据时的代理口径） */
-function techPosition(s: WatchStock): { label: string; color: string; desc: string } {
+function techPosition(s: WatchStock) {
   const up = s.pct >= 7;
   const highVolume = (s.volumeRatio ?? 0) >= 2;
   const hotTurnover = (s.turnoverRate ?? 0) >= 10;
@@ -35,59 +29,44 @@ function techPosition(s: WatchStock): { label: string; color: string; desc: stri
   return { label: "横盘整理", color: "text-slate-300", desc: `今日${fmtPct(s.pct)}，方向未明` };
 }
 
-/** 资金性质：主力/游资/散户（按委托金额口径近似，附局限性说明） */
-function fundNature(s: WatchStock): { label: string; color: string; desc: string } {
+function fundNature(s: WatchStock) {
   const mainPos = s.mainNet > 0;
   const extraDominant = s.extraLargeNet > 0 && Math.abs(s.extraLargeNet) > Math.abs(s.largeNet);
   const smallIn = s.smallNet > 0 && s.mainNet < 0;
   if (smallIn) return { label: "散户接盘", color: "text-emerald-300", desc: "主力流出+散户流入，警惕派发" };
   if (mainPos && extraDominant) return { label: "大资金进场", color: "text-rose-300", desc: `超大单主导，净流入${fmtMoney(s.mainNet)}` };
   if (mainPos) return { label: "主力净流入", color: "text-rose-300", desc: `净流入${fmtMoney(s.mainNet)}（占比${fmtPct(s.mainNetPct)}）` };
-  return { label: "主力净流出", color: "text-slate-400", desc: `净流出${fmtMoney(Math.abs(s.mainNet)).replace(/^\+/, "")}` }; // v9.99.2（A4）：消除"净流出-50.00亿"双重符号
+  return { label: "主力净流出", color: "text-slate-400", desc: `净流出${fmtMoney(Math.abs(s.mainNet)).replace(/^\+/, "")}` };
 }
 
-/** 主线归属：v9.91.0 板块级判定（权威分类器折叠大类 vs 今日主线），替代名称子串匹配 */
-function mainlineOwn(
-  s: WatchStock,
-  mainlines: string[],
-  classify?: { mainline?: string; concept?: string | null; source?: string } | null,
-): { label: string; color: string; desc: string } {
-  if (!mainlines || mainlines.length === 0)
-    return { label: "主线未知", color: "text-slate-500", desc: "今日无主线数据" };
-  // ① 板块级判定：个股概念折叠大类 vs 今日主线名（双向包含，兼容大类/细分子线）
+function mainlineOwn(s: WatchStock, mainlines: string[], classify?: Props["classify"]) {
+  if (!mainlines || mainlines.length === 0) return { label: "主线未知", color: "text-slate-500", desc: "今日无主线数据" };
   if (classify && classify.mainline && classify.mainline !== "其他") {
-    const hit = mainlines.find(m =>
-      m === classify.mainline || classify.mainline!.includes(m) || m.includes(classify.mainline!));
-    if (hit)
-      return { label: `命中主线：${hit}`, color: "text-rose-300", desc: `核心题材：${classify.concept ?? classify.mainline}（${classify.source}）` };
+    const hit = mainlines.find((m) => m === classify.mainline || classify.mainline!.includes(m) || m.includes(classify.mainline!));
+    if (hit) return { label: `命中主线：${hit}`, color: "text-rose-300", desc: `核心题材：${classify.concept ?? classify.mainline}（${classify.source}）` };
   }
-  // ② 兜底：名称子串（分类数据不可用时）
-  const hit2 = mainlines.find(m => s.name.includes(m) || m.includes(s.name));
+  const hit2 = mainlines.find((m) => s.name.includes(m) || m.includes(s.name));
   if (hit2) return { label: `命中主线：${hit2}`, color: "text-rose-300", desc: "与今日主线相关" };
   return { label: "不在今日主线", color: "text-slate-400", desc: "未命中今日主线候选" };
 }
 
-/** 止损/止盈参考（按近端波动近似，明确标注仅供参考） */
-function stopRef(s: WatchStock): { stop: string; take: string } {
+function stopRef(s: WatchStock) {
   const base = s.price > 0 ? s.price : 0;
-  if (base <= 0) return { stop: "—", take: "—" };
-  // 涨幅大的票给更宽止损，防止被正常波动扫掉
+  if (base <= 0) return { stop: "-", take: "-" };
   const stopPct = s.pct >= 7 ? 8 : s.pct >= 3 ? 5 : 3;
   const takePct = s.pct >= 7 ? 5 : s.pct >= 3 ? 8 : 10;
-  return {
-    stop: base.toFixed(2) + `（-${stopPct}%）`,
-    take: (base * (1 + takePct / 100)).toFixed(2) + `（+${takePct}%）`,
-  };
+  return { stop: base.toFixed(2) + `（${stopPct}%）`, take: (base * (1 + takePct / 100)).toFixed(2) + `（${takePct}%）` };
 }
 
-// ============== 组件 ==============
 export default function StockDecisionCard({ stock, vetoList, mainlines = [], cost = null, classify = null }: Props) {
+  const portfolio = usePortfolio();
+  const [actionMsg, setActionMsg] = useState("");
+  const [actionErr, setActionErr] = useState("");
   const pos = techPosition(stock);
   const fund = fundNature(stock);
   const own = mainlineOwn(stock, mainlines, classify);
   const vetoed = vetoList.length > 0;
   const ref = stopRef(stock);
-  // v9.27（P1-7）：个股离场信号（持仓成本止损 + 资金/量价结构）
   const exit = checkStockExit({
     code: stock.code, name: stock.name,
     cost, price: stock.price, pct: stock.pct,
@@ -96,8 +75,6 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
   });
   const exitB = exitBadge(exit);
 
-  // 一句话结论（五色操作徽章，与主线口径一致；v9.26.11：新增"重仓参与"档）
-  // 参与档位：重仓（强势+大资金+主线命中）> 轻仓（强势+大资金 或 主线内走强）> 谨慎 > 观望 > 不建议
   const strongAndFund = pos.label === "强势上行" && fund.label.includes("进场");
   const onMainline = own.label.startsWith("命中主线");
   const conclusion = vetoed
@@ -109,11 +86,37 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
         : pos.label === "高位放量"
           ? { label: "谨慎参与", color: "bg-amber-500/20 text-amber-300 border-amber-500/40" }
           : { label: "观望", color: "bg-slate-500/20 text-slate-400 border-slate-500/40" };
-
-  // v9.77（P0-3 修复）：置信度诚实化 —— 原公式 65+有量比10+有换手5 是"数据字段覆盖近似"，
-  // 被大字当"置信度"展示会让游资误以为=历史胜率。改标"数据完整度"并脚注说明非胜率。
-  // （历史真实命中率回灌见 decisionAttribution，当前样本积累中显示"样本积累中"）
   const confidence = vetoed ? 40 : 65 + (stock.volumeRatio ? 10 : 0) + (stock.turnoverRate ? 5 : 0);
+
+  const runAction = async (action: "watch" | "logic" | "paper" | "real") => {
+    if (!isLocalServer()) return;
+    setActionMsg(""); setActionErr("");
+    try {
+      if (action === "watch") {
+        const price = stock.price > 0 ? stock.price : null;
+        if (!price) throw new Error("现价不可用，无法设置盯盘区间");
+        const r = await apiFetch("/api/watch/add", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: stock.code, name: stock.name, buy_low: Math.round(price * 0.98 * 100) / 100, buy_high: Math.round(price * 1.02 * 100) / 100, stop_loss: Math.round(price * 0.95 * 100) / 100, trigger_pct: 5, status: "active", note: "个股决策卡" }),
+        });
+        if (!r.ok) throw new Error("加盯盘失败");
+      }
+      if (action === "logic" || action === "paper" || action === "real") {
+        await portfolio.saveLogic({
+          code: stock.code, name: stock.name,
+          thesis: `${conclusion.label}：${own.label}；${fund.label}；${pos.label}`,
+          breakLine: stock.price > 0 ? Math.round(stock.price * 0.95 * 100) / 100 : null,
+          board: null, status: "验证中", simulated: action === "paper",
+        });
+      }
+      if (action === "paper" || action === "real") {
+        const post = buildPost({ code: stock.code, mainline: null, humanAction: "confirm", priceAtPost: stock.price, notes: action === "paper" ? "纸上确认" : "真实成交", simulated: action === "paper" });
+        await savePost(post);
+        await portfolio.addTrade({ code: stock.code, name: stock.name, action: "buy", price: stock.price, quantity: 100, cost: stock.price, simulated: action === "paper", notes: action === "paper" ? "纸上确认" : "真实成交" });
+      }
+      setActionMsg(action === "watch" ? "已加入盯盘" : action === "logic" ? "已录逻辑台账" : action === "paper" ? "纸上确认已记录" : "真实成交已记录");
+    } catch (e) { setActionErr(String(e)); }
+  };
 
   const Row = ({ k, children }: { k: string; children: React.ReactNode }) => (
     <div className="flex justify-between gap-3 text-xs">
@@ -125,43 +128,22 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
   return (
     <div className="rounded-lg border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-transparent p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-bold text-amber-300">🎯 个股决策卡</span>
+        <span className="text-[11px] font-bold text-amber-300">个股决策卡</span>
         <span className={`rounded border px-2 py-0.5 text-[11px] font-bold ${conclusion.color}`}>{conclusion.label}</span>
       </div>
       <div className="space-y-1.5">
-        {/* v9.27（P1-7）：离场信号（置顶最醒目） */}
         {exit.shouldExit && (
           <div className={`rounded border px-2 py-1.5 ${exit.level === "red" ? "border-rose-500/50 bg-rose-500/10" : "border-amber-500/40 bg-amber-500/10"}`}>
             <div className={`text-[11px] font-black ${exit.level === "red" ? "text-rose-300" : "text-amber-300"}`}>{exitB.label}</div>
             <div className="mt-0.5 text-[10px] text-slate-400 leading-relaxed">{exit.reasons.join("；")}</div>
           </div>
         )}
-        <Row k="主线归属">
-          <span className={own.color}>{own.label}</span>
-          <span className="ml-1 text-[10px] text-slate-500">{own.desc}</span>
-        </Row>
-        <Row k="技术位置">
-          <span className={pos.color}>{pos.label}</span>
-          <span className="ml-1 text-[10px] text-slate-500">{pos.desc}</span>
-        </Row>
-        <Row k="资金性质">
-          <span className={fund.color}>{fund.label}</span>
-          <span className="ml-1 text-[10px] text-slate-500">{fund.desc}</span>
-        </Row>
-        {vetoList.length > 0 && (
-          <Row k="风险点">
-            <span className="text-rose-300">
-              {vetoList.slice(0, 2).map(v => v.reason).join("；")}
-            </span>
-          </Row>
-        )}
-        <Row k="止损/止盈参考">
-          <span className="text-slate-300">损 {ref.stop} / 盈 {ref.take}（仅参考）</span>
-        </Row>
-        <Row k="数据完整度">
-          <span className="text-violet-300">{confidence}%</span>
-        </Row>
-        {/* v9.32：快速下单（券商 URL Scheme 直通，秒级执行） */}
+        <Row k="主线归属"><span className={own.color}>{own.label}</span><span className="ml-1 text-[10px] text-slate-500">{own.desc}</span></Row>
+        <Row k="技术位置"><span className={pos.color}>{pos.label}</span><span className="ml-1 text-[10px] text-slate-500">{pos.desc}</span></Row>
+        <Row k="资金性质"><span className={fund.color}>{fund.label}</span><span className="ml-1 text-[10px] text-slate-500">{fund.desc}</span></Row>
+        {vetoList.length > 0 && <Row k="风险点"><span className="text-rose-300">{vetoList.slice(0, 2).map((v) => v.reason).join("；")}</span></Row>}
+        <Row k="止损/止盈参考"><span className="text-slate-300">损 {ref.stop} / 盈 {ref.take}（仅供参考）</span></Row>
+        <Row k="数据完整度"><span className="text-violet-300">{confidence}%</span></Row>
         <Row k="快速下单">
           <div className="flex gap-1">
             <a href={orderUrl(stock.code, "ths")} className="rounded px-1.5 py-0.5 text-[10px] bg-rose-500/20 text-rose-300 hover:bg-rose-500/30">同花顺</a>
@@ -169,17 +151,24 @@ export default function StockDecisionCard({ stock, vetoList, mainlines = [], cos
             <a href={orderUrl(stock.code, "dfcf")} className="rounded px-1.5 py-0.5 text-[10px] bg-amber-500/20 text-amber-300 hover:bg-amber-500/30">东财</a>
           </div>
         </Row>
+        <div className="grid grid-cols-2 gap-1 pt-1">
+          <button onClick={() => runAction("watch")} className="inline-flex items-center justify-center gap-1 rounded bg-sky-500/15 px-2 py-1 text-[10px] font-bold text-sky-300 hover:bg-sky-500/30"><Target className="h-3 w-3" /> 加盯盘</button>
+          <button onClick={() => runAction("logic")} className="inline-flex items-center justify-center gap-1 rounded bg-teal-500/15 px-2 py-1 text-[10px] font-bold text-teal-300 hover:bg-teal-500/30"><BookOpen className="h-3 w-3" /> 录逻辑</button>
+          <button onClick={() => runAction("paper")} className="inline-flex items-center justify-center gap-1 rounded bg-violet-500/15 px-2 py-1 text-[10px] font-bold text-violet-300 hover:bg-violet-500/30"><Check className="h-3 w-3" /> 纸上确认</button>
+          <button onClick={() => runAction("real")} className="inline-flex items-center justify-center gap-1 rounded bg-emerald-500/15 px-2 py-1 text-[10px] font-bold text-emerald-300 hover:bg-emerald-500/30"><Wallet className="h-3 w-3" /> 记真实成交</button>
+        </div>
+        {actionMsg && <div className="rounded bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-300">{actionMsg}</div>}
+        {actionErr && <div className="rounded bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-300">{actionErr}</div>}
       </div>
-      {/* v9.92.0（AI 贯穿全局）：模块内问 AI —— 携带决策卡现场数据，就地深问 */}
       <AskAI
         code={stock.code}
         name={stock.name}
         compact
         context={`个股决策卡现场数据：${stock.name}(${stock.code}) 现价${stock.price.toFixed(2)} 今日${(stock.pct ?? 0).toFixed(1)}% 主力${fmtMoney(stock.mainNet)} 5日${fmtMoney(stock.mainNet5d)} 换手${(stock.turnoverRate ?? 0).toFixed(1)}% 量比${(stock.volumeRatio ?? 0).toFixed(1)} 概念归类：${classify?.concept ?? classify?.mainline ?? "未知"}`}
-        placeholder="问：为什么跌？该不该加仓？资金在流出吗？"
+        placeholder="问：为什么跌？要不要加仓？资金在流出吗？"
       />
       <div className="pt-1 border-t border-white/5 flex items-center justify-between">
-        <span className="text-[10px] text-slate-600">规则引擎基于实时数据生成 · 资金按委托金额口径，无法识别拆单 · 数据完整度为字段覆盖近似，非历史胜率</span>
+        <span className="text-[10px] text-slate-600">规则引擎基于实时数据生成 路 资金按委托金额口径，无法识别拆单 路 数据完整度为字段覆盖近似，非历史胜率</span>
         <DisclaimerTag />
       </div>
     </div>

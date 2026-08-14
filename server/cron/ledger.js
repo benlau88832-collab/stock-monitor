@@ -1,17 +1,12 @@
 // ============================================================
-// server/cron/ledger.js —— 领域模块（v9.139.0 阶段二 #16，split-cron.js 自动拆分）
-// 行为与原 cron.js 逐字一致；原文件已只留调度注册
+// v9.142.0 ledger domain: decision backfill, post summary,
+// user style profile, and holding logic push from logic_ledger table.
 // ============================================================
 const B = require("./base");
-const { contentKey, httpsGet, bjDate, bjDateStr, EM_UT, detectSealDecayServer, markCronStep, hasCronStep, isTradingDayCN, getJson, getJsonWithFallback, requestRaw, parseLLMJSON, SCHEMAS, withPgLock, LOCK_CRON_MAIN, LOCK_THEME, LOCK_WATCH, LOCK_INTRADAY, callLLM, saveFactorIc } = B;
+const { bjDate, bjDateStr, httpsGet, EM_UT, parseLLMJSON, SCHEMAS } = B;
+const { checkLedgerAlerts, activeEntries } = require("../../src/shared/logic-ledger.js");
 
-
-// ============== P0-3：拍板盈亏自动回填 ==============
-// 对 decision_post 中 human_action='confirm' 且 executed=false 的样本，
-// 用东财 push2his 日K 回填 T+1/T+5 盈亏（拍板价→T+1/T+5 收盘价涨跌幅%）
-// 幂等：回填后置 executed=true，下次 cron 不再处理
 async function runTradeBackfill(pool) {
-  // 拉未回填的 confirm 拍板（近 60 天）
   const r = await pool.query(
     `SELECT * FROM decision_post
      WHERE human_action='confirm' AND executed=false AND code IS NOT NULL
@@ -21,7 +16,6 @@ async function runTradeBackfill(pool) {
   const posts = r.rows;
   let backfilled = 0;
   for (const post of posts) {
-    // T+5 需要拍板后至少 7 自然日（5 交易日 + 周末余量）
     const ageDays = Math.floor((Date.now() - new Date(post.ts).getTime()) / 86400000);
     if (ageDays < 7) continue;
     try {
@@ -30,7 +24,7 @@ async function runTradeBackfill(pool) {
         await pool.query(`UPDATE decision_post SET pnl=$1, executed=true WHERE ticket_id=$2`, [pnl, post.ticket_id]);
         backfilled++;
       }
-    } catch { /* 单条失败继续 */ }
+    } catch { /* single failure continues */ }
   }
   return { total: posts.length, backfilled };
 }
@@ -43,20 +37,18 @@ async function backfillOnePost(post) {
     const j = await httpsGet(url, 10000);
     const arr = j?.data?.klines ?? [];
     if (Array.isArray(arr)) kl = arr;
-  } catch { /* push2his 断源 → 腾讯兜底 */ }
-  // v9.84.5：push2his 断源（HTTP 000）→ 腾讯 fqkline 兜底（列格式 date,open,close,high,low,volume 兼容）
+  } catch { /* fallback to Tencent */ }
   if (kl.length === 0) {
     try {
       const qSymbol = /^(60|68|5)/.test(post.code) ? `sh${post.code}` : `sz${post.code}`;
       const txUrl = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${qSymbol},day,,,10,qfq`;
       const tj = await httpsGet(txUrl, 10000);
-      const rows = tj?.data?.[qSymbol]?.qfqday ?? tj?.data?.[qSymbol]?.day ?? [];
-      if (Array.isArray(rows)) kl = rows.map(r => (Array.isArray(r) ? r.join(",") : String(r)));
-    } catch { /* 腾讯也失败 → 返回 null */ }
+      const rows = tj?.data?.data?.[qSymbol]?.qfqday ?? tj?.data?.data?.[qSymbol]?.day ?? [];
+      if (Array.isArray(rows)) kl = rows.map((r) => (Array.isArray(r) ? r.join(",") : String(r)));
+    } catch { /* return null */ }
   }
   if (!Array.isArray(kl) || kl.length < 2) return null;
-  const dates = kl.map(line => String(line).split(",")[0]);
-  // 定位拍板日（含当日）在日K的位置
+  const dates = kl.map((line) => String(line).split(",")[0]);
   let idx = dates.indexOf(post.date);
   if (idx < 0) {
     for (let i = 0; i < dates.length; i++) {
@@ -66,7 +58,6 @@ async function backfillOnePost(post) {
   }
   const base = Number(post.price_at_post) > 0 ? Number(post.price_at_post) : Number(kl[idx].split(",")[2]);
   if (!(base > 0)) return null;
-  // T+5（第 5 个交易日后）优先；不足则 T+1
   const t5line = kl[idx + 5];
   if (t5line) {
     const t5Close = Number(t5line.split(",")[2]);
@@ -80,23 +71,19 @@ async function backfillOnePost(post) {
   return null;
 }
 
-
-// ============== P1-4：盘后主动汇报 ==============
-// 15:10 生成【今日拍板命中度】【明日剧本】【明日应关注】→ 落 kv:post_summary:日期 → 推送手机
-// LLM 不可用/未配置 → 规则版兜底（不阻塞）
 async function runPostSummary(pool) {
   const date = bjDate();
   const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
-  // 1. 今日拍板
   let posts = [];
   try {
     const r = await pool.query(
       `SELECT mainline, code, human_action, confidence_at_post, price_at_post, pnl, executed
-       FROM decision_post WHERE date=$1 ORDER BY ts`, [dateStr],
+       FROM decision_post WHERE date=$1 ORDER BY ts`,
+      [dateStr],
     );
     posts = r.rows;
-  } catch { /* 表可能未建 */ }
-  // 2. 今日市场指标
+  } catch { /* table may be empty */ }
+
   let sentiment = null, ztCount = null, blastedRate = null, maxBoard = null;
   try {
     const r = await pool.query(`SELECT value FROM kv_store WHERE key=$1`, [`market_daily:${dateStr}`]);
@@ -106,7 +93,7 @@ async function runPostSummary(pool) {
       blastedRate = md?.blastedRate ?? null;
       maxBoard = md?.maxBoardHeight ?? null;
     }
-  } catch { /* 无 market_daily 用默认 */ }
+  } catch { /* default */ }
   try {
     const r = await pool.query(`SELECT value FROM kv_store WHERE key=$1`, [`sentiment:${dateStr}`]);
     if (r.rows[0]?.value != null) {
@@ -114,40 +101,30 @@ async function runPostSummary(pool) {
       sentiment = typeof v === "object" && v !== null ? Number(v.__raw ?? v.score ?? NaN) : Number(v);
       if (!Number.isFinite(sentiment)) sentiment = null;
     }
-  } catch { /* 静默 */ }
+  } catch { /* default */ }
 
   const postsText = posts.length === 0
     ? "今日无拍板记录"
-    : posts.map(p => `${p.mainline ?? p.code ?? "?"} → ${p.human_action}${p.pnl != null ? `（T+5 ${p.pnl}%）` : ""}`).join("；");
+    : posts.map((p) => `${p.mainline ?? p.code ?? "?"} → ${p.human_action}${p.pnl != null ? `（T+5 ${p.pnl}%）` : ""}`).join("；");
 
-  // v9.123.0（卓越审查 P1-7）：复盘链消费认知层——注入认知单行（与 /api/cognition 同源，不再各自取数各自判）
   let cogLine = "";
   try {
     const { latestCognition } = require("../lib/cognition");
     const cog = await latestCognition(pool);
     if (cog) {
-      cogLine = `【认知层 v${cog.version}】情绪${cog.sentiment.value.stage}(${cog.sentiment.value.score}) · 主线${cog.mainline.value.primaryTheme}(强度${cog.mainline.value.strength}) · 资金${cog.capital.value.signal} · 风险${cog.risk.value.level}·闸门${cog.risk.value.gateOpen ? "开" : "关"} · 龙头${cog.leader.value.name}${cog.leader.value.height}板`;
+      cogLine = `【认知层 v${cog.version}】情绪${cog.sentiment.value.stage}(${cog.sentiment.value.score}) 路 主线${cog.mainline.value.primaryTheme}(强度${cog.mainline.value.strength}) 路 资金${cog.capital.value.signal} 路 风险${cog.risk.value.level}路闸门${cog.risk.value.gateOpen ? "开" : "关"} 路 龙头${cog.leader.value.name}${cog.leader.value.height}板`;
     }
-  } catch { /* 认知不可用 → 不注入，保留原 prompt */ }
+  } catch { /* ignore */ }
 
-  // 3. LLM 生成（callModelText）
-  const prompt = `日期：${dateStr}
-${cogLine ? cogLine + "\n" : ""}今日拍板：${postsText}
-今日市场：情绪${sentiment ?? "?"}分 · 涨停${ztCount ?? "?"}只 · 炸板率${blastedRate ?? "?"}% · 最高板${maxBoard ?? "?"}
-
-请按以下三段输出（每段≤3行，引用具体数字）：
-【今日拍板命中度】
-【明日剧本】（最多3个，含概率）
-【明日应关注】（最多3条）`;
+  const prompt = `日期：${dateStr}\n${cogLine ? cogLine + "\n" : ""}今日拍板：${postsText}\n今日市场：情绪${sentiment ?? "?"}分 路 涨停${ztCount ?? "?"}只 路 炸板率${blastedRate ?? "?"}% 路 最高板${maxBoard ?? "?"}\n\n请按以下三段输出（每段≤3行，引用具体数字）：\n【今日拍板命中度】\n【明日剧本】（最多3个，含概率）\n【明日应关注】（最多5条）`;
   let summary = null;
   try {
     const { callModelText } = require("../lib/httpProxy");
-    summary = await callModelText(prompt, { system: "你是A股短线游资盘后复盘助手。严格按给定三段标题输出，每段≤3行，引用具体数字。", maxTokens: 4000, temperature: 0.3 }); // v9.107.0（全站助手）：盘后拍板提档 2000→4000 // v9.101.0（P1-06 返工）：600→2000
+    summary = await callModelText(prompt, { system: "你是A股短线游资盘后复盘助手。严格按给定三段标题输出，每段≤3行，引用具体数字。", maxTokens: 4000, temperature: 0.3 });
   } catch (e) {
-    summary = `【今日拍板命中度】规则版：${postsText}\n【明日剧本】情绪${sentiment ?? "?"}分，炸板${blastedRate ?? "?"}%，明日以情绪延续性为准\n【明日应关注】看最高板${maxBoard ?? "?"}梯队 + 竞价高开方向`;
+    summary = `【今日拍板命中度】规则版：${postsText}\n【明日剧本】情绪${sentiment ?? "?"}分，炸板${blastedRate ?? "?"}%，明日以情绪延续性为纲\n【明日应关注】看最高板${maxBoard ?? "?"}梯队 + 竞价高开方向`;
   }
 
-  // 4. 落库 kv:post_summary:日期
   const summaryKey = `post_summary:${dateStr}`;
   try {
     await pool.query(
@@ -155,25 +132,15 @@ ${cogLine ? cogLine + "\n" : ""}今日拍板：${postsText}
        ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
       [summaryKey, JSON.stringify({ date: dateStr, text: summary, posts: postsText, created_at: new Date().toISOString() })],
     );
-  } catch { /* 落库失败不阻塞 */ }
+  } catch { /* ignore */ }
 
-  // 5. 推送（复用 sendPushIfConfigured）
   try {
     const { sendPushIfConfigured } = require("../routes/push");
-    await sendPushIfConfigured({
-      title: `📊 盘后汇报 ${dateStr}`,
-      body: summary.slice(0, 500),
-      severity: "warning",
-    }, pool);
-  } catch { /* 推送失败静默 */ }
-
+    await sendPushIfConfigured({ title: `盘后汇报 ${dateStr}`, body: summary.slice(0, 500), severity: "warning" }, pool);
+  } catch { /* ignore */ }
   return { ok: true, summaryKey };
 }
 
-
-// ============== P3-4：用户风格学习（周度） ==============
-// 拉近 30 天 decision_post（拍板）+ trade_ledger（成交）→ LLM 推断风格/心理偏差/禁忌题材
-// 落 kv:user_style:YYYY-MM-DD；供前端 userProfile 与 AI 督导参考
 async function runUserStyleProfile(pool) {
   const date = bjDate();
   const dateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
@@ -184,33 +151,29 @@ async function runUserStyleProfile(pool) {
        FROM decision_post WHERE date >= to_char(now() - interval '30 days', 'YYYY-MM-DD') ORDER BY ts DESC LIMIT 100`,
     );
     posts = r.rows;
-  } catch { /* 表未建 */ }
+  } catch { /* empty */ }
   try {
     const r = await pool.query(
       `SELECT code, name, action, price, cost, pnl_pct, date
        FROM trade_ledger WHERE date >= to_char(now() - interval '30 days', 'YYYY-MM-DD') ORDER BY ts DESC LIMIT 100`,
     );
     trades = r.rows;
-  } catch { /* 表未建 */ }
+  } catch { /* empty */ }
 
   if (posts.length === 0 && trades.length === 0) return { ok: false, reason: "no data" };
+  const postsText = posts.length === 0 ? "无拍板" : posts.slice(0, 30).map((p) => `${p.date} ${p.mainline ?? p.code ?? "?"}→${p.human_action}${p.pnl != null ? `(${p.pnl}%)` : ""}`).join("；");
+  const tradesText = trades.length === 0 ? "无成交" : trades.slice(0, 30).map((t) => `${t.date} ${t.code}${t.name ? "/" + t.name : ""} ${t.action}@${t.price}${t.pnl_pct != null ? `(${t.pnl_pct}%)` : ""}`).join("；");
 
-  const postsText = posts.length === 0 ? "无拍板" : posts.slice(0, 30).map(p => `${p.date} ${p.mainline ?? p.code ?? "?"}→${p.human_action}${p.pnl != null ? `(${p.pnl}%)` : ""}`).join("；");
-  const tradesText = trades.length === 0 ? "无成交" : trades.slice(0, 30).map(t => `${t.date} ${t.code}${t.name ? "/" + t.name : ""} ${t.action}@${t.price}${t.pnl_pct != null ? `(${t.pnl_pct}%)` : ""}`).join("；");
-
-  const prompt = `用户近30天拍板记录：\n${postsText}\n\n用户近30天成交记录：\n${tradesText}\n\n请推断：1) 交易风格（超短打板/波段/价值/题材博弈）2) 常见心理偏差（追高/死扛/频繁交易等）3) 应回避的题材类型。输出严格JSON：{"style":"...","biases":["..."],"avoidThemes":["..."],"suggestion":"≤40字建议"}`;
-
+  const prompt = `用户近30天拍板记录：\n${postsText}\n\n用户近30天成交记录：\n${tradesText}\n\n请推断：1) 交易风格（超短打板/波段/价值/题材博弈）2) 常见心理偏差（追高/死扛/频繁交易等）3) 应回避的题材类型。输出严格JSON：{"style":"...","biases":["..."],"avoidThemes":["..."],"suggestion":"≤50字建议"}`;
   let result = null;
   try {
     const { callModelText } = require("../lib/httpProxy");
-    const text = await callModelText(prompt, { system: "你是A股行为金融分析师。只输出JSON。", maxTokens: 4000, temperature: 0.4 }); // v9.107.0（全站助手）：行为金融提档 2000→4000 // v9.101.0（P1-06 返工）：800→2000
-    // v9.87.0（P1-8）：统一解析 + schema 归一化（字段类型/数组元素）
+    const text = await callModelText(prompt, { system: "你是A股行为金融分析师。只输出JSON。", maxTokens: 4000, temperature: 0.4 });
     result = parseLLMJSON(text, SCHEMAS.userStyle);
-  } catch { /* LLM 失败 → 规则版 */ }
+  } catch { /* rule fallback */ }
   if (!result) {
-    result = { style: "未知", biases: [], avoidThemes: [], suggestion: "样本不足，建议持续使用拍板与成交记录功能" };
+    result = { style: "未知", biases: [], avoidThemes: [], suggestion: "样本不足，建议继续使用拍板与成交记录功能" };
   }
-
   const styleKey = `user_style:${dateStr}`;
   try {
     await pool.query(
@@ -218,32 +181,10 @@ async function runUserStyleProfile(pool) {
        ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
       [styleKey, JSON.stringify({ ...result, date: dateStr })],
     );
-  } catch { /* 落库失败不阻塞 */ }
+  } catch { /* ignore */ }
   return { ok: true, styleKey };
 }
-// ============== v9.140.0（#11 推送分层·持仓优先）：持仓逻辑提醒推手机 ==============
-// 前端 logicLedger.saveEntry 已把台账同步到 PG kv logic_ledger:日期（同 decision_post 模式）；
-// 本任务读取最近台账 → 用 shared/logic-ledger.js（与前端同一份引擎）判定四类提醒 →
-// 按天去重（kv ledger_push_log:日期）→ sendPushIfConfigured 推送（Server酱/企微/Bark/飞书/Qmsg）。
-// 分层：持仓提醒 = 最高优先级（critical 破位/证伪必推；warning 催化到期/板块退潮随通道配置）；
-//       市场级推送保持原路径不变（互不干扰）。
-const { checkLedgerAlerts, activeEntries } = require("../../src/shared/logic-ledger.js");
 
-/** 读取最近台账（今日优先，回看 4 天） */
-async function loadRecentLedger(pool, today) {
-  for (let back = 0; back < 4; back++) {
-    const ds = bjDateStr(-back);
-    try {
-      const r = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`logic_ledger:${ds}`]);
-      const v = r.rows[0]?.value;
-      const arr = typeof v === "string" ? JSON.parse(v) : v;
-      if (Array.isArray(arr) && arr.length > 0) return { entries: arr, date: ds };
-    } catch { /* 单日读取失败继续回看 */ }
-  }
-  return null;
-}
-
-/** 今日已推送 key 集合（kv ledger_push_log:日期 → ["600001:break_line", ...]） */
 async function loadPushedLog(pool, today) {
   try {
     const r = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`ledger_push_log:${today}`]);
@@ -261,68 +202,85 @@ async function savePushedLog(pool, today, pushedKeys) {
   );
 }
 
-/**
- * 持仓提醒推送（cron 调度 / 手动触发）
- * 现价装配：有破位线的持仓经腾讯批量行情（qt.gtimg.cn，GBK rawBuffer）取实时价 ——
- *   否则 break_line 提醒因 price=null 永不触发（名实核对：null 输入 = 死路径）；
- *   腾讯失败 → 该持仓破位检测降级跳过（其余提醒不受影响）
- * @param {object} pool
- * @param {object} [opts] { dryRun?: boolean } dryRun 只统计不真发（验收用，避免打扰用户）
- * @returns {Promise<{ok:boolean; entriesDate?:string; candidates:number; pushed:number; reasons?:string}>}
- */
+async function loadLogicEntries(pool) {
+  const r = await pool.query(
+    `SELECT * FROM logic_ledger WHERE status <> '已离场' ORDER BY updated_at DESC LIMIT 200`,
+  );
+  return r.rows.map((row) => ({
+    id: row.id,
+    code: row.code,
+    name: row.name || row.code,
+    status: row.status,
+    thesis: row.thesis,
+    catalysts: Array.isArray(row.catalysts) ? row.catalysts : [],
+    breakLine: row.break_line != null ? Number(row.break_line) : null,
+    board: row.board,
+    decisionRef: row.decision_ref,
+    tradeRef: row.trade_ref,
+    simulated: Boolean(row.simulated),
+  }));
+}
+
+async function loadBoardHealth(pool) {
+  const today = bjDateStr();
+  try {
+    const r = await pool.query("SELECT value FROM kv_store WHERE key=$1", [`swing_direction:${today}`]);
+    const v = r.rows[0]?.value;
+    const data = typeof v === "string" ? JSON.parse(v) : v;
+    const boards = Array.isArray(data?.boards) ? data.boards : [];
+    const map = {};
+    for (const b of boards) if (b?.name) map[String(b.name)] = b.phase !== "退潮";
+    return map;
+  } catch { return {}; }
+}
+
 async function runLedgerPush(pool, opts = {}) {
   const today = bjDateStr();
-  const src = await loadRecentLedger(pool, today);
-  if (!src) return { ok: false, reason: "no ledger data" };
+  const entries = await loadLogicEntries(pool);
+  if (!entries || entries.length === 0) return { ok: false, reason: "no logic ledger data" };
   const alreadyPushed = await loadPushedLog(pool, today);
-  // 现价装配：需要破位线检测的持仓（活跃 + breakLine 非空）
-  const needPrice = src.entries.filter(e => e.status !== "已离场" && e.breakLine != null && e.breakLine > 0);
+  const boardHealth = await loadBoardHealth(pool);
+
+  const needPrice = entries.filter((e) => e.breakLine != null && e.breakLine > 0);
   const priceMap = new Map();
   if (needPrice.length > 0) {
     try {
-      const codes = [...new Set(needPrice.map(e => String(e.code)))];
-      const q = codes.map(c => (c.startsWith("6") ? "sh" : c.startsWith("4") || c.startsWith("8") ? "bj" : "sz") + c).join(",");
+      const codes = [...new Set(needPrice.map((e) => String(e.code)))];
+      const q = codes.map((c) => (c.startsWith("6") ? "sh" : c.startsWith("4") || c.startsWith("8") ? "bj" : "sz") + c).join(",");
       const { requestRaw } = require("../lib/outbound");
       const { parseTencentQuotesBatch } = require("../lib/stockSnapshot");
-      const { body } = await requestRaw(`https://qt.gtimg.cn/q=${q}`, { timeout: 5000, rawBuffer: true }); // GBK → rawBuffer
-      for (const [code, price] of parseTencentQuotesBatch(body)) {
-        if (price != null && Number.isFinite(price)) priceMap.set(code, price);
+      const { body } = await requestRaw(`https://qt.gtimg.cn/q=${q}`, { timeout: 5000, rawBuffer: true });
+      for (const [code, pct] of parseTencentQuotesBatch(body)) {
+        if (pct != null && Number.isFinite(pct)) priceMap.set(String(code).replace(/^(sh|sz|bj)/, ""), pct);
       }
-    } catch (e) { console.warn("[cron] ledger_push 现价装配失败（破位检测本轮回退）:", e.message); }
+    } catch (e) { console.warn("[cron] ledger_push price enrich failed:", e.message); }
   }
-  const input = { price: null, boardHealthy: null, today };
-  // 候选选择：逐条注入真实现价（无价持仓仅剩催化/证伪/退潮类提醒；破位无价跳过）
+
   const candidates = [];
-  for (const e of activeEntries(src.entries)) {
+  for (const e of entries) {
     const price = priceMap.get(String(e.code)) ?? null;
-    for (const a of checkLedgerAlerts(e, { ...input, price })) {
+    const boardHealthy = e.board ? (boardHealth[String(e.board)] ?? null) : null;
+    for (const a of checkLedgerAlerts(e, { price, boardHealthy, today })) {
       const key = `${a.code}:${a.type}`;
       if (alreadyPushed.has(key)) continue;
       if (a.type === "break_line" && price == null) continue;
       candidates.push({ alert: a, key });
     }
   }
-  // 分层：critical（破位/证伪）优先
   candidates.sort((x, y) => (x.alert.severity === "critical" ? 0 : 1) - (y.alert.severity === "critical" ? 0 : 1));
+
   let pushed = 0;
   for (const { alert, key } of candidates) {
-    alreadyPushed.add(key); // 先记账再发送（发送失败当轮不重推，下轮重试窗口自然覆盖）
+    alreadyPushed.add(key);
     if (opts.dryRun) { pushed++; continue; }
     try {
       const { sendPushIfConfigured } = require("../routes/push");
-      const r = await sendPushIfConfigured({
-        title: `📌 持仓提醒：${alert.name}（${alert.code}）`,
-        body: alert.message,
-        severity: alert.severity,
-      });
+      const r = await sendPushIfConfigured({ title: `持仓提醒：${alert.name}（${alert.code}）`, body: alert.message, severity: alert.severity });
       if (r && r.ok) pushed++;
-      else console.warn(`[cron] ledger_push ${key} 发送未成功（${r?.reason ?? "unknown"}），下轮重试窗口覆盖`);
-    } catch (e) { console.warn(`[cron] ledger_push ${key} 异常:`, e.message); }
+    } catch (e) { console.warn(`[cron] ledger_push ${key} failed:`, e.message); }
   }
   await savePushedLog(pool, today, alreadyPushed);
-  console.log(`[cron] ledger_push ${today}: 候选 ${candidates.length} 条（去重后新增），实推 ${pushed} 条${opts.dryRun ? "（dryRun）" : ""}`);
-  return { ok: true, entriesDate: src.date, candidates: candidates.length, pushed };
+  return { ok: true, entries: entries.length, candidates: candidates.length, pushed };
 }
 
-module.exports = { runTradeBackfill, backfillOnePost, runPostSummary, runUserStyleProfile, runLedgerPush, loadRecentLedger, loadPushedLog, savePushedLog };
-
+module.exports = { runTradeBackfill, backfillOnePost, runPostSummary, runUserStyleProfile, runLedgerPush, loadPushedLog, savePushedLog };

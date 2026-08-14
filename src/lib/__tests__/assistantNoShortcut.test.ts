@@ -30,7 +30,7 @@ describe("v9.108.2 runAssistantAgent 路由回归（D-5）", () => {
     const r = await runAssistantAgent("今天情绪如何", {});
     expect(r.degraded).toBe(true);
     expect(r.reply.length).toBeGreaterThan(10); // 永不空白
-    expect(r.reply.startsWith("⚠ 规则版")).toBe(true);
+    expect(r.reply).toContain("AI 暂不可用");
   });
 
   it("LLM 输出非法 JSON（parse 失败）→ 规则版兜底非空", async () => {

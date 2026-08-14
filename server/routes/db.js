@@ -686,13 +686,13 @@ module.exports = function dbRoutes(app) {
     if (!p.ticketId || !p.humanAction) return res.status(400).json({ error: "ticketId & humanAction required" });
     try {
       await pool.query(
-        `INSERT INTO decision_post(date,ticket_id,mainline,code,human_action,confidence_at_post,price_at_post,executed,pnl,notes,decision_log_ref,ts)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
+        `INSERT INTO decision_post(date,ticket_id,mainline,code,human_action,confidence_at_post,price_at_post,executed,pnl,notes,decision_log_ref,simulated,ts)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now())
          ON CONFLICT (ticket_id) DO NOTHING`,
         [
           p.date, p.ticketId, p.mainline ?? null, p.code ?? null, p.humanAction,
           p.confidenceAtPost ?? null, p.priceAtPost ?? null, Boolean(p.executed), p.pnl ?? null,
-          p.notes ?? "", p.decisionLogRef ?? null,
+          p.notes ?? "", p.decisionLogRef ?? null, Boolean(p.simulated),
         ],
       );
       res.json({ ok: true, ticketId: p.ticketId });
@@ -727,10 +727,10 @@ module.exports = function dbRoutes(app) {
     if (!t.code || !t.action || typeof t.price !== "number") return res.status(400).json({ error: "code/action/price required" });
     try {
       await pool.query(
-        `INSERT INTO trade_ledger(date,decision_post_ref,code,name,action,price,quantity,cost,pnl_pct,notes,ts)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())`,
+        `INSERT INTO trade_ledger(date,decision_post_ref,code,name,action,price,quantity,cost,pnl_pct,notes,simulated,ts)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())`,
         [t.date, t.decisionPostRef ?? null, t.code, t.name ?? null, t.action, t.price,
-         t.quantity ?? 0, t.cost ?? null, t.pnlPct ?? null, t.notes ?? null],
+         t.quantity ?? 0, t.cost ?? null, t.pnlPct ?? null, t.notes ?? null, Boolean(t.simulated)],
       );
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ error: e.message }); }

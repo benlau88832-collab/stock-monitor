@@ -14,7 +14,8 @@ import { isLocalServer } from "../lib/cloudStore";
 import { callAI } from "../lib/ai";
 import { fetchBrainContext } from "../lib/assistantAgent";
 import { apiFetch } from "../lib/cloudStore";
-import { exportElementAsPng } from "../lib/exportImage"; // v9.99.1（批次 5-3）：导出通用化（与情绪报告共用）
+import { exportElementAsPng } from "../lib/exportImage";
+import { usePortfolio } from "../hooks/usePortfolio"; // v9.99.1（批次 5-3）：导出通用化（与情绪报告共用）
 
 // v9.94.1：13 维度结构化复盘类型（与服务端 cron.generateDailyReview 的 dimensions 对齐）
 interface ReviewDimensions {
@@ -78,6 +79,8 @@ export default function ReviewPanel() {
 
   // v9.99.1（批次 5-3）：导出复盘卡为 PNG（html2canvas 共用工具，与情绪报告同实现）
   const [exporting, setExporting] = useState(false);
+  const portfolio = usePortfolio();
+  void portfolio;
   const exportRef = useRef<HTMLDivElement>(null);
 
   const exportPng = async () => {

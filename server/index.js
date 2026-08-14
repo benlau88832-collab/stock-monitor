@@ -1,28 +1,20 @@
 // ============================================================
-// stock-monitor 本地服务端 · 入口
-// 功能：① 静态托管 docs/index.html（v9.25 前端）
-//       ② /api/db/*  前端数据读写 PostgreSQL
-//       ③ /api/proxy/* 东方财富接口转发（CORS/限流缓存）
-//       ④ 定时抓取 + LLM 分析（cron）
-// 访问：本机 http://localhost:8080
+// stock-monitor local server entry
+// Static hosting: docs/index.html
+// APIs: /api/db/*, /api/proxy/*, cron + LLM analysis
 // ============================================================
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-const os = require("os");
 const { initDb, pool } = require("./db");
 
-// v9.26.5：显式加载 .env（保证任意启动方式都读到 AI_API_KEY / DATABASE_URL）
 require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// v9.75（安全修复）：CORS 从全放开收敛为仅本机来源 ——
-// 之前 app.use(cors()) 允许任意网页跨域读取 /api/db/*（实测可无鉴权读到 AI Key），
-// 现在只放行 localhost/127.0.0.1 同源访问；GitHub Pages 线上无 /api 不受影响。
 const isLocalOrigin = (origin) => {
-  if (!origin) return true; // 同源/无 Origin（curl 等）
+  if (!origin) return true;
   try {
     const u = new URL(origin);
     return u.hostname === "localhost" || u.hostname === "127.0.0.1";
@@ -31,31 +23,19 @@ const isLocalOrigin = (origin) => {
 app.use(cors({
   origin: (origin, cb) => {
     if (isLocalOrigin(origin)) cb(null, true);
-    else cb(null, false); // 拒绝第三方 Origin，不返回 ACAO 头
+    else cb(null, false);
   },
 }));
-// v9.67：1mb → 2mb —— AI 长上下文+history+toolDefs+researchCtx 累积常超 1mb（PM2 日志反复 PayloadTooLargeError），2mb 在安全范围
-// v9.77：2mb → 10mb —— localStorage 全量迁移（migrateLocalStorageToCloud，~4.5MB）批量 POST 仍超 2mb → 413 静默丢数据；
-//   仅监听 127.0.0.1 本机，10mb 安全
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// ---------- 健康检查 ----------
-// v9.114.0（T5-2 D-10）：旧单点 db 探活端点删除 —— 统一聚合端点 /api/health 在 routes/health.js
-// （数据源 + AI 端点 + PG 连通 + SW 版本，终审 D-10 统一 SLA 视图）；PG 探活能力已并入 out.pg
-
-// ---------- 静态托管（前端单文件产物） ----------
 const DOCS_DIR = path.join(__dirname, "..", "docs");
 app.use(express.static(DOCS_DIR));
-// SPA fallback：未知路径回 index.html
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(path.join(DOCS_DIR, "index.html"));
 });
 
-// ============== v9.85.0（P0-2）：本地 token 专用读取端点 ==============
-// 背景：kv 敏感 key 已脱敏（local_token 不再可经 /api/db/kv 读取），前端改走本端点。
-// 安全：严格校验 Origin 必须为本服务自身（localhost:8080/127.0.0.1:8080 或同源无 Origin）——
-//   其他 localhost 端口网页（恶意）拿不到 token；服务端仅监听 127.0.0.1。
 app.get("/api/auth/local-token", async (req, res) => {
   try {
     const origin = req.headers.origin;
@@ -74,20 +54,10 @@ app.get("/api/auth/local-token", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ============== v9.85.0（P0-2）：/api 写操作统一鉴权中间件 ==============
-// 背景（审查报告 P0-2）：此前仅 /api/ai/* 与 /api/proxy/* 有 LOCAL_TOKEN 鉴权（且因 P0-1 未生效），
-//   /api/db、/api/watch、/api/push、/api/research、/api/theme-analysis 等写接口全部裸奔——
-//   localhost 任意网页可覆盖 PG 数据、读推送凭据、触发付费 LLM/推送。
-// 策略：POST/PUT/DELETE 必须携带 x-local-token（前端 cloudStore.apiFetch 自动带）；
-//   GET 读端点维持 localhost-only（与现状一致，全量收敛列入 backlog）。
-// v9.137.0（审查 P1-01 修复）：白名单条目改为相对挂载路径 —— 中间件挂载于 app.use("/api",...)，
-//   其内部 req.path 为相对 /api 的路径（"/ai/call" 而非 "/api/ai/call"）。
-//   原绝对路径条目永不命中（存在≠生效）：/api/ai/call|stream 被双重鉴权（无害但冗余）、
-//   /api/brain/pg 被强制要求 token 而前端 pgTool 裸 fetch 不带 → PG 工具组恒 401。
-//   恢复设计意图：白名单内端点自带鉴权（ai 路由 checkAuth / brain/pg 工具名白名单只读查询）。
 const WRITE_AUTH_WHITELIST = new Set(["/ai/call", "/ai/stream", "/brain/pg"]);
 let writeTokenCache = { t: null, ts: 0 };
-let writeTokenInitialized = false; // v9.85.2（P1-1）：fail-closed —— 已初始化后读取失败拒绝写操作
+let writeTokenInitialized = false;
+
 async function effectiveWriteToken() {
   if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
   if (writeTokenCache.t && Date.now() - writeTokenCache.ts < 30000) return writeTokenCache.t;
@@ -102,6 +72,7 @@ async function effectiveWriteToken() {
     return writeTokenInitialized ? writeTokenCache.t : null;
   }
 }
+
 app.use("/api", async (req, res, next) => {
   const method = req.method;
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
@@ -113,66 +84,37 @@ app.use("/api", async (req, res, next) => {
   next();
 });
 
-// ---------- DB 读写路由 ----------
 require("./routes/db")(app);
 
-// ---------- v9.115.0（S1-1）：单一 AI 认知层路由 ----------
+// v9.142.0 unified portfolio/trade/logic ledger + server swing direction
+require("./routes/portfolio")(app);
+require("./routes/swing")(app);
+
 require("./routes/cognition")(app);
-
-// ---------- v9.116.0（S2-2）：决策直达路由（五支柱纯函数，秒级不依赖 LLM） ----------
 require("./routes/decisions")(app);
-
-// ---------- v9.117.0（S3-3）：主动智能流路由（时段洞察 + LLM 预算） ----------
 require("./routes/proactive")(app);
-
-// ---------- v9.120.0（卓越 S1-1c）：认知推理路由（共振/因果/变化率/预判/narrative） ----------
 require("./routes/reasoning")(app);
-
-// ---------- 东财代理路由 ----------
 require("./routes/proxy")(app);
-
-// ---------- v9.114.0（T5-2 D-10）：统一健康聚合路由 ----------
 require("./routes/health")(app);
-
-// ---------- AI 中转路由（v9.26 F-03：模型 Key 只存服务端 .env） ----------
 require("./routes/ai")(app);
-
-// ---------- v9.66：个股深度调研（妙想中转） ----------
 require("./routes/research")(app);
-
-// ---------- v9.66：个股盯价监控（清单/走势/触发事件） ----------
 require("./routes/watch")(app);
-
-// ---------- P0-4：外部推送中转（Server酱/企业微信/Bark） ----------
 require("./routes/push")(app);
-
-// ---------- v9.124.0（蓝图 4A T-资讯-1）：个股资讯聚合路由（news_feed ∪ 快讯名称匹配） ----------
 require("./routes/news")(app);
-
-// ---------- v9.125.0（蓝图 L6 纪律层前置）：纪律教练路由（行为偏差检测，纯函数 0 token） ----------
 require("./routes/coach")(app);
-
-// ---------- v9.126.0（蓝图 L4 批次 C）：情绪周期回测路由（分阶段次日溢价/晋级率统计） ----------
 require("./routes/backtest")(app);
 
-// ---------- 定时任务（收盘抓取 + LLM 分析） ----------
 require("./cron")({ pool });
 
-// ---------- v9.91.0（概念地基）：同花顺概念白名单启动预加载（异步，不阻塞启动） ----------
-// 表空或 >24h 时后台抓取落库；首次请求 /api/concepts/whitelist 时前端会再触发一次懒加载兜底
 (async () => {
   try {
     const { ensureConceptWhitelist } = require("./lib/thsConcepts");
     const r = await ensureConceptWhitelist(pool);
-    if (r.refreshed) console.log(`[thsConcepts] 概念白名单启动刷新完成: ${r.count} 个概念`);
-    else console.log("[thsConcepts] 概念白名单已就绪（无需刷新）");
-  } catch (e) { console.warn("[thsConcepts] 启动预加载失败（首次请求时再试）:", e.message); }
+    if (r.refreshed) console.log(`[thsConcepts] whitelist refreshed: ${r.count}`);
+    else console.log("[thsConcepts] whitelist fresh");
+  } catch (e) { console.warn("[thsConcepts] preload failed:", e.message); }
 })();
 
-// ---------- 启动 ----------
-// v9.75（安全修复）：只监听 127.0.0.1（本机），不再暴露 0.0.0.0 —— 局域网其他设备无法访问，恶意网页无法触碰
-// v9.84.3（5.4）：LOCAL_TOKEN 默认启用 —— 未配置 env 时自动生成随机 token 落 kv（local_token），
-//   前端自动读取并在 /api/ai/* 携带 x-local-token（防局域网/公网白嫖 AI 配额，V1 遗留半成品收尾）
 async function ensureLocalToken(p) {
   if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
   try {
@@ -188,19 +130,24 @@ async function ensureLocalToken(p) {
        ON CONFLICT(key) DO UPDATE SET value=$1, updated_at=now()`,
       [JSON.stringify({ token })],
     );
-    console.log("[server] LOCAL_TOKEN 自动生成并落库（/api/ai 接口鉴权已启用）");
+    console.log("[server] LOCAL_TOKEN generated");
     return token;
   } catch (e) {
-    console.warn("[server] LOCAL_TOKEN 初始化失败（鉴权未启用）:", e.message);
+    console.warn("[server] LOCAL_TOKEN init failed:", e.message);
     return null;
   }
 }
 
 initDb().then(async () => {
+  try {
+    const { runMigrations } = require("./db-migrations");
+    await runMigrations();
+  } catch (e) { console.warn("[server] db-migrations failed:", e.message); }
   const token = await ensureLocalToken(pool);
+  try { const { buildDirection } = require("./routes/swing"); buildDirection().catch((e) => console.warn("[swing] warmup failed:", e.message)); setInterval(() => buildDirection().catch((e) => console.warn("[swing] background refresh failed:", e.message)), 30 * 60 * 1000); } catch (e) { console.warn("[swing] warmup setup failed:", e.message); }
   app.listen(PORT, "127.0.0.1", () => {
     console.log(`[server] stock-monitor local server on port ${PORT}`);
-    console.log(`[server] 本机访问:   http://localhost:${PORT}${token ? "（x-local-token 已启用）" : ""}`);
+    console.log(`[server] local: http://localhost:${PORT}${token ? " (x-local-token enabled)" : ""}`);
   });
 }).catch(err => {
   console.error("[server] DB init failed:", err.message);

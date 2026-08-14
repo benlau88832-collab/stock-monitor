@@ -160,6 +160,27 @@ export async function buildReasoningNote(): Promise<string | null> {
  * v9.115.0（S1-3）：认知层单行优先（消费认知不重建）；认知不可用回退原全量快照
  * v9.120.0（卓越 S1-1c）：推理层 narrative 追加（市场理解行，助手不再各自重建）
  */
+export interface AssistantSiteContext {
+  topMainline?: string;
+  topMainlineScore?: number | null;
+  topMainlineZtCount?: number;
+  topMainlineHeight?: number;
+  sentiment?: number | null;
+  sentimentLabel?: string;
+  marketNet?: number;
+  watchStocks?: string;
+  activeTab?: string;
+  currentStock?: { code: string; name: string } | null;
+}
+
+export const TAB_LABELS: Record<string, string> = {
+  dashboard: "驾驶舱",
+  fundline: "资金主线",
+  radar: "个股雷达",
+  dragon: "龙虎榜复盘",
+  news: "消息面",
+};
+
 export async function buildFullSnapshot(siteContext: AssistantSiteContext): Promise<string> {
   const brain = await fetchBrainContext();
   const parts: string[] = [];
@@ -307,113 +328,8 @@ export async function buildQuickSystem(siteContext: AssistantSiteContext): Promi
  * v9.109.1（A-1）：主线类接收结构化 brain —— 从 picks 按 correlation 区分龙头（前2）/跟风（后3），
  *   直击用户报障"哪些是龙头标的哪些是跟风"（快照文本只有龙头名，无区分）
  */
-export async function fallbackAnswer(snapshot: string, question: string, reason?: string, brain?: BrainContext): Promise<string> {
-  const q = question.trim();
-  const lines = snapshot.split("\n").map(s => s.trim()).filter(Boolean);
-  const head = `⚠ 规则版（AI 暂不可用${reason ? `：${reason}` : ""}）——以下为本地数据摘要\n`;
-  const grab = (kw: string) => lines.filter(l => l.includes(kw));
-  // 按段提取：命中行 + 后续行直到下一个【】段头（消息摘要是多行段落）
-  const grabSection = (kw: string): string[] => {
-    const idx = lines.findIndex(l => l.includes(kw));
-    if (idx < 0) return [];
-    const out = [lines[idx]];
-    for (let i = idx + 1; i < lines.length; i++) {
-      if (lines[i].startsWith("【")) break;
-      out.push(lines[i]);
-    }
-    return out;
-  };
-
-  // 主线类（含"主线"）→ 主线Top3 + 龙头/跟风区分（v9.109.1 A-1：有结构化 brain 时用 picks 区分）+ 闸门
-  if (/主线/.test(q)) {
-    // v9.109.1（A-1）：优先结构化 brain —— 按 picks 顺序区分龙头（前2）/跟风（后3），correlation 降序
-    const top = brain?.mainlines?.top ?? [];
-    if (top.length) {
-      const linesOut = top.slice(0, 3).map(t => {
-        const picks = [...(t.picks ?? [])].sort((a, b) => (b.correlation ?? 0) - (a.correlation ?? 0));
-        const leader = picks.slice(0, 2).map(p => p.name).filter(Boolean).join("/") || "—";
-        const follower = picks.slice(2, 5).map(p => p.name).filter(Boolean).join("/") || "—";
-        return `${t.theme}(强度${t.heat ?? "?"}·裁决${t.verdict ?? "?"}·龙头:${leader}·跟风:${follower})`;
-      });
-      return head + "【今日主线（规则版）】\n" + linesOut.join("\n") + (brain?.gate ? `\n次日闸门：${brain.gate.label}` : "");
-    }
-    const mainlines = grab("主线Top3");
-    const gate = grab("次日闸门");
-    if (mainlines.length) {
-      return head + "【今日主线】\n" + mainlines.join("\n")
-        + (gate.length ? "\n" + gate.join("\n") : "");
-    }
-    return head + "本地快照暂无主线数据（AI 不可用且规则库未产出）。";
-  }
-  // 个股类（股票名 2-4 字中文 / 6位代码）→ 先实时 /api/db/stock/:code（v9.108.1 D-3），再快照匹配
-  const codeMatch = q.match(/\d{6}/);
-  const nameMatch = q.match(/([\u4e00-\u9fa5]{2,4})(?=为什么|为何|涨停|大涨|大跌|下跌|走势|异动|什么情况|怎么样|还能买|能不能买|能不能上|分析)/);
-  const target = codeMatch ? codeMatch[0] : nameMatch ? nameMatch[1] : null;
-  if (target) {
-    // 先尝试实时个股数据（AI 不可用时也能给带数字的回答）
-    if (/^\d{6}$/.test(target)) {
-      try {
-        const r = await fetch(`/api/db/stock/${target}`, { signal: AbortSignal.timeout(6000) });
-        const j = await r.json();
-        // v9.128.0（一致性审查 P1-2）：/api/db/stock 无 quote/fund/anns 键（实际键名 announcements）——
-        //   原读取恒 undefined，AI 断供时个股规则兜底缺报价/主力/公告；删除死读，用真实键
-        const newsN = Array.isArray(j?.news) ? j.news.length : 0;
-        const annsN = Array.isArray(j?.announcements) ? j.announcements.length : 0;
-        const seatsN = Array.isArray(j?.seats) ? j.seats.length : 0;
-        const parts: string[] = [];
-        if (annsN > 0) parts.push(`公告${annsN}条`);
-        if (seatsN > 0) parts.push(`龙虎榜席位${seatsN}条`);
-        if (newsN > 0) parts.push(`相关快讯${newsN}条`);
-        if (parts.length) return head + `【${target} 实时摘要（规则版）】${target}：` + parts.join(" · ");
-      } catch { /* 落到快照匹配 */ }
-    }
-    const hits = lines.filter(l => l.includes(target) && /强催化|龙虎榜|黑天鹅|公告|快讯/.test(l));
-    if (hits.length) return head + `【${target} 相关本地数据】\n` + hits.slice(0, 6).join("\n");
-    return head + `本地无 ${target} 的盘口数据（AI 不可用且本地库未覆盖该股）。`;
-  }
-  // 消息类（消息/新闻/政策/公告/事件/快讯）→ 本地最近 2 日消息摘要（政策优先，整段提取）
-  if (/消息|新闻|政策|公告|事件|快讯|资讯/.test(q)) {
-    const msgs = grabSection("本地最近2日消息摘要");
-    if (msgs.length) return head + msgs.join("\n");
-    const news = grab("重要快讯");
-    return head + (news.length ? news.join("\n") : "本地快照暂无消息数据（cron 可能尚未抓取或非交易日）。");
-  }
-  // 情绪/行情类 → 市场行 + 涨停板块分布
-  if (/情绪|行情|大盘|市场|怎么样|如何|什么情况|趋势/.test(q)) {
-    const market = grab("大脑快照");
-    const boards = grab("涨停板块分布");
-    if (market.length) {
-      return head + market.join("\n") + (boards.length ? "\n" + boards.join("\n") : "");
-    }
-    return head + "本地快照暂无市场数据。";
-  }
-  // 其他 → 快照通用摘要（前 8 行）
-  const summary = lines.slice(0, 8);
-  return head + "【本地数据摘要】\n" + (summary.length ? summary.join("\n") : "本地快照为空（数据源未就绪）。");
-}
-
-/** v9.92.0：Tab key → 中文名（上下文注入用） */
-export const TAB_LABELS: Record<string, string> = {
-  dashboard: "驾驶舱",
-  fundline: "资金主线",
-  radar: "个股雷达",
-  dragon: "龙虎榜复盘",
-  news: "消息面",
-};
-
-export interface AssistantSiteContext {
-  /** 当前最强主线摘要（供"知道你在看什么"） */
-  topMainline?: string;
-  topMainlineScore?: number | null;
-  topMainlineZtCount?: number;
-  topMainlineHeight?: number;
-  sentiment?: number | null;
-  sentimentLabel?: string;
-  marketNet?: number;          // 全市场主力净流入(元)
-  watchStocks?: string;        // 自选股摘要（名称列表）
-  /** v9.92.0（AI 贯穿全局·上下文感知）：当前页面与个股（来自 uiContext 全局登记） */
-  activeTab?: string;          // dashboard/fundline/radar/dragon/news
-  currentStock?: { code: string; name: string } | null;
+export async function fallbackAnswer(_snapshot: string, _question: string, reason?: string, _brain?: BrainContext): Promise<string> {
+  return `AI 暂不可用（${reason || "empty content/调用失败"}），本次不输出研判结论。请稍后重试，或先查看驾驶舱方向榜与规则引擎数据。`;
 }
 
 export async function runAssistantAgent(
