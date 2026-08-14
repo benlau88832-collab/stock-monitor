@@ -13,6 +13,7 @@ const PROVIDERS = [
   { id: "push2ex",      host: "push2ex.eastmoney.com",           kind: "quote", priority: 0 },
   { id: "push2his",     host: "push2his.eastmoney.com",          kind: "kline", priority: 0, fallbackTo: "tencentKline" },
   { id: "datacenter",   host: "datacenter-web.eastmoney.com",    kind: "data",  priority: 0 },
+  { id: "reportapi",    host: "reportapi.eastmoney.com",        kind: "data",  priority: 0 },
   { id: "emappdata",    host: "emappdata.eastmoney.com",         kind: "data",  priority: 0 },
   // ---- 东财新闻/公告/页面 ----
   { id: "npWeblist",    host: "np-weblist.eastmoney.com",        kind: "news",  priority: 0 },

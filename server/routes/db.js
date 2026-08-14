@@ -517,12 +517,22 @@ module.exports = function dbRoutes(app) {
         }
       }
 
+      const [researchForecastR, surveyR, holderR, liftR] = await Promise.allSettled([
+        require("../lib/researchData").fetchResearchReportsServer(code, 5),
+        require("../lib/researchData").fetchInstitutionSurveysServer(code, 5),
+        require("../lib/researchData").fetchHolderCountServer(code),
+        require("../lib/researchData").fetchLiftBanServer(code, 5),
+      ]);
       res.json({
         code,
         concepts,                                     // { themes, allBoards, hybk } | null
         news: newsRowsR.rows,
         announcements: annsR.status === "fulfilled" ? annsR.value.rows : [],
         reports: reportsR.status === "fulfilled" ? reportsR.value.rows : [],
+        researchForecast: researchForecastR.status === "fulfilled" ? researchForecastR.value : [],
+        surveys: surveyR.status === "fulfilled" ? surveyR.value : [],
+        holderCount: holderR.status === "fulfilled" ? holderR.value : null,
+        liftBan: liftR.status === "fulfilled" ? liftR.value : [],
         watch: watchR.status === "fulfilled" ? watchR.value.rows : [],
         watchLog: watchLogR.status === "fulfilled" ? watchLogR.value.rows : [],
         seats,                                        // 近 45 天席位净买/卖记录

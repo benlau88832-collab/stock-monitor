@@ -1049,6 +1049,28 @@ export default function StockWatchlist({ mainlines = [] }: { mainlines?: string[
                       <div>日K {aggData.kline?.length ?? 0} 根 · 指标 {aggData.indicators?.signals?.length ?? 0} 信号</div>
                     </div>
                   </div>
+                  <div className="lg:col-span-12 rounded-lg border border-white/10 bg-black/20 p-2">
+                    <div className="text-[10px] text-slate-500">🧪 投研证据（研报/调研/股东/解禁）</div>
+                    <div className="mt-1 grid grid-cols-1 gap-1.5 text-[10px] sm:grid-cols-2 lg:grid-cols-4">
+                      <div>
+                        <div className="text-slate-400">研报 {aggData.researchForecast?.length ?? 0} 条</div>
+                        {(aggData.researchForecast ?? []).slice(0, 2).map((r, i) => (<div key={i} className="text-slate-300">{r.orgName} {r.rating} EPS {r.predictThisYearEps ?? "?"}/{r.predictNextYearEps ?? "?"} PE {r.predictThisYearPe ?? "?"}/{r.predictNextYearPe ?? "?"}</div>))}
+                      </div>
+                      <div>
+                        <div className="text-slate-400">机构调研 {aggData.surveys?.length ?? 0} 条</div>
+                        {(aggData.surveys ?? []).slice(0, 2).map((s, i) => (<div key={i} className="text-slate-300">{s.noticeDate} {s.receiveObject || "机构"}{s.num ? `（${s.num}家）` : ""}</div>))}
+                      </div>
+                      <div>
+                        <div className="text-slate-400">股东户数</div>
+                        {aggData.holderCount ? <div className="text-slate-300">{aggData.holderCount.holderNum ?? "?"} 户 · 环比 {aggData.holderCount.holderNumChange ?? "?"}（{aggData.holderCount.holderNumRatio ?? "?"}%）</div> : <div className="text-slate-600">未采集</div>}
+                      </div>
+                      <div>
+                        <div className="text-slate-400">未来解禁</div>
+                        {(aggData.liftBan ?? []).slice(0, 2).map((l, i) => (<div key={i} className="text-slate-300">{l.freeDate} {l.freeRatio ?? "?"}%</div>))}
+                        {(aggData.liftBan ?? []).length === 0 && <div className="text-slate-600">无近期解禁</div>}
+                      </div>
+                    </div>
+                  </div>
                   {/* v9.130.0（终审 D3）：个股监控公告栏资讯聚合（公告+新闻+快讯滚动） */}
                   <div className="lg:col-span-12 rounded-lg border border-white/10 bg-black/20 p-2">
                     <StockNewsAgg code={selected ?? ""} name={stocks[selected ?? ""]?.name ?? selected ?? ""} />

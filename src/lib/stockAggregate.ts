@@ -12,6 +12,10 @@ export interface StockAggregateData {
   news: Array<{ title: string; time: string; sentiment?: string | null }>;
   announcements: Array<{ title: string; stock_name?: string; column_name?: string; time: string }>;
   reports: unknown[];
+  researchForecast?: Array<{ title: string; orgName: string; publishDate: string; rating: string; predictThisYearEps?: number | null; predictThisYearPe?: number | null; predictNextYearEps?: number | null; predictNextYearPe?: number | null; url?: string }>;
+  surveys?: Array<{ noticeDate: string; receiveDate: string; receiveObject: string; receiveWay: string; num?: number | null }>;
+  holderCount?: { endDate: string; holderNum: number | null; preHolderNum: number | null; holderNumChange: number | null; holderNumRatio: number | null } | null;
+  liftBan?: Array<{ freeDate: string; liftMarketCap: number | null; freeRatio: number | null }>;
   watch: unknown[];
   seats: Array<{ date: string; deptName: string; direction: string; net: number }>;
   ztHistory: Array<{ date: string; lbc: number; hybk?: string }>;
@@ -86,6 +90,20 @@ export function buildAggregatePrompt(d: StockAggregateData): string {
     lines.push(`近30日涨停历史：${d.ztHistory.map(z => `${z.date} ${z.lbc}板`).join("、")}`);
   } else {
     lines.push("近30日涨停历史：无");
+  }
+  if (d.researchForecast && d.researchForecast.length > 0) {
+    lines.push(`研报一致预期（${d.researchForecast.length} 条）：${d.researchForecast.slice(0, 3).map(r => `${r.orgName} ${r.rating} EPS${r.predictThisYearEps ?? "?"}/${r.predictNextYearEps ?? "?"} PE${r.predictThisYearPe ?? "?"}/${r.predictNextYearPe ?? "?"}`).join("；")}`);
+  } else {
+    lines.push("研报一致预期：无");
+  }
+  if (d.surveys && d.surveys.length > 0) {
+    lines.push(`机构调研（${d.surveys.length} 条）：${d.surveys.slice(0, 3).map(s => `${s.noticeDate} ${s.receiveObject || "机构"}${s.num ? `(${s.num}家)` : ""}`).join("；")}`);
+  }
+  if (d.holderCount) {
+    lines.push(`股东户数：${d.holderCount.holderNum ?? "?"}（环比${d.holderCount.holderNumChange ?? "?"}，${d.holderCount.holderNumRatio ?? "?"}%）`);
+  }
+  if (d.liftBan && d.liftBan.length > 0) {
+    lines.push(`未来解禁：${d.liftBan.map(l => `${l.freeDate} ${l.freeRatio ?? "?"}%`).join("、")}`);
   }
   return lines.join("\n");
 }
