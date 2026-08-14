@@ -225,12 +225,13 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
   const [stage, setStage] = useState<ReturnType<typeof analyzeSwing> | null>(null);
   const [lastPrice, setLastPrice] = useState<number | null>(null);
   const [chainCtx, setChainCtx] = useState<{ chain: any; signals: any } | null>(null);
+  const [feedbackPenalty, setFeedbackPenalty] = useState<{ total: number; byAttribution: Record<string, number> } | null>(null);
   const [err, setErr] = useState("");
 
   const run = async () => {
     const c = code.trim();
     if (!/^\d{6}$/.test(c)) { setErr("请输入 6 位股票代码"); return; }
-    setBusy(true); setErr(""); setResult(null); setStage(null);
+    setBusy(true); setErr(""); setResult(null); setStage(null); setFeedbackPenalty(null);
     try {
       const r = await apiFetch("/api/decisions/swing", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: c }),
@@ -244,6 +245,7 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
       setLastPrice(j.snap?.price ?? j.stage?.ma20 ?? null);
       setResult(j.decision ?? null);
       setChainCtx(j.chain?.chain ? j.chain : null);
+      setFeedbackPenalty(j.feedbackPenalty ?? null);
       if (j.llmError) setErr(`AI 研判暂不可用，已使用规则研判：${j.llmError}`);
     } catch (e) {
       try {
@@ -292,6 +294,7 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
           {result.verdict === "波段买入" && <div className="text-slate-300">止损 {result.stopLossPct}% 路 止盈 +{result.targetPct}% 路 仓位 {result.positionRange[0]}-{result.positionRange[1]}%</div>}
           {result.reasons.length > 0 && <div className="text-emerald-300/80">{result.reasons.join("；")}</div>}
           {result.blocks.length > 0 && <div className="text-rose-300/80">{result.blocks.join("；")}</div>}
+          {feedbackPenalty?.total ? <div className="text-amber-300/80">用户反馈硬扣：-{Math.min(15, feedbackPenalty.total * 3)} 分（{Object.entries(feedbackPenalty.byAttribution).map(([k, v]) => `${k} ${v}`).join("、")}）</div> : null}
             <DecisionActionPanel code={code.trim()} name={name.trim() || code.trim()} price={lastPrice} defaultThesis={`${result?.reasons.join("；") || stage?.signals.join("；") || "波段决策"}；止损参考 ${result?.stopLossPct != null ? Math.round((lastPrice ?? 0) * (1 - result.stopLossPct / 100) * 100) / 100 : ""}`} addTrade={addTrade} saveLogic={saveLogic} />
         </div>
       )}

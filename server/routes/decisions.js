@@ -14,6 +14,7 @@ const { fetchStockSnapshotServer } = require("../lib/stockSnapshot");
 const { analyzeSwing } = require("../lib/swingStage");
 const { swingDecision } = require("../lib/swingDecision");
 const { chatComplete } = require("../lib/llmCore");
+const { loadFeedbackPenalty, applyDecisionPenalty } = require("../lib/feedbackPenalty");
 const { buildChainView } = require("../../src/shared/transmission-chain.js");
 
 function num(v) {
@@ -118,7 +119,9 @@ module.exports = function decisionsRoutes(app) {
       const code = String(body.code ?? "").trim();
       if (!code) return res.status(400).json({ error: "missing code" });
       const v = await composeDecision({ code, mainline: body.mainline });
-      res.json(v);
+      const fp = await loadFeedbackPenalty(pool, code);
+      const applied = applyDecisionPenalty(v, fp);
+      res.json({ ...applied.decision, feedbackPenalty: applied.penalty });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -157,7 +160,9 @@ module.exports = function decisionsRoutes(app) {
         llmError = String(e?.message ?? e);
         decision = swingDecision({ stage, board: null, holding: false });
       }
-      res.json({ ok: true, code, snap: snapVal, stage, chain: chainVal, decision, fromLLM, llmError });
+      const fp = await loadFeedbackPenalty(pool, code);
+      const applied = applyDecisionPenalty(decision, fp);
+      res.json({ ok: true, code, snap: snapVal, stage, chain: chainVal, decision: applied.decision, fromLLM, llmError, feedbackPenalty: applied.penalty });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
