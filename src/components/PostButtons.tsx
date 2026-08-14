@@ -9,6 +9,7 @@ import { useRef, useState } from "react";
 import { buildPost, savePost, hasPosted, type HumanAction, type DecisionPost } from "../lib/decisionPost";
 import { emit as emitAlert } from "../lib/alertBus";
 import type { PostHookCtx } from "../lib/hookDecisionPost";
+import { apiFetch } from "../lib/cloudStore";
 import DisclaimerTag from "./DisclaimerTag";
 
 interface Props {
@@ -31,17 +32,41 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
   const [note, setNote] = useState("");
   const [qty, setQty] = useState("");
   const lastTicketId = useRef<string | null>(null);
+  const [postFb, setPostFb] = useState<string | null>(null);
+  const [postFbNote, setPostFbNote] = useState("");
+  const [postFbSent, setPostFbSent] = useState(false);
+  const [postFbAttr, setPostFbAttr] = useState<string | null>(null);
 
   // 仅当有 AI 或规则裁决时才显示按钮（无 agentVerdict 时仍可显示，使用户随手记一句"否决"）
   if (posted) {
     return (
-      <div className="mt-2 px-3 py-2 rounded bg-slate-800/60 text-slate-200 text-xs flex items-center justify-between">
-        <span>已记录拍板：
-          <b className={posted === "confirm" ? "text-emerald-400" : posted === "watch" ? "text-amber-300" : "text-rose-300"}>
-            {posted === "confirm" ? "✅ 确认上车" : posted === "watch" ? "⏸ 等等观望" : "🚫 否决回避"}
-          </b>
-        </span>
-        <button className="text-sky-400 hover:text-sky-300 underline" onClick={() => setPosted(null)}>撤销重拍</button>
+      <div className="mt-2 px-3 py-2 rounded bg-slate-800/60 text-slate-200 text-xs space-y-1.5">
+        <div className="flex items-center justify-between">
+          <span>已记录拍板：
+            <b className={posted === "confirm" ? "text-emerald-400" : posted === "watch" ? "text-amber-300" : "text-rose-300"}>
+              {posted === "confirm" ? "✅ 确认上车" : posted === "watch" ? "⏸ 等等观望" : "🚫 否决回避"}
+            </b>
+          </span>
+          <button className="text-sky-400 hover:text-sky-300 underline" onClick={() => setPosted(null)}>撤销重拍</button>
+        </div>
+        {posted === "confirm" && !postFbSent && (
+          <div className="flex flex-wrap gap-1">
+            <button onClick={() => sendPostFeedback("accurate")} className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-500/30">👍 准确</button>
+            <button onClick={() => setPostFb("inaccurate")} className="rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-300 hover:bg-rose-500/30">👎 不准确</button>
+          </div>
+        )}
+        {posted === "confirm" && postFb === "inaccurate" && !postFbSent && (
+          <div className="space-y-1">
+            <div className="flex flex-wrap gap-1">
+              {[{ key: "chain", label: "产业链判断错" }, { key: "fundamentals", label: "基本面判断错" }, { key: "timing", label: "择时判断错" }, { key: "data", label: "数据本身错" }].map((o) => (
+                <button key={o.key} onClick={() => setPostFbAttr(o.key)} className={`rounded px-1.5 py-0.5 text-[10px] ${postFbAttr === o.key ? "bg-rose-500/30 text-rose-200 ring-1 ring-rose-400/50" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}>{o.label}</button>
+              ))}
+            </div>
+            <input value={postFbNote} onChange={(e) => setPostFbNote(e.target.value)} placeholder="补充原因（可选）" className="w-full px-2 py-1 text-xs rounded bg-slate-950/60 border border-slate-700 text-slate-200 focus:outline-none focus:border-sky-500" />
+            <button onClick={() => sendPostFeedback("inaccurate", postFbAttr ?? undefined)} className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-bold text-rose-200 hover:bg-rose-500/30">提交反馈</button>
+          </div>
+        )}
+        {postFbSent && <div className="text-[10px] text-emerald-300">反馈已记录，用于画像与置信校准</div>}
       </div>
     );
   }
@@ -58,6 +83,16 @@ export default function PostButtons({ mainline, agentVerdict, aiLogTs, code = nu
   ];
   const [fbKey, setFbKey] = useState<string | null>(null);
   const toggleFb = (k: string) => setFbKey(prev => prev === k ? null : k);
+  const sendPostFeedback = async (feedback: "accurate" | "inaccurate", attribution?: string) => {
+    try {
+      await apiFetch("/api/db/decision_feedback", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticketId: lastTicketId.current, code, mainline, feedback, attribution, note: postFbNote }),
+      });
+      setPostFbSent(true);
+      emitAlert({ id: `post_fb_${lastTicketId.current}`, severity: "info", message: "已记录决策反馈，用于画像与置信校准" });
+    } catch { /* 反馈失败不影响主流程 */ }
+  };
 
   const handlePost = async (action: HumanAction) => {
     if (aiLogTs && hasPosted(aiLogTs)) {

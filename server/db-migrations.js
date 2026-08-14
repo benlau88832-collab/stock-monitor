@@ -27,8 +27,22 @@ CREATE TABLE IF NOT EXISTS logic_ledger (
 CREATE INDEX IF NOT EXISTS idx_logic_code_status ON logic_ledger(code, status);
 `;
 
+const DECISION_FEEDBACK_SQL = `
+CREATE TABLE IF NOT EXISTS decision_feedback (
+  id             SERIAL PRIMARY KEY,
+  ticket_id      TEXT,
+  code           TEXT,
+  mainline       TEXT,
+  feedback       TEXT NOT NULL,
+  attribution    TEXT,
+  note           TEXT,
+  created_at     TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_df_ticket ON decision_feedback(ticket_id);
+`;
 async function runMigrations() {
   await pool.query(LOGIC_LEDGER_SQL);
+  await pool.query(DECISION_FEEDBACK_SQL);
   await pool.query(`ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE logic_ledger ADD COLUMN IF NOT EXISTS invalidation_conditions JSONB DEFAULT '[]'::jsonb`);

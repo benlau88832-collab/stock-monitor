@@ -211,6 +211,17 @@ CREATE TABLE IF NOT EXISTS cognition_snapshots (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_cog_version ON cognition_snapshots(version);
+CREATE TABLE IF NOT EXISTS decision_feedback (
+  id             SERIAL PRIMARY KEY,
+  ticket_id      TEXT,
+  code           TEXT,
+  mainline       TEXT,
+  feedback       TEXT NOT NULL,
+  attribution    TEXT,
+  note           TEXT,
+  created_at     TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_df_ticket ON decision_feedback(ticket_id);
 `;
 
 async function initDb() {

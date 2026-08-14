@@ -90,6 +90,7 @@ require("./routes/db")(app);
 require("./routes/portfolio")(app);
 require("./routes/swing")(app);
 require("./routes/chain")(app);
+require("./routes/feedback")(app);
 
 require("./routes/cognition")(app);
 require("./routes/decisions")(app);
