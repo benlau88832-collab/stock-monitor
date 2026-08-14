@@ -163,6 +163,10 @@ function checkTarget(target) {
 const MAX_RESP_BYTES = 5 * 1024 * 1024;
 const CACHE_MAX_BYTES = 40 * 1024 * 1024;
 let cacheBytes = 0;
+function degradePush2his(res) {
+  res.set("X-Data-Source", "push2his-degraded");
+  res.status(204).end();
+}
 function forward(req, res, target, bodyBuf, fallbackDepth = 0) {
   const { url: u } = checkTarget(target);
   const fallbackHost = u.hostname === "push2.eastmoney.com" ? "push2delay.eastmoney.com" : null;
@@ -186,6 +190,7 @@ function forward(req, res, target, bodyBuf, fallbackDepth = 0) {
     if (fallbackTarget && fallbackDepth === 0) {
       return forward(req, res, fallbackTarget, bodyBuf, 1);
     }
+    if (u.hostname === "push2his.eastmoney.com" && !bodyBuf) return degradePush2his(res);
     return res.status(502).json({ error: "circuit open (source cooling)" });
   }
   res.set("X-Data-Source", u.hostname); // v9.99.0：data_source 标记（实际供数源，前端可观测）
@@ -237,6 +242,7 @@ function forward(req, res, target, bodyBuf, fallbackDepth = 0) {
       if (r.statusCode >= 400) {
         recordFail(u.hostname, new Error("upstream http " + r.statusCode));
         if (fallbackTarget && fallbackDepth === 0) return done(() => forward(req, res, fallbackTarget, bodyBuf, 1));
+        if (u.hostname === "push2his.eastmoney.com" && !bodyBuf) return done(() => degradePush2his(res));
         return done(() => res.status(502).json({ error: "upstream http " + r.statusCode }));
       }
       if (cacheKey) {
@@ -264,6 +270,7 @@ function forward(req, res, target, bodyBuf, fallbackDepth = 0) {
   upstream.on("error", e => {
     recordFail(u.hostname, e);
     if (fallbackTarget && fallbackDepth === 0) return done(() => forward(req, res, fallbackTarget, bodyBuf, 1));
+    if (u.hostname === "push2his.eastmoney.com" && !bodyBuf) return done(() => degradePush2his(res));
     done(() => res.status(502).json({ error: e.message }));
   });
   // v9.81（性能）：上游超时 12s→6s —— 东财断源时前端不再挂 12s 等 504
@@ -272,6 +279,7 @@ function forward(req, res, target, bodyBuf, fallbackDepth = 0) {
     recordFail(u.hostname, e);
     upstream.destroy();
     if (fallbackTarget && fallbackDepth === 0) return done(() => forward(req, res, fallbackTarget, bodyBuf, 1));
+    if (u.hostname === "push2his.eastmoney.com" && !bodyBuf) return done(() => degradePush2his(res));
     done(() => res.status(504).json({ error: "upstream timeout" }));
   });
   if (bodyBuf) upstream.write(bodyBuf);
