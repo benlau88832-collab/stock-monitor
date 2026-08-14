@@ -10,9 +10,9 @@
 const { execFile } = require("child_process");
 const path = require("path");
 
-const PYTHON = "C:/Python312/python.exe";
-const MX_DATA = "C:/Users/Administrator/.workbuddy/skills/mx-data/mx_data.py";
-const MX_SEARCH = "C:/Users/Administrator/.workbuddy/skills/mx-search/mx_search.py";
+const PYTHON = process.env.MX_PYTHON_BIN || (process.platform === "win32" ? "C:/Python312/python.exe" : "python3");
+const MX_DATA = process.env.MX_DATA_SCRIPT || "C:/Users/Administrator/.workbuddy/skills/mx-data/mx_data.py";
+const MX_SEARCH = process.env.MX_SEARCH_SCRIPT || "C:/Users/Administrator/.workbuddy/skills/mx-search/mx_search.py";
 const OUT_DIR = path.join(__dirname, "..", "tmp", "mx");
 
 function runMx(script, query, timeoutMs = 60000) {

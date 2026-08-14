@@ -108,7 +108,7 @@ export async function computeDecisionHitrate(days = 30): Promise<HitrateResult> 
     // v9.137.0（审查 P3-13）：AI-对话 来源（consoleDigest 正则回写，置信硬编码 65/50，非真实裁决）
     // 原落入 rule 桶污染规则胜率 —— 并入 degraded 桶（"非正式裁决"语义）
     const isDegraded = l.path === "rule_fallback" || l.rateLimited === true || l.gatedDowngrade != null || l.source === "AI-对话";
-    const bucket = isDegraded ? res.degraded : (l.source === "AI-Agent" ? res.ai : res.rule);
+    const bucket = isDegraded ? res.degraded : ((l.source === "AI-Agent" || l.source === "AI-Swing") ? res.ai : res.rule);
     bucket.total++;
     bucket.hits += win;
   }
@@ -134,6 +134,12 @@ export interface PostHitrateResult {
   aiPnlT5: { avg: number | null; n: number };
   rulePnlT5: { avg: number | null; n: number };
   degradedPnlT5: { avg: number | null; n: number };
+  aiPnlT20: { avg: number | null; n: number };
+  rulePnlT20: { avg: number | null; n: number };
+  degradedPnlT20: { avg: number | null; n: number };
+  aiPnlT60: { avg: number | null; n: number };
+  rulePnlT60: { avg: number | null; n: number };
+  degradedPnlT60: { avg: number | null; n: number };
   /** 已回填样本数（少于拍板数 = 数据积累中） */
   backfilledCount: number;
 }
@@ -147,6 +153,12 @@ export async function computePostHitrate(days = 30): Promise<PostHitrateResult> 
     aiPnlT5: { avg: null, n: 0 },
     rulePnlT5: { avg: null, n: 0 },
     degradedPnlT5: { avg: null, n: 0 },
+    aiPnlT20: { avg: null, n: 0 },
+    rulePnlT20: { avg: null, n: 0 },
+    degradedPnlT20: { avg: null, n: 0 },
+    aiPnlT60: { avg: null, n: 0 },
+    rulePnlT60: { avg: null, n: 0 },
+    degradedPnlT60: { avg: null, n: 0 },
     backfilledCount: 0,
   };
   const logs = loadDecisionLogs(days);
@@ -161,7 +173,7 @@ export async function computePostHitrate(days = 30): Promise<PostHitrateResult> 
     const source = log?.source ?? "规则投票";  // 无配对按规则保守处理
     // v9.137.0（审查 P3-13）：AI-对话 来源并入 degraded（同 computeDecisionHitrate 口径）
     const isDegraded = log ? (log.path === "rule_fallback" || log.rateLimited === true || log.gatedDowngrade != null || log.source === "AI-对话") : false;
-    const bucketKey = isDegraded ? "degraded" : source === "AI-Agent" ? "ai" : "rule";
+    const bucketKey = isDegraded ? "degraded" : (source === "AI-Agent" || source === "AI-Swing") ? "ai" : "rule";
 
     // 真实 T+5 盈亏回填（本地无则尝试现算；失败静默）
     let pnlT5: number | null = null;
@@ -186,6 +198,15 @@ export async function computePostHitrate(days = 30): Promise<PostHitrateResult> 
     pnlBucket.avg = pnlBucket.avg == null
       ? pnlT5
       : Math.round((pnlBucket.avg * (pnlBucket.n - 1) + pnlT5) / pnlBucket.n * 100) / 100;
+    const addPnl = (target: { avg: number | null; n: number }, v: number | null) => {
+      if (v == null) return;
+      target.n++;
+      target.avg = target.avg == null ? v : Math.round((target.avg * (target.n - 1) + v) / target.n * 100) / 100;
+    };
+    const b20 = bucketKey === "ai" ? res.aiPnlT20 : bucketKey === "rule" ? res.rulePnlT20 : res.degradedPnlT20;
+    const b60 = bucketKey === "ai" ? res.aiPnlT60 : bucketKey === "rule" ? res.rulePnlT60 : res.degradedPnlT60;
+    addPnl(b20, Number(post.pnlT20 ?? null) || null);
+    addPnl(b60, Number(post.pnlT60 ?? null) || null);
   }
 
   if (res.ai.total > 0) res.ai.rate = Math.round(res.ai.hits / res.ai.total * 100);

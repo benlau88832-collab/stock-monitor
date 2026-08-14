@@ -436,6 +436,20 @@ export function getAgentTools(): AgentTool[] {
       },
     },
     {
+      name: "getChainContext",
+      description: "产业链上下文：查个股所在产业链/节点/上下游/营收敞口/最新信号。判断个股前若有code应调用，并在理由中引用链位置与敞口。",
+      kind: "data",
+      execute: async (ctx: ToolContext) => {
+        const code = ctx.code;
+        if (!code) return { dataMissing: true as const, missing: ["code"], note: "未传入股票代码，无法查产业链" };
+        try {
+          const r = await fetch(`/api/chain/context?code=${encodeURIComponent(code)}`, { signal: AbortSignal.timeout(6000) });
+          if (!r.ok) return { error: `chain context ${r.status}` };
+          return await r.json();
+        } catch (e) { return { error: String(e) }; }
+      },
+    },
+    {
       name: "getDecisionEvidence",
       description: "多源决策证据：汇聚各引擎输出（decisionBus 视角）",
       kind: "data",
@@ -563,6 +577,18 @@ export function getStockAgentTools(stock: StockToolInput): AgentTool[] {
   return [
     // v11-6（P1）：个股 Agent 同样可推断缺失字段
     estimateMissingFields,
+    {
+      name: "getChainContext",
+      description: "产业链上下文：查该股所在产业链/节点/上下游/营收敞口/信号。个股研判应优先调用。",
+      kind: "data",
+      execute: async () => {
+        try {
+          const r = await fetch(`/api/chain/context?code=${encodeURIComponent(stock.code)}`, { signal: AbortSignal.timeout(6000) });
+          if (!r.ok) return { error: `chain context ${r.status}` };
+          return await r.json();
+        } catch (e) { return { error: String(e) }; }
+      },
+    },
     {
       name: "getStockFund",
       description: "个股资金面：主力净流入(元/占比)/5日/10日/换手/量比（fetchStockOne 实时）",

@@ -5,6 +5,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, AlertTriangle, Plus, RefreshCw, X } from "lucide-react";
 import { apiFetch, isLocalServer } from "../lib/cloudStore";
+import { localDateStr } from "../lib/format";
+import { getProfilePrompt } from "../lib/userProfile";
 import { analyzeSwing, type KlineBar } from "../lib/swingStage";
 import { swingDecision } from "../lib/swingDecision";
 import {
@@ -223,12 +225,15 @@ function LogicLedgerPanel({ entries, priceMap, boardHealth, onAdd, onUpdate, onR
   );
 }
 
-function SwingDecisionCard({ addTrade, saveLogic }: {
+export function SwingVerdictCard({ addTrade, saveLogic, initialCode = "", initialName = "" }: {
   addTrade: (input: PortfolioTradeInput) => Promise<any>;
   saveLogic: (input: PortfolioLogicInput) => Promise<any>;
+  initialCode?: string;
+  initialName?: string;
 }) {
-  const [code, setCode] = useState("");
-  const [name, setName] = useState("");
+  const [code, setCode] = useState(initialCode);
+  const [name, setName] = useState(initialName);
+  const [swingLogRef, setSwingLogRef] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ApiSwingDecision | null>(null);
   const [stage, setStage] = useState<ReturnType<typeof analyzeSwing> | null>(null);
@@ -243,7 +248,7 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
     setBusy(true); setErr(""); setResult(null); setStage(null); setFeedbackPenalty(null);
     try {
       const r = await apiFetch("/api/decisions/swing", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: c }), signal: AbortSignal.timeout(60000),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: c, profile: getProfilePrompt() }), signal: AbortSignal.timeout(60000),
       });
       if (!r.ok) {
         const ej = await r.json().catch(() => ({}));
@@ -253,6 +258,14 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
       setStage(j.stage ?? null);
       setLastPrice(j.snap?.price ?? j.stage?.ma20 ?? null);
       setResult(j.decision ?? null);
+      const logTs = String(Date.now());
+      setSwingLogRef(logTs);
+      try {
+        const key = `decision_log:${localDateStr()}`;
+        const arr = JSON.parse(localStorage.getItem(key) || "[]");
+        arr.push({ ts: logTs, mainline: null, action: j.decision?.verdict?.includes("买入") ? "可上车" : j.decision?.verdict === "持有" ? "观望" : j.decision?.verdict === "观望" ? "观望" : "禁止", source: "AI-Swing", confidence: j.decision?.score ?? 50, path: "ai-swing", agentReason: j.decision?.signal ?? "" });
+        localStorage.setItem(key, JSON.stringify(arr.slice(-200)));
+      } catch { /* AI-Swing 留痕失败不影响决策展示 */ }
       setChainCtx(j.chain?.chain ? j.chain : null);
       setFeedbackPenalty(j.feedbackPenalty ?? null);
       if (j.llmError) setErr(`AI 研判暂不可用，已使用规则研判：${j.llmError}`);
@@ -315,7 +328,7 @@ function SwingDecisionCard({ addTrade, saveLogic }: {
             <div className="rounded bg-black/20 p-1.5 text-[10px] text-amber-300/90">失效条件：{result.invalidationConditions.join("；")}</div>
           )}
           {feedbackPenalty?.total ? <div className="text-amber-300/80">用户反馈硬扣：-{Math.min(15, feedbackPenalty.total * 3)} 分（{Object.entries(feedbackPenalty.byAttribution).map(([k, v]) => `${k} ${v}`).join("、")}）</div> : null}
-          <DecisionActionPanel code={code.trim()} name={name.trim() || code.trim()} price={lastPrice} defaultThesis={`${result?.reasons.join("；") || stage?.signals.join("；") || "波段决策"}；止损参考 ${result?.stopLossPct != null ? Math.round((lastPrice ?? 0) * (1 - result.stopLossPct / 100) * 100) / 100 : ""}`} defaultInvalidation={result.invalidationConditions ?? []} defaultReviewCycle={result.reviewCycleDays ?? 20} addTrade={addTrade} saveLogic={saveLogic} />
+          <DecisionActionPanel code={code.trim()} name={name.trim() || code.trim()} price={lastPrice} decisionLogRef={swingLogRef} defaultThesis={`${result?.reasons.join("；") || stage?.signals.join("；") || "波段决策"}；止损参考 ${result?.stopLossPct != null ? Math.round((lastPrice ?? 0) * (1 - result.stopLossPct / 100) * 100) / 100 : ""}`} defaultInvalidation={result.invalidationConditions ?? []} defaultReviewCycle={result.reviewCycleDays ?? 20} addTrade={addTrade} saveLogic={saveLogic} />
         </div>
       )}
     </div>
@@ -397,7 +410,7 @@ export default function SwingWarRoomV2() {
           </div>
         </div>
 
-        <SwingDecisionCard addTrade={portfolio.addTrade} saveLogic={portfolio.saveLogic} />
+        <SwingVerdictCard addTrade={portfolio.addTrade} saveLogic={portfolio.saveLogic} />
       </div>
 
       <LogicLedgerPanel

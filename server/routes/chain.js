@@ -1,10 +1,12 @@
 // ============================================================
 // v9.143.0 chain/context: stock -> industry chain context
 // Shared chain KB now lives in src/shared/transmission-chain.js.
+// v9.145.0（第二轮 P1-4）：加入 industry_chain_event 查询与手动推理触发。
 // ============================================================
 const { pool } = require("../db");
 const { buildChainView } = require("../../src/shared/transmission-chain.js");
 const { getChainDbContext } = require("../lib/chainDb");
+const { runChainReasoning } = require("../lib/chainReasoning");
 
 function bjDateStr() {
   const d = new Date(Date.now() + 8 * 3600 * 1000);
@@ -65,6 +67,27 @@ async function enrichSignals(board) {
   return out;
 }
 
+async function loadEvents(chainId) {
+  if (!chainId) return [];
+  try {
+    const r = await pool.query(
+      `SELECT id, chain_id, title, summary, impact_path, impacted_nodes, confidence, published_at
+       FROM industry_chain_event WHERE chain_id=$1 ORDER BY published_at DESC LIMIT 5`,
+      [chainId],
+    );
+    return r.rows.map((row) => ({
+      id: row.id,
+      chainId: row.chain_id,
+      title: row.title,
+      summary: row.summary,
+      impactPath: typeof row.impact_path === "string" ? JSON.parse(row.impact_path) : row.impact_path,
+      impactedNodes: Array.isArray(row.impacted_nodes) ? row.impacted_nodes : (typeof row.impacted_nodes === "string" ? JSON.parse(row.impacted_nodes) : []),
+      confidence: row.confidence,
+      publishedAt: row.published_at,
+    }));
+  } catch { return []; }
+}
+
 module.exports = function chainRoutes(app) {
   app.get("/api/chain/context", async (req, res) => {
     const code = String(req.query.code || "").trim();
@@ -74,7 +97,8 @@ module.exports = function chainRoutes(app) {
       if (code) {
         const dbCtx = await getChainDbContext(pool, code);
         if (dbCtx.mapped) {
-          return res.json({ code, board: dbCtx.chain.boardName, boards: dbCtx.boards, chain: dbCtx.chain, signals: { fund: null, ztCount: null }, source: "db" });
+          const events = await loadEvents(dbCtx.chain.chainId);
+          return res.json({ code, board: dbCtx.chain.boardName, boards: dbCtx.boards, chain: dbCtx.chain, signals: { fund: null, ztCount: null }, events, source: "db" });
         }
       }
       const candidates = code ? await findBoardsForCode(code) : (board ? [board] : []);
@@ -86,7 +110,19 @@ module.exports = function chainRoutes(app) {
         return res.json({ code, board, chain: null, boards: candidates.slice(0, 10), reason: "未收录，待补充" });
       }
       const signals = await enrichSignals(found.board);
-      res.json({ code, board: found.board, boards: candidates.slice(0, 10), chain: found.chain, signals });
+      const events = await loadEvents(found.chain.chainId);
+      res.json({ code, board: found.board, boards: candidates.slice(0, 10), chain: found.chain, signals, events });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/chain/reasoning/run", async (req, res) => {
+    try {
+      const chainId = String(req.body?.chainId || "").trim();
+      if (!chainId) return res.status(400).json({ error: "chainId required" });
+      const out = await runChainReasoning(pool, chainId);
+      res.json(out);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

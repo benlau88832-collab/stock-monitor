@@ -83,7 +83,7 @@ async function fetchNewsContext(code) {
   };
 }
 
-async function llmSwingDecision(code, snap, stage, chain, newsCtx, fundamentals) {
+async function llmSwingDecision(code, snap, stage, chain, newsCtx, fundamentals, profile) {
   const system = "你是A股波段投研分层决策引擎。每一层结论必须引用输入中的具体数据，输出严格JSON。";
   const user = `请对 ${code} 做波段决策：
 阶段：${JSON.stringify(stage)}
@@ -91,6 +91,7 @@ async function llmSwingDecision(code, snap, stage, chain, newsCtx, fundamentals)
 产业链：${JSON.stringify(chain)}
 研报/调研/股东/解禁：${JSON.stringify(fundamentals)}
 消息：${JSON.stringify(newsCtx)}
+ 用户画像：${profile || "暂无"}
 
 输出严格JSON：
 {"verdict":"波段买入|持有|减仓|观望|回避","score":0-100,"buyPoint":"买点或null","stopLossPct":5,"targetPct":15,"positionRange":[10,20],"holdingHorizonDays":20,"reviewCycleDays":20,"reasons":["证据链"],"blocks":["风险"],"evidenceChain":[{"step":"产业链","evidence":"引用具体数据"}],"invalidationConditions":["假设失效条件"],"signal":"一句话"}`;
@@ -137,6 +138,7 @@ module.exports = function decisionsRoutes(app) {
   app.post("/api/decisions/swing", async (req, res) => {
     try {
       const code = String(req.body?.code ?? "").trim();
+      const profile = String(req.body?.profile ?? "");
       if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
       const [snap, klines, chainCtx, newsCtx, researchForecastR, surveyR, holderR, liftR] = await Promise.allSettled([
         fetchStockSnapshotServer(code),
@@ -171,7 +173,7 @@ module.exports = function decisionsRoutes(app) {
       let llmError = null;
       try {
         decision = await Promise.race([
-          llmSwingDecision(code, snapVal, stage, chainVal, newsVal, fundamentalsVal),
+          llmSwingDecision(code, snapVal, stage, chainVal, newsVal, fundamentalsVal, profile),
           new Promise((_, reject) => setTimeout(() => reject(new Error("llm timeout 35s")), 35000)),
         ]);
         fromLLM = true;

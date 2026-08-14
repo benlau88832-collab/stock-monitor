@@ -201,3 +201,31 @@ export function classifySwingPhase(bars: KlineBar[]): SwingStageResult {
 export function analyzeSwing(bars: KlineBar[]): SwingStageResult {
   return classifySwingPhase(bars);
 }
+
+// v9.145.0（第二轮 P1-5）：周线级中长波段模型，适配 60-180 天持有周期
+function weekKey(date: string): string {
+  const d = new Date(date + "T00:00:00+08:00");
+  if (Number.isNaN(d.getTime())) return date;
+  const y = d.getFullYear();
+  const jan1 = new Date(y, 0, 1);
+  const week = Math.ceil(((d.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7);
+  return `${y}-W${String(week).padStart(2, "0")}`;
+}
+
+export function aggregateWeeklyBars(bars: KlineBar[]): KlineBar[] {
+  const map = new Map<string, KlineBar>();
+  for (const b of bars) {
+    const key = weekKey(b.date);
+    const cur = map.get(key);
+    if (!cur) { map.set(key, { ...b }); continue; }
+    cur.close = b.close;
+    cur.high = Math.max(cur.high, b.high);
+    cur.low = Math.min(cur.low, b.low);
+    cur.volume += b.volume;
+  }
+  return [...map.values()];
+}
+
+export function analyzeWeeklySwing(bars: KlineBar[]): SwingStageResult {
+  return classifySwingPhase(aggregateWeeklyBars(bars));
+}

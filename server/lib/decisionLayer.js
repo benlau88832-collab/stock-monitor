@@ -12,6 +12,7 @@
 const { getFreshCognition } = require("./cognition");
 const { pool } = require("../db");
 const { composeDecisionCore, cognSubset } = require("./decisionCore");
+const { detectBehaviorBias } = require("./behaviorCoach");
 const { fetchStockSnapshotServer } = require("./stockSnapshot");
 
 /** 决策直达入口：{code?, mainline?} → 五支柱裁决 + 游资战术（PG 认知权威 + 个股快照装配）
@@ -57,6 +58,20 @@ async function composeDecision(input = {}, dbPool = null) {
   // v9.121.0（卓越 S2-1b）+ v9.123.0（P1-1）：真实时段注入（buyPoint 竞价判断用；session 经 cognSubset 透传）
   const { currentSession } = require("./proactiveSession");
   const v = composeDecisionCore(stock, cognSubset(cog), { riskAppetite: "短线" }, currentSession().phase);
+  // v9.145.0（第二轮 P0-4）：纪律行为偏差真实影响建议仓位
+  try {
+    const tr = await p.query(
+      "SELECT ts, code, name, action, price, quantity, cost, pnl_pct FROM trade_ledger WHERE ts >= now() - interval '30 days' ORDER BY ts DESC LIMIT 500"
+    );
+    const biases = detectBehaviorBias(tr.rows || [], { days: 30, maxTradesPerDay: 3, stopLossPct: 5 });
+    const alertBias = biases.find((b) => b.severity === "alert") || biases[0] || null;
+    if (alertBias && typeof v.suggestedPositionPct === "number") {
+      const scaled = Math.max(0, Math.round(v.suggestedPositionPct * 0.7));
+      v.suggestedPositionPct = scaled;
+      if (typeof v.score === "number") v.score = Math.max(0, Math.round(v.score - 8));
+      v.blocks = [...(v.blocks || []), "纪律熔断：" + alertBias.type + "（" + alertBias.evidence + "），建议仓位已按 70% 折算"];
+    }
+  } catch { /* 纪律数据读取失败不阻塞主决策 */ }
   return { ...v, latencyMs: Date.now() - t0, asOf: cog?.asOf ?? date };
 }
 

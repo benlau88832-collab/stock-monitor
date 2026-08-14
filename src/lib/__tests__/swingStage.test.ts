@@ -1,7 +1,7 @@
 // v9.138.0（波段重构·阶段一）：swingStage 波段位置模型纯函数测试
 import { describe, it, expect } from "vitest";
 import {
-  analyzeSwing, detectPlatform, detectBreakout, detectFirstLimitUp, detectFirstBoardDipBuy,
+  analyzeSwing, analyzeWeeklySwing, aggregateWeeklyBars, detectPlatform, detectBreakout, detectFirstLimitUp, detectFirstBoardDipBuy,
   type KlineBar,
 } from "../swingStage";
 
@@ -15,6 +15,18 @@ function mkBars(closes: number[], opts?: { vols?: number[]; lastHighBoost?: numb
     return { date: `d${i}`, open: prev, close: c, high, low, volume: vols[i] ?? 100 };
   });
 }
+
+describe("周线级中长波段模型", () => {
+  it("aggregateWeeklyBars 按周聚合且 analyzeWeeklySwing 不抛错", () => {
+    const bars = Array.from({ length: 80 }, (_, i) => ({
+      date: `2026-${String(Math.floor(i / 5) + 1).padStart(2, "0")}-${String((i % 5) + 1).padStart(2, "0")}`, open: 10 + i * 0.1, close: 10.1 + i * 0.1, high: 10.2 + i * 0.1, low: 10 + i * 0.1, volume: 100,
+    }));
+    const weekly = aggregateWeeklyBars(bars);
+    expect(weekly.length).toBeLessThan(bars.length);
+    const r = analyzeWeeklySwing(bars);
+    expect(["底部整理","启动","主升","加速","退潮","数据不足"]).toContain(r.phase);
+  });
+});
 
 describe("detectPlatform 平台识别", () => {
   it("横盘 20 日振幅<12% → 识别平台", () => {

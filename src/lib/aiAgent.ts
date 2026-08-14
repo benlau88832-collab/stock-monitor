@@ -181,6 +181,7 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
 
 规则：
 1. 第一轮先调用 1-3 个最关键的检查工具（如 checkSysRisk 先看系统性风险、getAdmissionVerdict 看准入、factorHealth 看因子健康度）。
+1.5. 若上下文含股票代码（ctx.code），必须先调用 getChainContext 获取产业链位置/上下游/营收敞口/信号，并在最终 reason 中引用链信息；查不到映射时如实说“未收录”。
 2. 观察结果后再决定下一轮查什么（如"准入通过→查资金连续性/龙虎榜"）。
 3. 一旦发现硬风险（系统性风险red/诱多/封单崩落）→ 立即停止，输出最终裁决 action="禁止"。
 4. 每轮只输出严格JSON之一：
@@ -403,6 +404,7 @@ ${toolDefs.map(t => `- ${t.name}: ${t.description}`).join("\n")}
 
 规则：
 1. 第一轮先调用 getStockFund（查真实主力资金）+ detectStockTrap（查诱多）。
+1.5. 先调用 getChainContext 查该股产业链位置/上下游/营收敞口/信号，并在最终 reason 引用；查不到映射时写“未收录”。
 2. 拿到资金/诱多数据后，结合封单/炸板/连板位置做综合研判。
 3. 每轮只输出严格JSON之一：
    调用工具：{"calls":[{"tool":"工具名","reason":"为什么查它"}]}

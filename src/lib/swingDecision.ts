@@ -22,6 +22,10 @@ export interface SwingDecisionInput {
   thesisFalsified?: boolean;
   /** 催化是否临近兑现 */
   catalystDue?: boolean;
+  /** 基本面体检/趋势评分（0-100，null=未接入） */
+  fundamentalScore?: number | null;
+  /** 未来催化剂数量（财报/解禁/调研等） */
+  catalystCount?: number;
 }
 
 export interface SwingDecisionResult {
@@ -54,7 +58,7 @@ const clamp = (v: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
  *  - 观望：底部整理（等启动）或 主升但未持仓（等回踩）
  */
 export function swingDecision(input: SwingDecisionInput): SwingDecisionResult {
-  const { stage, board, holding = false, cost = null, thesisFalsified = false, catalystDue = false } = input;
+  const { stage, board, holding = false, cost = null, thesisFalsified = false, catalystDue = false, fundamentalScore = null, catalystCount = 0 } = input;
   const reasons: string[] = [];
   const blocks: string[] = [];
   const phase = stage.phase;
@@ -118,6 +122,12 @@ export function swingDecision(input: SwingDecisionInput): SwingDecisionResult {
 
   // 催化临近 → 持有加分（等验证）
   if (catalystDue && holding) { score += 3; reasons.push("催化验证临近——持有等兑现"); }
+  // v9.145.0（第二轮 P1-5）：基本面与催化剂日历进入波段决策
+  if (fundamentalScore != null) {
+    if (fundamentalScore >= 70) { score += 6; reasons.push(`基本面趋势分 ${fundamentalScore}（优于阈值）`); }
+    else if (fundamentalScore < 50) { score -= 8; blocks.push(`基本面趋势分 ${fundamentalScore}（低于阈值）`); }
+  }
+  if (catalystCount > 0) { score += Math.min(5, catalystCount); reasons.push(`未来催化剂 ${catalystCount} 项`); }
 
   score = clamp(score);
 

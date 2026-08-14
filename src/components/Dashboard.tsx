@@ -37,6 +37,8 @@ import SimpleWatchSkin, { type TopMainlineBrief, type WatchAlertBrief } from "./
 import { isLocalServer, kvGet, kvSet } from "../lib/cloudStore";
 // v9.37（V3-4/7）：AI 终裁决（多源共识）
 import DecisionVerdictCard from "./DecisionVerdictCard";
+import { SwingVerdictCard } from "./SwingVerdictCard";
+import { usePortfolio } from "../hooks/usePortfolio";
 import { collectEvidence } from "../lib/decisionCollector";
 import { classifyMarketState } from "../lib/marketStateMachine";
 import { checkSysRisk } from "../lib/sysRiskGuard";
@@ -155,6 +157,7 @@ export default function Dashboard({
     try { return JSON.parse(localStorage.getItem(PANEL_PREF_KEY) ?? "{}"); } catch { return {}; }
   };
   const [panelPref] = useState(loadPanelPref); // 惰性初始化，仅首帧读取
+  const portfolio = usePortfolio();
   // 修复：原代码只在组件首次挂载时算一次 phase，phase 改变时不会重新打开 AI 复盘
   const [showAI, setShowAI] = useState(panelPref.showAI ?? phase === "post");
   const [showSignal, setShowSignal] = useState(Boolean(panelPref.showSignal));
@@ -573,6 +576,19 @@ export default function Dashboard({
       <div className="space-y-2">
         {/* v9.23-3：游资五问条（驾驶舱顶部常驻） */}
         <FiveQBar battlePlan={battlePlan ?? null} overview={overview} fund={fund ?? null} />
+        {/* v9.145.0（第二轮 P0-1）：波段投研决策卡优先展示，旧五支柱降级为战术参考 */}
+        <SwingVerdictCard
+          addTrade={portfolio.addTrade}
+          saveLogic={portfolio.saveLogic}
+          initialCode={(() => {
+            const lead = battlePlan?.candidates?.[0]?.leaders?.[0];
+            return lead ? lead.code : "";
+          })()}
+          initialName={(() => {
+            const lead = battlePlan?.candidates?.[0]?.leaders?.[0];
+            return lead ? lead.name : "";
+          })()}
+        />
         {/* v9.37（V3-7）：AI 终裁决（多源共识，替代决策的可见终点） */}
         <DecisionVerdictCard
           mainline={battlePlan?.candidates?.[0]?.mainline ?? "—"}

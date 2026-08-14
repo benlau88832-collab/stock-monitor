@@ -13,6 +13,7 @@ interface Props {
   defaultThesis?: string;
   defaultInvalidation?: string[];
   defaultReviewCycle?: number;
+  decisionLogRef?: string | null;
   confidenceAtPost?: number | null;
   addTrade: (input: PortfolioTradeInput) => Promise<any>;
   saveLogic: (input: PortfolioLogicInput) => Promise<any>;
@@ -28,7 +29,7 @@ function num(v: string): number | null {
 const inputCls = "w-full rounded bg-black/30 px-2 py-1 text-[11px] text-slate-200 border border-white/10 outline-none";
 const labelCls = "text-[10px] text-slate-500";
 
-export default function DecisionActionPanel({ code, name, price, defaultThesis = "", defaultInvalidation = [], defaultReviewCycle = 20, confidenceAtPost = null, addTrade, saveLogic }: Props) {
+export default function DecisionActionPanel({ code, name, price, defaultThesis = "", defaultInvalidation = [], defaultReviewCycle = 20, decisionLogRef = null, confidenceAtPost = null, addTrade, saveLogic }: Props) {
   const [mode, setMode] = useState<ActionMode | null>(null);
   const [thesis, setThesis] = useState(defaultThesis);
   const [breakLine, setBreakLine] = useState(price != null ? String(Math.round(price * 0.95 * 100) / 100) : "");
@@ -117,6 +118,7 @@ export default function DecisionActionPanel({ code, name, price, defaultThesis =
           humanAction: "confirm",
           confidenceAtPost,
           priceAtPost: p,
+          decisionLogRef,
           notes: `${simulated ? "纸上确认" : "真实成交"} ${notes}`.trim(),
           simulated,
         });

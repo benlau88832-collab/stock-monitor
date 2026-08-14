@@ -40,9 +40,28 @@ CREATE TABLE IF NOT EXISTS decision_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_df_ticket ON decision_feedback(ticket_id);
 `;
+
+// v9.145.0（第二轮 P1-4）：产业链传导事件表，供“一次推理、多票复用”
+const CHAIN_EVENT_SQL = `
+CREATE TABLE IF NOT EXISTS industry_chain_event (
+  id             SERIAL PRIMARY KEY,
+  chain_id       TEXT NOT NULL,
+  origin_node_id INTEGER,
+  title          TEXT,
+  summary        TEXT,
+  impact_path    JSONB DEFAULT '[]'::jsonb,
+  impacted_nodes JSONB DEFAULT '[]'::jsonb,
+  confidence     INTEGER,
+  model_generated BOOLEAN DEFAULT true,
+  published_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ice_chain ON industry_chain_event(chain_id, published_at DESC);
+`;
+
 async function runMigrations() {
   await pool.query(LOGIC_LEDGER_SQL);
   await pool.query(DECISION_FEEDBACK_SQL);
+  await pool.query(CHAIN_EVENT_SQL);
   await pool.query(`ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE logic_ledger ADD COLUMN IF NOT EXISTS invalidation_conditions JSONB DEFAULT '[]'::jsonb`);
@@ -52,7 +71,7 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_t60 DOUBLE PRECISION`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_source TEXT`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_logic_updated ON logic_ledger(updated_at DESC)`);
-  console.log("[db-migrations] logic_ledger/simulated ready");
+  console.log("[db-migrations] logic_ledger/simulated/chain_event ready");
 }
 
 module.exports = { runMigrations };

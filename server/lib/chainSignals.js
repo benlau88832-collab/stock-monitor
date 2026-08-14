@@ -1,6 +1,9 @@
 // ============================================================
 // v9.143.0 chain signal sync: commodity_price kv -> industry_chain_signal
+// v9.145.0（第二轮 P1-4）：新信号写入后触发产业链传导推理
 // ============================================================
+const { runChainReasoning } = require("./chainReasoning");
+
 let lastSync = 0;
 
 async function syncCommoditySignals(pool, force = false) {
@@ -18,6 +21,7 @@ async function syncCommoditySignals(pool, force = false) {
        FROM industry_chain_node n JOIN industry_chain c ON c.id=n.chain_id`,
     );
     const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const changedChains = new Set();
 
     for (const node of nodesR.rows) {
       const keys = [node.chain_id, node.chain_name, node.name];
@@ -29,6 +33,11 @@ async function syncCommoditySignals(pool, force = false) {
          VALUES($1,'price',$2,$3,$4,$5,'https://www.baiinfo.com/')`,
         [node.id, Number(hit.price) || null, hit.unit || null, hit.dir || "flat", today],
       );
+      changedChains.add(node.chain_id);
+    }
+
+    for (const chainId of [...changedChains].slice(0, 3)) {
+      try { await runChainReasoning(pool, chainId); } catch { /* 推理失败不阻塞同步 */ }
     }
   } catch { /* 信号同步失败不阻塞链路 */ }
 }
