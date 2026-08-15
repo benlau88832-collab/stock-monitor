@@ -370,22 +370,29 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
         )}
       </div>
 
-      {/* 全栈情报分析台 */}
-      <IntelligenceDashboard
-        news={allNews.map(n => ({
-          code: n.code, title: n.title, summary: n.summary ?? "",
-          boards: n.boards, sentiment: n.sentiment, stars: n.stars,
-          isOverseas: n.isOverseas, time: n.time, url: n.url,
-        } as IntelNewsItem))}
-        announcements={topAnnouncements}
-        strongBoards={strongBoards}
-        slot={inferSlot()}
-        marketSnapshot={marketSnapshot ?? undefined}
-      />
+      {/* v9.149.0（B4）：三聚合器收敛 —— 情报台+事件研判合并为一个"情报分析台"折叠（盘后深挖用），
+          公告淘金保留为第二层常驻；页面从两屏缩到一屏半 */}
+      <details className="rounded-xl border border-white/10 bg-white/5">
+        <summary className="cursor-pointer select-none px-4 py-2 text-sm font-bold text-slate-200 hover:text-slate-100">
+          🧠 情报分析台（主题作战 + 事件研判 + 产业链追溯，默认收起）
+        </summary>
+        <div className="space-y-3 px-3 pb-3 pt-1">
+          <IntelligenceDashboard
+            news={allNews.map(n => ({
+              code: n.code, title: n.title, summary: n.summary ?? "",
+              boards: n.boards, sentiment: n.sentiment, stars: n.stars,
+              isOverseas: n.isOverseas, time: n.time, url: n.url,
+            } as IntelNewsItem))}
+            announcements={topAnnouncements}
+            strongBoards={strongBoards}
+            slot={inferSlot()}
+            marketSnapshot={marketSnapshot ?? undefined}
+          />
+          <EventClassifyPanel onOpenNews={() => {}} />
+        </div>
+      </details>
 
-      {/* v9.133.0（游资改造）：事件三级研判移回消息面 Tab（驾驶舱决策区只留裁决+选股） */}
-      <EventClassifyPanel onOpenNews={() => {}} />
-      {/* 公告淘金分区：盘后全市场公告扫描 */}
+      {/* 公告淘金分区：盘后全市场公告扫描（v9.149.0 B4：第二层常驻） */}
       <AnnouncementPanel onTopAnnouncements={setTopAnnouncements} />
 
       {/* AI 快讯三行：固定在滚动条上方 */}

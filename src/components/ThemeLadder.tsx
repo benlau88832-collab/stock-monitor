@@ -112,7 +112,7 @@ export default function ThemeLadder({ rawZTPool }: ThemeLadderProps) {
         <span className="text-[11px] text-slate-500">{groups.length}个题材 · {pool.length}只涨停</span>
       </div>
 
-      {/* 断板预警 */}
+      {/* 断板预警（v9.149.0 B3：置顶常驻，不随梯队折叠收起） */}
       {brokenBoards.length > 0 && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2">
           <span className="text-xs font-bold text-rose-400">⚠️ 断板预警：</span>
@@ -135,18 +135,23 @@ export default function ThemeLadder({ rawZTPool }: ThemeLadderProps) {
         </div>
       )}
 
-      {/* 题材列表 */}
-      <div className="space-y-0.5">
-        {groups.map((g) => (
-          <ThemeRow
-            key={g.theme}
-            group={g}
-            lifecycle={calendar.get(g.theme)}
-            isExpanded={expanded.has(g.theme)}
-            onToggle={() => toggleExpand(g.theme)}
-          />
-        ))}
-      </div>
+      {/* 题材列表（v9.149.0 B3：默认折叠 —— 与主线强度榜合并为"主线复盘"复合块，点击展开 drill-down） */}
+      <details open={false} className="rounded-lg border border-white/10 bg-black/10">
+        <summary className="cursor-pointer select-none px-3 py-2 text-xs font-bold text-slate-300 hover:text-slate-100">
+          📋 题材明细（{groups.length} 组，点击展开）—— 与上方主线强度榜配套查看
+        </summary>
+        <div className="space-y-0.5 px-2 pb-2 pt-1">
+          {groups.map((g) => (
+            <ThemeRow
+              key={g.theme}
+              group={g}
+              lifecycle={calendar.get(g.theme)}
+              isExpanded={expanded.has(g.theme)}
+              onToggle={() => toggleExpand(g.theme)}
+            />
+          ))}
+        </div>
+      </details>
     </div>
   );
 }

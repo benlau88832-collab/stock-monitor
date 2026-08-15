@@ -130,23 +130,30 @@ async function addPeopleSuggestion(db, suggestion) {
   return list;
 }
 
-/** 采纳建议：移入 confirmed（幂等），并从建议池移除 */
+/** 采纳建议：移入 confirmed（幂等），并从建议池移除；v9.148.2（A7 P2-7）：两步写包事务防并发半状态 */
 async function confirmPeopleSuggestion(db, name) {
   const list = await getPeopleSuggestions(db);
   const item = list.find((x) => x.name === name);
   if (!item) return { ok: false, reason: "suggestion not found" };
   const confirmed = await getConfirmedPeople(db);
   if (!confirmed.some((x) => x.name === name)) confirmed.push(item);
-  await db.query(
-    `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
-     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
-    ["chain_people_confirmed", JSON.stringify(confirmed)],
-  );
-  await db.query(
-    `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
-     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
-    ["chain_people_suggestions", JSON.stringify(list.filter((x) => x.name !== name))],
-  );
+  try {
+    await db.query("BEGIN");
+    await db.query(
+      `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      ["chain_people_confirmed", JSON.stringify(confirmed)],
+    );
+    await db.query(
+      `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      ["chain_people_suggestions", JSON.stringify(list.filter((x) => x.name !== name))],
+    );
+    await db.query("COMMIT");
+  } catch (e) {
+    try { await db.query("ROLLBACK"); } catch { /* 回滚失败静默 */ }
+    throw e;
+  }
   return { ok: true, confirmed };
 }
 

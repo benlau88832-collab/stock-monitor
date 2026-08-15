@@ -37,7 +37,7 @@ import SimpleWatchSkin, { type TopMainlineBrief, type WatchAlertBrief } from "./
 import { isLocalServer, kvGet, kvSet } from "../lib/cloudStore";
 // v9.37（V3-4/7）：AI 终裁决（多源共识）
 import DecisionVerdictCard from "./DecisionVerdictCard";
-import { SwingVerdictCard } from "./SwingVerdictCard";
+import { SwingVerdictCard } from "./SwingWarRoomV2"; // v9.149.0（B1）：SwingVerdictCard.tsx 壳删除，改直连 V2
 import { usePortfolio } from "../hooks/usePortfolio";
 import { collectEvidence } from "../lib/decisionCollector";
 import { classifyMarketState } from "../lib/marketStateMachine";

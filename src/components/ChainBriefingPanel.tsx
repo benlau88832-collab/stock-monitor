@@ -204,7 +204,11 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
                         // v9.148.1（T9）：受益标的带 code，点击跳个股雷达分析
                         <button
                           key={x.code ?? x.name}
-                          onClick={() => { window.location.hash = "radar"; }}
+                          onClick={() => {
+                            // v9.149.0（B6 P2-11）：跳转前定位个股（雷达页选中该股）
+                            if (x.code) import("../lib/uiContext").then(m => m.setCurrentStock(x.code!, x.name)).catch(() => {});
+                            window.location.hash = "radar";
+                          }}
                           className="mr-1 rounded bg-emerald-500/10 px-1 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
                           title="去个股雷达分析"
                         >

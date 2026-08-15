@@ -697,6 +697,23 @@ export default function DragonTiger() {
         <FreshnessTag type="t_plus_1" />
       </div>
 
+      {/* v9.149.0（B5）：时段感知 —— 盘中显示引导（数据盘后才有，避免"空态海"） */}
+      {(() => {
+        const d = new Date(Date.now() + 8 * 3600 * 1000);
+        const day = d.getDay();
+        const h = d.getHours() * 60 + d.getMinutes();
+        const isWeekday = day >= 1 && day <= 5;
+        const isTradingHours = h >= 9 * 60 && h <= 15 * 60;
+        if (isWeekday && isTradingHours) {
+          return (
+            <div className="rounded-lg border border-sky-500/20 bg-sky-950/10 px-4 py-2 text-xs text-sky-300/90">
+              🕒 盘中时段：龙虎榜数据于 <b>收盘后 16:00 起</b> 陆续更新（T+1 复盘用）—— 现在可先看昨日复盘结论，盘后再看今日明细
+            </div>
+          );
+        }
+        return null;
+      })()}
+
       {/* 合力/独食信号 */}
       <SignalBanner signals={seatSignals} />
 

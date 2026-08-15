@@ -140,6 +140,13 @@ async function scanChain(db, chainId, { withWeb = true } = {}) {
         searchLog.push({ person: p.name, error: e.message });
       }
     }
+    // v9.149.0（B7）：固定源栏目流并入（SemiEngineering/CNBC 科技 —— 与关键词结果同事件多源，提升"多源验证"命中）
+    try {
+      const { searchFixedFeeds } = require("./webSearch");
+      const fixed = await searchFixedFeeds({ limit: 20 });
+      webItems.push(...fixed);
+      searchLog.push({ fixedFeeds: fixed.length });
+    } catch { /* 固定源失败不阻塞 */ }
   }
 
   // 3) 验证 + 按人/普通分组

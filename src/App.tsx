@@ -25,6 +25,7 @@ import ScenarioPanel from "./components/ScenarioPanel";
 import SwingWarRoomV2 from "./components/SwingWarRoomV2";
 import DecisionCard from "./components/DecisionCard";
 import ChainBriefingPanel from "./components/ChainBriefingPanel"; // v9.148.0（任务09）：产业链简报第一眼入口
+import IntradaySkinStrip from "./components/IntradaySkinStrip"; // v9.149.0（B2）：盘中皮肤水平条
 import { useMarketData } from "./hooks/useMarketData";
 import { getBJDate } from "./lib/format";
 export type { SentimentFactors, OverviewData, FundStructureData, DarkPoolData, GlobalData, MainlineData } from "./lib/marketTypes";
@@ -71,6 +72,15 @@ export default function App() {
               <ChainBriefingPanel compact />
               <SwingWarRoomV2 />
               <CognitionBanner />
+              {/* v9.149.0（B2）：盘中皮肤一条水平条（原埋在完整驾驶舱折叠里） */}
+              <IntradaySkinStrip overview={overview} watchStocks={watchStocks} mainlines={battlePlan?.candidates.map((c: any) => c.mainline ?? "") ?? []} />
+              {/* v9.149.0（B2）：DecisionCard 上提 —— 决策是核心动作，从两层折叠的"坟墓"里提到第一层 */}
+              <DecisionCard
+                mainlines={(battlePlan?.candidates ?? []).slice(0, 2).map((c: any) => ({
+                  mainline: c.mainline ?? "",
+                  leaders: (c.leaders ?? []).map((l: any) => ({ code: l.code ?? "", name: l.name ?? "" })),
+                }))}
+              />
               <details className="rounded-xl border border-white/10 bg-white/5">
                 <summary className="cursor-pointer select-none px-4 py-1.5 text-xs font-bold text-slate-300 hover:text-slate-100">
                   认知推理 / 场景融合 / 深度研究台（默认收起）
@@ -78,12 +88,6 @@ export default function App() {
                 <div className="space-y-3 px-3 py-3">
                   <ReasoningPanel />
                   <ScenarioPanel />
-                  <DecisionCard
-                    mainlines={(battlePlan?.candidates ?? []).slice(0, 2).map((c: any) => ({
-                      mainline: c.mainline ?? "",
-                      leaders: (c.leaders ?? []).map((l: any) => ({ code: l.code ?? "", name: l.name ?? "" })),
-                    }))}
-                  />
                   <details className="rounded-xl border border-white/10 bg-white/5" open={currentPhase === "post"}>
                     <summary className="cursor-pointer select-none px-3 py-2 text-xs font-bold text-slate-300">完整驾驶舱与研究工具</summary>
                     <div className="px-3 pb-3 pt-1">

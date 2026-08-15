@@ -34,6 +34,9 @@ const PROVIDERS = [
   { id: "googleNews",   host: "news.google.com",                 kind: "news",  priority: 1 },
   // 备源：HN Algolia（直连 JSON，技术/产业讨论聚合，无限额）—— CNBC/SemiEngineering 栏目流留待任务05每日扫描
   { id: "hnAlgolia",    host: "hn.algolia.com",                  kind: "news",  priority: 1 },
+  // v9.149.0（B7）：固定源栏目流（直连，半导体垂直 + CNBC 科技，提升多源验证真命中）
+  { id: "semiEng",      host: "semiengineering.com",            kind: "news",  priority: 1 },
+  { id: "cnbcSearch",   host: "search.cnbc.com",                 kind: "news",  priority: 1 },
   // ---- AI 网关（LLM 出站）----
   { id: "agnes",        host: "apihub.agnes-ai.cn",              kind: "ai" },
   { id: "opencode",     host: "opencode.ai",                     kind: "ai" },

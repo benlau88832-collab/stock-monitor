@@ -119,4 +119,30 @@ async function searchGoogleNews(keyword, opts = {}, deps = {}) {
   return out;
 }
 
-module.exports = { searchWeb, searchGoogleNews, searchHackerNews, parseRSS, AUTHORITATIVE_HINTS };
+module.exports = { searchWeb, searchGoogleNews, searchHackerNews, parseRSS, AUTHORITATIVE_HINTS, searchFixedFeeds };
+
+/**
+ * v9.149.0（B7）：固定源栏目流召回 —— 半导体垂直站 + CNBC 科技频道（直连可用，无限额）。
+ * 返回最近 N 条（带权威标记/来源名），供挖掘引擎并入关键词搜索结果（提升"多源验证"真命中）。
+ * 源：semiengineering.com/feed（半导体深度稿）+ CNBC 科技栏目 RSS
+ */
+const FIXED_FEEDS = [
+  { url: "https://semiengineering.com/feed/", label: "SemiEngineering" },
+  { url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114", label: "CNBC Tech" },
+];
+
+async function searchFixedFeeds({ timeout = 12000, limit = 20 } = {}) {
+  const out = [];
+  for (const feed of FIXED_FEEDS) {
+    try {
+      const r = await requestRaw(feed.url, { timeout, viaProxy: false });
+      if (r.status && (r.status < 200 || r.status >= 300)) continue;
+      const items = parseRSS(r.body).slice(0, limit);
+      for (const it of items) {
+        if (!it.source) it.source = feed.label;
+        out.push(it);
+      }
+    } catch { /* 单源失败不阻塞 */ }
+  }
+  return out;
+}

@@ -54,31 +54,37 @@ async function chainStockAvgPct(db, chainId, fromDate, days = 5) {
   return { avgPct: Number(avg.toFixed(2)), sampleCount: rows.length, codes: rows.length };
 }
 
-/** 回填一条链的命中统计（简报日之后已存在 ≥6 个交易日才回填；幂等 ON CONFLICT） */
+/**
+ * 回填一条链的命中统计（v9.148.2 A7 P2-8：对最近 10 期内所有"日历已足且 kv 缺失"的期逐一回填，
+ * 不再只回填最新一期 —— cron 停一天也不会永久漏回填；每期 ON CONFLICT 幂等）
+ * 口径（P2-9 注释对齐实现）：base=简报**当天**收盘（T+0，21:00 生成简报用当天收盘合理），last=T+5 收盘
+ */
 async function recordChainHit(db, chainId) {
-  // 取"存在 ≥6 个交易日"的最新简报（自然日门槛删除，用交易日历判断）
   const r = await db.query(
     `SELECT briefing_date, content FROM chain_briefing
      WHERE chain_id=$1 ORDER BY briefing_date DESC LIMIT 10`,
     [chainId],
   );
+  const filled = [];
   for (const row of r.rows) {
     const date = row.briefing_date;
+    const key = `chain_hit:${chainId}:${date}`;
+    const exist = await db.query(`SELECT value FROM kv_store WHERE key=$1`, [key]);
+    if (exist.rows[0]) continue; // 已回填过，跳过
     const cal = await tradingCalendarAfter(db, date, { need: 6 });
-    if (!cal) continue; // 该期简报后交易日不足 6 天 → 看更早一期
+    if (!cal) continue; // 该期简报后交易日不足 6 天 → 等更晚再回填
     const c = row.content ?? {};
     const stage = c.stage ?? "";
     const stat = await chainStockAvgPct(db, chainId, date, 5);
     if (!stat) continue;
-    const key = `chain_hit:${chainId}:${date}`;
     await db.query(
       `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
        ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
       [key, JSON.stringify({ chainId, date, stage, ...stat, recordedAt: new Date().toISOString() })],
     );
-    return { chainId, date, stage, ...stat };
+    filled.push({ chainId, date, stage, ...stat });
   }
-  return null;
+  return filled.length > 0 ? filled[0] : null;
 }
 
 /** 全链回填（cron 每日调用） */
