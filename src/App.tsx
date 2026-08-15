@@ -26,6 +26,7 @@ import SwingWarRoomV2 from "./components/SwingWarRoomV2";
 import DecisionCard from "./components/DecisionCard";
 import ChainBriefingPanel from "./components/ChainBriefingPanel"; // v9.148.0（任务09）：产业链简报第一眼入口
 import IntradaySkinStrip from "./components/IntradaySkinStrip"; // v9.149.0（B2）：盘中皮肤水平条
+import BackToTop from "./components/BackToTop"; // v9.149.1：一键回到顶部
 import { useMarketData } from "./hooks/useMarketData";
 import { getBJDate } from "./lib/format";
 export type { SentimentFactors, OverviewData, FundStructureData, DarkPoolData, GlobalData, MainlineData } from "./lib/marketTypes";
@@ -63,6 +64,9 @@ export default function App() {
 
       {/* v9.147.0（阶段二C）：盘中精灵浮层（通达信"盘中精灵"效果，右下角常驻；改接活跃源 anomaly:今日） */}
       <SpriteOverlay />
+
+      {/* v9.149.1：一键回到顶部（滚动超 400px 出现，所有 Tab 生效） */}
+      <BackToTop />
 
       <ErrorBoundary>
         <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-4">
