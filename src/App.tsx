@@ -24,6 +24,7 @@ import ReasoningPanel from "./components/ReasoningPanel";
 import ScenarioPanel from "./components/ScenarioPanel";
 import SwingWarRoomV2 from "./components/SwingWarRoomV2";
 import DecisionCard from "./components/DecisionCard";
+import ChainBriefingPanel from "./components/ChainBriefingPanel"; // v9.148.0（任务09）：产业链简报第一眼入口
 import { useMarketData } from "./hooks/useMarketData";
 import { getBJDate } from "./lib/format";
 export type { SentimentFactors, OverviewData, FundStructureData, DarkPoolData, GlobalData, MainlineData } from "./lib/marketTypes";
@@ -66,6 +67,8 @@ export default function App() {
         <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-4">
           {active === "dashboard" && (
             <>
+              {/* v9.148.0（任务09）：产业链简报置顶 —— 每天第一眼：6 链走到哪个阶段/谁受益/逻辑变没变 */}
+              <ChainBriefingPanel compact />
               <SwingWarRoomV2 />
               <CognitionBanner />
               <details className="rounded-xl border border-white/10 bg-white/5">
@@ -108,6 +111,11 @@ export default function App() {
                 </div>
               </details>
             </>
+          )}
+
+          {active === "briefing" && (
+            // v9.148.0（任务09）：简报独立视图（手机扫码 #briefing 直达，纯简报轻量页）
+            <ChainBriefingPanel />
           )}
 
           {active === "fundline" && (

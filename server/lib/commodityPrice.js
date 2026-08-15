@@ -94,4 +94,42 @@ async function saveCommodityPrices(pool, payload) {
   return dateStr;
 }
 
-module.exports = { parseBaiinfoPrices, fetchBaiinfoPrices, fetchShengyishePrices, fetchCommodityPrices, saveCommodityPrices };
+/** 历史价格序列（任务 05，v9.148.0）：查近 N 天 commodity_price:日期 键，按日倒序返回。
+ * 返回：{ dates: string[], byDate: [{date, items: [{name,price,unit,dir,pct}]}], byName: {品种名: [{date,price,dir,pct}]} }
+ * byName 供"涨价到哪一环"趋势判断与前端走势图（30 天）使用；无数据返回空结构。
+ */
+async function getCommodityPriceHistory(pool, { days = 30 } = {}) {
+  const r = await pool.query(
+    `SELECT key, value FROM kv_store WHERE key LIKE 'commodity_price:%'
+     ORDER BY key DESC LIMIT $1`,
+    [Math.max(7, Math.min(120, days))],
+  );
+  const byDate = [];
+  for (const row of r.rows) {
+    let v = row.value;
+    if (typeof v === "string") { try { v = JSON.parse(v); } catch { continue; } }
+    if (!Array.isArray(v?.items)) continue;
+    byDate.push({
+      date: String(row.key.replace("commodity_price:", "")),
+      items: v.items.map((x) => ({
+        name: String(x.name ?? ""),
+        price: x.price != null ? Number(x.price) : null,
+        unit: x.unit ?? "",
+        dir: x.dir ?? "flat",
+        pct: x.pct != null ? Number(x.pct) : null,
+      })),
+    });
+  }
+  // 转 byName 序列（品种 → 按日期）
+  const byName = {};
+  for (const d of byDate) {
+    for (const it of d.items) {
+      if (!it.name) continue;
+      if (!byName[it.name]) byName[it.name] = [];
+      byName[it.name].push({ date: d.date, price: it.price, dir: it.dir, pct: it.pct });
+    }
+  }
+  return { dates: byDate.map((d) => d.date), byDate, byName };
+}
+
+module.exports = { parseBaiinfoPrices, fetchBaiinfoPrices, fetchShengyishePrices, fetchCommodityPrices, saveCommodityPrices, getCommodityPriceHistory };

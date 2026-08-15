@@ -85,7 +85,7 @@ function BoardRow({ b }: { b: SwingBoardScore }) {
         {b.fund10d != null && <span className="text-slate-400">10日主力 {b.fund10d}亿</span>}
       </div>
       {b.catalystsTop.length > 0 && <div className="mt-1 text-[10px] text-violet-300/80">催化：{b.catalystsTop.join("、")}</div>}
-      {b.pct20d == null && <div className="mt-1 text-[10px] text-amber-300/80">K线暂缺，仅资金/涨停维度</div>}
+      {/* v9.148.0（任务02 A3）：降级提示收敛 —— 移除每卡重复的"K线暂缺"，顶部横幅+作战条 badge 已覆盖 */}
     </div>
   );
 }

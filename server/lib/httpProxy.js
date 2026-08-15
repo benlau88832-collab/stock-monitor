@@ -105,4 +105,6 @@ async function callModelText(payloadText, opts = {}) {
   return text;
 }
 
-module.exports = { postJSON, callModelText, PROXY_URL, isNetworkErr };
+// v9.148.0（任务03）：补导出 PROXY_AGENT —— outbound.js 解构它实现 viaProxy，
+//   此前未导出导致 viaProxy 恒 undefined（声称走代理实际一直直连，外网源不可达的根因之一）
+module.exports = { postJSON, callModelText, PROXY_URL, PROXY_AGENT, isNetworkErr };

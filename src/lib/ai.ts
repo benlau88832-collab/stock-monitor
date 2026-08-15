@@ -291,7 +291,7 @@ export async function streamChat(
         user: opts.user,
         temperature: opts.temperature ?? 0.2,
         maxTokens: opts.maxTokens ?? 4000, // v9.107.0（全站助手）：默认 2000→4000
-        thinking: opts.thinking ?? false,
+        thinking: opts.thinking ?? true, // v9.148.0（任务01）：quickChat 默认开思考（用户设置显式 false 才关）
       }),
       signal,
     });
@@ -742,7 +742,7 @@ export async function callAgentChat(
         user,
         temperature: opts?.temperature ?? 0.2,
         maxTokens: opts?.maxTokens ?? 8000, // v9.111.0（R-2）：ReAct 主路径默认提档（原 v9.107.1 2000→4000）
-        thinking: false,
+        // v9.148.0（任务01）：不再显式传 thinking —— 思考由服务端 TASK_CONFIG(agentReason=恒思考) 决定
         tools,
         history: opts?.history ?? [],
       }),
@@ -765,7 +765,7 @@ export async function callAgentChat(
     const j = await resp.json();
     clearTimeout(timer);
     // v9.109.0（L-4 根治 RC-D）：服务端重试耗尽仍 empty → 客户端再给 1 次（1s 退避，防瞬时网关抖动；
-    //   二次请求 thinking:false 与首次一致 —— 服务端 llmCore 已强制关 thinking）
+    //   v9.148.0：二次请求同首次，思考由服务端 TASK_CONFIG 决定）
     if (j.error && /empty content/i.test(String(j.error))) {
       await new Promise(r => setTimeout(r, 1000));
       try {
@@ -776,7 +776,7 @@ export async function callAgentChat(
             task: "agentReason", system, user,
             temperature: opts?.temperature ?? 0.2,
             maxTokens: opts?.maxTokens ?? 8000, // v9.111.0（R-2）：ReAct 主路径默认提档（与 agentReason 对齐）
-            thinking: false, tools, history: opts?.history ?? [],
+            tools, history: opts?.history ?? [],
           }),
           signal: ctrl.signal,
         });

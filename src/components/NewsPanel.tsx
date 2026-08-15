@@ -224,6 +224,8 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [boardFilter, setBoardFilter] = useState<string>("");
+  // v9.148.0（任务02 B6）：噪音过滤（无板块标注的社会消息：天气/电影/防汛等）默认开启
+  const [hideNoise, setHideNoise] = useState(true);
   // v9.104.0（第四批 C，T-C2）：新闻→标的联动（涨停池股票名命中标题）—— news code → 股票名[]
   const [stockLinks, setStockLinks] = useState<Map<string, string[]>>(new Map());
 
@@ -325,6 +327,12 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
     domestic = domestic.filter(n => n.boards.includes(boardFilter));
     overseas = overseas.filter(n => n.boards.includes(boardFilter));
   }
+  // v9.148.0（任务02 B6）：默认过滤无板块标注的噪音（雷电预警/电影票房/防汛等社会消息无板块标签，
+  //   与财经快讯（带板块/命中主线）区分；实测 08-15 快讯流约 1/3 为噪音）
+  if (hideNoise) {
+    domestic = domestic.filter(n => n.boards.length > 0 || n.mainlineHit);
+    overseas = overseas.filter(n => n.boards.length > 0 || n.mainlineHit);
+  }
 
   // 所有出现过的板块
   const allBoards = [...new Set(allNews.flatMap(n => n.boards))].sort();
@@ -404,6 +412,13 @@ export default function NewsPanel({ autoRefresh = true, strongBoards = [], marke
           数据源：东方财富 7x24（{autoRefresh ? "每30秒刷新" : "已暂停"}）· ★★★重要消息置顶加粗 · <SentimentDot s="positive" />利好 <SentimentDot s="negative" />利空 <SentimentDot s="neutral" />中性
         </span>
         <div className="flex items-center gap-2">
+          <button onClick={() => setHideNoise(!hideNoise)}
+            className={`rounded px-2 py-1 text-[11px] font-bold border transition-colors ${hideNoise
+              ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+              : "border-white/10 bg-black/30 text-slate-400 hover:text-slate-200"}`}
+            title="过滤无板块标注的社会消息（天气/电影/防汛等）">
+            {hideNoise ? "🐟 已过滤噪音" : "📄 显示全部"}
+          </button>
           <select value={boardFilter} onChange={e => setBoardFilter(e.target.value)}
             className="rounded bg-black/30 border border-white/10 px-2 py-1 text-[11px] text-slate-300 outline-none">
             <option value="">全部板块</option>

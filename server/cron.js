@@ -487,6 +487,52 @@ function startCron({ pool }) {
   cron.schedule("20 9 * * 1-5", runCommodityPriceTask);
   cron.schedule("10 15 * * 1-5", runCommodityPriceTask);
 
+  // v9.148.0（任务07+08）：每晚 21:00 全链挖掘 + 简报生成 —— 6 链站内信号 + 外网交叉验证
+  // → chain_intel 落库 → LLM 简报 → chain_briefing（每晚都跑含周末；幂等覆盖同链同日）
+  cron.schedule("0 21 * * *", async () => {
+    try {
+      const { runNightlyScan } = require("./lib/chainIntel");
+      const { generateAllBriefings } = require("./lib/chainBriefing");
+      const scanResults = await runNightlyScan(pool);
+      console.log(`[cron] chain_intel 夜间扫描: ${scanResults.map(r => r.chainId + (r.ok ? `(${r.items}条/${r.ms}ms)` : "✗" + r.error)).join(" ")}`);
+      const briefResults = await generateAllBriefings(pool);
+      console.log(`[cron] chain_briefing 简报: ${briefResults.map(r => r.chainId + (r.ok ? `(${r.stage}${r.fallback ? ",规则兜底" : ""})` : "✗" + r.error)).join(" ")}`);
+    } catch (e) { console.warn("[cron] chain_intel 夜间任务失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
+  // v9.148.0（任务12）：每日 16:05 回填链命中率（简报判断 vs T+5 链内标的实际涨跌）
+  cron.schedule("5 16 * * 1-5", async () => {
+    try {
+      const { recordAllChainHits } = require("./lib/chainLearning");
+      const results = await recordAllChainHits(pool);
+      if (results.length > 0) {
+        console.log(`[cron] chain_hit 命中回填: ${results.map(r => r.chainId + "(" + r.date + "→" + r.avgPct + "%)").join(" ")}`);
+      }
+    } catch (e) { console.warn("[cron] chain_hit 回填失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
+  // v9.148.0（任务11）：盘中异动补挖 —— 每 5 分钟检测（批量涨停≥3/商品±3%/链内公告）→ 补挖+推送
+  // 同链 30 分钟节流；未配置推送渠道时静默（检测仍记录，不推送）
+  cron.schedule("*/5 9-15 * * 1-5", async () => {
+    try {
+      const { runAnomalyCheck } = require("./lib/chainAnomaly");
+      const results = await runAnomalyCheck(pool);
+      if (results.length > 0) {
+        console.log(`[cron] chain_anomaly 异动: ${results.map(r => r.chainId + (r.throttled ? "(节流)" : (r.pushed ? "(已推)" : (r.skipped ? "(未配渠道)" : "✗" + (r.error || "")))).slice(0, 30)).join(" ")}`);
+      }
+    } catch (e) { console.warn("[cron] chain_anomaly 异动检测失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
+  // v9.148.0（任务10）：早盘前推送简报摘要（交易日 8:35；简报为前一晚 21:00 生成）
+  // 需先在设置页配置推送渠道（Server酱=微信扫码绑定）；未配置时静默跳过
+  cron.schedule("35 8 * * 1-5", async () => {
+    try {
+      const { pushBriefingDigest } = require("./lib/chainPush");
+      const out = await pushBriefingDigest(pool);
+      console.log(`[cron] chain_push 简报推送: ${out.ok ? "已推送" : (out.skipped ? "跳过(" + (out.reason || "未配置渠道") + ")" : "失败")}（${out.chainCount ?? 0} 链，${out.date ?? ""}）`);
+    } catch (e) { console.warn("[cron] chain_push 简报推送失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
   // v9.140.0（#11 推送分层·持仓优先）：持仓逻辑提醒推手机 —— 盘中每 20 分钟 + 盘后 15:50 各一次
   // 引擎与前端同源（shared/logic-ledger.js），按天去重（ledger_push_log:日期），
   // 持仓台账数据由前端 saveEntry 同步到 PG kv（logic_ledger:日期）

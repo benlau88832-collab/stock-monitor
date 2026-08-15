@@ -12,7 +12,8 @@ import {
   subscribe,
 } from "../lib/alertBus";
 
-export type TabKey = "dashboard" | "fundline" | "radar" | "dragon" | "news";
+// v9.148.0（任务09）：briefing 为隐藏视图（不占 Tab 按钮，手机扫码 #briefing 直达）
+export type TabKey = "dashboard" | "fundline" | "radar" | "dragon" | "news" | "briefing";
 
 const TABS: { key: TabKey; label: string; phase: string }[] = [
   { key: "dashboard", label: "驾驶舱", phase: "盘前/盘中" },

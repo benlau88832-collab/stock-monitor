@@ -233,13 +233,13 @@ module.exports = function aiRoutes(app) {
       const effectiveMaxTokens = cfg ? cfg.maxTokens : (Number(maxTokens) || 4000); // v9.107.0（全站助手）：默认 2000→4000
       const effectiveTemperature = cfg ? cfg.temperature : (temperature != null ? Number(temperature) : 0.2);
       // v9.109.0（L-2 根治 RC-A/B/C）：统一走 llmCore.chatComplete —— empty content 重试（重试强制关 thinking）
-      // + 恒发 enable_thinking:false（不再依赖 AI_PROVIDER 字符串门控，实测 opencode 网关接受且 content 正常）
+      // + 思考开关以服务端 TASK_CONFIG 为准（agentReason 等复杂任务恒思考；未配置任务沿用客户端参数）
       // + 网络/超时端点 failover（AI_FALLBACK 链）
       try {
         const { chatComplete } = require("../lib/llmCore");
         const r = await chatComplete({
           system: sysText, user: userText, history, tools,
-          maxTokens: effectiveMaxTokens, temperature: effectiveTemperature, thinking: Boolean(thinking),
+          maxTokens: effectiveMaxTokens, temperature: effectiveTemperature, thinking: cfg ? cfg.thinking : Boolean(thinking),
         });
         // v9.87.0（P1-8）：JSON 类 task 上游响应做 schema 校验 —— 仅 warn 日志不阻断
         // （前端 parseLLMJSON 仍有自己的降级链；此处让"坏 JSON 率"可观测）
@@ -312,10 +312,9 @@ module.exports = function aiRoutes(app) {
       temperature: Math.max(0, Math.min(1, temperature != null ? Number(temperature) : 0.2)),
       stream: true,
     };
-    // v9.109.0（L-1 根治 RC-A）：恒发 enable_thinking（不依赖 AI_PROVIDER 字符串门控）——
-    // thinking 非 true 一律 false（实测 opencode 网关接受且 content 正常；原 Agnes 专属注释作废，
-    // 见 /api/ai/call 同款改造 :147-149）
-    body.chat_template_kwargs = { enable_thinking: Boolean(thinking) };
+    // v9.109.0（L-1 根治 RC-A）+ v9.148.0（思考默认开）：恒发 enable_thinking ——
+    // quickChat 等未配置任务默认开思考（用户显式 thinking:false 才关），复杂任务由 TASK_CONFIG 在 call 端点控制
+    body.chat_template_kwargs = { enable_thinking: thinking !== false };
     const u = new URL(baseUrl);
     const payload = JSON.stringify(body);
     const reqOpts = {

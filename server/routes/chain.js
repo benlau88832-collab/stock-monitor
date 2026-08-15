@@ -8,6 +8,12 @@ const { buildChainView } = require("../../src/shared/transmission-chain.js");
 const { getChainDbContext } = require("../lib/chainDb");
 const { runChainReasoning } = require("../lib/chainReasoning");
 const { getChainSignals } = require("../lib/industryData");
+// v9.148.0（任务04）：6 链 × 标的集合（概念校准产物，异动监控/简报复用）
+const { getChainStocks, chainStockStats, CHAINS } = require("../lib/chainStocks");
+// v9.148.0（任务05）：产业价格历史序列（30 天趋势，简报/前端走势图用）
+const { getCommodityPriceHistory } = require("../lib/commodityPrice");
+// v9.148.0（任务08）：链简报查询/生成
+const { generateBriefing, generateAllBriefings } = require("../lib/chainBriefing");
 
 function bjDateStr() {
   const d = new Date(Date.now() + 8 * 3600 * 1000);
@@ -135,6 +141,94 @@ module.exports = function chainRoutes(app) {
       const days = Math.max(7, Math.min(365, Number(req.query.days) || 90));
       if (!chainId) return res.status(400).json({ error: "chainId required" });
       res.json({ ok: true, chainId, days, items: await getChainSignals(pool, chainId, days) });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // v9.148.0（任务04）：6 链 × 标的集合查询（概念命中 + hybk + 种子兜底）
+  // GET /api/chain/stocks?chain=semiconductor → { chain, name, count, stocks }
+  // GET /api/chain/stocks → 6 链标的数统计（校准报告用）
+  app.get("/api/chain/stocks", async (req, res) => {
+    try {
+      const chain = String(req.query.chain || "").trim();
+      if (chain) {
+        if (!CHAINS[chain]) return res.status(400).json({ error: `unknown chain: ${chain}` });
+        const stocks = await getChainStocks(chain);
+        res.json({ ok: true, chain, name: CHAINS[chain].name, count: stocks.length, stocks });
+      } else {
+        res.json({ ok: true, chains: await chainStockStats() });
+      }
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // v9.148.0（任务05）：产业价格历史序列（30 天）
+  // GET /api/chain/prices?days=30 → { dates, byDate, byName }
+  app.get("/api/chain/prices", async (req, res) => {
+    try {
+      const days = Math.max(7, Math.min(120, Number(req.query.days) || 30));
+      res.json({ ok: true, days, ...(await getCommodityPriceHistory(pool, { days })) });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // v9.148.0（任务08）：链简报查询/生成
+  // GET /api/chain/briefings?chain=semiconductor → 最新简报；GET /api/chain/briefings → 6 链最新
+  // POST /api/chain/briefings/generate → 手动触发（body: {chainId?} 缺省全部）
+  app.get("/api/chain/briefings", async (req, res) => {
+    try {
+      const chain = String(req.query.chain || "").trim();
+      if (chain) {
+        const r = await pool.query(
+          `SELECT chain_id, briefing_date, content, model, created_at FROM chain_briefing WHERE chain_id=$1 ORDER BY briefing_date DESC LIMIT 7`,
+          [chain],
+        );
+        res.json({ ok: true, chain, items: r.rows.map((x) => ({ date: x.briefing_date, content: x.content, model: x.model })) });
+      } else {
+        const r = await pool.query(
+          `SELECT DISTINCT ON (chain_id) chain_id, briefing_date, content, model FROM chain_briefing ORDER BY chain_id, briefing_date DESC`,
+        );
+        res.json({ ok: true, items: r.rows.map((x) => ({ chain: x.chain_id, date: x.briefing_date, content: x.content, model: x.model })) });
+      }
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/chain/briefings/generate", async (req, res) => {
+    try {
+      const chainId = String(req.body?.chainId || "").trim();
+      const out = chainId ? await generateBriefing(pool, chainId) : await generateAllBriefings(pool);
+      res.json({ ok: true, out });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // v9.148.0（任务09）：简报页二维码（手机扫码直连）—— 内容=局域网 IP 的 #briefing URL
+  // GET /api/chain/briefings/qr → image/png
+  app.get("/api/chain/briefings/qr", async (req, res) => {
+    try {
+      const os = require("os");
+      const port = process.env.PORT || 8080;
+      const ifaces = os.networkInterfaces();
+      let lan = null;
+      for (const list of Object.values(ifaces)) {
+        for (const it of list || []) {
+          if (it.family === "IPv4" && !it.internal) { lan = it.address; break; }
+        }
+        if (lan) break;
+      }
+      const host = lan || "127.0.0.1";
+      const url = `http://${host}:${port}/#briefing`;
+      const QRCode = require("qrcode");
+      const buf = await QRCode.toBuffer(url, { width: 280, margin: 1, errorCorrectionLevel: "M" });
+      res.set("Content-Type", "image/png");
+      res.set("Cache-Control", "no-store");
+      res.send(buf);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

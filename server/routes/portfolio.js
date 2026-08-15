@@ -257,12 +257,29 @@ module.exports = function portfolioRoutes(app) {
       );
       row = r.rows[0];
     } else {
-      const r = await pool.query(
-        `INSERT INTO logic_ledger(code,name,status,thesis,catalysts,break_line,board,decision_ref,trade_ref,simulated,invalidation_conditions,review_cycle_days,next_review_at)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-        [code, name, status, String(b.thesis), JSON.stringify(catalysts), breakLine, board, decisionRef, tradeRef, simulated, JSON.stringify(invalidationConditions), reviewCycleDays, nextReviewAt]
+      // v9.148.0（任务02 A4）：幂等防重 —— 同代码+同逻辑且非终态时复用更新，不再重复插入
+      //   （2026-08-15 实测：亨通光电 6 条、中天科技 3 条完全相同记录 = 重复点击"录逻辑"导致）
+      const dup = await pool.query(
+        `SELECT id FROM logic_ledger WHERE code=$1 AND thesis=$2 AND status='验证中' ORDER BY id DESC LIMIT 1`,
+        [code, String(b.thesis)]
       );
-      row = r.rows[0];
+      if (dup.rows[0]) {
+        const r = await pool.query(
+          `UPDATE logic_ledger
+           SET name=$2,catalysts=$3,break_line=$4,board=$5,decision_ref=$6,trade_ref=$7,simulated=$8,
+               invalidation_conditions=$9,review_cycle_days=$10,next_review_at=$11,updated_at=now()
+           WHERE id=$1 RETURNING *`,
+          [dup.rows[0].id, name, JSON.stringify(catalysts), breakLine, board, decisionRef, tradeRef, simulated, JSON.stringify(invalidationConditions), reviewCycleDays, nextReviewAt]
+        );
+        row = r.rows[0];
+      } else {
+        const r = await pool.query(
+          `INSERT INTO logic_ledger(code,name,status,thesis,catalysts,break_line,board,decision_ref,trade_ref,simulated,invalidation_conditions,review_cycle_days,next_review_at)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+          [code, name, status, String(b.thesis), JSON.stringify(catalysts), breakLine, board, decisionRef, tradeRef, simulated, JSON.stringify(invalidationConditions), reviewCycleDays, nextReviewAt]
+        );
+        row = r.rows[0];
+      }
     }
     res.json({ ok: true, logic: rowToLogic(row), portfolio: await loadPortfolio() });
   });

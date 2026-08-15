@@ -94,7 +94,7 @@ export function useMarketData() {
   const initialTab = (() => {
     const fromUrl = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
     const fromLs = typeof window !== "undefined" ? localStorage.getItem("stock:activeTab") : null;
-    const keys: TabKey[] = ["dashboard", "fundline", "radar", "dragon", "news"];
+    const keys: TabKey[] = ["dashboard", "fundline", "radar", "dragon", "news", "briefing"];
     if (keys.includes(fromUrl as TabKey)) return fromUrl as TabKey;
     if (fromLs && keys.includes(fromLs as TabKey)) return fromLs as TabKey;
     return "dashboard";
@@ -103,7 +103,7 @@ export function useMarketData() {
   useEffect(() => {
     const onHash = () => {
       const h = window.location.hash.replace("#", "");
-      const keys: TabKey[] = ["dashboard", "fundline", "radar", "dragon", "news"];
+      const keys: TabKey[] = ["dashboard", "fundline", "radar", "dragon", "news", "briefing"];
       if (keys.includes(h as TabKey)) setActive(h as TabKey);
     };
     window.addEventListener("hashchange", onHash);
