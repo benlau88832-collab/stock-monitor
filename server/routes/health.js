@@ -24,6 +24,17 @@ module.exports = function healthRoutes(app) {
     } catch (e) {
       out.pg = { ok: false, error: e.message };
     }
+    // ③b v9.147.0（数据基建·阶段一）：本地 K 线健康（kline_daily 表有数据即视为可用）
+    try {
+      const kr = await pool.query(`SELECT count(*)::int AS n, max(date) AS d1 FROM kline_daily`);
+      out.localKlines = {
+        ok: Number(kr.rows[0]?.n || 0) > 0,
+        bars: Number(kr.rows[0]?.n || 0),
+        lastDate: kr.rows[0]?.d1 ?? null,
+      };
+    } catch (e) {
+      out.localKlines = { ok: false, error: e.message };
+    }
     // ④ SW 缓存版本（读 public/sw.js 的 CACHE 常量；部署目录不存在/解析失败 → null）
     try {
       const swPath = path.join(__dirname, "../../public/sw.js");
@@ -58,12 +69,15 @@ module.exports = function healthRoutes(app) {
       { name: "pg_connectivity", ok: out.pg?.ok === true, latencyMs: out.pg?.latencyMs ?? null },
       { name: "cognition_build", ok: out.cognition?.ok === true, detail: out.cognition?.ok ? `v${out.cognition.version} hash=${out.cognition.hash}` : "build failed" },
       { name: "market_source", ok: (() => {
+        // v9.147.0（数据基建·阶段一）：K线已本地化（kline_daily 通达信全市场导入）——
+        //   历史K线源检查改为"本地表有数据 OR 外部K线源可用"，push2his 断源不再误报
+        if (out.localKlines?.ok === true) return true;
         if (!Array.isArray(out.sources)) return false;
         const ok = (h) => out.sources.some((s) => s.host === h && s.state === "ok");
         const primaryOk = ok("push2.eastmoney.com") || ok("push2delay.eastmoney.com") || ok("qt.gtimg.cn");
         const klineOk = ok("push2his.eastmoney.com") || ok("web.ifzq.gtimg.cn");
         return primaryOk && klineOk;
-      })(), detail: "主行情源与历史K线源至少一个可用；失败时显示降级" },
+      })(), detail: "主行情源与历史K线源至少一个可用（v9.147.0：本地 kline_daily 视为K线可用）；失败时显示降级" },
       { name: "ai_endpoint", ok: out.ai?.degraded === false, detail: "deepseek-v4-flash（恒思考）/ OpenCode Go failover" },
       { name: "sw_version", ok: !!out.sw?.cache, detail: out.sw?.cache ?? "sw.js 未读取" },
     ];

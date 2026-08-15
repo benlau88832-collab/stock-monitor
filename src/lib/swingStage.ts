@@ -130,9 +130,10 @@ export function detectFirstBoardDipBuy(bars: KlineBar[], limitPct = 9.5): { hit:
 }
 
 // ---------- 主升/加速/退潮判定 ----------
-export function classifySwingPhase(bars: KlineBar[]): SwingStageResult {
-  if (!bars || bars.length < 30) {
-    return { phase: "数据不足", confidence: 0, buyPoint: null, ma5: null, ma10: null, ma20: null, ma60: null, biasMa20: null, signals: ["K线不足 30 根"] };
+export function classifySwingPhase(bars: KlineBar[], opts: { minBars?: number } = {}): SwingStageResult {
+  const minBars = opts.minBars ?? 30;
+  if (!bars || bars.length < minBars) {
+    return { phase: "数据不足", confidence: 0, buyPoint: null, ma5: null, ma10: null, ma20: null, ma60: null, biasMa20: null, signals: [`K线不足 ${minBars} 根`] };
   }
   const closes = bars.map(b => b.close);
   const ma5 = sma(closes, 5);
@@ -227,5 +228,30 @@ export function aggregateWeeklyBars(bars: KlineBar[]): KlineBar[] {
 }
 
 export function analyzeWeeklySwing(bars: KlineBar[]): SwingStageResult {
-  return classifySwingPhase(aggregateWeeklyBars(bars));
+  return classifySwingPhase(aggregateWeeklyBars(bars), { minBars: 20 });
+}
+
+// v9.147.0（阶段二A·多周期共振）：月线第三级 —— 与周线同构，适配 1-3 年中长波段方向判断
+// 用途：日线（3天-1月）/ 周线（60-180天）/ 月线（1-3年）三周期共振裁决；
+//   月线主升 + 周线退潮 = 中期回调（低吸窗口），月线退潮 + 日线反弹 = 反抽不追。
+function monthKey(date: string): string {
+  return String(date || "").slice(0, 7); // YYYY-MM
+}
+
+export function aggregateMonthlyBars(bars: KlineBar[]): KlineBar[] {
+  const map = new Map<string, KlineBar>();
+  for (const b of bars) {
+    const key = monthKey(b.date);
+    const cur = map.get(key);
+    if (!cur) { map.set(key, { ...b }); continue; }
+    cur.close = b.close;
+    cur.high = Math.max(cur.high, b.high);
+    cur.low = Math.min(cur.low, b.low);
+    cur.volume += b.volume;
+  }
+  return [...map.values()];
+}
+
+export function analyzeMonthlySwing(bars: KlineBar[]): SwingStageResult {
+  return classifySwingPhase(aggregateMonthlyBars(bars), { minBars: 12 });
 }

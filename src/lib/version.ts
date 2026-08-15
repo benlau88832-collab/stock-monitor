@@ -198,5 +198,21 @@
 // ============================================================
 // v9.144.0（全站根源修正：AI督导统一认知源/方向榜降级/逻辑提醒真实化/决策证据落地/移动端布局）
 // v9.145.0（第二轮报告执行：主决策卡接入/Agent产业链/去Windows本地化/纪律熔断/产业链传导事件/周线模型）
-export const APP_VERSION = "v9.145.0";
-export const BUILD_DATE = "2026-08-14";
+// v9.146.0（第三轮报告执行：swing 消费 DB 链上下文/服务端 AI-Swing 留痕/周线接入主决策/主卡归因反馈/
+//   独立基本面研判/链景气选股/服务端自动逻辑台账/诚实降级外部产业数据）
+// ============================================================
+// v9.147.0（数据基建·阶段一：本地日K落库 —— 通达信全市场导入 + 增量更新 + 读路径本地优先）：
+//   背景：波段决策卡 K 线实时抓 push2his（断源即报"K线数据不足<30根"），600487 本地 5401 根却报错。
+//   🆕 kline_daily 表（code+date 主键）+ db-migrations 增量迁移
+//   🆕 server/lib/klineDb.js（.day 二进制解析 / unnest 批量 upsert 幂等 / 本地读 / 腾讯 qfq 兜底回写）
+//   🆕 server/scripts/tdx-import.js 全市场导入（F 盘通达信 vipdoc 约 1.2 万只 / 2900 万根日K，1-3 分钟）
+//   🆕 cron 15:45 交易日增量（lday mtime 过滤 + 本地 max(date) 跳过 + 自选池腾讯兜底）
+//   🔧 读路径本地优先：decisions.js fetchStockKlines / proxy.js /api/proxy/stock-kline /
+//     indicators.js fetchDailyKline —— 本地 ≥30 根直接返回，实时仅兜底并回写缓存
+//   复权口径声明：通达信 .day 不复权原始价；腾讯 qfq 回填前复权；短窗口形态判定两口径一致，
+//     同 code 冲突保留先写入者（force 覆盖仅限腾讯兜底回填）
+// v9.147.0（阶段二A·多周期共振）：月线第三级（analyzeMonthlySwing，日/周/月三周期裁决）
+// v9.147.0（阶段二B·波段信号闭环）：swing_signals 表 + buyPoint 信号落库 + T+20/T+60 回填 + 胜率面板
+// v9.147.0（阶段二C·盘中精灵恢复）：SpriteOverlay 改接活跃源 anomaly:今日（原 anomaly_latest 死源）
+export const APP_VERSION = "v9.147.0";
+export const BUILD_DATE = "2026-08-15";

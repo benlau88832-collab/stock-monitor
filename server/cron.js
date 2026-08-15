@@ -666,6 +666,29 @@ function startCron({ pool }) {
     } catch (e) { console.error("[cron] 用户风格学习失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
 
+  // ---------- v9.147.0（数据基建·阶段一）：本地日K增量维护（盘后 15:45） ----------
+  // 通达信 lday 增量导入 + 自选池腾讯 qfq 兜底 → kline_daily 表（读路径本地优先）
+  // 交易日执行；单轮失败不阻塞主链；幂等（code+date 冲突跳过）
+  cron.schedule("45 15 * * 1-5", async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      const { runKlineIncremental } = require("./cron/klines");
+      await runKlineIncremental(pool);
+      await markCronStep(pool, bjDateStr(), "klineIncremental");
+    } catch (e) { console.error("[cron] kline 增量失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
+  // ---------- v9.147.0（阶段二B·波段信号闭环）：信号 T+20/T+60 盈亏回填（盘后 15:55） ----------
+  // 用本地 kline_daily 计算 swing_signals 未回填样本的 20/60 交易日收盘涨跌幅（0 外部依赖）
+  cron.schedule("55 15 * * 1-5", async () => {
+    try {
+      if (!isTradingDayCN()) return;
+      const { backfillSignalPnl } = require("./lib/swingSignals");
+      const r = await backfillSignalPnl(pool);
+      if (r.backfilled > 0) console.log(`[cron] 波段信号回填: ${r.backfilled}/${r.total} 条`);
+    } catch (e) { console.error("[cron] 波段信号回填失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
   // ---------- V13-1（P0）：新闻驱动作战管线 ----------
   // 频率（V13-4 深度推理）：盘前 9:15 检查隔夜 → 盘中每 30 分钟（9:00-14:30 含整点共 12 轮，v9.137.0 注释对齐）→ 盘后 15:05 完整版
   const scheduleThemeAnalysis = (expr, label) => cron.schedule(expr, async () => {

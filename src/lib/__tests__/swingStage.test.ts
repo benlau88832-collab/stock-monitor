@@ -1,7 +1,7 @@
 // v9.138.0（波段重构·阶段一）：swingStage 波段位置模型纯函数测试
 import { describe, it, expect } from "vitest";
 import {
-  analyzeSwing, analyzeWeeklySwing, aggregateWeeklyBars, detectPlatform, detectBreakout, detectFirstLimitUp, detectFirstBoardDipBuy,
+  analyzeSwing, analyzeWeeklySwing, analyzeMonthlySwing, aggregateWeeklyBars, aggregateMonthlyBars, detectPlatform, detectBreakout, detectFirstLimitUp, detectFirstBoardDipBuy,
   type KlineBar,
 } from "../swingStage";
 
@@ -25,6 +25,40 @@ describe("周线级中长波段模型", () => {
     expect(weekly.length).toBeLessThan(bars.length);
     const r = analyzeWeeklySwing(bars);
     expect(["底部整理","启动","主升","加速","退潮","数据不足"]).toContain(r.phase);
+  });
+});
+
+// v9.147.0（阶段二A·多周期共振）：月线第三级 —— 按 YYYY-MM 聚合，minBars=12
+describe("月线级长波段模型", () => {
+  it("aggregateMonthlyBars 按月聚合（同月多根 → 1 根）", () => {
+    const bars = Array.from({ length: 60 }, (_, i) => ({
+      date: `2026-${String(Math.floor(i / 20) + 1).padStart(2, "0")}-${String((i % 20) + 1).padStart(2, "0")}`,
+      open: 10 + i * 0.1, close: 10.1 + i * 0.1, high: 10.2 + i * 0.1, low: 10 + i * 0.1, volume: 100,
+    }));
+    const monthly = aggregateMonthlyBars(bars);
+    expect(monthly.length).toBeLessThan(bars.length);
+    expect(monthly.length).toBe(3); // 3 个月
+    const r = analyzeMonthlySwing(bars);
+    expect(["底部整理","启动","主升","加速","退潮","数据不足"]).toContain(r.phase);
+  });
+
+  it("月线持续上行（>=20 根，MA20 可算）→ 主升", () => {
+    const closes = Array.from({ length: 24 }, (_, i) => 10 + i * 0.5); // 每月一根，持续上行
+    const bars: KlineBar[] = closes.map((c, i) => ({
+      date: `2025-${String(i + 1).padStart(2, "0")}-15`,
+      open: c - 0.2, close: c, high: c + 0.3, low: c - 0.4, volume: 100,
+    }));
+    const r = analyzeMonthlySwing(bars);
+    expect(r.phase).not.toBe("数据不足");
+    expect(["主升", "加速"]).toContain(r.phase);
+  });
+
+  it("月线不足 12 根 → 数据不足（防短样本误判）", () => {
+    const bars: KlineBar[] = Array.from({ length: 6 }, (_, i) => ({
+      date: `2026-${String(i + 1).padStart(2, "0")}-15`,
+      open: 10, close: 11, high: 11.2, low: 9.8, volume: 100,
+    }));
+    expect(analyzeMonthlySwing(bars).phase).toBe("数据不足");
   });
 });
 

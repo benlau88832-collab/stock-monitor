@@ -17,6 +17,7 @@ import CommodityChain from "./components/CommodityChain";
 import MarginPanel from "./components/MarginPanel";
 import IndustryFundFlowChart from "./components/IndustryFundFlowChart";
 import AlertBanner from "./components/AlertBanner";
+import SpriteOverlay from "./components/SpriteOverlay";
 import AIConsole from "./components/AIConsole";
 import CognitionBanner from "./components/CognitionBanner";
 import ReasoningPanel from "./components/ReasoningPanel";
@@ -57,6 +58,9 @@ export default function App() {
       />
 
       <AlertBanner alerts={alerts} />
+
+      {/* v9.147.0（阶段二C）：盘中精灵浮层（通达信"盘中精灵"效果，右下角常驻；改接活跃源 anomaly:今日） */}
+      <SpriteOverlay />
 
       <ErrorBoundary>
         <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-4">

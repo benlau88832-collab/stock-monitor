@@ -2,7 +2,7 @@
 // v9.97.0（批次 2）：技术指标快照（tinavi indicators.ts 移植，服务端纯函数）
 // MA5/10/20/60、MACD(12,26,9)、RSI(6,14 Wilder)、KDJ(9)、BOLL(20,2)
 // 输出：{ name, value, bias: bull|bear|neutral } 信号数组（分维度打标，聚合层加权）
-// 日K 数据源：腾讯 web.ifzq.gtimg.cn fqkline（push2his 断源 fallback，服务端直连）
+// 日K 数据源：本地 kline_daily 优先（v9.147.0 数据基建·阶段一），腾讯 fqkline 兜底
 // ============================================================
 const { getJson } = require("./outbound");
 
@@ -116,9 +116,20 @@ function computeIndicatorSignals(closes) {
   return { signals, snapshot };
 }
 
-// ---------- 服务端日K 获取（腾讯 fqkline，push2his 断源兜底） ----------
+// ---------- 服务端日K 获取（本地 kline_daily 优先，腾讯 fqkline 兜底） ----------
+// v9.147.0（数据基建·阶段一）：本地 kline_daily（通达信导入+每日增量）优先，断源根治；
+//   本地不足 30 根时走腾讯 fqkline 并回写缓存。
 // param 格式：sh600721,day,,,320,qfq → 返回 {"sh600721":{"qfqday":[[date,open,close,high,low,volume],...]}}
-async function fetchDailyKline(code) {
+async function fetchDailyKline(code, pool) {
+  // 本地优先（>=30 根直接返回，升序对象数组）
+  try {
+    const { getLocalKlines } = require("./klineDb");
+    const p = pool || require("../db").pool;
+    const local = await getLocalKlines(p, code, 320);
+    if (Array.isArray(local) && local.length >= 30) {
+      return local.map((k) => ({ date: k.date, open: k.open, close: k.close, high: k.high, low: k.low, volume: k.volume || 0 }));
+    }
+  } catch { /* 本地读失败则走实时 */ }
   const market = code.startsWith("6") ? "sh" : "sz";
   const symbol = `${market}${code}`;
   const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${symbol},day,,,320,qfq`;
@@ -128,10 +139,17 @@ async function fetchDailyKline(code) {
   const node = inner?.[symbol]?.qfqday || inner?.[symbol]?.day;
   if (!Array.isArray(node) || node.length === 0) return [];
   // [date, open, close, high, low, volume, ...]
-  return node.map(r => ({
+  const klines = node.map(r => ({
     date: String(r[0]),
     open: Number(r[1]), close: Number(r[2]), high: Number(r[3]), low: Number(r[4]), volume: Number(r[5]) || 0,
   })).filter(k => Number.isFinite(k.close) && k.close > 0);
+  // v9.147.0：腾讯兜底结果回写本地缓存（qfq 覆盖 tdx 同日期）
+  try {
+    const { upsertKlines } = require("./klineDb");
+    const p = pool || require("../db").pool;
+    await upsertKlines(p, klines.map((k) => ({ code, ...k, amount: 0 })), "tencent", true);
+  } catch { /* 回写失败不影响本次返回 */ }
+  return klines;
 }
 
 /** 聚合端点用：拉日K → 指标快照 + 信号数组（失败返回 null 不阻塞其余维度） */

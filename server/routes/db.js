@@ -765,4 +765,31 @@ module.exports = function dbRoutes(app) {
       res.json({ ok: true, rows: r.rows });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
+
+  // v9.147.0（重建·对齐 v9.146 接口）：决策反馈 —— POST 写入 / GET 查询
+  // 消费方：PostButtons（拍板反馈）与 DecisionFeedback（波段决策卡就地反馈）
+  app.post("/api/db/decision_feedback", async (req, res) => {
+    const t = req.body || {};
+    if (!t.ticketId || !t.feedback) return res.status(400).json({ error: "ticketId/feedback required" });
+    try {
+      await pool.query(
+        `INSERT INTO decision_feedback(ticket_id,code,mainline,feedback,attribution,note)
+         VALUES($1,$2,$3,$4,$5,$6)`,
+        [t.ticketId, t.code ?? null, t.mainline ?? null, t.feedback, t.attribution ?? null, t.note ?? null],
+      );
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/db/decision_feedback", async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(Number(req.query.limit) || 200, 500));
+      const r = await pool.query(
+        `SELECT id,ticket_id,code,mainline,feedback,attribution,note,created_at
+         FROM decision_feedback ORDER BY created_at DESC LIMIT $1`,
+        [limit],
+      );
+      res.json({ ok: true, rows: r.rows });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 };

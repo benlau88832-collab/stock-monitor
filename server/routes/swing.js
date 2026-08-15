@@ -155,6 +155,21 @@ module.exports = function swingRoutes(app) {
       res.status(502).json({ error: e.message });
     }
   });
+
+  // v9.147.0（阶段二B·波段信号闭环）：信号胜率归因 + 最近信号列表
+  // GET /api/swing/signals?limit=50 → { stats: [{signalType, n, t20:{n,winRate,win,avg}, t60:{...}}], recent: [...] }
+  app.get("/api/swing/signals", async (req, res) => {
+    try {
+      const { getSignalStats, listRecentSignals } = require("../lib/swingSignals");
+      const [stats, recent] = await Promise.all([
+        getSignalStats(pool),
+        listRecentSignals(pool, Number(req.query.limit) || 50),
+      ]);
+      res.json({ ok: true, stats, recent, asOf: new Date().toISOString() });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 };
 
 module.exports.buildDirection = buildDirection;

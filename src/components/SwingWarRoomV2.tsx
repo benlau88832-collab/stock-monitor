@@ -7,13 +7,15 @@ import { Activity, AlertTriangle, Plus, RefreshCw, X } from "lucide-react";
 import { apiFetch, isLocalServer } from "../lib/cloudStore";
 import { localDateStr } from "../lib/format";
 import { getProfilePrompt } from "../lib/userProfile";
-import { analyzeSwing, type KlineBar } from "../lib/swingStage";
+import { analyzeSwing, analyzeWeeklySwing, analyzeMonthlySwing, type KlineBar } from "../lib/swingStage";
 import { swingDecision } from "../lib/swingDecision";
 import {
   activeEntries, checkAllLedgerAlerts, type LogicEntry,
 } from "../lib/logicLedger";
 import { usePortfolio, type PortfolioLogicInput, type PortfolioTradeInput } from "../hooks/usePortfolio";
 import DecisionActionPanel from "./DecisionActionPanel";
+import DecisionFeedback from "./DecisionFeedback";
+import SwingSignalPanel from "./SwingSignalPanel";
 
 interface SwingBoardScore {
   code: string;
@@ -45,6 +47,9 @@ interface ApiSwingDecision {
   evidenceChain?: Array<{ step: string; evidence: string }>;
   invalidationConditions?: string[];
   signal: string;
+  dailyStage?: string | null;
+  weeklyStage?: string | null;
+  monthlyStage?: string | null;
 }
 
 const PHASE_COLOR: Record<string, string> = {
@@ -56,6 +61,13 @@ const PHASE_COLOR: Record<string, string> = {
   资金信号: "text-amber-300 bg-amber-500/10",
   数据不足: "text-slate-500 bg-white/5",
 };
+
+function horizonLabel(days?: number): string {
+  if (days == null) return "未定";
+  if (days <= 20) return "短波段";
+  if (days <= 60) return "中波段";
+  return "长波段";
+}
 
 function BoardRow({ b }: { b: SwingBoardScore }) {
   return (
@@ -237,15 +249,19 @@ export function SwingVerdictCard({ addTrade, saveLogic, initialCode = "", initia
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ApiSwingDecision | null>(null);
   const [stage, setStage] = useState<ReturnType<typeof analyzeSwing> | null>(null);
+  const [weeklyStage, setWeeklyStage] = useState<ReturnType<typeof analyzeWeeklySwing> | null>(null);
+  const [monthlyStage, setMonthlyStage] = useState<ReturnType<typeof analyzeMonthlySwing> | null>(null);
   const [lastPrice, setLastPrice] = useState<number | null>(null);
-  const [chainCtx, setChainCtx] = useState<{ chain: any; signals: any } | null>(null);
+  const [chainCtx, setChainCtx] = useState<{ chain: any; signals: any; events?: any[]; dataSourceNote?: string } | null>(null);
+  const [mappingStats, setMappingStats] = useState<{ totalMapped: number; totalConcepts: number; bySource: Array<{ source: string; n: number; confirmed: number; with_exposure: number }> } | null>(null);
   const [feedbackPenalty, setFeedbackPenalty] = useState<{ total: number; byAttribution: Record<string, number> } | null>(null);
   const [err, setErr] = useState("");
+  const [autoLogicMsg, setAutoLogicMsg] = useState<string | null>(null);
 
   const run = async () => {
     const c = code.trim();
     if (!/^\d{6}$/.test(c)) { setErr("请输入 6 位股票代码"); return; }
-    setBusy(true); setErr(""); setResult(null); setStage(null); setFeedbackPenalty(null);
+    setBusy(true); setErr(""); setAutoLogicMsg(null); setResult(null); setStage(null); setWeeklyStage(null); setMonthlyStage(null); setFeedbackPenalty(null);
     try {
       const r = await apiFetch("/api/decisions/swing", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: c, profile: getProfilePrompt() }), signal: AbortSignal.timeout(60000),
@@ -256,9 +272,11 @@ export function SwingVerdictCard({ addTrade, saveLogic, initialCode = "", initia
       }
       const j = await r.json();
       setStage(j.stage ?? null);
+      setWeeklyStage(j.weeklyStage ?? null);
+      setMonthlyStage(j.monthlyStage ?? null);
       setLastPrice(j.snap?.price ?? j.stage?.ma20 ?? null);
       setResult(j.decision ?? null);
-      const logTs = String(Date.now());
+      const logTs = String(j.decisionLogRef ?? Date.now());
       setSwingLogRef(logTs);
       try {
         const key = `decision_log:${localDateStr()}`;
@@ -268,10 +286,16 @@ export function SwingVerdictCard({ addTrade, saveLogic, initialCode = "", initia
       } catch { /* AI-Swing 留痕失败不影响决策展示 */ }
       setChainCtx(j.chain?.chain ? j.chain : null);
       setFeedbackPenalty(j.feedbackPenalty ?? null);
+      try {
+        const sr = await apiFetch("/api/chain/mapping-stats", { signal: AbortSignal.timeout(8000) });
+        const sj = await sr.json();
+        if (sj.ok) setMappingStats(sj);
+      } catch { /* 映射统计不可用不阻塞 */ }
       if (j.llmError) setErr(`AI 研判暂不可用，已使用规则研判：${j.llmError}`);
+      if (j.autoLogic?.created) setAutoLogicMsg("已自动挂载持仓逻辑台账（含失效条件与复核周期）");
     } catch (e) {
       try {
-        const kr = await apiFetch(`/api/proxy/stock-kline?code=${c}&days=70`);
+        const kr = await apiFetch(`/api/proxy/stock-kline?code=${c}&days=160`);
         if (!kr.ok) throw new Error("K线获取失败");
         const kj = await kr.json();
         const rows: string[] = kj?.klines ?? [];
@@ -303,18 +327,33 @@ export function SwingVerdictCard({ addTrade, saveLogic, initialCode = "", initia
         </button>
       </div>
       {err && <div className="mt-1 text-[11px] text-rose-300">{err}</div>}
+      {autoLogicMsg && <div className="mt-1 text-[11px] text-teal-300">{autoLogicMsg}</div>}
       {result && (
         <div className="mt-2 space-y-1.5 text-[11px]">
           <div className="flex items-center gap-2">
             <span className={`text-lg font-black ${result.verdict === "波段买入" ? "text-emerald-300" : result.verdict === "持有" ? "text-teal-300" : result.verdict === "减仓" ? "text-amber-300" : result.verdict === "观望" ? "text-slate-300" : "text-rose-300"}`}>{result.signal}</span>
-            {stage && <span className="text-slate-300">位置：<b className="text-sky-300">{stage.phase}</b></span>}
-            {chainCtx?.chain && <div className="text-[10px] text-teal-300/80">产业链：{chainCtx.chain.chainName} · {chainCtx.chain.nodeName} · 上游 {chainCtx.chain.upstream.join(" / ") || "无"} → 下游 {chainCtx.chain.downstream.join(" / ") || "无"}</div>}
+            <span className="text-slate-300">日线：<b className="text-sky-300">{stage?.phase ?? result.dailyStage ?? "—"}</b> · 周线：<b className="text-teal-300">{weeklyStage?.phase ?? result.weeklyStage ?? "—"}</b> · 月线：<b className="text-violet-300">{monthlyStage?.phase ?? result.monthlyStage ?? "—"}</b></span>
+            {chainCtx?.chain && (
+              <div className="text-[10px] text-teal-300/80">
+                产业链：{chainCtx.chain.chainName} · {chainCtx.chain.nodeName} · 上游 {chainCtx.chain.upstream.join(" / ") || "无"} → 下游 {chainCtx.chain.downstream.join(" / ") || "无"}
+                {chainCtx.chain.exposurePct != null ? ` · 营收敞口 ${(chainCtx.chain.exposurePct * 100).toFixed(1)}%` : " · 敞口未核实"}
+              </div>
+            )}
+            {chainCtx?.events && chainCtx.events.length > 0 && (
+              <div className="text-[10px] text-violet-300/80">最新链事件：{chainCtx.events[0].title}</div>
+            )}
+            <div className="text-[10px] text-slate-500">{chainCtx?.dataSourceNote ?? "产业景气数据来源：仅新闻/政策/资金代理，无协会/统计直采"}</div>
+            {mappingStats && (
+              <div className="text-[10px] text-slate-500">
+                链映射覆盖：{mappingStats.totalMapped}/{mappingStats.totalConcepts} · 已确认 {mappingStats.bySource.reduce((s, x) => s + x.confirmed, 0)}
+              </div>
+            )}
             {lastPrice != null && <span className="text-slate-400">参考价 {lastPrice.toFixed(2)}</span>}
           </div>
           {result.buyPoint && <div className="text-cyan-300">买点：{result.buyPoint}</div>}
           {result.verdict === "波段买入" && <div className="text-slate-300">止损 {result.stopLossPct}% 路 止盈 +{result.targetPct}% 路 仓位 {result.positionRange[0]}-{result.positionRange[1]}%</div>}
           {(result.holdingHorizonDays != null || result.reviewCycleDays != null) && (
-            <div className="text-sky-300/90">持有周期 {result.holdingHorizonDays ?? 20} 天 · 复核周期 {result.reviewCycleDays ?? 20} 天</div>
+            <div className="text-sky-300/90">持有周期 {result.holdingHorizonDays ?? 20} 天（{horizonLabel(result.holdingHorizonDays)}） · 复核周期 {result.reviewCycleDays ?? 20} 天</div>
           )}
           {result.reasons.length > 0 && <div className="text-emerald-300/80">{result.reasons.join("；")}</div>}
           {result.blocks.length > 0 && <div className="text-rose-300/80">{result.blocks.join("；")}</div>}
@@ -329,6 +368,7 @@ export function SwingVerdictCard({ addTrade, saveLogic, initialCode = "", initia
           )}
           {feedbackPenalty?.total ? <div className="text-amber-300/80">用户反馈硬扣：-{Math.min(15, feedbackPenalty.total * 3)} 分（{Object.entries(feedbackPenalty.byAttribution).map(([k, v]) => `${k} ${v}`).join("、")}）</div> : null}
           <DecisionActionPanel code={code.trim()} name={name.trim() || code.trim()} price={lastPrice} decisionLogRef={swingLogRef} defaultThesis={`${result?.reasons.join("；") || stage?.signals.join("；") || "波段决策"}；止损参考 ${result?.stopLossPct != null ? Math.round((lastPrice ?? 0) * (1 - result.stopLossPct / 100) * 100) / 100 : ""}`} defaultInvalidation={result.invalidationConditions ?? []} defaultReviewCycle={result.reviewCycleDays ?? 20} addTrade={addTrade} saveLogic={saveLogic} />
+          <DecisionFeedback ticketId={swingLogRef} code={code.trim() || null} />
         </div>
       )}
     </div>
@@ -454,6 +494,8 @@ export default function SwingWarRoomV2() {
           <div className="text-[10px] text-slate-600">板块K线缺失时仅展示资金/涨停维度，K线恢复后自动升级为完整景气评分。</div>
         </div>
       </details>
+
+      <SwingSignalPanel />
     </div>
   );
 }

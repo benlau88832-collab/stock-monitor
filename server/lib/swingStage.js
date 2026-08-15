@@ -1,6 +1,7 @@
 // ============================================================
 // v9.142.0 swing stage model (server CJS port of src/lib/swingStage.ts)
 // Pure functions used by the server direction engine.
+// v9.147.0（阶段二A·多周期共振）：月线第三级 analyzeMonthlySwing
 // ============================================================
 
 function sma(values, period) {
@@ -82,9 +83,10 @@ function detectFirstBoardDipBuy(bars, limitPct = 9.5) {
   return { hit: holdLine && notChasing, note: holdLine && notChasing ? `首板次日回踩${dipLine.toFixed(2)}（MA5/10）企稳` : "回踩未到位或已再封板" };
 }
 
-function classifySwingPhase(bars) {
-  if (!bars || bars.length < 30) {
-    return { phase: "数据不足", confidence: 0, buyPoint: null, ma5: null, ma10: null, ma20: null, ma60: null, biasMa20: null, signals: ["K线不足30根"] };
+function classifySwingPhase(bars, opts = {}) {
+  const minBars = opts.minBars ?? 30;
+  if (!bars || bars.length < minBars) {
+    return { phase: "数据不足", confidence: 0, buyPoint: null, ma5: null, ma10: null, ma20: null, ma60: null, biasMa20: null, signals: [`K线不足${minBars}根`] };
   }
   const closes = bars.map((b) => b.close);
   const ma5 = sma(closes, 5);
@@ -145,4 +147,66 @@ function analyzeSwing(bars) {
   return classifySwingPhase(bars);
 }
 
-module.exports = { classifySwingPhase, analyzeSwing, detectPlatform, detectBreakout, detectFirstLimitUp, detectFirstBoardDipBuy };
+// v9.145.0（第三轮 P0-3）：服务端 CJS 周线级中长波段模型，与 src/lib/swingStage.ts 同构。
+// 60-180 天持有周期使用周 K 聚合后的位置判断，避免只按日线短周期下结论。
+function weekKey(date) {
+  const d = new Date(String(date || "") + "T00:00:00+08:00");
+  if (Number.isNaN(d.getTime())) return String(date || "");
+  const y = d.getFullYear();
+  const jan1 = new Date(y, 0, 1);
+  const week = Math.ceil(((d.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7);
+  return `${y}-W${String(week).padStart(2, "0")}`;
+}
+
+function aggregateWeeklyBars(bars) {
+  const map = new Map();
+  for (const b of bars) {
+    const key = weekKey(b.date);
+    const cur = map.get(key);
+    if (!cur) {
+      map.set(key, { ...b });
+      continue;
+    }
+    cur.close = b.close;
+    cur.high = Math.max(cur.high, b.high);
+    cur.low = Math.min(cur.low, b.low);
+    cur.volume += b.volume;
+  }
+  return [...map.values()];
+}
+
+function analyzeWeeklySwing(bars) {
+  return classifySwingPhase(aggregateWeeklyBars(bars), { minBars: 20 });
+}
+
+// v9.147.0（阶段二A·多周期共振）：月线第三级 —— 与周线同构，适配 1-3 年中长波段方向判断
+function monthKey(date) {
+  return String(date || "").slice(0, 7); // YYYY-MM
+}
+
+function aggregateMonthlyBars(bars) {
+  const map = new Map();
+  for (const b of bars) {
+    const key = monthKey(b.date);
+    const cur = map.get(key);
+    if (!cur) {
+      map.set(key, { ...b });
+      continue;
+    }
+    cur.close = b.close;
+    cur.high = Math.max(cur.high, b.high);
+    cur.low = Math.min(cur.low, b.low);
+    cur.volume += b.volume;
+  }
+  return [...map.values()];
+}
+
+function analyzeMonthlySwing(bars) {
+  return classifySwingPhase(aggregateMonthlyBars(bars), { minBars: 12 });
+}
+
+module.exports = {
+  classifySwingPhase, analyzeSwing, analyzeWeeklySwing, analyzeMonthlySwing,
+  aggregateWeeklyBars, aggregateMonthlyBars,
+  detectPlatform, detectBreakout, detectFirstLimitUp, detectFirstBoardDipBuy,
+};

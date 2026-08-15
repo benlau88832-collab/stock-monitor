@@ -336,11 +336,21 @@ function proxyRoutes(app) {
   // v9.138.0（波段重构·阶段一）：个股日K（波段决策卡数据源，60-70 根）
   // GET /api/proxy/stock-kline?code=600001&days=70 → { klines: [...] }
   // v9.138.0 实测修正：主源 = push2his http（https 对 node TLS ban）；腾讯 fqkline 兜底（仅个股支持，板块不支持）。
+  // v9.147.0（数据基建·阶段一）：本地 kline_daily 优先（通达信全市场导入），断源根治；实时仅兜底并回写缓存。
   app.get("/api/proxy/stock-kline", async (req, res) => {
     if (!(await checkAuth(req, res))) return;
     const code = String(req.query.code ?? "");
     const days = Math.min(120, Number(req.query.days) || 70);
     if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "invalid code" });
+    // 本地优先：通达信导入 + 每日增量（kline_daily），≥30 根直接返回（含最新日期信息）
+    try {
+      const { getLocalKlines, getLocalKlinesStrings } = require("../lib/klineDb");
+      const local = await getLocalKlinesStrings(pool, code, days);
+      if (Array.isArray(local) && local.length >= 30) {
+        const meta = await getLocalKlines(pool, code, 1);
+        return res.json({ code, secid: `local.${code}`, klines: local, source: "local", lastDate: meta[0]?.date ?? null });
+      }
+    } catch { /* 本地读失败则走实时 */ }
     const secid = /^(60|68|5)/.test(code) ? `1.${code}` : `0.${code}`;
     try {
       const { getJson } = require("../lib/outbound");
@@ -348,20 +358,35 @@ function proxyRoutes(app) {
       const r = await getJson(url, { timeout: 8000, retries: 1, source: "push2his" });
       const klines = r.data?.data?.klines ?? [];
       if (!Array.isArray(klines) || klines.length === 0) throw new Error("push2his empty");
-      res.json({ code, secid, klines });
+      return res.json({ code, secid, klines });
     } catch (e) {
       console.warn(`[proxy] stock-kline ${code} 主源失败（push2his ${e?.type ?? ""} ${e?.message ?? e}），走腾讯兜底`);
       // 腾讯 fqkline 兜底（个股可用；push2his 双失败才到这里）
       try {
         const { getJson } = require("../lib/outbound");
+        const { upsertKlines } = require("../lib/klineDb");
         const q = /^(60|68|5)/.test(code) ? `sh${code}` : `sz${code}`;
         const txUrl = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${q},day,,,${days},qfq`;
         const tj = await getJson(txUrl, { timeout: 8000, source: "tencent" });
         const rows = tj.data?.data?.[q]?.qfqday ?? tj.data?.data?.[q]?.day ?? [];
         const klines = Array.isArray(rows) ? rows.map((r) => (Array.isArray(r) ? r.join(",") : String(r))) : [];
-        res.json({ code, secid: q, klines: klines.length ? klines : [] });
+        // v9.147.0：腾讯兜底结果回写本地缓存（qfq 覆盖 tdx 同日期）
+        if (klines.length) {
+          try {
+            const bars = klines
+              .map((line) => {
+                const [date, open, close, high, low, volume] = String(line).split(",");
+                const n = Number(close);
+                if (!date || !Number.isFinite(n)) return null;
+                return { code, date: String(date), open: Number(open), close: n, high: Number(high), low: Number(low), volume: Number(volume) || 0, amount: 0 };
+              })
+              .filter(Boolean);
+            if (bars.length) await upsertKlines(pool, bars, "tencent", true);
+          } catch { /* 回写失败不影响本次返回 */ }
+        }
+        return res.json({ code, secid: q, klines: klines.length ? klines : [] });
       } catch {
-        res.status(502).json({ error: "个股K线获取失败" });
+        return res.status(502).json({ error: "个股K线获取失败" });
       }
     }
   });

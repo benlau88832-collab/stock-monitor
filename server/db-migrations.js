@@ -1,6 +1,7 @@
 // ============================================================
 // v9.142.0 可操作闭环迁移：logic_ledger + simulated 口径
 // 独立于 db.js 的历史 SCHEMA，避免改坏既有建表脚本。
+// v9.147.0（数据基建·阶段一）：kline_daily（本地日K缓存）+ swing_signals（波段信号闭环）
 // ============================================================
 const { pool } = require("./db");
 
@@ -104,6 +105,86 @@ CREATE TABLE IF NOT EXISTS cron_checkpoint (
 );
 `;
 
+// v9.146.0（第三轮报告执行）：AI-Swing 留痕表（服务端波段决策审计）
+const AI_DECISION_LOG_SQL = `
+CREATE TABLE IF NOT EXISTS ai_decision_log (
+  id SERIAL PRIMARY KEY,
+  code TEXT NOT NULL,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  verdict TEXT,
+  score NUMERIC,
+  holding_horizon_days INTEGER,
+  review_cycle_days INTEGER,
+  source TEXT NOT NULL DEFAULT 'AI-Swing',
+  from_llm BOOLEAN NOT NULL DEFAULT true,
+  llm_error TEXT,
+  raw_json JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_adl_code_ts ON ai_decision_log(code, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_adl_source_ts ON ai_decision_log(source, ts DESC);
+`;
+
+// v9.146.0（第三轮报告执行）：独立基本面研判留痕
+const FUNDAMENTAL_JUDGMENT_SQL = `
+CREATE TABLE IF NOT EXISTS fundamental_judgment (
+  id SERIAL PRIMARY KEY,
+  code TEXT NOT NULL,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+  quality_score INTEGER,
+  valuation TEXT,
+  key_points JSONB DEFAULT '[]'::jsonb,
+  raw_json JSONB,
+  source TEXT DEFAULT 'AI-Swing'
+);
+CREATE INDEX IF NOT EXISTS idx_fj_code_ts ON fundamental_judgment(code, ts DESC);
+`;
+
+// v9.147.0（数据基建·阶段一）：本地日K落库 —— 通达信 .day 全市场导入 + 增量更新
+// 背景：波段决策卡 K 线实时抓 push2his（断源时"K线数据不足<30根"），600487 本地有 5401 根却报错。
+// 本表为 K 线权威缓存：读路径本地优先，实时源仅兜底回填。
+// 复权口径：通达信 .day 为不复权原始价；实时回填（腾讯 fqkline qfq）为前复权 ——
+//   swingStage 仅用 MA 排列/平台/突破形态，短窗口内两者形态一致，注释声明口径差异。
+const KLINE_DAILY_SQL = `
+CREATE TABLE IF NOT EXISTS kline_daily (
+  code       TEXT NOT NULL,
+  date       TEXT NOT NULL,
+  open       DOUBLE PRECISION,
+  high       DOUBLE PRECISION,
+  low        DOUBLE PRECISION,
+  close      DOUBLE PRECISION,
+  volume     DOUBLE PRECISION,
+  amount     DOUBLE PRECISION,
+  source     TEXT NOT NULL DEFAULT 'tdx',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (code, date)
+);
+CREATE INDEX IF NOT EXISTS idx_kline_code_date ON kline_daily(code, date DESC);
+`;
+
+// v9.147.0（阶段二B·波段信号闭环）：波段买点信号落库 + T+20/T+60 盈亏回填
+// 信号来源：swing 决策 stage.buyPoint（放量首板/首板次日低吸/平台突破/主升回踩）
+// 回填：cron 每日用本地 kline_daily 计算 T+20/T+60 收盘涨跌幅 → 胜率归因（样本≥10 才下结论）
+const SWING_SIGNALS_SQL = `
+CREATE TABLE IF NOT EXISTS swing_signals (
+  id            SERIAL PRIMARY KEY,
+  code          TEXT NOT NULL,
+  name          TEXT,
+  signal_type   TEXT NOT NULL,
+  signal_date   TEXT NOT NULL,
+  price         DOUBLE PRECISION,
+  close_t20     DOUBLE PRECISION,
+  close_t60     DOUBLE PRECISION,
+  pnl_t20       DOUBLE PRECISION,
+  pnl_t60       DOUBLE PRECISION,
+  status        TEXT NOT NULL DEFAULT 'open',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(code, signal_type, signal_date)
+);
+CREATE INDEX IF NOT EXISTS idx_swsig_code ON swing_signals(code, signal_date DESC);
+CREATE INDEX IF NOT EXISTS idx_swsig_type_date ON swing_signals(signal_type, signal_date);
+`;
+
 async function runMigrations() {
   await pool.query(LOGIC_LEDGER_SQL);
   await pool.query(DECISION_FEEDBACK_SQL);
@@ -111,6 +192,10 @@ async function runMigrations() {
   await pool.query(FUNDAMENTAL_HISTORY_SQL);
   await pool.query(CATALYST_CALENDAR_SQL);
   await pool.query(CRON_CHECKPOINT_SQL);
+  await pool.query(AI_DECISION_LOG_SQL);
+  await pool.query(FUNDAMENTAL_JUDGMENT_SQL);
+  await pool.query(KLINE_DAILY_SQL);
+  await pool.query(SWING_SIGNALS_SQL);
   await pool.query(`ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS simulated BOOLEAN DEFAULT false`);
   await pool.query(`ALTER TABLE logic_ledger ADD COLUMN IF NOT EXISTS invalidation_conditions JSONB DEFAULT '[]'::jsonb`);
@@ -120,7 +205,7 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_t60 DOUBLE PRECISION`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_source TEXT`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_logic_updated ON logic_ledger(updated_at DESC)`);
-  console.log("[db-migrations] logic_ledger/simulated/chain_event/fundamental_history/catalyst/cron ready");
+  console.log("[db-migrations] logic_ledger/simulated/chain_event/fundamental_history/catalyst/cron/ai_decision_log/fundamental_judgment/kline_daily/swing_signals ready");
 }
 
 module.exports = { runMigrations };

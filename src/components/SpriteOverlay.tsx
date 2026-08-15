@@ -1,8 +1,9 @@
 // ============================================================
 // v9.102.0（第二批 A，T-A3）：盘中精灵浮层（通达信"盘中精灵"效果）
 // 右下角常驻迷你条 + S 级事件弹窗（红闪）+ A 级高亮列表
-// 数据源：5s 轮询 /api/db/kv?key=anomaly_latest（服务端 intradaySprint 最新一条，
-//   字段与 runIntradayBrain 同构：level/type/board/reason/severity/ts）
+// 数据源：30s 轮询 /api/db/kv?key=anomaly:今日（v9.147.0 阶段二C 修复：
+//   原 anomaly_latest 由已停用的 intradaySprint 写入=死源；改接 runIntradayBrain
+//   （每 5 分钟活跃）落库的 anomaly:日期 —— 板块集体涨停/资金脉冲，取最新一条展示）
 // 声音/通知：复用 alertBus.emit（同 id 15 分钟冷却内置）
 // 交互：S 级弹窗出现 6s 自动收起 / 可手动关闭；迷你条点击展开最近 5 条
 // ============================================================
@@ -29,6 +30,30 @@ const levelColor: Record<string, string> = {
   B: "bg-sky-500/15 text-sky-300 border-sky-500/30",
 };
 
+// v9.147.0（阶段二C）：anomaly:日期 条目（集体涨停/资金脉冲）→ 精灵事件形状
+// S=critical（集体涨停）、A=warning（资金脉冲）、B=info
+function anomalyToSprint(a: any): SprintEvent | null {
+  if (!a || typeof a !== "object") return null;
+  const type = String(a.type ?? "");
+  const board = a.board ? String(a.board) : null;
+  let reason = "";
+  if (type === "集体涨停") {
+    reason = `${board ?? ""} ${a.count ?? 0} 只涨停（最高 ${a.lbc ?? 1} 板）${a.stocks ? " · " + a.stocks : ""}`;
+  } else if (type === "资金脉冲") {
+    reason = `${board ?? ""} 涨 ${a.pct ?? 0}% · 主力净流入 ${((Number(a.mainNet ?? 0) / 1e8)).toFixed(1)} 亿`;
+  } else {
+    reason = String(a.reason ?? type ?? "");
+  }
+  const level = a.severity === "critical" ? "S" : a.severity === "warning" ? "A" : "B";
+  return {
+    id: `anomaly:${board ?? type}:${Math.floor(Number(a.ts ?? 0) / 60000)}`,
+    level, type, board, reason,
+    severity: String(a.severity ?? "info"),
+    ts: Number(a.ts ?? Date.now()),
+    date: String(a.date ?? getBJDateStr()),
+  };
+}
+
 export default function SpriteOverlay() {
   const [latest, setLatest] = useState<SprintEvent | null>(null);
   const [popup, setPopup] = useState<SprintEvent | null>(null); // S 级弹窗
@@ -42,23 +67,17 @@ export default function SpriteOverlay() {
     let alive = true;
     const load = async () => {
       try {
-        const r = await fetch("/api/db/kv?key=anomaly_latest");
+        const today = getBJDateStr();
+        // v9.147.0：改读活跃源 anomaly:今日（runIntradayBrain 每 5 分钟写，数组取最新）
+        const r = await fetch(`/api/db/kv?key=${encodeURIComponent(`anomaly:${today}`)}`);
         const j = await r.json();
         const v = j?.value;
-        if (!v || typeof v !== "object") return;
-        const ev = v as SprintEvent;
-        // v9.106.1（验收观察项②）：跨日校验 —— 盘前 anomaly_latest 残留昨日事件时清空，
-        // 不再显示昨日"涨停潮"误导。事件日期 = 显式 date 字段优先，缺失时按 ts 换算北京日期
-        // （覆盖历史无 date 字段的测试残留事件）
-        const evDate = ev.date || (ev.ts ? getBJDateStr(new Date(ev.ts)) : "");
-        if (evDate && evDate !== getBJDateStr()) {
-          if (lastIdRef.current !== ev.id || latest != null) {
-            setLatest(null);
-            setPopup(null);
-            setHistory([]);
-          }
-          return;
-        }
+        const arr = Array.isArray(v) ? v : (v && typeof v === "object" && "__raw" in v ? JSON.parse(v.__raw) : null);
+        if (!Array.isArray(arr) || arr.length === 0) return;
+        const ev = anomalyToSprint(arr[arr.length - 1]); // 最新一条
+        if (!ev) return;
+        // 跨日校验：事件日期必须等于今日（anomaly:今日 键已按日隔离，双保险）
+        if (ev.date && ev.date !== today) return;
         if (!ev.id || ev.id === lastIdRef.current) return;
         lastIdRef.current = ev.id;
         if (!alive) return;
@@ -75,7 +94,7 @@ export default function SpriteOverlay() {
       } catch { /* 轮询失败静默 */ }
     };
     load();
-    const t = setInterval(load, 5000); // 5s 轮询最新精灵事件
+    const t = setInterval(load, 30000); // 30s 轮询（anomaly 每 5 分钟一批，30s 足够及时）
     return () => { alive = false; clearInterval(t); if (popupTimer.current) clearTimeout(popupTimer.current); };
   }, []);
 

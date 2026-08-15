@@ -30,6 +30,14 @@ async function runTradeBackfill(pool) {
 }
 
 async function backfillOnePost(post) {
+  // v9.147.0（数据基建·阶段一）：本地 kline_daily 优先（通达信全市场导入），断源根治
+  try {
+    const { getLocalKlinesStrings } = require("../lib/klineDb");
+    const local = await getLocalKlinesStrings(pool, post.code, 80);
+    if (Array.isArray(local) && local.length >= 2) {
+      return computeBackfillPnl(local, post);
+    }
+  } catch { /* 本地读失败则走实时 */ }
   const secid = /^(60|68|5)/.test(post.code) ? `1.${post.code}` : `0.${post.code}`;
   const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55&klt=101&fqt=0&lmt=80&ut=${EM_UT}`;
   let kl = [];
@@ -48,6 +56,11 @@ async function backfillOnePost(post) {
     } catch { /* return null */ }
   }
   if (!Array.isArray(kl) || kl.length < 2) return null;
+  return computeBackfillPnl(kl, post);
+}
+
+/** 拍板回填盈亏计算（纯函数：K线字符串数组 + post → { pnl, t20, t60, source }） */
+function computeBackfillPnl(kl, post) {
   const dates = kl.map((line) => String(line).split(",")[0]);
   let idx = dates.indexOf(post.date);
   if (idx < 0) {

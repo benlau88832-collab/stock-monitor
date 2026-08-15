@@ -125,4 +125,19 @@ async function getChainDbContext(p, code) {
   };
 }
 
-module.exports = { ensureChainKb, mapStockToChain, getChainDbContext };
+// v9.147.0（重建·对齐 v9.146 接口）：产业链传导事件读取（industry_chain_event 表）
+// 供 decisions.js fetchChainContext 使用 —— 一次推理、多票复用的事件上下文
+async function loadChainEvents(p, chainId) {
+  try {
+    const r = await p.query(
+      `SELECT id, title, summary, impact_path, impacted_nodes, confidence, model_generated, published_at
+       FROM industry_chain_event WHERE chain_id=$1 ORDER BY published_at DESC LIMIT 10`,
+      [String(chainId)],
+    );
+    return r.rows;
+  } catch {
+    return [];
+  }
+}
+
+module.exports = { ensureChainKb, mapStockToChain, getChainDbContext, loadChainEvents };
