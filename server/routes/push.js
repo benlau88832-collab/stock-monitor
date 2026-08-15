@@ -229,3 +229,4 @@ function pushRoutes(app) {
 
 module.exports = pushRoutes;
 module.exports.sendPushIfConfigured = sendPushIfConfigured;
+module.exports.loadPushConfig = loadPushConfig; // v9.148.1（T8）：push-state 复用

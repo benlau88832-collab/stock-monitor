@@ -4,6 +4,14 @@
 // 位置：驾驶舱顶部（第一眼入口）+ #briefing 独立视图（手机扫码直连）
 // ============================================================
 import { useEffect, useState, useCallback } from "react";
+import { getLocalToken } from "../lib/cloudStore"; // v9.148.1（T7）：采纳建议需带 token
+
+interface PersonSuggestion {
+  name: string;
+  zh?: string;
+  why?: string;
+  suggestedAt?: string;
+}
 
 interface BriefingItem {
   chain: string;
@@ -11,7 +19,7 @@ interface BriefingItem {
   content: {
     stage: string;
     summary: string;
-    beneficiaries?: Array<{ name: string; reason: string; evidence?: string }>;
+    beneficiaries?: Array<{ name: string; code?: string; reason: string; evidence?: string }>;
     logicChange?: string;
     keySignals?: Array<{ text: string; verified?: boolean }>;
     risks?: string[];
@@ -41,6 +49,38 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [qr, setQr] = useState<string | null>(null);
+  // v9.148.1（T7）：人物自扩散建议池
+  const [suggestions, setSuggestions] = useState<PersonSuggestion[]>([]);
+  // v9.148.1（T8）：推送绑定状态（未绑定显示黄条引导）
+  const [pushConfigured, setPushConfigured] = useState<boolean | null>(null);
+
+  const loadPushState = useCallback(async () => {
+    try {
+      const r = await fetch("/api/chain/push-state");
+      const j = await r.json();
+      setPushConfigured(j.configured === true);
+    } catch { setPushConfigured(null); }
+  }, []);
+
+  const loadSuggestions = useCallback(async () => {
+    try {
+      const r = await fetch("/api/chain/people/suggestions");
+      const j = await r.json();
+      if (Array.isArray(j.items)) setSuggestions(j.items);
+    } catch { /* 建议加载失败不阻塞 */ }
+  }, []);
+
+  const confirmPerson = async (name: string) => {
+    try {
+      const token = await getLocalToken();
+      await fetch("/api/chain/people/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
+        body: JSON.stringify({ name }),
+      });
+      loadSuggestions();
+    } catch { /* 采纳失败静默 */ }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -56,11 +96,13 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
 
   useEffect(() => {
     load();
+    loadSuggestions();
+    loadPushState();
     const img = new Image();
     img.onload = () => setQr("/api/chain/briefings/qr?" + Date.now());
     img.onerror = () => setQr(null);
     img.src = "/api/chain/briefings/qr";
-  }, [load]);
+  }, [load, loadSuggestions, loadPushState]);
 
   if (loading) {
     return (
@@ -93,6 +135,37 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
 
       {error && <div className="mb-2 text-[11px] text-rose-400">{error}</div>}
 
+      {/* v9.148.1（T8）：微信推送未绑定 → 黄条引导（用户零感知问题的修复） */}
+      {pushConfigured === false && (
+        <div className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">
+          📱 微信推送未绑定 —— ⚙️ 设置页配置 Server酱 SendKey 后，每天 8:35 自动收到简报摘要（当前仅网页可见）
+        </div>
+      )}
+
+      {/* v9.148.1（T7）：人物自扩散建议（LLM 每晚从情报中发现的新关键人物） */}
+      {suggestions.length > 0 && (
+        <details className="mb-2 rounded-lg border border-violet-500/20 bg-violet-950/10 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] font-bold text-violet-300">
+            🧑‍🚀 新增人物建议（{suggestions.length}）
+          </summary>
+          <div className="mt-1.5 space-y-1">
+            {suggestions.map((s) => (
+              <div key={s.name} className="flex items-center gap-2 text-[11px] text-slate-300">
+                <span className="font-bold">{s.name}</span>
+                {s.zh && <span className="text-slate-500">{s.zh}</span>}
+                <span className="flex-1 truncate text-[10px] text-slate-500">{s.why}</span>
+                <button
+                  onClick={() => confirmPerson(s.name)}
+                  className="shrink-0 rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-bold text-violet-300 hover:bg-violet-500/30"
+                >
+                  ✔ 采纳（加入每日追踪）
+                </button>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
       {items.length === 0 ? (
         <div className="rounded-lg border border-dashed border-white/10 p-4 text-center text-xs text-slate-500">
           简报尚未生成 —— 每晚 21:00 自动运行；也可等待今晚任务或稍后刷新。
@@ -117,7 +190,17 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
                   <div className="mt-1.5">
                     <span className="text-[10px] font-bold text-emerald-400">受益：</span>
                     <span className="text-[11px] text-slate-300">
-                      {benef.slice(0, 3).map((x) => x.name).join("、")}
+                      {benef.slice(0, 3).map((x) => (
+                        // v9.148.1（T9）：受益标的带 code，点击跳个股雷达分析
+                        <button
+                          key={x.code ?? x.name}
+                          onClick={() => { window.location.hash = "radar"; }}
+                          className="mr-1 rounded bg-emerald-500/10 px-1 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
+                          title="去个股雷达分析"
+                        >
+                          {x.name}{x.code ? `(${x.code})` : ""}
+                        </button>
+                      ))}
                     </span>
                   </div>
                 )}

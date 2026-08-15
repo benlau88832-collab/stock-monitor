@@ -1,28 +1,40 @@
 // ============================================================
-// server/lib/chainLearning.js —— 变量命中率学习（任务 12，v9.148.0）
+// server/lib/chainLearning.js —— 变量命中率学习（任务 12，v9.148.0 / T4 重构 v9.148.1）
 // 闭环：简报判断（stage/keySignals）→ 事后对照（链内标的 T+5 真实涨跌，本地 K 线）
 //      → 命中统计落 kv（chain_hit:chainId:date）→ 下一期简报 prompt 引用
-// 触发：cron 每日 16:05 回填（简报生成 ≥5 天前的链）
+// 触发：cron 每日 16:05 回填（简报日之后已存在 ≥6 个交易日才回填）
+// v9.148.1（T4 P1-2）：交易日历锚定重构 —— 原 ROW_NUMBER DESC 量的是"最近 5 日"而非
+//   "简报日后 T+5"；现改为：取简报日后全市场共同交易日历，base=第 1 个交易日收盘，
+//   last=第 6 个交易日收盘；日历不足 6 天返回 null（跳过，不写 kv）。
 // ============================================================
 const { getChainStocks, CHAINS } = require("./chainStocks");
 const { pool } = require("../db");
 
-/** 链内标的 T+N 平均涨跌（本地 kline_daily；信号日收盘 → 5 个交易日后收盘） */
+/** 简报日后的交易日历（全市场共同，取前 6 个）；不足 6 天返回 null */
+async function tradingCalendarAfter(db, fromDate, { need = 6 } = {}) {
+  const r = await db.query(
+    `SELECT DISTINCT date FROM kline_daily WHERE date >= $1 ORDER BY date LIMIT $2`,
+    [fromDate, need],
+  );
+  if (r.rows.length < need) return null;
+  return r.rows.map((x) => x.date);
+}
+
+/** 链内标的 T+5 平均涨跌（交易日历锚定：简报日后第 1 与第 6 个交易日收盘差） */
 async function chainStockAvgPct(db, chainId, fromDate, days = 5) {
+  const cal = await tradingCalendarAfter(db, fromDate, { need: days + 1 });
+  if (!cal) return null; // 日历不足，跳过（不写脏数据）
+  const d0 = cal[0];
+  const dN = cal[days];
   const stocks = await getChainStocks(chainId, { limit: 200 }, { _pool: db });
   if (stocks.length === 0) return null;
   const codes = stocks.slice(0, 80).map((s) => s.code);
   const r = await db.query(
-    `WITH ranked AS (
-       SELECT code, date, close,
-              ROW_NUMBER() OVER (PARTITION BY code ORDER BY date DESC) rn
-       FROM kline_daily WHERE code = ANY($1) AND date >= $2
-     )
-     SELECT code,
-            MAX(CASE WHEN rn = 1 THEN close END) last_close,
-            MAX(CASE WHEN rn = $3 THEN close END) base_close
-     FROM ranked GROUP BY code`,
-    [codes, fromDate, days + 1],
+    `SELECT code,
+            MAX(CASE WHEN date = $2 THEN close END) base_close,
+            MAX(CASE WHEN date = $3 THEN close END) last_close
+     FROM kline_daily WHERE code = ANY($1) AND date IN ($2, $3) GROUP BY code`,
+    [codes, d0, dN],
   );
   const rows = r.rows.filter((x) => x.last_close != null && x.base_close != null && x.base_close > 0);
   if (rows.length === 0) return null;
@@ -31,29 +43,31 @@ async function chainStockAvgPct(db, chainId, fromDate, days = 5) {
   return { avgPct: Number(avg.toFixed(2)), sampleCount: rows.length, codes: rows.length };
 }
 
-/** 回填一条链的命中统计（读 5+ 天前简报 → 对照 T+5） */
+/** 回填一条链的命中统计（简报日之后已存在 ≥6 个交易日才回填；幂等 ON CONFLICT） */
 async function recordChainHit(db, chainId) {
+  // 取"存在 ≥6 个交易日"的最新简报（自然日门槛删除，用交易日历判断）
   const r = await db.query(
     `SELECT briefing_date, content FROM chain_briefing
-     WHERE chain_id=$1 AND briefing_date < CURRENT_DATE - 3
-     ORDER BY briefing_date DESC LIMIT 1`,
+     WHERE chain_id=$1 ORDER BY briefing_date DESC LIMIT 10`,
     [chainId],
   );
-  if (!r.rows[0]) return null;
-  const { briefing_date: date, content } = r.rows[0];
-  const c = content ?? {};
-  const stage = c.stage ?? "";
-  // 对照窗口：简报日后第 4 个自然日~第 8 个自然日（用日期范围近似 T+5 交易日）
-  const fromDate = date;
-  const stat = await chainStockAvgPct(db, chainId, fromDate, 5);
-  if (!stat) return null;
-  const key = `chain_hit:${chainId}:${date}`;
-  await db.query(
-    `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
-     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
-    [key, JSON.stringify({ chainId, date, stage, ...stat, recordedAt: new Date().toISOString() })],
-  );
-  return { chainId, date, stage, ...stat };
+  for (const row of r.rows) {
+    const date = row.briefing_date;
+    const cal = await tradingCalendarAfter(db, date, { need: 6 });
+    if (!cal) continue; // 该期简报后交易日不足 6 天 → 看更早一期
+    const c = row.content ?? {};
+    const stage = c.stage ?? "";
+    const stat = await chainStockAvgPct(db, chainId, date, 5);
+    if (!stat) continue;
+    const key = `chain_hit:${chainId}:${date}`;
+    await db.query(
+      `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
+       ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+      [key, JSON.stringify({ chainId, date, stage, ...stat, recordedAt: new Date().toISOString() })],
+    );
+    return { chainId, date, stage, ...stat };
+  }
+  return null;
 }
 
 /** 全链回填（cron 每日调用） */
@@ -82,4 +96,4 @@ async function getChainHitHistory(db, chainId, { limit = 5 } = {}) {
   });
 }
 
-module.exports = { chainStockAvgPct, recordChainHit, recordAllChainHits, getChainHitHistory };
+module.exports = { chainStockAvgPct, recordChainHit, recordAllChainHits, getChainHitHistory, tradingCalendarAfter };

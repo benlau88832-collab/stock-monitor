@@ -2,6 +2,41 @@
 
 本文件记录 `stock-monitor` 项目各版本的提交哈希和内容摘要，方便追溯与回滚。
 
+## v9.148.1 — V4 Pro 审查修复批次 T1-T12（2026-08-16）
+
+> 依据 `思路梳理\v4pro0813审查报告与执行指令-2026-08-16.md`（总评 3.2/5）逐条修复：P0×4 + P1×7 + 治理与事故处置。
+
+### 🔴 P0
+- **站内信号落库 + 链 ID 映射**（`chainIntel.js`）：chain_intel 补 signals 列（ALTER 幂等）；新引擎链 ID → 既有 46 链 ID 映射表（aiCompute→ai-hardware/compute-service/liquid-cooling/optical-comm 等）——此前 5/6 链信号恒 0，LLM 简报从未收到站内信号；修复后 6 链信号 20 条/链
+- **监听 0.0.0.0**（`index.js`）：手机扫码/微信推送链接（局域网 IP）物理可达；**generate 端点强制 x-local-token**（`routes/chain.js`，复制 ai.js fail-closed 模式）——0.0.0.0 后防局域网白嫖 LLM 配额
+- **版本与发布治理**：version.ts v9.147.0→v9.148.1；CHANGELOG 补写 v9.138-v9.148.1；README 重写核心功能（含产业链简报）；build 重建 docs/index.html
+- **GitHub 同步**：main 分支快进至最新（原停在 v9.75，落后 14 版）
+
+### 🟠 P1
+- **T+5 交易日锚定重构**（`chainLearning.js`）：交易日历锚定（简报日后第 1/6 个交易日收盘差），删除自然日门槛——原 ROW_NUMBER 量的是"最近 5 日"而非"简报日后 T+5"
+- **异动两缺口**：新增涨>5%未涨停检测（腾讯批量行情）；公告改 5 分钟增量窗口防重复推送；节流 kv 写时机移到推送成功后
+- **验证三档口径**：多源验证/单源权威/待验证；prompt 锁"禁止把单源说成多源"；keySignals verified 后置校验降级
+- **人物自扩散**：简报输出 suggestedPeople → kv 建议池 → 前端采纳 → getKeyPeople 合并
+- **推送感知 + 降级标注**：GET /api/chain/push-state + 前端黄条引导；夜扫代理探测 webDegraded → 简报 risks 注入降级提示
+- **受益人代码化**：简报受益人必须是 A 股个股带 code，后置校验（code ∈ 链集合），剔除板块/ETF 输出
+
+### ⚪ 治理
+- robocopy 二次事故取证（08-15 19:13，session.jsonl 实锤）与防再犯三件套：AGENTS.md 开工必读 + harness 审批规则 + ROBOCOPY-GUARD.txt 哨兵；回收站还原需用户确认后执行（暂不动数据）
+
+## v9.148.0 — 产业链主动投研引擎 12 任务全交付（2026-08-15）
+
+> 开发面板流程（构思→grilling→PRD→12 任务）全量交付：把项目从"展示机器"改造成"AI 主动投研引擎"。文档见 `思路梳理\PRD.md / TASKS.md / 交付说明-2026-08-15.md`。
+
+- **AI 思考模式修复**：health 宣传"恒思考"但主路径实际关闭（前端显式 false + 服务端 TASK_CONFIG 未生效）→ 修复后 agentReason reasoningLen 800→8897
+- **PROXY_AGENT 导出修复**：httpProxy.js 未导出 PROXY_AGENT → outbound viaProxy 恒失效（外网不可达根因）
+- **webSearch 外网搜索层**：Google News RSS 经本地代理出墙（无限额免 key，英文原发）+ HN Algolia 直连备源 + 权威源判定
+- **chainStocks 概念校准**：6 链 × 336 只（概念+hybk+种子 40 只兜底金属概念缺失）
+- **chainIntel 每晚 21:00 挖掘引擎**：全 6 链 36s，59-79 条/链 + 关键人物动态
+- **chainBriefing LLM 简报**：阶段判断/受益标的带证据/逻辑变化对比/坏 JSON 双兜底（6 链全非降级）
+- **ChainBriefingPanel**：驾驶舱简报区（第一眼入口）+ #briefing 手机视图 + 二维码扫码直连
+- **chainPush/chainAnomaly/chainLearning**：早盘微信推送 / 盘中异动补挖（批量涨停≥3/商品±3%/公告）/ T+5 命中率闭环
+- **布局治理**：台账幂等（10→3 条）、方向榜降级提示收敛、消息噪音过滤
+
 ## v9.137.0 — AI 大脑审查全量修复（2026-08-13）
 
 > 依据《审查报告_AI大脑_展示vs协同_2026-08-13.md》对 v9.136.0 全量审查后的修复发布：P0×2 + P1×8 + P2×8 + P3 批量，全部问题修复不跳过，交付"产品级"。

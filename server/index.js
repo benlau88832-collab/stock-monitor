@@ -152,7 +152,9 @@ initDb().then(async () => {
   } catch (e) { console.warn("[server] db-migrations failed:", e.message); }
   const token = await ensureLocalToken(pool);
   try { const { buildDirection } = require("./routes/swing"); buildDirection().catch((e) => console.warn("[swing] warmup failed:", e.message)); setInterval(() => buildDirection().catch((e) => console.warn("[swing] background refresh failed:", e.message)), 30 * 60 * 1000); } catch (e) { console.warn("[swing] warmup setup failed:", e.message); }
-  app.listen(PORT, "127.0.0.1", () => {
+  // v9.148.1（T2 P0-2）：监听 0.0.0.0 —— 手机扫码/微信推送链接（局域网 IP）物理可达；
+  //   安全护栏：烧钱写操作（/api/chain/briefings/generate 等）已强制 x-local-token（P1-1 同日上线）
+  app.listen(PORT, process.env.HOST || "0.0.0.0", () => {
     // v9.145.0：产业信号同步较重，放到服务监听后异步执行，避免阻塞首屏启动
     setTimeout(() => {
       require("./lib/industryData").syncLocalIndustrySignals(pool)

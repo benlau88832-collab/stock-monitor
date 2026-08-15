@@ -214,5 +214,14 @@
 // v9.147.0（阶段二A·多周期共振）：月线第三级（analyzeMonthlySwing，日/周/月三周期裁决）
 // v9.147.0（阶段二B·波段信号闭环）：swing_signals 表 + buyPoint 信号落库 + T+20/T+60 回填 + 胜率面板
 // v9.147.0（阶段二C·盘中精灵恢复）：SpriteOverlay 改接活跃源 anomaly:今日（原 anomaly_latest 死源）
-export const APP_VERSION = "v9.147.0";
-export const BUILD_DATE = "2026-08-15";
+// v9.148.0（产业链主动投研引擎 12 任务）：AI 思考模式修复（agentReason 恒思考）/PROXY_AGENT 导出修复/
+//   webSearch 外网搜索层（Google News RSS 经代理+HN 备源+权威判定）/chainStocks 6 链×336 只/
+//   chainIntel 每晚 21:00 挖掘引擎（站内信号+外网交叉验证）/chainBriefing LLM 简报（阶段/受益标的/逻辑变化）/
+//   ChainBriefingPanel 驾驶舱简报区+#briefing 手机视图+二维码/chainPush 早盘推送/chainAnomaly 异动补挖/
+//   chainLearning 命中率回填/台账幂等/噪音过滤+降级收敛
+// v9.148.1（V4 Pro 0816 审查修复批次 T1-T12）：站内信号落库+链 ID 映射（5/6 链信号 0→20）/
+//   监听 0.0.0.0+generate 端点 token 鉴权/版本三件套+README+CHANGELOG/T+5 交易日锚定重构/
+//   大涨检测+公告去重/验证三档口径+prompt 锁/人物自扩散/push-state+webDegraded/受益人 code 校验/
+//   GitHub main 快进同步
+export const APP_VERSION = "v9.148.1";
+export const BUILD_DATE = "2026-08-16";

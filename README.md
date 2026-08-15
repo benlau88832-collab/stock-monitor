@@ -1,89 +1,86 @@
-# A股实时监控终端 - Vite+React 重构版
+# A股实时交易辅助终端（stock-monitor）
 
-基于 A 股深度复盘体系的实盘交易辅助监控终端，采用 **Vite + React + Tailwind** 重构，支持全市场数据采集、资金结构分析、风险扫描等核心功能。
+基于 A 股深度复盘体系的**个人实盘交易辅助监控终端**，已从"市场监控面板"演进为**全栈投研系统**：前端（React+Vite+TS）+ 后端（Express+PostgreSQL+node-cron）+ **AI 决策大脑（DeepSeek V4 Flash，ReAct Agent）** + **产业链主动投研引擎（每晚自动挖掘外网情报 → LLM 研判 → 盘前简报）**。
+
+> ⚠️ **robocopy 铁律**：本仓库禁止任何 `robocopy /MIR`、`/PURGE`、`rm -rf` 类镜像/递归删除命令（曾两次误删工作区目录）。git 是唯一同步通道，删除动作先人工确认。详见 `AGENTS.md` 与 `ROBOCOPY-GUARD.txt`。
 
 ## 🚀 快速开始
 
-### 本地开发
-
 ```bash
-# 克隆仓库
+# 克隆仓库（默认分支 main 已同步最新）
 git clone https://github.com/benlau88832-collab/stock-monitor.git
 cd stock-monitor
 
-# 安装依赖并启动
+# 后端（需 PostgreSQL + server/.env 配置 DATABASE_URL / AI_API_KEY）
+cd server && npm install && cd ..
+# 前端开发
 npm install
-npm run dev
+npm run dev        # 前端开发服务器
+node server/index.js  # 后端（生产：npx pm2 start server/index.js --name stock-monitor）
 ```
 
-浏览器打开 `http://localhost:5173`
+浏览器打开 `http://localhost:8080`（生产）或 `http://localhost:5173`（dev）。
 
-## 📊 核心功能
+## 📊 核心功能（v9.148.1）
 
-| 模块 | 功能描述 |
-|------|---------|
-| **市场监控** | 全市场统计（~5000只个股）、情绪温度计、明暗盘资金流对比 |
-| **资金结构** | 主力资金 vs 散户力量对比、30天历史快照折线图 |
-| **明暗盘TOP10** | 概念板块排名 + 个股成分股展开（洗盘/出货信号判断） |
-| **全球信号** | 纳指/道指/恒指等海外指数实时数据 |
-| **重要指标** | 涨跌幅家数、涨停跌停数、成交额等关键数据 |
-| **个股监控** | 输入6位股票代码查看资金流与一票否决信号 |
-| **避坑指南** | A股散户常见陷阱及风险识别 |
+### 🧭 五主 Tab（驾驶舱 / 个股雷达 / 资金主线 / 龙虎榜复盘 / 消息面）
+| 模块 | 功能 |
+|------|------|
+| **🔗 产业链简报**（驾驶舱顶部，第一眼入口） | 每晚 21:00 自动挖掘 6 条链（半导体/AI算力/AI电力设备/有色金属/小金属/机器人）——站内信号 + **外网公开信息交叉验证**（Google News 英文原发，≥2 独立来源且 ≥1 权威 → "多源验证"）→ LLM 研判（阶段/受益标的/逻辑变化/风险）；手机扫码 `/#briefing` 直达；早盘 8:35 微信推送摘要 |
+| **⚡ 盘中异动补挖** | 链内标的批量涨停/大涨（≥3 只）、商品价格 ±3%、链内重大公告 → 立即补挖并推送（30 分钟节流） |
+| **波段作战系统** | 波段方向榜、持仓逻辑台账、波段决策卡、多周期共振（日/周/月） |
+| **AI 认知层 + 决策直达** | 单一 AI 认知对象（情绪/主线/资金/风险闸门/龙头）+ 决策卡（准入/仓位/离场/风控，规则兜底永不降级） |
+| **个股雷达** | 自选股 AI 研判、个股聚合深度页（K线/技术指标/舆情/研报/基本面体检/同行对比）、盯价监控 |
+| **资金主线** | 主线强度榜、题材梯队、行业资金流、明暗盘信号 |
+| **龙虎榜复盘** | 游资席位画像（格局/波段/砸盘/接力派）、连续动作追踪、T+1 回填 |
+| **消息面** | 快讯流（噪音过滤默认开）、公告淘金、热点主题作战、产业链追溯 |
+| **决策闭环** | 拍板留痕 → T+5/T+20/T+60 真实盈亏回填 → 周度风格画像 → 纪律熔断 |
 
-## 🔍 技术说明
+### 🤖 产业链主动投研引擎（v9.148 核心新增）
+- **每晚 21:00**：6 链 × 18 个关键变量（中英搜索词交叉召回）+ 8 位关键人物（马斯克/黄仁勋/…，支持 AI 自扩散建议）→ 验证规则（多源验证/单源权威/待验证三档）→ LLM 简报落库
+- **命中率闭环**：简报阶段判断 vs T+5 链内标的真实涨跌对照 → 下期简报引用（AI 越用越准）
+- **微信推送**：Server酱扫码绑定（设置页配置 SendKey）→ 每日 8:35 简报摘要 + 盘中异动
 
-- **数据获取**: 使用 JSONP 跨域调用东方财富 push2 API（`https://push2.eastmoney.com/api/qt`），解决浏览器 CORS 限制
-- **全市场统计**: 分板块（主板/创业板/科创板/北交所）分页查询后合并，避免单页返回上限导致的 100 只采样误差
-- **情绪温度计**: `upRatio×40 + limitScore×1.3 + avgPctScore×0.8 + indexScore + 20`，加入指数涨跌幅权重
-- **明暗盘判断**: 暗盘（超大单+大单）vs 明盘（中单+小单），方向相反且绝对值更大 → 洗盘/出货信号
-- **30天快照**: localStorage 持久化资金流历史记录，支持图表/表格切换视图
+## ✅ 验证命令（必须在仓库根跑）
+
+```bash
+npx vitest run server/lib/__tests__/   # 服务端单测（247+，在 server 目录跑会漏 14 个文件）
+npx vitest run src/lib/__tests__/      # 前端单测（1164+）
+npx tsc --noEmit                       # 类型检查
+npm run build                          # 构建（产物 docs/index.html，提交前必须重建）
+npx pm2 restart stock-monitor          # 重启服务
+curl http://127.0.0.1:8080/api/health  # 健康检查（含数据源/AI/PG/版本）
+```
+
+**提交前验证链**：单测 → tsc → build → pm2 重启 → curl 实测 → 版本三件套（`src/lib/version.ts` + docs title + CHANGELOG）同步。
 
 ## 🧩 分支说明
 
 | 分支 | 状态 | 描述 |
 |------|------|------|
-| `main` | ✅ 主分支 | Vite+React 最新版本（含滚动摘要 commit） |
-| `arena/019fa1a9-stock-monitor` | 🔄 开发分支 | 最新最全版本（个股关注、利好利空监控等） |
-
-所有过时分支（v2-test, v3-test, 019f9dee 等）已清理。
+| `main` | ✅ 默认分支 | 已快进同步至最新（v9.148.1） |
+| `arena/019fb619-stock-monitor` | 🔄 开发分支 | 与 main 同树（历史保留） |
 
 ## 📁 项目结构
 
 ```
-src/
-├── App.tsx          # 主应用组件（Tab 导航 + 模块路由）
-├── components/      # UI 组件库
-│   ├── TopNav.tsx
-│   ├── MarketOverview.tsx
-│   ├── FundStructure.tsx  # 资金结构+30天快照
-│   ├── DarkPool.tsx     # 明暗盘TOP10+个股展开
-│   ├── GlobalSignals.tsx
-│   ├── KeyIndicators.tsx
-│   └── ...
-├── lib/
-│   ├── api.ts         # 所有数据抓取函数（JSONP封装）
-│   ├── format.ts      # 格式化函数（金额/百分比）
-│   └── realLinks.ts   # 真实东方财富链接生成
-├── main.tsx           # React 入口
-└── utils/cn.ts        # 中文数据映射
+├── src/                # 前端（React 19 + Vite + TS + Tailwind）
+│   ├── components/     # 五 Tab 组件 + ChainBriefingPanel（简报卡）
+│   ├── lib/            # ai.ts / emotionStage / transmission-chain 等
+│   └── shared/         # 前后端共享（概念分类 / 链知识库）
+├── server/             # 后端（Express + PG + node-cron + MCP）
+│   ├── lib/            # 核心引擎：webSearch / chainIntel / chainBriefing /
+│   │                   #   chainStocks / chainVariables / chainAnomaly /
+│   │                   #   chainPush / chainLearning / llmCore / cognition
+│   ├── routes/         # chain.js（stocks/prices/briefings/qr）/ ai.js / push.js 等
+│   └── cron.js         # 定时任务（21:00 挖掘简报 / 8:35 推送 / 盘中异动 / 16:05 命中回填）
+├── docs/               # 构建产物（GitHub Pages 部署，build 生成）
+└── CHANGELOG.md        # 版本历史
 ```
 
-## ⚠️ 注意事项
+## ⚠️ 已知边界
 
-1. **北向资金接口**: 东方财富北向资金自 2024年8月起间歇性断供，显示为"数据不完整"
-2. **本地数据**: 资金快照使用 localStorage 持久化，首次访问时会生成模拟历史数据
-3. **JSONP限制**: 东方财富 push2 API 仅支持 GET 请求 + JSONP 回调，不支持 POST
-
-## 📝 版本演进
-
-```
-V3 (8739c0b)  - Vite+React 重构，JSONP跨域，全市场5000+涨跌
-V4 (b195ae7)  - 全面修复真实bug（不改布局颜色）
-V4.1 (84884bf)- 修复涨跌家数根因 + 个股关注+利好利空监控
-V4.2 (4f80f56)- 加固接口令牌 + 涨跌家数异常兜底
-Build (620196d)- 构建产物输出到 /docs，纳入版本控制
-```
-
----
-
-*本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议。*
+- 概念分类为按需采集（约 414 只），6 链标的集合靠"概念+行业+种子名单"（336 只）兜底
+- 价格历史与命中率自 2026-08-15 起积累，需 1-2 周数据后趋势/命中显示完整
+- 服务默认监听 0.0.0.0（同局域网手机可访问 `http://<局域网IP>:8080`）；烧钱写操作需 `x-local-token`
+- 本终端仅用于实盘交易辅助监控，所有数据来自公开接口实时抓取，不构成投资建议

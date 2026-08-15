@@ -86,9 +86,76 @@ function allVariableTasks() {
   return out;
 }
 
-/** 人物清单（含链关联） */
-function getKeyPeople() {
-  return KEY_PEOPLE.map((p, i) => ({ id: i + 1, ...p }));
+/** 人物清单（含链关联）；v9.148.1（T7 P1-5）：传入 db 时合并用户已采纳的扩散人物 */
+async function getKeyPeople(db) {
+  const base = KEY_PEOPLE.map((p, i) => ({ id: i + 1, ...p }));
+  if (!db) return base;
+  try {
+    const r = await db.query(`SELECT value FROM kv_store WHERE key='chain_people_confirmed'`);
+    const v = r.rows[0]?.value;
+    const arr = Array.isArray(v) ? v : (v ? JSON.parse(typeof v === "string" ? v : (v.__raw || JSON.stringify(v))) : []);
+    const names = new Set(base.map((p) => p.name));
+    let nextId = base.length + 1;
+    for (const p of Array.isArray(arr) ? arr : []) {
+      if (!p?.name || names.has(p.name)) continue;
+      names.add(p.name);
+      base.push({ id: nextId++, name: p.name, zh: p.zh || p.name, chains: Array.isArray(p.chains) ? p.chains : ["aiCompute"], search: p.search || p.name, note: p.note || "用户采纳的扩散人物" });
+    }
+  } catch { /* 合并失败不影响静态名单 */ }
+  return base;
 }
 
-module.exports = { CHAIN_VARIABLES, KEY_PEOPLE, getChainVariables, allVariableTasks, getKeyPeople };
+/** 建议池（kv chain_people_suggestions，LLM 简报自扩散产出） */
+async function getPeopleSuggestions(db) {
+  try {
+    const r = await db.query(`SELECT value FROM kv_store WHERE key='chain_people_suggestions'`);
+    const v = r.rows[0]?.value;
+    const arr = Array.isArray(v) ? v : (v ? JSON.parse(typeof v === "string" ? v : (v.__raw || JSON.stringify(v))) : []);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+/** 追加建议（按 name 去重）；返回最新建议列表 */
+async function addPeopleSuggestion(db, suggestion) {
+  const list = await getPeopleSuggestions(db);
+  if (suggestion?.name && !list.some((x) => x.name === suggestion.name)) {
+    list.push({ name: suggestion.name, zh: suggestion.zh || "", chains: Array.isArray(suggestion.chains) ? suggestion.chains : ["aiCompute"], why: suggestion.why || "", suggestedAt: new Date().toISOString() });
+  }
+  await db.query(
+    `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
+     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+    ["chain_people_suggestions", JSON.stringify(list)],
+  );
+  return list;
+}
+
+/** 采纳建议：移入 confirmed（幂等），并从建议池移除 */
+async function confirmPeopleSuggestion(db, name) {
+  const list = await getPeopleSuggestions(db);
+  const item = list.find((x) => x.name === name);
+  if (!item) return { ok: false, reason: "suggestion not found" };
+  const confirmed = await getConfirmedPeople(db);
+  if (!confirmed.some((x) => x.name === name)) confirmed.push(item);
+  await db.query(
+    `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
+     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+    ["chain_people_confirmed", JSON.stringify(confirmed)],
+  );
+  await db.query(
+    `INSERT INTO kv_store(key, value, updated_at) VALUES($1,$2,now())
+     ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=now()`,
+    ["chain_people_suggestions", JSON.stringify(list.filter((x) => x.name !== name))],
+  );
+  return { ok: true, confirmed };
+}
+
+async function getConfirmedPeople(db) {
+  try {
+    const r = await db.query(`SELECT value FROM kv_store WHERE key='chain_people_confirmed'`);
+    const v = r.rows[0]?.value;
+    const arr = Array.isArray(v) ? v : (v ? JSON.parse(typeof v === "string" ? v : (v.__raw || JSON.stringify(v))) : []);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+module.exports = { CHAIN_VARIABLES, KEY_PEOPLE, getChainVariables, allVariableTasks, getKeyPeople, getPeopleSuggestions, addPeopleSuggestion, confirmPeopleSuggestion, getConfirmedPeople };

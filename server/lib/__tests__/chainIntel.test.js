@@ -63,3 +63,30 @@ describe("classifyItems 验证规则", () => {
     expect(classifyItems([])).toEqual([]);
   });
 });
+
+describe("chainIntel 信号映射与落库（v9.148.1 T1）", () => {
+  it("saveChainIntel 落库含 signals 列", async () => {
+    const { saveChainIntel } = await import("../chainIntel");
+    const calls = [];
+    const db = {
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    await saveChainIntel(db, "semiconductor", { items: [], people: [], signals: [{ node_name: "上游：设备/材料", signal_type: "price" }], meta: {} });
+    const insert = calls.find((c) => c.sql.includes("INSERT INTO chain_intel"));
+    expect(insert.sql).toContain("signals");
+    expect(insert.params[4]).toContain("上游：设备/材料");
+  });
+
+  it("localSignals 映射未知 ID 回退直查（ANY 参数化）", async () => {
+    const { localSignals, CHAIN_SIGNAL_MAP } = await import("../chainIntel");
+    // 未知链 → 回退 [chainId] 自身
+    expect(CHAIN_SIGNAL_MAP["nope"]).toBeUndefined();
+    const sqls = [];
+    const db = { query: async (sql) => { sqls.push(sql); return { rows: [] }; } };
+    await localSignals(db, "semiconductor");
+    expect(sqls[0]).toContain("ANY($1::text[])");
+  });
+});

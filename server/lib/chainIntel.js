@@ -11,7 +11,18 @@ const { getChainStocks } = require("./chainStocks");
 const { getChainVariables, getKeyPeople } = require("./chainVariables");
 const { getCommodityPriceHistory } = require("./commodityPrice");
 
-/** 表结构（幂等 ensure） */
+// v9.148.1（T1 P0-1）：新引擎链 ID → 既有 46 链 ID 映射（2026-08-16 实测数据库对齐；
+//   此前 aiCompute 等 5 链按新 ID 查信号恒 0 → 站内信号从未进过 LLM 简报）
+const CHAIN_SIGNAL_MAP = {
+  semiconductor: ["semiconductor", "storage"],
+  aiCompute:     ["ai-hardware", "compute-service", "liquid-cooling", "optical-comm"],
+  aiPower:       ["grid", "power", "energy-storage"],
+  nonferrous:    ["copper", "aluminum", "gold"],
+  minorMetals:   ["rare-earth", "gold"],
+  robotics:      ["robot"],
+};
+
+/** 表结构（幂等 ensure；已存在的表补 signals 列） */
 async function ensureChainIntelTable(db) {
   await db.query(`CREATE TABLE IF NOT EXISTS chain_intel (
     id SERIAL PRIMARY KEY,
@@ -23,6 +34,7 @@ async function ensureChainIntelTable(db) {
     created_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE(chain_id, intel_date)
   )`);
+  await db.query(`ALTER TABLE chain_intel ADD COLUMN IF NOT EXISTS signals JSONB NOT NULL DEFAULT '[]'`);
 }
 
 /** 标题归一化（去非字母数字，用于"同一事件多源"分组） */
@@ -66,14 +78,15 @@ function classifyItems(items) {
   });
 }
 
-/** 站内信号（最近 7 天 industry_chain_signal，按类型汇总） */
+/** 站内信号（最近 30 天 industry_chain_signal，按既有 46 链 ID 映射查询） */
 async function localSignals(db, chainId) {
+  const ids = CHAIN_SIGNAL_MAP[chainId] || [chainId];
   const r = await db.query(
-    `SELECT s.signal_type, s.value, s.unit, s.direction, s.effective_date, n.name AS node_name
+    `SELECT s.signal_type, s.value, s.unit, s.direction, s.effective_date, n.name AS node_name, n.chain_id
      FROM industry_chain_signal s JOIN industry_chain_node n ON n.id = s.node_id
-     WHERE n.chain_id = $1 AND s.effective_date >= CURRENT_DATE - 7
+     WHERE n.chain_id = ANY($1::text[]) AND s.effective_date >= CURRENT_DATE - 30
      ORDER BY s.effective_date DESC LIMIT 50`,
-    [chainId],
+    [ids],
   );
   return r.rows;
 }
@@ -82,7 +95,7 @@ async function localSignals(db, chainId) {
 async function scanChain(db, chainId, { withWeb = true } = {}) {
   const cfg = getChainVariables(chainId);
   if (!cfg) throw new Error(`unknown chain: ${chainId}`);
-  const people = getKeyPeople().filter((p) => p.chains.includes(chainId));
+  const people = (await getKeyPeople(db)).filter((p) => p.chains.includes(chainId));
 
   // 1) 站内
   const signals = await localSignals(db, chainId);
@@ -138,30 +151,42 @@ async function scanChain(db, chainId, { withWeb = true } = {}) {
   };
 }
 
-/** 落库（幂等：同链同日覆盖） */
+/** 落库（幂等：同链同日覆盖；v9.148.1 T1：signals 列落库） */
 async function saveChainIntel(db, chainId, intel) {
   await ensureChainIntelTable(db);
   const dateStr = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-  const { items, people, meta } = intel;
+  const { items, people, signals, meta } = intel;
   await db.query(
-    `INSERT INTO chain_intel(chain_id, intel_date, items, people, meta)
-     VALUES($1,$2,$3,$4,$5)
-     ON CONFLICT(chain_id, intel_date) DO UPDATE SET items=$3, people=$4, meta=$5, created_at=now()`,
-    [chainId, dateStr, JSON.stringify(items), JSON.stringify(people), JSON.stringify(meta)],
+    `INSERT INTO chain_intel(chain_id, intel_date, items, people, signals, meta)
+     VALUES($1,$2,$3,$4,$5,$6)
+     ON CONFLICT(chain_id, intel_date) DO UPDATE SET items=$3, people=$4, signals=$5, meta=$6, created_at=now()`,
+    [chainId, dateStr, JSON.stringify(items), JSON.stringify(people), JSON.stringify(signals ?? []), JSON.stringify(meta)],
   );
   return dateStr;
 }
 
-/** 每晚全链扫描（cron 21:00）：逐链扫描落库，一条失败不阻塞其他 */
+/** 每晚全链扫描（cron 21:00）：逐链扫描落库，一条失败不阻塞其他
+ * v9.148.1（T8 P1-6）：开头探测外网代理 —— 失败标记 webDegraded 进 meta（简报层注入降级提示） */
 async function runNightlyScan(db = pool, { chains = Object.keys(require("./chainVariables").CHAIN_VARIABLES), withWeb = true } = {}) {
   await ensureChainIntelTable(db);
+  // 代理探测（不阻塞扫描）
+  let webDegraded = false;
+  if (withWeb) {
+    try {
+      const { requestRaw } = require("./outbound");
+      await requestRaw("https://news.google.com/rss/search?q=probe", { timeout: 8000, viaProxy: true });
+    } catch {
+      webDegraded = true;
+      console.warn("[chainIntel] 外网代理探测失败 → webDegraded（简报将标注降级）");
+    }
+  }
   const results = [];
   for (const chainId of chains) {
     const t0 = Date.now();
     try {
       const intel = await scanChain(db, chainId, { withWeb });
-      const dateStr = await saveChainIntel(db, chainId, { ...intel, meta: { durationMs: Date.now() - t0, at: new Date().toISOString() } });
-      results.push({ chainId, ok: true, date: dateStr, items: intel.items.length, people: intel.people.filter(p => p.items.length).map(p => p.name), ms: Date.now() - t0 });
+      const dateStr = await saveChainIntel(db, chainId, { ...intel, meta: { durationMs: Date.now() - t0, at: new Date().toISOString(), webDegraded } });
+      results.push({ chainId, ok: true, date: dateStr, items: intel.items.length, signals: intel.signals.length, webDegraded, people: intel.people.filter(p => p.items.length).map(p => p.name), ms: Date.now() - t0 });
     } catch (e) {
       results.push({ chainId, ok: false, error: e.message, ms: Date.now() - t0 });
     }
@@ -169,4 +194,4 @@ async function runNightlyScan(db = pool, { chains = Object.keys(require("./chain
   return results;
 }
 
-module.exports = { ensureChainIntelTable, classifyItems, scanChain, saveChainIntel, runNightlyScan };
+module.exports = { ensureChainIntelTable, classifyItems, scanChain, saveChainIntel, runNightlyScan, localSignals, CHAIN_SIGNAL_MAP };

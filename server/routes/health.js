@@ -16,6 +16,20 @@ module.exports = function healthRoutes(app) {
     try { out.sources = getSourceHealth(); } catch (e) { out.sources = { error: e.message }; }
     // ② AI 端点健康（熔断状态/empty 率）
     try { out.ai = getHealth(); } catch (e) { out.ai = { error: e.message }; }
+    // ②b v9.148.1（T8 P1-6）：推送配置状态（前端黄条/健康面板单列）
+    try {
+      const { loadPushConfig } = require("./push");
+      const cfg = await loadPushConfig(pool);
+      out.push = { configured: !!(cfg && cfg.enabled) };
+      if (out.push.configured) {
+        const ch = String(cfg.channel || "");
+        out.push.channels = ch ? ch.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      } else {
+        out.push.channels = [];
+      }
+    } catch (e) {
+      out.push = { configured: false, error: e.message };
+    }
     // ③ PG 连通探活（SELECT 1 + 延迟）
     try {
       const t0 = Date.now();
@@ -80,8 +94,10 @@ module.exports = function healthRoutes(app) {
       })(), detail: "主行情源与历史K线源至少一个可用（v9.147.0：本地 kline_daily 视为K线可用）；失败时显示降级" },
       { name: "ai_endpoint", ok: out.ai?.degraded === false, detail: "deepseek-v4-flash（恒思考）/ OpenCode Go failover" },
       { name: "sw_version", ok: !!out.sw?.cache, detail: out.sw?.cache ?? "sw.js 未读取" },
+      // v9.148.1（T8 P1-6）：推送配置状态（单列不拉低总体 ok —— 未绑定只是引导项）
+      { name: "push_configured", ok: out.push?.configured === true, detail: out.push?.configured ? `已配置（${(out.push.channels || []).join(",")}）` : "未绑定推送渠道（设置页配置 SendKey 后早盘收简报）" },
     ];
-    out.ok = out.checks.every((c) => c.ok);
+    out.ok = out.checks.filter((c) => c.name !== "push_configured").every((c) => c.ok);
     res.json(out);
   });
 
