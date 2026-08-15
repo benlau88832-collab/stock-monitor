@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
-import { writeFileSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync, readFileSync } from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,9 +21,23 @@ function writeNoJekyll() {
   };
 }
 
+// v9.148.2（A3 P0-3）：构建时从 src/lib/version.ts 正则取 APP_VERSION 注入 title
+// （两个 index.html 停止手写版本号，杜绝 title 乱码/旧版本号复发）
+function injectVersionTitle() {
+  return {
+    name: "inject-version-title",
+    transformIndexHtml(html: string) {
+      const src = readFileSync(path.resolve(__dirname, "src/lib/version.ts"), "utf8");
+      const m = src.match(/APP_VERSION\s*=\s*"([^"]+)"/);
+      const v = m ? m[1] : "dev";
+      return html.replace(/<title>[^<]*<\/title>/, `<title>A股实时交易辅助终端 ${v}</title>`);
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), viteSingleFile(), writeNoJekyll()],
+  plugins: [react(), tailwindcss(), injectVersionTitle(), viteSingleFile(), writeNoJekyll()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

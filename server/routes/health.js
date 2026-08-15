@@ -39,12 +39,17 @@ module.exports = function healthRoutes(app) {
       out.pg = { ok: false, error: e.message };
     }
     // ③b v9.147.0（数据基建·阶段一）：本地 K 线健康（kline_daily 表有数据即视为可用）
+    // v9.148.2（A6 P1-3）：count(*) 全表扫 28.6M 行拖 11-20s → pg_class.reltuples 估算 + LIMIT 1 取最新日期
     try {
-      const kr = await pool.query(`SELECT count(*)::int AS n, max(date) AS d1 FROM kline_daily`);
+      const [kr, lr] = await Promise.all([
+        pool.query(`SELECT reltuples::bigint AS n FROM pg_class WHERE relname='kline_daily'`),
+        // 最新交易日走 trading_calendar（8770 行，v9.148.2 A5 建）；kline_daily 无 date 索引全表扫会拖慢
+        pool.query(`SELECT max(date) AS d1 FROM trading_calendar`).catch(() => pool.query(`SELECT date AS d1 FROM kline_daily ORDER BY date DESC LIMIT 1`)),
+      ]);
       out.localKlines = {
         ok: Number(kr.rows[0]?.n || 0) > 0,
         bars: Number(kr.rows[0]?.n || 0),
-        lastDate: kr.rows[0]?.d1 ?? null,
+        lastDate: lr.rows[0]?.d1 ?? null,
       };
     } catch (e) {
       out.localKlines = { ok: false, error: e.message };
@@ -94,10 +99,10 @@ module.exports = function healthRoutes(app) {
       })(), detail: "主行情源与历史K线源至少一个可用（v9.147.0：本地 kline_daily 视为K线可用）；失败时显示降级" },
       { name: "ai_endpoint", ok: out.ai?.degraded === false, detail: "deepseek-v4-flash（恒思考）/ OpenCode Go failover" },
       { name: "sw_version", ok: !!out.sw?.cache, detail: out.sw?.cache ?? "sw.js 未读取" },
-      // v9.148.1（T8 P1-6）：推送配置状态（单列不拉低总体 ok —— 未绑定只是引导项）
-      { name: "push_configured", ok: out.push?.configured === true, detail: out.push?.configured ? `已配置（${(out.push.channels || []).join(",")}）` : "未绑定推送渠道（设置页配置 SendKey 后早盘收简报）" },
+      // v9.148.1（T8 P1-6）→ v9.148.2（A7 P2-10）：informational 标志（按字段过滤，不再用魔法字符串）
+      { name: "push_configured", informational: true, ok: out.push?.configured === true, detail: out.push?.configured ? `已配置（${(out.push.channels || []).join(",")}）` : "未绑定推送渠道（设置页配置 SendKey 后早盘收简报）" },
     ];
-    out.ok = out.checks.filter((c) => c.name !== "push_configured").every((c) => c.ok);
+    out.ok = out.checks.filter((c) => !c.informational).every((c) => c.ok);
     res.json(out);
   });
 

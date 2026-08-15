@@ -8,11 +8,14 @@ vi.hoisted(() => {
 
 import { chainStockAvgPct, recordChainHit, tradingCalendarAfter } from "../chainLearning";
 
-/** mock db：kline_daily 按日期提供收盘价；日历由 dates 数组驱动 */
+/** mock db：trading_calendar 驱动日历；kline_daily 按日期提供收盘价 */
 function makeDb({ dates, closesByDate = {}, briefingRows = [] } = {}) {
   return {
     query: vi.fn(async (sql, params) => {
-      if (sql.includes("SELECT DISTINCT date FROM kline_daily")) {
+      if (sql.includes("CREATE TABLE IF NOT EXISTS trading_calendar")) return { rows: [] };
+      if (sql.includes("SELECT count(*)::int n FROM trading_calendar")) return { rows: [{ n: dates.length }] };
+      if (sql.includes("SELECT DISTINCT date FROM kline_daily")) return { rows: [] }; // ensure 首填兜底
+      if (sql.includes("FROM trading_calendar")) {
         const from = params[0];
         const need = Number(params[1]) || 6;
         const rows = dates.filter((d) => d >= from).slice(0, need).map((d) => ({ date: d }));

@@ -93,7 +93,8 @@ async function getKeyPeople(db) {
   try {
     const r = await db.query(`SELECT value FROM kv_store WHERE key='chain_people_confirmed'`);
     const v = r.rows[0]?.value;
-    const arr = Array.isArray(v) ? v : (v ? JSON.parse(typeof v === "string" ? v : (v.__raw || JSON.stringify(v))) : []);
+    // v9.148.2（A7 P3）：kv __raw typeof 守卫（字符串/对象/数组三种形态安全解析）
+    const arr = Array.isArray(v) ? v : (v && typeof v === "object" && typeof v.__raw === "string" ? JSON.parse(v.__raw) : (typeof v === "string" ? JSON.parse(v) : []));
     const names = new Set(base.map((p) => p.name));
     let nextId = base.length + 1;
     for (const p of Array.isArray(arr) ? arr : []) {
@@ -110,7 +111,7 @@ async function getPeopleSuggestions(db) {
   try {
     const r = await db.query(`SELECT value FROM kv_store WHERE key='chain_people_suggestions'`);
     const v = r.rows[0]?.value;
-    const arr = Array.isArray(v) ? v : (v ? JSON.parse(typeof v === "string" ? v : (v.__raw || JSON.stringify(v))) : []);
+    const arr = Array.isArray(v) ? v : (v && typeof v === "object" && typeof v.__raw === "string" ? JSON.parse(v.__raw) : (typeof v === "string" ? JSON.parse(v) : [])); // v9.148.2（A7 P3）：kv __raw typeof 守卫const arr = Array.isArray(v) ? v : (v ? JSON.parse(typeof v === "string" ? v : (v.__raw || JSON.stringify(v))) : []); typeof v === "object" ? (typeof v.__raw === "string" ? JSON.parse(v.__raw) : (Array.isArray(v) ? v : [])) : (typeof v === "string" ? JSON.parse(v) : []));
     return Array.isArray(arr) ? arr : [];
   } catch { return []; }
 }
@@ -153,7 +154,7 @@ async function getConfirmedPeople(db) {
   try {
     const r = await db.query(`SELECT value FROM kv_store WHERE key='chain_people_confirmed'`);
     const v = r.rows[0]?.value;
-    const arr = Array.isArray(v) ? v : (v ? JSON.parse(typeof v === "string" ? v : (v.__raw || JSON.stringify(v))) : []);
+    const arr = Array.isArray(v) ? v : (v && typeof v === "object" && typeof v.__raw === "string" ? JSON.parse(v.__raw) : (typeof v === "string" ? JSON.parse(v) : [])); // v9.148.2（A7 P3）：kv __raw typeof 守卫const arr = Array.isArray(v) ? v : (v ? JSON.parse(typeof v === "string" ? v : (v.__raw || JSON.stringify(v))) : []); typeof v === "object" ? (typeof v.__raw === "string" ? JSON.parse(v.__raw) : (Array.isArray(v) ? v : [])) : (typeof v === "string" ? JSON.parse(v) : []));
     return Array.isArray(arr) ? arr : [];
   } catch { return []; }
 }

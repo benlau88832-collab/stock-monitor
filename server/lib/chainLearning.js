@@ -10,10 +10,21 @@
 const { getChainStocks, CHAINS } = require("./chainStocks");
 const { pool } = require("../db");
 
-/** 简报日后的交易日历（全市场共同，取前 6 个）；不足 6 天返回 null */
+/** 交易日历表（v9.148.2 A5 P1-1：替代 DISTINCT date 全表扫 —— kline_daily 3.2GB 无 date 索引，实测 5.1s/次）
+ * 建表 + 首次全量填充（一次性 INSERT SELECT DISTINCT ≈8770 行）；增量由 cron/klines.js 每日 upsert */
+async function ensureTradingCalendar(db) {
+  await db.query(`CREATE TABLE IF NOT EXISTS trading_calendar (date TEXT PRIMARY KEY)`);
+  const r = await db.query(`SELECT count(*)::int n FROM trading_calendar`);
+  if (Number(r.rows[0]?.n || 0) === 0) {
+    await db.query(`INSERT INTO trading_calendar(date) SELECT DISTINCT date FROM kline_daily`);
+  }
+}
+
+/** 简报日后的交易日历（取前 N 个）；不足返回 null */
 async function tradingCalendarAfter(db, fromDate, { need = 6 } = {}) {
+  await ensureTradingCalendar(db);
   const r = await db.query(
-    `SELECT DISTINCT date FROM kline_daily WHERE date >= $1 ORDER BY date LIMIT $2`,
+    `SELECT date FROM trading_calendar WHERE date >= $1 ORDER BY date LIMIT $2`,
     [fromDate, need],
   );
   if (r.rows.length < need) return null;
@@ -96,4 +107,4 @@ async function getChainHitHistory(db, chainId, { limit = 5 } = {}) {
   });
 }
 
-module.exports = { chainStockAvgPct, recordChainHit, recordAllChainHits, getChainHitHistory, tradingCalendarAfter };
+module.exports = { chainStockAvgPct, recordChainHit, recordAllChainHits, getChainHitHistory, tradingCalendarAfter, ensureTradingCalendar };

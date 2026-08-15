@@ -96,7 +96,7 @@ cd "E:/CC-HAHA/workspace/024_永久VPN" && python vision.py "<图片绝对路径
 2. **git 仓库根（工作区根）= 唯一代码真源**。开发直接在 `E:\CC-HAHA\workspace` 的 server/src/docs 上改，改完 `git add/commit/push` 一步到位。
 3. **废除"源码目录双轨制"**：`022_股票监控项目\stock-monitor-v9.9\stock-monitor` 不再是开发副本（本次事故后已空置），不得再往里面写代码、不得再从它同步。
 4. 同步/部署一律走 git：`git push origin arena/019fb619-stock-monitor` 后，需要时在目标机 `git pull`。
-5. 提交前必须验证：`npx vitest run --dir src` + `npx vitest run --dir server/lib/__tests__`（注意：vitest 默认扫整个工作区，会误跑 027 等项目，必须 --dir 限定）+ `npx tsc --noEmit` + `npm run build` + pm2 重启 + curl 实测 + **版本三件套**（`src/lib/version.ts` 的 APP_VERSION、`index.html`/`docs/index.html` 的 `<title>`、`CHANGELOG.md` 顶部条目三者同步，v9.148.1 起强制）。
+5. 提交前必须验证：`npx vitest run --dir src` + `npx vitest run --dir server/lib/__tests__`（注意：vitest 默认扫整个工作区，会误跑 027 等项目，必须 --dir 限定）+ `npx tsc --noEmit` + `npm run build` + pm2 重启 + curl 实测 + **版本三件套**（`src/lib/version.ts` 的 APP_VERSION、build 后 `docs/index.html` 的 `<title>` **字节级校验**（干净中文+版本号，vite transformIndexHtml 已单源注入，无需手写）、`CHANGELOG.md` 顶部条目三者同步，v9.148.2 起强制）。
 6. pm2 服务入口：`E:\CC-HAHA\workspace\server\index.js`（`npx pm2 start server/index.js --name stock-monitor --cwd E:\CC-HAHA\workspace\server`）。MCP server 入口：`E:\CC-HAHA\workspace\server\mcp\index.js`。
 
 ### 本次事故恢复要点（如再遇删库/删代码）

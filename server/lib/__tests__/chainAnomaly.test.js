@@ -120,3 +120,48 @@ describe("detectPctSurge（v9.148.1 T5 大涨检测）", () => {
     expect(triggers).toEqual([]);
   });
 });
+
+describe("公告异动（v9.148.2 A2 P0-2 复活）", () => {
+  it("news.time 为 TEXT 类型也能触发（to_char 比较不报操作符错误）", async () => {
+    // mock：news.time 返回 TEXT 字符串（真实类型）；无 seen 记录
+    const db = makeDb(true);
+    const triggers = await checkAnomalies(db);
+    expect(triggers.some((t) => t.chainId === "semiconductor" && t.reason.includes("链内消息命中"))).toBe(true);
+  });
+
+  it("同一标题 seen 去重后不重复触发", async () => {
+    // 第一次触发后 seen 已写；第二次同一标题 → 不再触发
+    const seen = new Map();
+    const db = {
+      query: async (sql, params) => {
+        if (sql.includes("to_char")) return { rows: [{ title: "半导体产业链重大利好公告", time: "2026-08-16 10:00:00" }] };
+        if (sql.includes("SELECT value FROM kv_store WHERE key=$1") && params?.[0]?.startsWith("chain_anomaly_seen:")) {
+          return { rows: seen.has(params[0]) ? [{ value: seen.get(params[0]) }] : [] };
+        }
+        if (sql.includes("INSERT INTO kv_store")) { seen.set(params[0], params[1]); return { rows: [] }; }
+        if (sql.includes("zt_snapshot")) return { rows: [{ data: JSON.stringify({ pool: [] }) }] };
+        return { rows: [] };
+      },
+    };
+    const t1 = await checkAnomalies(db);
+    const first = t1.find((t) => t.chainId === "semiconductor");
+    expect(first).toBeTruthy();
+    // 模拟触发后 seen 已标记（checkAnomalies 本身不写 seen，由 runAnomalyDig 写——这里模拟已写）
+    seen.set("chain_anomaly_seen:" + require("crypto").createHash("sha1").update("半导体产业链重大利好公告".replace(/[^\w\u4e00-\u9fa5]/g, "")).digest("hex").slice(0, 16), JSON.stringify({ ts: Date.now() }));
+    const t2 = await checkAnomalies(db);
+    expect(t2.some((t) => t.chainId === "semiconductor" && t.reason.includes("链内消息命中"))).toBe(false);
+  });
+
+  it("30 分钟前入库的新闻仍在 2 小时窗口内 → 触发", async () => {
+    const db = {
+      query: async (sql, params) => {
+        if (sql.includes("to_char")) return { rows: [{ title: "半导体产业链重大利好公告", time: "2026-08-16 09:30:00" }] };
+        if (sql.includes("SELECT value FROM kv_store WHERE key=$1") && params?.[0]?.startsWith("chain_anomaly_seen:")) return { rows: [] };
+        if (sql.includes("zt_snapshot")) return { rows: [{ data: JSON.stringify({ pool: [] }) }] };
+        return { rows: [] };
+      },
+    };
+    const triggers = await checkAnomalies(db);
+    expect(triggers.some((t) => t.chainId === "semiconductor")).toBe(true);
+  });
+});

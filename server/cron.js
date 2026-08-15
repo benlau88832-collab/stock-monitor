@@ -500,8 +500,9 @@ function startCron({ pool }) {
     } catch (e) { console.warn("[cron] chain_intel 夜间任务失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });
 
-  // v9.148.0（任务12）：每日 16:05 回填链命中率（简报判断 vs T+5 链内标的实际涨跌）
-  cron.schedule("5 16 * * 1-5", async () => {
+  // v9.148.0（任务12）→ v9.148.2（A5）：每日回填链命中率（简报判断 vs T+5 链内标的实际涨跌）
+  //   18:30 执行（原 16:05 与 15:45 kline 增量写 IO 相撞 + 16:05 时当日 kline 可能未写完）
+  cron.schedule("30 18 * * 1-5", async () => {
     try {
       const { recordAllChainHits } = require("./lib/chainLearning");
       const results = await recordAllChainHits(pool);
@@ -720,6 +721,14 @@ function startCron({ pool }) {
       if (!isTradingDayCN()) return;
       const { runKlineIncremental } = require("./cron/klines");
       await runKlineIncremental(pool);
+      // v9.148.2（A5 P1-1）：交易日历增量 upsert（命中率锚定查询用，替代 kline_daily 全表扫）
+      try {
+        const today = bjDateStr();
+        await pool.query(
+          `INSERT INTO trading_calendar(date) VALUES($1) ON CONFLICT(date) DO NOTHING`,
+          [today],
+        );
+      } catch (e) { console.warn("[cron] trading_calendar upsert 失败:", e.message); }
       await markCronStep(pool, bjDateStr(), "klineIncremental");
     } catch (e) { console.error("[cron] kline 增量失败:", e.message); }
   }, { timezone: "Asia/Shanghai" });

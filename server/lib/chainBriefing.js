@@ -43,29 +43,55 @@ function ruleFallback(chainId, intel) {
 }
 
 /**
- * v9.148.1（T6 P1-4-2）：keySignals 后置校验（纯函数）——
- * LLM 标 verified:true 的条目必须有输入情报的对应支撑（标题归一化包含 或 来源匹配），
- * 无支撑则降为 verified:false（防 LLM 把单源写成多源）。
+ * v9.148.1（T6 P1-4-2）重构 v9.148.2（A4 P1-2）：keySignals 引用核对（纯函数）——
+ * LLM 输出 {text, titleIds:[...], sourceCount}；titleIds 必须指向输入情报中真实的
+ * "多源验证"（verified && sourceCount>=2）条目才保留 verified:true，否则降级并写 downgradeReason。
+ * 无 titleIds 时中文兜底：char-bigram Dice>0.45 与任一多源条目匹配。
  * @param {Array} signals LLM 输出的 keySignals
- * @param {Array} intelItems 输入情报条目（含 verified/singleAuthoritative/title/sources）
+ * @param {Array} intelItems 输入情报条目（编号后：{idx, verified, sourceCount, title, sources}）
  * @returns {Array} 修正后的 signals
  */
 function verifySignalsAgainstIntel(signals, intelItems) {
   if (!Array.isArray(signals)) return [];
-  const norm = (t) => String(t).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]/g, "").slice(0, 40);
-  const pool = intelItems.filter((i) => i.verified || i.singleAuthoritative);
+  const multi = intelItems.filter((i) => i.verified === true && Number(i.sourceCount) >= 2);
+  if (multi.length === 0 && Array.isArray(signals) && signals.some((s) => s?.verified === true)) {
+    console.warn("[chainBriefing] 支撑池为空但 LLM 标了 verified —— 全部降级（无多源条目可支撑）");
+  }
+  // char-bigram Dice 相似度（中文兜底）
+  const bigrams = (t) => {
+    const s = String(t ?? "").replace(/\s+/g, "");
+    const out = new Set();
+    for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+    return out;
+  };
+  const dice = (a, b) => {
+    const A = bigrams(a), B = bigrams(b);
+    if (A.size === 0 || B.size === 0) return 0;
+    let inter = 0;
+    for (const x of A) if (B.has(x)) inter++;
+    return (2 * inter) / (A.size + B.size);
+  };
   return signals.map((s) => {
     if (!s || s.verified !== true) return s;
-    const sn = norm(s.text ?? "");
-    const supported = pool.some((i) => {
-      const tn = norm(i.title ?? "");
-      if (sn.length >= 12 && (tn.includes(sn.slice(0, 24)) || sn.includes(tn.slice(0, 24)))) return true;
-      // 标题显著词（长度 ≥4 的英文数字段，最多前 6 个）命中文本 → 视为同源支撑（中英混排场景）
-      const words = String(i.title ?? "").match(/[A-Za-z0-9]{4,}/g) || [];
-      const textLow = String(s.text ?? "").toLowerCase();
-      return words.slice(0, 6).some((w) => textLow.includes(w.toLowerCase()));
-    });
-    return supported ? s : { ...s, verified: false };
+    const ids = Array.isArray(s.titleIds) ? s.titleIds.map(Number).filter((n) => Number.isFinite(n)) : [];
+    const text = String(s.text ?? "");
+    const byId = ids.map((id) => intelItems.find((i) => i.idx === id)).filter(Boolean);
+    // 引用有效性：指向真实多源条目 且 文本与条目共享 ≥2 个显著词（防"指了不相干多源条目糊弄"）
+    const STOP = new Set(["is", "of", "to", "on", "at", "in", "the", "for", "and", "with", "as", "by", "up", "vs", "a"]);
+    const wordsIn = (t) => (String(t ?? "").match(/[A-Za-z0-9]{2,}/g) || []).map((w) => w.toLowerCase()).filter((w) => !STOP.has(w));
+    const textWords = wordsIn(text);
+    const idOk = byId.length > 0
+      && byId.every((i) => i.verified === true && Number(i.sourceCount) >= 2)
+      && byId.some((i) => {
+        const tw = wordsIn(i.title);
+        const overlap = tw.filter((w) => textWords.includes(w)).length;
+        return overlap >= 2 || dice(text, i.title) > 0.3;
+      });
+    if (idOk && Number(s.sourceCount) >= 2) return { ...s, verified: true, titleIds: byId.map((i) => i.idx) };
+    // titleIds 不足 → 中文兜底（与任一多源条目 bigram Dice>0.45）
+    const fuzzy = multi.find((i) => dice(text, i.title) > 0.45);
+    if (fuzzy) return { ...s, verified: true, titleIds: [fuzzy.idx], sourceCount: Number(fuzzy.sourceCount), fuzzy: true };
+    return { ...s, verified: false, downgradeReason: "无 ≥2 源多源验证条目支撑（titleIds 未指向或与文本不相关）" };
   });
 }
 
@@ -119,9 +145,9 @@ async function generateBriefing(db, chainId, { withLLM = true } = {}) {
     priceBrief = lines.join("；");
   } catch { /* 价格失败不影响简报 */ }
 
-  // 组装情报摘要（截断控制 token；v9.148.1 T6：三档口径 多源验证/单源权威/待验证）
-  const itemBrief = intel.items.slice(0, 40).map((i) =>
-    `[${i.verified ? "多源验证" : (i.singleAuthoritative ? "单源权威" : "待验证")}] ${i.title.slice(0, 90)}（${i.sources.join("/").slice(0, 30)}${i.sourceCount > 1 ? `，${i.sourceCount}源` : ""}${i.authoritativeCount ? "，权威" : ""}）`
+  // 组装情报摘要（v9.148.2 A4：逐条编号 [1]..[40]，供 LLM 输出 titleIds 引用）
+  const itemBrief = intel.items.slice(0, 40).map((i, idx) =>
+    `[${idx + 1}] [${i.verified ? "多源验证" : (i.singleAuthoritative ? "单源权威" : "待验证")}] ${i.title.slice(0, 90)}（${i.sources.join("/").slice(0, 30)}${i.sourceCount > 1 ? `，${i.sourceCount}源` : ""}${i.authoritativeCount ? "，权威" : ""}）`
   ).join("\n");
   const peopleBrief = (intel.people || []).filter((p) => p.items.length > 0).map((p) =>
     `【${p.name}（${p.note || ""}）】${p.items.slice(0, 3).map((x) => x.title.slice(0, 60)).join(" / ")}`
@@ -154,8 +180,8 @@ async function generateBriefing(db, chainId, { withLLM = true } = {}) {
     hitHistory,
     ``,
     // v9.148.1（T7 P1-5）：人物自扩散 —— 引导 LLM 从情报中发现新关键人物
-    `请输出 JSON：{"stage":"","summary":"","beneficiaries":[{"name":"","reason":"","evidence":""}],"logicChange":"","keySignals":[{"text":"","verified":true}],"risks":[""],"suggestedPeople":[{"name":"","zh":"","chains":[""],"why":""}]}` +
-    `（suggestedPeople：从今日情报中发现的对本链有影响的新关键人物（非已有名单），无则空数组）`,
+    `请输出 JSON：{"stage":"","summary":"","beneficiaries":[{"name":"","code":"","reason":"","evidence":""}],"logicChange":"","keySignals":[{"text":"","titleIds":[1],"sourceCount":2}],"risks":[""],"suggestedPeople":[{"name":"","zh":"","chains":[""],"why":""}]}` +
+    `（keySignals.titleIds 必须引用上方编号 [1]..[40] 中对应情报条目，且仅当引用的条目标了"多源验证"时才写 verified:true；suggestedPeople：从今日情报中发现的对本链有影响的新关键人物（非已有名单），无则空数组）`,
   ].join("\n");
 
   let content = null;
@@ -171,9 +197,10 @@ async function generateBriefing(db, chainId, { withLLM = true } = {}) {
         const r2 = await chatComplete({ system, user, maxTokens: 6000, temperature: 0.2, thinking: true });
         content = parseLLMJSON(r2.text);
       }
-      // v9.148.1（T6 P1-4-2）：keySignals 后置校验 —— LLM 标 verified 必须有情报支撑，否则降级
+      // v9.148.1（T6 P1-4-2）→ v9.148.2（A4 P1-2）：keySignals 引用核对（titleIds 指向多源条目才保留）
       if (content && Array.isArray(content.keySignals)) {
-        content.keySignals = verifySignalsAgainstIntel(content.keySignals, intel.items ?? []);
+        const idxItems = (intel.items ?? []).map((i, idx) => ({ ...i, idx: idx + 1 }));
+        content.keySignals = verifySignalsAgainstIntel(content.keySignals, idxItems);
       }
     // v9.148.1（T7 P1-5）：人物自扩散 —— 简报建议的新人物追加进建议池（按 name 去重）
       if (content && Array.isArray(content.suggestedPeople) && content.suggestedPeople.length > 0) {
@@ -184,15 +211,27 @@ async function generateBriefing(db, chainId, { withLLM = true } = {}) {
           }
         } catch { /* 建议落池失败不影响简报 */ }
       }
-      // v9.148.1（T9 P1-7）：受益人后置校验 —— 只保留 A 股个股且 code ∈ 链集合，剔除板块/ETF/无 code
+      // v9.148.1（T9 P1-7）→ v9.148.2（A7 P2-6）：受益人校验（放宽：链外合法个股保留，集合仅做核心标记；
+      //   集合查询失败不整段清空，risks 如实说明）
       if (content && Array.isArray(content.beneficiaries)) {
         const { getChainStocks } = require("./chainStocks");
-        const stocks = await getChainStocks(chainId, { limit: 1000 }, { _pool: db }).catch(() => []);
-        const valid = validateBeneficiaries(content.beneficiaries, stocks.map((s) => s.code));
-        const dropped = content.beneficiaries.length - valid.length;
-        content.beneficiaries = valid;
+        let chainCodes = [];
+        let chainOk = true;
+        try {
+          const stocks = await getChainStocks(chainId, { limit: 1000 }, { _pool: db });
+          chainCodes = stocks.map((s) => s.code);
+        } catch {
+          chainOk = false;
+          console.warn(`[chainBriefing] ${chainId} 链集合查询失败（受益人仅做基础过滤）`);
+        }
+        const before = content.beneficiaries.length;
+        content.beneficiaries = validateBeneficiaries(content.beneficiaries, chainCodes);
+        const dropped = before - content.beneficiaries.length;
         if (dropped > 0 && Array.isArray(content.risks)) {
-          content.risks.push(`已剔除 ${dropped} 个非 A 股个股受益标的（板块/ETF/无代码，见口径规则）`);
+          content.risks.push(`已剔除 ${dropped} 个非 A 股个股/ETF/指数受益标的（见口径规则）`);
+        }
+        if (!chainOk && Array.isArray(content.risks)) {
+          content.risks.push("⚠ 链标的集合查询失败，受益标的核心标记不可用");
         }
       }
     } catch (e) {
@@ -231,20 +270,31 @@ async function generateAllBriefings(db = pool, { withLLM = true } = {}) {
 }
 
 /**
- * v9.148.1（T9 P1-7）：受益人后置校验（纯函数）——
- * 只保留 A 股个股（6 位 code 且 ∈ 链标的集合），剔除板块/概念/ETF/指数/无 code。
+ * v9.148.1（T9 P1-7）→ v9.148.2（A7 P2-6 放宽）：受益人校验（纯函数）——
+ * 只保留 A 股个股：6 位 code 且排除明确 ETF/指数段（15/51/56 开头或名称含 ETF/指数/板块/概念/基金）；
+ * 链内集合（chainCodes）仅做"核心受益"标记（core:true），不再整批剔除链外合法个股。
  * @param {Array} beneficiaries LLM 输出 [{name, code, reason, evidence}]
- * @param {Array<string>} chainCodes 该链标的集合 code 列表
+ * @param {Array<string>} chainCodes 该链标的集合（可为空数组=集合查询失败，仅做基础过滤）
  * @returns {Array} 过滤后的 beneficiaries
  */
 function validateBeneficiaries(beneficiaries, chainCodes) {
   if (!Array.isArray(beneficiaries)) return [];
-  const set = new Set(chainCodes);
+  const set = chainCodes ? new Set(chainCodes) : new Set();
+  const ETF_NAME = /ETF|指数|板块|概念|基金|LOF/i;
   return beneficiaries.filter((b) => {
     if (!b || typeof b !== "object") return false;
     const code = String(b.code || "");
-    return /^\d{6}$/.test(code) && set.has(code);
-  }).map((b) => ({ name: String(b.name || ""), code: String(b.code), reason: String(b.reason || "").slice(0, 200), evidence: String(b.evidence || "").slice(0, 120) }));
+    const name = String(b.name || "");
+    if (!/^\d{6}$/.test(code)) return false;          // 非 6 位代码
+    if (/^(15|51|56)/.test(code) || ETF_NAME.test(name)) return false; // ETF/指数段
+    return true;
+  }).map((b) => ({
+    name: String(b.name || ""),
+    code: String(b.code),
+    reason: String(b.reason || "").slice(0, 200),
+    evidence: String(b.evidence || "").slice(0, 120),
+    core: set.has(String(b.code)), // 链内集合 → 核心受益标记（集合为空=查询失败，不误标）
+  }));
 }
 
 module.exports = { ensureChainBriefingTable, generateBriefing, generateAllBriefings, verifySignalsAgainstIntel, ruleFallback, validateBeneficiaries };

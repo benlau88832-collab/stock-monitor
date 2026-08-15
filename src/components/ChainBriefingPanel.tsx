@@ -53,6 +53,8 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
   const [suggestions, setSuggestions] = useState<PersonSuggestion[]>([]);
   // v9.148.1（T8）：推送绑定状态（未绑定显示黄条引导）
   const [pushConfigured, setPushConfigured] = useState<boolean | null>(null);
+  // v9.148.2（A1）：采纳失败提示（手机端写操作降级）
+  const [personError, setPersonError] = useState<string | null>(null);
 
   const loadPushState = useCallback(async () => {
     try {
@@ -73,13 +75,18 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
   const confirmPerson = async (name: string) => {
     try {
       const token = await getLocalToken();
-      await fetch("/api/chain/people/confirm", {
+      const r = await fetch("/api/chain/people/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { "x-local-token": token } : {}) },
         body: JSON.stringify({ name }),
       });
+      if (!r.ok) throw new Error("HTTP " + r.status);
       loadSuggestions();
-    } catch { /* 采纳失败静默 */ }
+    } catch {
+      // v9.148.2（A1）：非本机访问 token 端点 403 → 写操作降级提示（手机端只读）
+      setPersonError("采纳失败：人物管理需在电脑本机操作（手机端只读）");
+      setTimeout(() => setPersonError(null), 4000);
+    }
   };
 
   const load = useCallback(async () => {
@@ -87,12 +94,14 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
       const r = await fetch("/api/chain/briefings");
       const j = await r.json();
       if (Array.isArray(j.items)) setItems(j.items);
+      // v9.148.2（A7 观察4）：简报刷新时同刷推送状态（设置页保存后点刷新即消失黄条）
+      loadPushState();
     } catch (e) {
       setError("简报加载失败");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadPushState]);
 
   useEffect(() => {
     load();
@@ -143,6 +152,7 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
       )}
 
       {/* v9.148.1（T7）：人物自扩散建议（LLM 每晚从情报中发现的新关键人物） */}
+      {personError && <div className="mb-2 text-[11px] text-rose-400">{personError}</div>}
       {suggestions.length > 0 && (
         <details className="mb-2 rounded-lg border border-violet-500/20 bg-violet-950/10 px-2 py-1.5">
           <summary className="cursor-pointer text-[11px] font-bold text-violet-300">

@@ -14,32 +14,8 @@ const { getChainStocks, chainStockStats, CHAINS } = require("../lib/chainStocks"
 const { getCommodityPriceHistory } = require("../lib/commodityPrice");
 // v9.148.0（任务08）：链简报查询/生成
 const { generateBriefing, generateAllBriefings } = require("../lib/chainBriefing");
-
-// v9.148.1（T2 P1-1）：烧钱写操作鉴权 —— 复制 routes/ai.js 的 effectiveToken 模式（fail-closed）
-//   0.0.0.0 监听后局域网任何页面可 POST；无 token 一律 401
-let storedTokenCache = { t: null, ts: 0 };
-let tokenInitialized = false;
-async function effectiveToken() {
-  if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
-  if (storedTokenCache.t && Date.now() - storedTokenCache.ts < 30000) return storedTokenCache.t;
-  try {
-    const r = await pool.query("SELECT value FROM kv_store WHERE key='local_token'");
-    const v = r.rows[0]?.value;
-    const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
-    storedTokenCache = { t: t ? String(t) : null, ts: Date.now() };
-    tokenInitialized = true;
-    return storedTokenCache.t;
-  } catch {
-    return tokenInitialized ? storedTokenCache.t : null;
-  }
-}
-async function checkAuth(req, res) {
-  const token = await effectiveToken();
-  if (!token) return true;
-  if (req.headers["x-local-token"] === token) return true;
-  res.status(401).json({ error: "unauthorized: missing/invalid x-local-token" });
-  return false;
-}
+// v9.148.2（A1）：POST /api/chain/* 的鉴权由 index.js 全局 /api 中间件统一负责（WRITE_AUTH_WHITELIST 之外
+//   所有非 GET 强制 x-local-token）——此前 chain.js 内复制 checkAuth 属重复实现，已删除（真实 401 来自全局中间件）。
 
 function bjDateStr() {
   const d = new Date(Date.now() + 8 * 3600 * 1000);
@@ -227,7 +203,7 @@ module.exports = function chainRoutes(app) {
   app.post("/api/chain/briefings/generate", async (req, res) => {
     try {
       // v9.148.1（T2 P1-1）：烧钱操作强制 token（0.0.0.0 后防局域网白嫖 LLM 配额）
-      if (!(await checkAuth(req, res))) return;
+
       const chainId = String(req.body?.chainId || "").trim();
       const out = chainId ? await generateBriefing(pool, chainId) : await generateAllBriefings(pool);
       res.json({ ok: true, out });
@@ -248,7 +224,7 @@ module.exports = function chainRoutes(app) {
 
   app.post("/api/chain/people/confirm", async (req, res) => {
     try {
-      if (!(await checkAuth(req, res))) return;
+
       const { confirmPeopleSuggestion } = require("../lib/chainVariables");
       const name = String(req.body?.name || "").trim();
       if (!name) return res.status(400).json({ error: "name required" });

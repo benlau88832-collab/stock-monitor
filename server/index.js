@@ -36,8 +36,15 @@ app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(path.join(DOCS_DIR, "index.html"));
 });
 
+// v9.148.2（A1）：token 读取统一到 lib/localToken（原 effectiveWriteToken 三份复制之一）
+const { effectiveToken, safeEqual, isLoopback } = require("./lib/localToken");
+
 app.get("/api/auth/local-token", async (req, res) => {
   try {
+    // v9.148.2（A1 P0-1）：环回校验 —— 0.0.0.0 监听下局域网任何人可 curl 自取 token 的漏洞封堵
+    if (!isLoopback(req.socket.remoteAddress)) {
+      return res.status(403).json({ error: "forbidden: token endpoint is loopback-only" });
+    }
     const origin = req.headers.origin;
     if (origin) {
       let u;
@@ -55,30 +62,14 @@ app.get("/api/auth/local-token", async (req, res) => {
 });
 
 const WRITE_AUTH_WHITELIST = new Set(["/ai/call", "/ai/stream", "/brain/pg"]);
-let writeTokenCache = { t: null, ts: 0 };
-let writeTokenInitialized = false;
-
-async function effectiveWriteToken() {
-  if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
-  if (writeTokenCache.t && Date.now() - writeTokenCache.ts < 30000) return writeTokenCache.t;
-  try {
-    const r = await pool.query("SELECT value FROM kv_store WHERE key='local_token'");
-    const v = r.rows[0]?.value;
-    const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
-    writeTokenCache = { t: t ? String(t) : null, ts: Date.now() };
-    writeTokenInitialized = true;
-    return writeTokenCache.t;
-  } catch {
-    return writeTokenInitialized ? writeTokenCache.t : null;
-  }
-}
 
 app.use("/api", async (req, res, next) => {
   const method = req.method;
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
   if (WRITE_AUTH_WHITELIST.has(req.path)) return next();
-  const token = await effectiveWriteToken();
-  if (!token || req.headers["x-local-token"] !== token) {
+  const token = await effectiveToken(pool);
+  // v9.148.2（A1）：常量时间比较（原 !== 存在时序侧信道）
+  if (!token || !safeEqual(req.headers["x-local-token"], token)) {
     return res.status(401).json({ error: "unauthorized: missing/invalid x-local-token" });
   }
   next();
@@ -152,9 +143,10 @@ initDb().then(async () => {
   } catch (e) { console.warn("[server] db-migrations failed:", e.message); }
   const token = await ensureLocalToken(pool);
   try { const { buildDirection } = require("./routes/swing"); buildDirection().catch((e) => console.warn("[swing] warmup failed:", e.message)); setInterval(() => buildDirection().catch((e) => console.warn("[swing] background refresh failed:", e.message)), 30 * 60 * 1000); } catch (e) { console.warn("[swing] warmup setup failed:", e.message); }
-  // v9.148.1（T2 P0-2）：监听 0.0.0.0 —— 手机扫码/微信推送链接（局域网 IP）物理可达；
-  //   安全护栏：烧钱写操作（/api/chain/briefings/generate 等）已强制 x-local-token（P1-1 同日上线）
-  app.listen(PORT, process.env.HOST || "0.0.0.0", () => {
+  // v9.148.2（A1 P0-1）：默认回 127.0.0.1 —— 局域网暴露改为显式选择（EXPOSE_LAN=1 才开 0.0.0.0）
+  //   手机扫码/推送链接需局域网访问时，在 server/.env 设 EXPOSE_LAN=1（安全护栏=token 端点环回校验已同日上线）
+  const HOST = process.env.EXPOSE_LAN === "1" ? (process.env.HOST || "0.0.0.0") : "127.0.0.1";
+  app.listen(PORT, HOST, () => {
     // v9.145.0：产业信号同步较重，放到服务监听后异步执行，避免阻塞首屏启动
     setTimeout(() => {
       require("./lib/industryData").syncLocalIndustrySignals(pool)

@@ -155,28 +155,12 @@ module.exports = function aiRoutes(app) {
   // /api/ai/call 必须携带 header `x-local-token`（防局域网/公网白嫖 Agnes 配额）
   // v9.84.3（5.4）：未配置 env 时读 kv local_token（index.js ensureLocalToken 自动生成），默认启用
   // v9.85.2（P1-1）：fail-closed —— 曾成功初始化过鉴权（kv 有 local_token）后，读取失败拒绝放行
-  //   （原 catch 返回 null 被当作"未启用鉴权"→ DB 短故障即全站放行）
-  let storedTokenCache = { t: null, ts: 0 };
-  let tokenInitialized = false; // 是否曾成功从 kv 读取过（区分"未配置"与"读取失败"）
-  async function effectiveToken() {
-    if (process.env.LOCAL_TOKEN) return process.env.LOCAL_TOKEN;
-    if (storedTokenCache.t && Date.now() - storedTokenCache.ts < 30000) return storedTokenCache.t;
-    try {
-      const r = await pool.query("SELECT value FROM kv_store WHERE key='local_token'");
-      const v = r.rows[0]?.value;
-      const t = v && typeof v === "object" && "__raw" in v ? v.__raw : (typeof v === "string" ? v : v?.token);
-      storedTokenCache = { t: t ? String(t) : null, ts: Date.now() };
-      tokenInitialized = true;
-      return storedTokenCache.t;
-    } catch {
-      // fail-closed：已初始化过 → 用最后已知 token（拒绝未授权请求）；从未初始化 → 放行（等同未配置）
-      return tokenInitialized ? storedTokenCache.t : null;
-    }
-  }
+  // v9.148.2（A1）：effectiveToken 收敛到 lib/localToken（三份复制消除）
+  const { effectiveToken, safeEqual } = require("../lib/localToken");
   async function checkAuth(req, res) {
-    const token = await effectiveToken();
+    const token = await effectiveToken(pool);
     if (!token) return true;
-    if (req.headers["x-local-token"] === token) return true;
+    if (safeEqual(req.headers["x-local-token"], token)) return true;
     res.status(401).json({ error: "unauthorized: missing/invalid x-local-token" });
     return false;
   }

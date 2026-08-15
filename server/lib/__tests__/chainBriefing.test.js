@@ -45,25 +45,27 @@ describe("generateBriefing 兜底路径", () => {
   });
 });
 
-describe("verifySignalsAgainstIntel（v9.148.1 T6）", () => {
+describe("verifySignalsAgainstIntel（v9.148.1 T6 → v9.148.2 A4 引用核对）", () => {
   const intel = [
-    { title: "SMIC Q2 net profit jumps 262%", verified: true, sources: ["Reuters"] },
-    { title: "TSMC record revenue", singleAuthoritative: true, sources: ["Bloomberg.com"] },
-    { title: "某无关新闻", verified: false, sources: ["某自媒"] },
+    { idx: 1, title: "SMIC Q2 net profit jumps 262%", verified: true, sourceCount: 2, sources: ["Reuters", "CNBC"] },
+    { idx: 2, title: "TSMC record revenue", singleAuthoritative: true, sourceCount: 1, sources: ["Bloomberg.com"] },
+    { idx: 3, title: "某无关新闻", verified: false, sourceCount: 1, sources: ["某自媒"] },
   ];
-  it("LLM verified 且有情报支撑 → 保留 true", () => {
+  it("LLM verified 且 titleIds 指向多源条目、文本相关 → 保留 true", () => {
     const out = verifySignalsAgainstIntel(
-      [{ text: "SMIC Q2 净利润大增，扩产提价", verified: true }],
+      [{ text: "SMIC Q2 净利润大增，扩产提价", titleIds: [1], sourceCount: 2, verified: true }],
       intel,
     );
     expect(out[0].verified).toBe(true);
+    expect(out[0].titleIds).toEqual([1]);
   });
-  it("LLM verified 但情报无支撑 → 降为 false", () => {
+  it("LLM verified 但无 titleIds 且无多源兜底 → 降为 false（带 downgradeReason）", () => {
     const out = verifySignalsAgainstIntel(
       [{ text: "完全虚构的事件描述，无任何情报对应", verified: true }],
       intel,
     );
     expect(out[0].verified).toBe(false);
+    expect(out[0].downgradeReason).toBeTruthy();
   });
   it("非数组/空输入安全", () => {
     expect(verifySignalsAgainstIntel(null, intel)).toEqual([]);
@@ -72,22 +74,58 @@ describe("verifySignalsAgainstIntel（v9.148.1 T6）", () => {
 });
 
 describe("validateBeneficiaries（v9.148.1 T9）", () => {
-  it("只保留 A 股个股且 code 在链集合内", () => {
+  it("v9.148.2 A7 放宽：A 股个股保留（链内标 core），ETF/无 code 剔除", () => {
     const out = validateBeneficiaries(
       [
         { name: "中芯国际", code: "688981", reason: "扩产提价", evidence: "SMIC" },
-        { name: "铜板块", code: "", reason: "铜价上涨" },
+        { name: "链外合法个股", code: "600000", reason: "IDC 概念受益" },
         { name: "电网设备ETF", code: "159326", reason: "ETF" },
         { name: "海外公司", code: "TSMC", reason: "代工" },
-        { name: "不在集合的个股", code: "600000", reason: "x" },
+        { name: "指数基金", code: "510300", reason: "指数" },
+        { name: "铜板块", code: "", reason: "铜价上涨" },
       ],
       ["688981", "601899"],
     );
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(2); // 688981 + 600000（链外保留）
     expect(out[0].code).toBe("688981");
+    expect(out[0].core).toBe(true);      // 链内 → 核心受益
+    expect(out[1].code).toBe("600000");
+    expect(out[1].core).toBe(false);     // 链外 → 非核心
   });
   it("非数组/空输入安全", () => {
     expect(validateBeneficiaries(null, [])).toEqual([]);
     expect(validateBeneficiaries([], ["600000"])).toEqual([]);
+  });
+});
+
+describe("verifySignalsAgainstIntel 引用核对（v9.148.2 A4）", () => {
+  const intel = [
+    { idx: 1, title: "TSMC raises prices by 25%", verified: true, sourceCount: 2, sources: ["Reuters", "Bloomberg.com"] },
+    { idx: 2, title: "TSMC cuts production forecast", verified: true, sourceCount: 2, sources: ["Reuters", "CNBC"] },
+    { idx: 3, title: "某单源新闻", verified: false, sourceCount: 1, sources: ["某自媒"] },
+  ];
+  it("titleIds 指向 2 源多源条目 → 保留 verified", () => {
+    const out = verifySignalsAgainstIntel(
+      [{ text: "TSMC 提价 25%", titleIds: [1], sourceCount: 2, verified: true }],
+      intel,
+    );
+    expect(out[0].verified).toBe(true);
+    expect(out[0].titleIds).toEqual([1]);
+  });
+  it("反例：TSMC 提薪支撑不了 TSMC 减产（titleIds 指向无关多源条目也降级——按引用语义，指了就必须是支撑）", () => {
+    // LLM 声称 verified 且 titleIds=[1]（提价），但文本说的是减产 → 引用与文本不符，靠 bigram 兜底也低 → 降级
+    const out = verifySignalsAgainstIntel(
+      [{ text: "TSMC 削减产量预测", titleIds: [1], sourceCount: 2, verified: true }],
+      intel,
+    );
+    expect(out[0].verified).toBe(false);
+    expect(out[0].downgradeReason).toBeTruthy();
+  });
+  it("titleIds 指向单源条目 → 降级（防单源写成多源）", () => {
+    const out = verifySignalsAgainstIntel(
+      [{ text: "某单源新闻内容", titleIds: [3], sourceCount: 2, verified: true }],
+      intel,
+    );
+    expect(out[0].verified).toBe(false);
   });
 });

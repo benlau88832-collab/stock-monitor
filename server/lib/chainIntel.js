@@ -13,13 +13,14 @@ const { getCommodityPriceHistory } = require("./commodityPrice");
 
 // v9.148.1（T1 P0-1）：新引擎链 ID → 既有 46 链 ID 映射（2026-08-16 实测数据库对齐；
 //   此前 aiCompute 等 5 链按新 ID 查信号恒 0 → 站内信号从未进过 LLM 简报）
+// v9.148.2（A7 P3）：robotics 补 machine-tool（谐波减速器/丝杠聚集地，58 条信号）
 const CHAIN_SIGNAL_MAP = {
   semiconductor: ["semiconductor", "storage"],
   aiCompute:     ["ai-hardware", "compute-service", "liquid-cooling", "optical-comm"],
   aiPower:       ["grid", "power", "energy-storage"],
   nonferrous:    ["copper", "aluminum", "gold"],
   minorMetals:   ["rare-earth", "gold"],
-  robotics:      ["robot"],
+  robotics:      ["robot", "machine-tool"],
 };
 
 /** 表结构（幂等 ensure；已存在的表补 signals 列） */
@@ -78,9 +79,20 @@ function classifyItems(items) {
   });
 }
 
-/** 站内信号（最近 30 天 industry_chain_signal，按既有 46 链 ID 映射查询） */
+/** 站内信号（最近 30 天 industry_chain_signal，按既有 46 链 ID 映射查询）
+ * v9.148.2（A7 P3）：未映射链打 warn 防复发 */
 async function localSignals(db, chainId) {
-  const ids = CHAIN_SIGNAL_MAP[chainId] || [chainId];
+  const ids = CHAIN_SIGNAL_MAP[chainId];
+  if (!ids) {
+    console.warn(`[chainIntel] CHAIN_SIGNAL_MAP 未映射链: ${chainId}（直查自身 ID，若信号异常请补映射）`);
+    return db.query(
+      `SELECT s.signal_type, s.value, s.unit, s.direction, s.effective_date, n.name AS node_name, n.chain_id
+       FROM industry_chain_signal s JOIN industry_chain_node n ON n.id = s.node_id
+       WHERE n.chain_id = ANY($1::text[]) AND s.effective_date >= CURRENT_DATE - 30
+       ORDER BY s.effective_date DESC LIMIT 50`,
+      [[chainId]],
+    ).then((r) => r.rows);
+  }
   const r = await db.query(
     `SELECT s.signal_type, s.value, s.unit, s.direction, s.effective_date, n.name AS node_name, n.chain_id
      FROM industry_chain_signal s JOIN industry_chain_node n ON n.id = s.node_id
