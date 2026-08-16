@@ -9,10 +9,10 @@ const REPORT = "https://reportapi.eastmoney.com/report/list";
 
 const num = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v))) ? null : Number(v);
 
-async function fetchResearchReportsServer(code, limit = 10) {
+async function fetchResearchReportsServer(code, limit = 10, _getJson = getJson) {
   const url = `${REPORT}?industryCode=*&pageSize=${limit}&industry=*&rating=*&ratingChange=*&beginTime=2024-01-01&endTime=2030-12-31&pageNo=1&fields=&qType=0&orgCode=&code=${code}`;
   try {
-    const r = await getJson(url, { timeout: 6000, source: "reportapi", headers: { Referer: "https://data.eastmoney.com/" } });
+    const r = await _getJson(url, { timeout: 6000, source: "reportapi", headers: { Referer: "https://data.eastmoney.com/" } });
     const list = Array.isArray(r.data?.data) ? r.data.data : [];
     return list.slice(0, limit).map((d) => ({
       title: String(d.title ?? ""),
@@ -30,6 +30,22 @@ async function fetchResearchReportsServer(code, limit = 10) {
   } catch {
     return [];
   }
+}
+
+// v9.150.0（P2-1）：研报覆盖/评级数量趋势（东财 reportapi 真实研报列表按月聚合）
+async function fetchResearchRatingTrendServer(code, limit = 200, _getJson = getJson) {
+  const reports = await fetchResearchReportsServer(code, limit, _getJson);
+  const byMonth = new Map();
+  for (const r of reports) {
+    const month = String(r.publishDate || "").slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) continue;
+    const bucket = byMonth.get(month) || { month, total: 0, ratings: {} };
+    bucket.total++;
+    const rating = String(r.rating || "未评级");
+    bucket.ratings[rating] = (bucket.ratings[rating] || 0) + 1;
+    byMonth.set(month, bucket);
+  }
+  return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month)).slice(-6);
 }
 
 async function fetchInstitutionSurveysServer(code, limit = 10) {
@@ -88,4 +104,4 @@ async function fetchLiftBanServer(code, limit = 5) {
   }
 }
 
-module.exports = { fetchResearchReportsServer, fetchInstitutionSurveysServer, fetchHolderCountServer, fetchLiftBanServer };
+module.exports = { fetchResearchReportsServer, fetchResearchRatingTrendServer, fetchInstitutionSurveysServer, fetchHolderCountServer, fetchLiftBanServer };

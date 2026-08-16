@@ -105,6 +105,25 @@ CREATE TABLE IF NOT EXISTS cron_checkpoint (
 );
 `;
 
+// v9.150.0（P2-4）：外部统计口径/协会数据真实落库
+const INDUSTRY_MACRO_SIGNAL_SQL = `
+CREATE TABLE IF NOT EXISTS industry_macro_signal (
+  id SERIAL PRIMARY KEY,
+  indicator TEXT NOT NULL,
+  indicator_label TEXT,
+  period TEXT NOT NULL,
+  value DOUBLE PRECISION,
+  unit TEXT,
+  yoy DOUBLE PRECISION,
+  mom DOUBLE PRECISION,
+  source TEXT,
+  source_url TEXT,
+  fetched_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(indicator, period)
+);
+CREATE INDEX IF NOT EXISTS idx_macro_indicator_period ON industry_macro_signal(indicator, period DESC);
+`;
+
 // v9.146.0（第三轮报告执行）：AI-Swing 留痕表（服务端波段决策审计）
 const AI_DECISION_LOG_SQL = `
 CREATE TABLE IF NOT EXISTS ai_decision_log (
@@ -192,6 +211,7 @@ async function runMigrations() {
   await pool.query(FUNDAMENTAL_HISTORY_SQL);
   await pool.query(CATALYST_CALENDAR_SQL);
   await pool.query(CRON_CHECKPOINT_SQL);
+  await pool.query(INDUSTRY_MACRO_SIGNAL_SQL);
   await pool.query(AI_DECISION_LOG_SQL);
   await pool.query(FUNDAMENTAL_JUDGMENT_SQL);
   await pool.query(KLINE_DAILY_SQL);
@@ -205,7 +225,7 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_t60 DOUBLE PRECISION`);
   await pool.query(`ALTER TABLE decision_post ADD COLUMN IF NOT EXISTS pnl_source TEXT`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_logic_updated ON logic_ledger(updated_at DESC)`);
-  console.log("[db-migrations] logic_ledger/simulated/chain_event/fundamental_history/catalyst/cron/ai_decision_log/fundamental_judgment/kline_daily/swing_signals ready");
+  console.log("[db-migrations] logic_ledger/simulated/chain_event/fundamental_history/catalyst/cron/macro/ai_decision_log/fundamental_judgment/kline_daily/swing_signals ready");
 }
 
 module.exports = { runMigrations };

@@ -2,6 +2,14 @@
 
 本文件记录 `stock-monitor` 项目各版本的提交哈希和内容摘要，方便追溯与回滚。
 
+## v9.150.0 — P2 剩余收口：外部统计口径 + 研报覆盖趋势（2026-08-17）
+
+- **P2-4 外部统计口径真实接入**：新增 `industry_macro_signal` 表与 `server/lib/industryStatistics.js`，每日 07:40 从外部数据网关拉取 PMI/非制造业PMI/CPI/PPI/工业增加值/固定资产投资/海关进出口并落库；`GET /api/chain/macro` 可查询，链简报面板新增统计口径条。数据源网关声明“整理自国家统计局/海关总署等公开统计口径”，不是注释式框架。
+- **P2-1 研报覆盖趋势补齐**：`researchData.js` 新增 `fetchResearchRatingTrendServer`，东财 reportapi 研报列表按月聚合数量与评级；`FundamentalCard` 展示最近 6 个月研报覆盖趋势。
+- **构建安全修复**：`vite.config.ts` 关闭 `emptyOutDir`，防止每次 `npm run build` 清空 `docs/reviews` 三轮审查文档。
+- **专项单测**：新增 `industryStatistics.test.js`（落库路径/外部失败降级）与 `researchData.test.js`（月度聚合/网络失败空数组）。
+- **真源路径恢复**：AGENTS.md 已改为 `E:\CC-HAHA\workspace\022_股票监控项目\stock-monitor-v9.9\stock-monitor` 为唯一开发点，PM2 从该目录启动；本轮全部改动都在该路径。
+
 ## v9.148.1 — V4 Pro 审查修复批次 T1-T12（2026-08-16）
 
 > 依据 `思路梳理\v4pro0813审查报告与执行指令-2026-08-16.md`（总评 3.2/5）逐条修复：P0×4 + P1×7 + 治理与事故处置。

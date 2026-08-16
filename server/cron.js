@@ -487,6 +487,15 @@ function startCron({ pool }) {
   cron.schedule("20 9 * * 1-5", runCommodityPriceTask);
   cron.schedule("10 15 * * 1-5", runCommodityPriceTask);
 
+  // v9.150.0（P2-4）：统计口径外部数据每日刷新（月度数据变化慢，失败静默，次日重试）
+  cron.schedule("40 7 * * *", async () => {
+    try {
+      const { syncIndustryMacroSignals } = require("./lib/industryStatistics");
+      const r = await syncIndustryMacroSignals(pool);
+      console.log(`[cron] industry_macro 同步: ${r.ok.map(x => `${x.endpoint}(${x.inserted})`).join(" ")}${r.failed.length ? " 失败:" + r.failed.map(x => x.endpoint).join(",") : ""}`);
+    } catch (e) { console.warn("[cron] industry_macro 同步失败:", e.message); }
+  }, { timezone: "Asia/Shanghai" });
+
   // v9.148.0（任务07+08）：每晚 21:00 全链挖掘 + 简报生成 —— 6 链站内信号 + 外网交叉验证
   // → chain_intel 落库 → LLM 简报 → chain_briefing（每晚都跑含周末；幂等覆盖同链同日）
   cron.schedule("0 21 * * *", async () => {

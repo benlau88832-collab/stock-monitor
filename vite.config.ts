@@ -48,7 +48,8 @@ export default defineConfig({
   // 不需要额外维护独立的 gh-pages 分支。
   build: {
     outDir: "docs",
-    emptyOutDir: true,
+    // v9.150.0：禁止 emptyOutDir 清空 docs/reviews（否则每次 build 会删除三轮审查文档）
+    emptyOutDir: false,
     // v9.84（分类统一）：src/shared/concept-groups.js 为 CJS（server require 同源），
     // 默认只处理 node_modules → 加入 include 让 rollup-commonjs 解析其 module.exports
     commonjsOptions: {

@@ -5,6 +5,7 @@
 // ============================================================
 import { useEffect, useState, useCallback } from "react";
 import { getLocalToken } from "../lib/cloudStore"; // v9.148.1（T7）：采纳建议需带 token
+import MacroSignalStrip from "./MacroSignalStrip";
 
 interface PersonSuggestion {
   name: string;
@@ -143,6 +144,8 @@ export default function ChainBriefingPanel({ compact = false }: { compact?: bool
       </div>
 
       {error && <div className="mb-2 text-[11px] text-rose-400">{error}</div>}
+
+      <MacroSignalStrip />
 
       {/* v9.148.1（T8）：微信推送未绑定 → 黄条引导（用户零感知问题的修复） */}
       {pushConfigured === false && (

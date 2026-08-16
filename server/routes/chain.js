@@ -8,6 +8,8 @@ const { buildChainView } = require("../../src/shared/transmission-chain.js");
 const { getChainDbContext } = require("../lib/chainDb");
 const { runChainReasoning } = require("../lib/chainReasoning");
 const { getChainSignals } = require("../lib/industryData");
+// v9.150.0（P2-4）：外部统计口径数据（PMI/CPI/PPI/工业增加值/固投/海关）
+const { getIndustryMacroSignals } = require("../lib/industryStatistics");
 // v9.148.0（任务04）：6 链 × 标的集合（概念校准产物，异动监控/简报复用）
 const { getChainStocks, chainStockStats, CHAINS } = require("../lib/chainStocks");
 // v9.148.0（任务05）：产业价格历史序列（30 天趋势，简报/前端走势图用）
@@ -143,6 +145,16 @@ module.exports = function chainRoutes(app) {
       const days = Math.max(7, Math.min(365, Number(req.query.days) || 90));
       if (!chainId) return res.status(400).json({ error: "chainId required" });
       res.json({ ok: true, chainId, days, items: await getChainSignals(pool, chainId, days) });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // v9.150.0（P2-4）：统计口径/协会数据查询
+  app.get("/api/chain/macro", async (req, res) => {
+    try {
+      const limit = Number(req.query.limit) || 12;
+      res.json({ ok: true, items: await getIndustryMacroSignals(pool, limit) });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

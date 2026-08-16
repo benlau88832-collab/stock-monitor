@@ -152,6 +152,9 @@ initDb().then(async () => {
       require("./lib/industryData").syncLocalIndustrySignals(pool)
         .then((sig) => console.log("[industryData] synced:", sig))
         .catch((e) => console.warn("[industryData] sync failed:", e.message));
+      require("./lib/industryStatistics").syncIndustryMacroSignals(pool)
+        .then((sig) => console.log("[industryStatistics] synced:", sig))
+        .catch((e) => console.warn("[industryStatistics] sync failed:", e.message));
       require("./cron/base").markCronStep(pool, require("./cron/base").bjDateStr(), "system-boot")
         .catch((e) => console.warn("[cron] system-boot checkpoint failed:", e.message));
     }, 1000);

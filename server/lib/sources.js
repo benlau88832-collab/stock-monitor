@@ -30,6 +30,8 @@ const PROVIDERS = [
   // ---- 免费大宗商品价格（v9.140.0 阶段三 #13：景气度价格数据源）----
   // 实测：百川盈孚首页 SSR 直出"今日涨跌"81 项可解析；生意社 100ppi.com JS challenge + API 需密钥（blocked，不进白名单）
   { id: "baiinfo",      host: "www.baiinfo.com",                 kind: "data",  priority: 1 },
+  // v9.150.0（P2-4）：外部统计口径数据网关（PMI/CPI/PPI/工业增加值/固投/海关进出口）
+  { id: "ftshareGateway", host: "market.ft.tech",                kind: "data",  priority: 1 },
   // ---- 外网信息搜索（任务 03，v9.148.0）：Google News RSS 经本地代理出墙，无限额免 key ----
   { id: "googleNews",   host: "news.google.com",                 kind: "news",  priority: 1 },
   // 备源：HN Algolia（直连 JSON，技术/产业讨论聚合，无限额）—— CNBC/SemiEngineering 栏目流留待任务05每日扫描

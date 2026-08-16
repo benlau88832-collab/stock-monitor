@@ -25,6 +25,7 @@ interface FundamentalData {
   history?: Array<{ reportDate: string; roe: number | null; debt: number | null; gross: number | null; revYoy: number | null; profitYoy: number | null; eps: number | null; cashPs: number | null }>;
   peerComparison?: { peerCount: number; peers: Array<{ code: string; name: string }>; metrics: Record<string, number | null> };
   catalysts?: Array<{ type: string; title: string; eventDate: string }>;
+  researchRatingTrend?: Array<{ month: string; total: number; ratings: Record<string, number> }>;
 }
 
 interface Props {
@@ -121,6 +122,22 @@ export default function FundamentalCard({ code, price = null }: Props) {
           <div className="space-y-0.5">
             {data.catalysts!.slice(0, 5).map((c, i) => (
               <div key={i} className="text-[9px] text-slate-400"><b className="text-amber-300/80">{c.eventDate}</b> [{c.type}] {c.title}</div>
+            ))}
+          </div>
+        </div>
+      )}
+      {(data.researchRatingTrend?.length ?? 0) > 0 && (
+        <div className="rounded bg-white/5 p-1.5">
+          <div className="text-[9px] text-slate-500 mb-0.5">📚 研报覆盖趋势（东财 reportapi 按月聚合）</div>
+          <div className="space-y-0.5">
+            {data.researchRatingTrend!.slice(-6).map((m, i) => (
+              <div key={i} className="flex flex-wrap gap-x-2 text-[9px] text-slate-400">
+                <span className="w-16 shrink-0">{m.month}</span>
+                <span>共 {m.total} 份</span>
+                {Object.entries(m.ratings).map(([r, n]) => (
+                  <span key={r} className="text-slate-500">{r} {n}</span>
+                ))}
+              </div>
             ))}
           </div>
         </div>

@@ -7,6 +7,7 @@
 // ============================================================
 const { getJson } = require("./outbound");
 const { persistFundamentalHistory, getFundamentalTrend, getPeerComparison } = require("./fundamentalTrend");
+const { fetchResearchRatingTrendServer } = require("./researchData");
 
 const DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get";
 
@@ -136,7 +137,16 @@ async function getFundamentalCheck(pool, code, force = false) {
     if (!force && cached.rows.length > 0) {
       const ageMs = Date.now() - new Date(cached.rows[0].updated_at).getTime();
       if (ageMs < 24 * 3600 * 1000) {
-        const base = cached.rows[0].data;
+        let base = cached.rows[0].data;
+        if (!Array.isArray(base.researchRatingTrend)) {
+          base = { ...base, researchRatingTrend: await fetchResearchRatingTrendServer(code) };
+          try {
+            await pool.query(
+              `UPDATE stock_fundamentals SET data=$1, updated_at=now() WHERE code=$2`,
+              [JSON.stringify(base), code],
+            );
+          } catch { /* 缓存补写失败不阻塞 */ }
+        }
         const { getCatalystCalendar } = require("./catalystCalendar");
         return { ...base, history: await getFundamentalTrend(pool, code), peerComparison: await getPeerComparison(pool, code), catalysts: await getCatalystCalendar(pool, code, 180) };
       }
@@ -158,6 +168,7 @@ async function getFundamentalCheck(pool, code, force = false) {
   out.peerComparison = await getPeerComparison(pool, code);
   const { getCatalystCalendar } = require("./catalystCalendar");
   out.catalysts = await getCatalystCalendar(pool, code, 180);
+  out.researchRatingTrend = await fetchResearchRatingTrendServer(code);
 
   // 落表缓存（失败不阻塞）
   try {

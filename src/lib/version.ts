@@ -223,5 +223,7 @@
 //   监听 0.0.0.0+generate 端点 token 鉴权/版本三件套+README+CHANGELOG/T+5 交易日锚定重构/
 //   大涨检测+公告去重/验证三档口径+prompt 锁/人物自扩散/push-state+webDegraded/受益人 code 校验/
 //   GitHub main 快进同步
-export const APP_VERSION = "v9.149.1";
-export const BUILD_DATE = "2026-08-16";
+// v9.150.0（P2 剩余收口）：外部统计口径真实落库（PMI/CPI/PPI/工业增加值/固投/海关，每日 07:40 刷新）+
+//   基本面研报覆盖趋势（东财 reportapi 按月聚合）+ FundamentalCard/链简报展示 + 专项单测
+export const APP_VERSION = "v9.150.0";
+export const BUILD_DATE = "2026-08-17";
